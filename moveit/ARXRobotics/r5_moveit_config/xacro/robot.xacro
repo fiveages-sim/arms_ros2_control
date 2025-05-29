@@ -1,0 +1,15 @@
+<?xml version="1.0"?>
+<robot xmlns:xacro="http://www.ros.org/wiki/xacro" name="R5a">
+  <xacro:arg name="initial_positions_file" default="initial_positions.yaml" />
+  <xacro:arg name="ros2_control_hardware_type" default="mock_components" />
+
+  <!-- Import R5 urdf file -->
+  <xacro:include filename="$(find r5_description)/xacro/R5.xacro" />
+
+  <!-- Import R5 ros2_control description -->
+  <xacro:include filename="arm.ros2_control.xacro" />
+  <xacro:include filename="hand.ros2_control.xacro" />
+
+  <xacro:r5_ros2_control name="R5FakeSystem" initial_positions_file="$(arg initial_positions_file)" ros2_control_hardware_type="$(arg ros2_control_hardware_type)"/>
+  <xacro:r5_hand_ros2_control name="R5HandFakeSystem" ros2_control_hardware_type="$(arg ros2_control_hardware_type)"/>
+</robot>
