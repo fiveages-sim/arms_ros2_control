@@ -67,13 +67,13 @@ def generate_launch_description():
             default_value='[0.0, 0.53, 0.073, 0.5]',  # 默认使用robot_wrapper.q0
             description='Default joint positions for the robot'
         ),
-        Node(
-            package='rviz2',
-            executable='rviz2',
-            name='rviz_ocs2',
-            output='screen',
-            arguments=["-d", rviz_config_file]
-        ),
+        # Node(
+        #     package='rviz2',
+        #     executable='rviz2',
+        #     name='rviz_ocs2',
+        #     output='screen',
+        #     arguments=["-d", rviz_config_file]
+        # ),
         Node(
             package='robot_state_publisher',
             executable='robot_state_publisher',
