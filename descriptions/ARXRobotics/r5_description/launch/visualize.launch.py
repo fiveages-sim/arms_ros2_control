@@ -14,7 +14,7 @@ package_description = "r5_description"
 
 def process_xacro():
     pkg_path = os.path.join(get_package_share_directory(package_description))
-    xacro_file = os.path.join(pkg_path, 'xacro', 'R5.xacro')
+    xacro_file = os.path.join(pkg_path, 'xacro', 'robot.xacro')
     robot_description_config = xacro.process_file(xacro_file)
     return robot_description_config.toxml()
 
@@ -54,7 +54,6 @@ def generate_launch_description():
             package='joint_state_publisher_gui',
             executable='joint_state_publisher_gui',
             name='joint_state_publisher',
-            output='screen',
-            condition=LaunchConfiguration('test_gui')
+            output='screen'
         ),
     ])

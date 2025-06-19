@@ -15,10 +15,7 @@ source ~/ros2_ws/install/setup.bash
 ros2 launch r5_description visualize.launch.py
 ```
 
-```bash
-source ~/ros2_ws/install/setup.bash
-ros2 launch r5_description visualize.launch.py
-```
+![arx lift](../../../.images/arx_r5.png)
 
 ## 3. OCS2 Demo
 ```bash
