@@ -15,6 +15,8 @@ source ~/ros2_ws/install/setup.bash
 ros2 launch x7s_description visualize.launch.py
 ```
 
+![arx x7s](../../../.images/arx_x7s.png)
+
 ## 3. OCS2 Demo
 ```bash
 source ~/ros2_ws/install/setup.bash

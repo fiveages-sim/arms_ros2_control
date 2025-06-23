@@ -471,5 +471,46 @@
       <child link="${prefix}gripper_center"/>
       <origin xyz="0.08657 0 0" rpy="0 0 0"/>
     </joint>
+
+    <link name="${prefix}left_pad"/>
+    <joint name="${prefix}left_pad_joint" type="fixed">
+      <parent link="${prefix}link7"/>
+      <child link="${prefix}left_pad"/>
+      <origin xyz="0.05843 -0.0249 0" rpy="0 0 0"/>
+    </joint>
+
+    <link name="${prefix}right_pad"/>
+    <joint name="${prefix}right_pad_joint" type="fixed">
+      <parent link="${prefix}link8"/>
+      <child link="${prefix}right_pad"/>
+      <origin xyz="0.05843 0.0249 0" rpy="0 0 0"/>
+    </joint>
+
+    <link name="${prefix}camera_support">
+      <visual>
+        <geometry>
+          <mesh filename="file://$(find x5_description)/meshes/camera_support.obj"/>
+        </geometry>
+      </visual>
+    </link>
+    <joint name="${prefix}camera_support_fixed" type="fixed">
+      <parent link="${prefix}link6"/>
+      <child link="${prefix}camera_support"/>
+      <origin xyz="0.045 0 0.021"/>
+    </joint>
+
+    <link name="${prefix}camera">
+      <visual>
+        <geometry>
+          <mesh
+              filename="file://$(find x5_description)/meshes/d405.obj"/>
+        </geometry>
+      </visual>
+    </link>
+    <joint name="${prefix}camera_fixed" type="fixed">
+      <origin xyz="0.0385 0 0.0475" rpy="0 0.523 0"/>
+      <parent link="${prefix}camera_support"/>
+      <child link="${prefix}camera"/>
+    </joint>
   </xacro:macro>
 </robot>

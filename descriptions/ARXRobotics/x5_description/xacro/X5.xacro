@@ -488,12 +488,8 @@
 
     <link name="${prefix}camera_support">
       <visual>
-        <origin
-            xyz="0 0 0"
-            rpy="0 0 0"/>
         <geometry>
-          <mesh
-              filename="file://$(find x5_description)/meshes/camera_support.obj"/>
+          <mesh filename="file://$(find x5_description)/meshes/camera_support.obj"/>
         </geometry>
       </visual>
     </link>
@@ -512,12 +508,9 @@
       </visual>
     </link>
     <joint name="${prefix}camera_fixed" type="fixed">
-      <origin
-          xyz="0.0385 0 0.0475"
-          rpy="0 0.523 0"/>
+      <origin xyz="0.0385 0 0.0475" rpy="0 0.523 0"/>
       <parent link="${prefix}camera_support"/>
       <child link="${prefix}camera"/>
-      <origin xyz="0.045 0 0.021"/>
     </joint>
   </xacro:macro>
 </robot>
