@@ -1,0 +1,23 @@
+<mujoco model="gripper_2">
+  <default>
+    <default class="visual">
+      <geom group="2" type="mesh" contype="0" conaffinity="0"/>
+    </default>
+    <default class="collision">
+      <geom group="3" type="mesh"/>
+    </default>
+  </default>
+  <asset>
+    <material name="black_shell" specular="0.5" shininess="0.0" rgba="0.150000 0.150000 0.150000 1.000000"/>
+    <mesh file="gripper_2.obj"/>
+    <mesh file="gripper_2_collision_0.obj"/>
+    <mesh file="gripper_2_collision_1.obj"/>
+  </asset>
+  <worldbody>
+    <body name="gripper_2">
+      <geom material="black_shell" mesh="gripper_2" class="visual"/>
+      <geom mesh="gripper_2_collision_0" rgba="0.84242254877437 0.9093089972376723 0.07103465669923925 1" class="collision"/>
+      <geom mesh="gripper_2_collision_1" rgba="0.7725398400705703 0.16448175751867333 0.7695763793761039 1" class="collision"/>
+    </body>
+  </worldbody>
+</mujoco>

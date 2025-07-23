@@ -1,0 +1,23 @@
+<mujoco model="camera_support">
+  <default>
+    <default class="visual">
+      <geom group="2" type="mesh" contype="0" conaffinity="0"/>
+    </default>
+    <default class="collision">
+      <geom group="3" type="mesh"/>
+    </default>
+  </default>
+  <asset>
+    <material name="white_metal.001" specular="0.5" shininess="0.25" rgba="0.800000 0.800000 0.800000 1.000000"/>
+    <mesh file="camera_support.obj"/>
+    <mesh file="camera_support_collision_0.obj"/>
+    <mesh file="camera_support_collision_1.obj"/>
+  </asset>
+  <worldbody>
+    <body name="camera_support">
+      <geom material="white_metal.001" mesh="camera_support" class="visual"/>
+      <geom mesh="camera_support_collision_0" rgba="0.07608678763149679 0.3087806145758313 0.21758463620321145 1" class="collision"/>
+      <geom mesh="camera_support_collision_1" rgba="0.7811979885293897 0.9706379355939684 0.6990404631613741 1" class="collision"/>
+    </body>
+  </worldbody>
+</mujoco>

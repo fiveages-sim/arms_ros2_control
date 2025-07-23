@@ -1,0 +1,28 @@
+<mujoco model="gripper_center_link">
+  <default>
+    <default class="visual">
+      <geom group="2" type="mesh" contype="0" conaffinity="0"/>
+    </default>
+    <default class="collision">
+      <geom group="3" type="mesh"/>
+    </default>
+  </default>
+  <asset>
+    <material name="black_shell" specular="0.5" shininess="0.0" rgba="0.150000 0.150000 0.150000 1.000000"/>
+    <material name="white_metal.001" specular="0.5" shininess="0.25" rgba="1.000000 1.000000 1.000000 1.000000"/>
+    <mesh file="gripper_center_link_0.obj"/>
+    <mesh file="gripper_center_link_1.obj"/>
+    <mesh file="gripper_center_link_collision_0.obj"/>
+    <mesh file="gripper_center_link_collision_1.obj"/>
+    <mesh file="gripper_center_link_collision_2.obj"/>
+  </asset>
+  <worldbody>
+    <body name="gripper_center_link">
+      <geom mesh="gripper_center_link_0" material="white_metal.001" class="visual"/>
+      <geom mesh="gripper_center_link_1" material="black_shell" class="visual"/>
+      <geom mesh="gripper_center_link_collision_0" rgba="0.9383067435375235 0.3234054303219127 0.6651239416573249 1" class="collision"/>
+      <geom mesh="gripper_center_link_collision_1" rgba="0.3840162291794218 0.5368071184722696 0.4063316875420272 1" class="collision"/>
+      <geom mesh="gripper_center_link_collision_2" rgba="0.7240706198949394 0.31717558588299455 0.01340586082919637 1" class="collision"/>
+    </body>
+  </worldbody>
+</mujoco>
