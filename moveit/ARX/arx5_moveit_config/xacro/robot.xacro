@@ -29,9 +29,6 @@
 
   <xacro:arg name="gazebo" default="false" />
   <xacro:if value="$(arg gazebo)">
-    <xacro:include filename="$(find arx5_description)/xacro/gazebo/arx5.gazebo.xacro" />
-    <xacro:arx5_gazebo/>
-
     <gazebo>
       <plugin filename="gz_ros2_control-system" name="gz_ros2_control::GazeboSimROS2ControlPlugin">
         <parameters>$(find arx5_moveit_config)/config/ros2_controllers.yaml</parameters>

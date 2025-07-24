@@ -38,7 +38,7 @@ smoothing_filter_plugin_name: "online_signal_smoothing::ButterworthFilterPlugin"
 is_primary_planning_scene_monitor: true
 
 ## MoveIt properties
-move_group_name:  arm  # Often 'manipulator' or 'arm'
+move_group_name:  r5_arm  # Often 'manipulator' or 'arm'
 planning_frame: base_link  # The MoveIt planning frame. Often 'base_link' or 'world'
 
 ## Other frames

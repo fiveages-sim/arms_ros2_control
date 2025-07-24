@@ -10,7 +10,7 @@ colcon build --packages-up-to arx5_moveit_config --symlink-install
 * Mock Components
 ```bash
 source ~/ros2_ws/install/setup.bash
-ros2 launch arx5_moveit_config demo.launch.py 
+ros2 launch moveit_common_config demo.launch.py 
 ```
 * Isaac Sim
 ```bash
@@ -20,18 +20,18 @@ ros2 launch arx5_moveit_config isaac.launch.py
 * Gazebo
 ```bash
 source ~/ros2_ws/install/setup.bash
-ros2 launch arx5_moveit_config gazebo.launch.py 
+ros2 launch moveit_common_config demo.launch.py hardware:=gz
 ```
 ```bash
 source ~/ros2_ws/install/setup.bash
-ros2 launch arx5_moveit_config gazebo.launch.py type:=r5
+ros2 launch moveit_common_config demo.launch.py hardware:=gz type:=r5
 ```
 
 ## 3. Moveit Servo
 * Mock Components
 ```bash
 source ~/ros2_ws/install/setup.bash
-ros2 launch arx5_moveit_config servo.launch.py ros2_control_hardware_type:=mock_components
+ros2 launch moveit_common_config servo.launch.py hardware:=gz
 ```
 * Isaac Sim
 ```bash

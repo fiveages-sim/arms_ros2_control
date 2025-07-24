@@ -1,19 +1,19 @@
 <?xml version="1.0"?>
 <package format="2">
-    <name>arx5_moveit_config</name>
+    <name>cr5_moveit_config</name>
     <version>0.0.0</version>
-    <description>The Moveit config for ARX R5 package</description>
+    <description>The Moveit config for Dobot CR5 package</description>
     <maintainer email="biao876990970@hotmail.com">Huang Zhenbiao</maintainer>
     <license>TODO</license>
 
     <exec_depend>xacro</exec_depend>
-    <exec_depend>arx5_description</exec_depend>
+    <exec_depend>cr5_description</exec_depend>
+    <exec_depend>robotiq_description</exec_depend>
     <exec_depend>moveit_teleop</exec_depend>
     <exec_depend>gripper_control</exec_depend>
     <exec_depend>joint_state_publisher</exec_depend>
     <exec_depend>robot_state_publisher</exec_depend>
     <exec_depend>topic_based_ros2_control</exec_depend>
-    <exec_depend>moveit_common_config</exec_depend>
 
     <export>
         <build_type>ament_cmake</build_type>

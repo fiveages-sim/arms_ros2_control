@@ -38,8 +38,11 @@ joint_limits:
     max_velocity: 10.0
     has_acceleration_limits: true
     max_acceleration: 5.0
-  joint7:
+
+  left_outer_knuckle_joint:
     has_velocity_limits: true
-    max_velocity: 0.1
+    max_velocity: 0.5
     has_acceleration_limits: false
     max_acceleration: 0.0
+
+
