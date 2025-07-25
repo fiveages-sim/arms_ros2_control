@@ -1,12 +1,12 @@
 <?xml version="1.0"?>
 <package format="2">
-    <name>arx5_moveit_config</name>
+    <name>panthera_moveit_config</name>
     <version>0.0.0</version>
-    <description>The Moveit config for ARX R5 package</description>
+    <description>The Moveit config for Panthera package</description>
     <maintainer email="biao876990970@hotmail.com">Huang Zhenbiao</maintainer>
     <license>TODO</license>
 
-    <exec_depend>arx5_description</exec_depend>
+    <exec_depend>panthera_description</exec_depend>
     <exec_depend>moveit_common_config</exec_depend>
 
     <export>

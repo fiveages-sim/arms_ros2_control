@@ -90,7 +90,7 @@ def launch_setup(context, *args, **kwargs):
 
     # RViz
     rviz_config_file = os.path.join(
-        get_package_share_directory(robot_name+"_moveit_config"),
+        get_package_share_directory("moveit_common_config"),
         "config",
         "rviz",
         "servo.rviz",
