@@ -20,7 +20,7 @@ colcon build --packages-up-to cr5_moveit_config --symlink-install
 * Gazebo
     ```bash
     source ~/ros2_ws/install/setup.bash
-    ros2 launch moveit_common_config demo.launch.py hardware:=gz robot:=cr5
+    ros2 launch moveit_common_config demo.launch.py hardware:=gz robot:=cr5 world:=warehouse
     ```
 
 ## 3. Moveit Servo
@@ -32,5 +32,5 @@ colcon build --packages-up-to cr5_moveit_config --symlink-install
 * Gazebo
     ```bash
     source ~/ros2_ws/install/setup.bash
-    ros2 launch moveit_common_config servo.launch.py hardware:=gz robot:=cr5 
+    ros2 launch moveit_common_config servo.launch.py hardware:=gz robot:=cr5 world:=warehouse
     ```
