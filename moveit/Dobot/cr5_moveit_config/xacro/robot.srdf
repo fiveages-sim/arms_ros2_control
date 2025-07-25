@@ -69,7 +69,7 @@
     <link name="right_inner_finger_pad"/>
     <link name="right_inner_knuckle"/>
 
-    <joint name="left_outer_knuckle_joint"/>
+    <joint name="finger_joint"/>
     <passive_joint name="left_inner_knuckle_joint"/>
     <passive_joint name="left_inner_finger_joint"/>
     <passive_joint name="right_outer_knuckle_joint"/>
@@ -135,10 +135,10 @@
     <group name="hand"/>
   </group>
   <group_state group="hand" name="open">
-    <joint name="left_outer_knuckle_joint" value="0.0"/>
+    <joint name="finger_joint" value="0.0"/>
   </group_state>
   <group_state group="hand" name="close">
-    <joint name="left_outer_knuckle_joint" value="0.8"/>
+    <joint name="finger_joint" value="0.8"/>
   </group_state>
 
   <!--END EFFECTOR: Purpose: Represent information about an end effector.-->

@@ -18,7 +18,11 @@ colcon build --packages-up-to cr5_moveit_config --symlink-install
     ros2 launch cr5_moveit_config isaac.launch.py
     ```
 * Gazebo
-    ```bash
+  ```bash
+  source ~/ros2_ws/install/setup.bash
+  ros2 launch moveit_common_config demo.launch.py hardware:=gz robot:=cr5
+  ```
+  ```bash
     source ~/ros2_ws/install/setup.bash
     ros2 launch moveit_common_config demo.launch.py hardware:=gz robot:=cr5 world:=warehouse
     ```
