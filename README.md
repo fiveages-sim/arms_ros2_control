@@ -4,12 +4,10 @@ This repository contains the ros2-control files for manipulators. The robot desc
 `robot_descriptions`](https://github.com/fiveages-sim/robot_descriptions) package, please place this package with the
 robot description files in the `src` directory of your ROS2 workspace, like below structure:
 
-```angular2html
 - ros2_ws
-- src
-- robot_descriptions
-- arm_ros2_control
-```
+  - src
+    - robot_descriptions
+    - arm_ros2_control
 
 ## 1. Moveit2 Control
 
