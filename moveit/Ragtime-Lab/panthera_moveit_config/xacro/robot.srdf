@@ -48,6 +48,7 @@
   <!--END EFFECTOR: Purpose: Represent information about an end effector.-->
   <!--DISABLE COLLISIONS: By default it is assumed that any link of the robot could potentially come into collision with any other link in the robot. This tag disables collision checking between a specified pair of links. -->
   <disable_collisions link1="gripper_center" link2="link6" reason="Adjacent"/>
+  <disable_collisions link1="gripper_center" link2="link5" reason="Adjacent"/>
   <disable_collisions link1="gripper_center" link2="gripper_1_link" reason="Adjacent"/>
   <disable_collisions link1="gripper_center" link2="gripper_2_link" reason="Adjacent"/>
   <disable_collisions link1="gripper_1_link" link2="gripper_2_link" reason="Default"/>

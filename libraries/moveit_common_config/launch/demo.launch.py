@@ -31,6 +31,7 @@ def launch_setup(context, *args, **kwargs):
     
     # 如果是gazebo模式，添加gazebo相关mappings
     use_gazebo = hardware == 'gz'
+    use_sim_time = hardware in ['gz', 'isaac']
     if use_gazebo:
         mappings['gazebo'] = 'true'
     
@@ -143,7 +144,7 @@ def launch_setup(context, *args, **kwargs):
         package="moveit_ros_move_group",
         executable="move_group",
         output="screen",
-        parameters=[moveit_config.to_dict(), {'use_sim_time': use_gazebo}],
+        parameters=[moveit_config.to_dict(), {'use_sim_time': use_sim_time}],
         arguments=["--ros-args", "--log-level", "info"],
     )
 
@@ -163,7 +164,7 @@ def launch_setup(context, *args, **kwargs):
             moveit_config.robot_description_semantic,
             moveit_config.planning_pipelines,
             moveit_config.robot_description_kinematics,
-            {'use_sim_time': use_gazebo}
+            {'use_sim_time': use_sim_time}
         ],
     )
 
@@ -220,11 +221,11 @@ def generate_launch_description():
     hardware_arg = DeclareLaunchArgument(
         "hardware",
         default_value="mock_components",
-        description="Hardware type: 'gz' for Gazebo simulation, 'mock_components' for mock components"
+        description="Hardware type: 'gz' for Gazebo simulation, 'isaac' for Isaac simulation, 'mock_components' for mock components"
     )
 
     world_arg = DeclareLaunchArgument(
-        'world', default_value='empty', description='Gz sim World (only used when hardware=gazebo)'
+        'world', default_value='empty', description='Gz sim World (only used when hardware=gz)'
     )
 
     return LaunchDescription([
