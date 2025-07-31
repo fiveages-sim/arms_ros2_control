@@ -1,0 +1,9 @@
+<library path="ocs2_arm_controller">
+    <class name="ocs2_arm_controller/Ocs2ArmController"
+           type="ocs2_arm_controller::Ocs2ArmController"
+           base_class_type="controller_interface::ControllerInterface">
+        <description>
+            Arm Controller for OCS2-based control.
+        </description>
+    </class>
+</library> 

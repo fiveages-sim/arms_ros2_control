@@ -69,12 +69,12 @@
     <link name="right_inner_finger_pad"/>
     <link name="right_inner_knuckle"/>
 
-    <joint name="finger_joint"/>
+    <joint name="gripper_joint"/>
     <passive_joint name="left_inner_knuckle_joint"/>
-    <passive_joint name="left_inner_finger_joint"/>
+    <passive_joint name="left_inner_gripper_joint"/>
     <passive_joint name="right_outer_knuckle_joint"/>
     <passive_joint name="right_inner_knuckle_joint"/>
-    <passive_joint name="right_inner_finger_joint"/>
+    <passive_joint name="right_inner_gripper_joint"/>
   </group>
 
   <!--GROUP STATES: Purpose: Define a named state for a particular group, in terms of joint values. This is useful to define states like 'folded arms'-->
@@ -106,22 +106,22 @@
   <disable_collisions link1="left_inner_knuckle" link2="right_inner_knuckle" reason="Never"/>
   
   <!-- Hand to arm connection -->
-  <disable_collisions link1="Link6" link2="eef_base_link" reason="Adjacent"/>
+  <disable_collisions link1="Link6" link2="gripper_base" reason="Adjacent"/>
   
-  <!-- eef_base_link collision disable rules -->
-  <!-- eef_base_link to left finger components -->
-  <disable_collisions link1="eef_base_link" link2="left_outer_knuckle" reason="Adjacent"/>
-  <disable_collisions link1="eef_base_link" link2="left_outer_finger" reason="Never"/>
-  <disable_collisions link1="eef_base_link" link2="left_inner_finger" reason="Never"/>
-  <disable_collisions link1="eef_base_link" link2="left_inner_finger_pad" reason="Never"/>
-  <disable_collisions link1="eef_base_link" link2="left_inner_knuckle" reason="Never"/>
+  <!-- gripper_base collision disable rules -->
+  <!-- gripper_base to left finger components -->
+  <disable_collisions link1="gripper_base" link2="left_outer_knuckle" reason="Adjacent"/>
+  <disable_collisions link1="gripper_base" link2="left_outer_finger" reason="Never"/>
+  <disable_collisions link1="gripper_base" link2="left_inner_finger" reason="Never"/>
+  <disable_collisions link1="gripper_base" link2="left_inner_finger_pad" reason="Never"/>
+  <disable_collisions link1="gripper_base" link2="left_inner_knuckle" reason="Never"/>
   
-  <!-- eef_base_link to right finger components -->
-  <disable_collisions link1="eef_base_link" link2="right_outer_knuckle" reason="Adjacent"/>
-  <disable_collisions link1="eef_base_link" link2="right_outer_finger" reason="Never"/>
-  <disable_collisions link1="eef_base_link" link2="right_inner_finger" reason="Never"/>
-  <disable_collisions link1="eef_base_link" link2="right_inner_finger_pad" reason="Never"/>
-  <disable_collisions link1="eef_base_link" link2="right_inner_knuckle" reason="Never"/>
+  <!-- gripper_base to right finger components -->
+  <disable_collisions link1="gripper_base" link2="right_outer_knuckle" reason="Adjacent"/>
+  <disable_collisions link1="gripper_base" link2="right_outer_finger" reason="Never"/>
+  <disable_collisions link1="gripper_base" link2="right_inner_finger" reason="Never"/>
+  <disable_collisions link1="gripper_base" link2="right_inner_finger_pad" reason="Never"/>
+  <disable_collisions link1="gripper_base" link2="right_inner_knuckle" reason="Never"/>
   
 
   <!--GROUPS: Representation of a set of joints and links. This can be useful for specifying DOF to plan for, defining arms, end effectors, etc-->
@@ -135,10 +135,10 @@
     <group name="hand"/>
   </group>
   <group_state group="hand" name="open">
-    <joint name="finger_joint" value="0.0"/>
+    <joint name="gripper_joint" value="0.0"/>
   </group_state>
   <group_state group="hand" name="close">
-    <joint name="finger_joint" value="0.8"/>
+    <joint name="gripper_joint" value="0.8"/>
   </group_state>
 
   <!--END EFFECTOR: Purpose: Represent information about an end effector.-->
