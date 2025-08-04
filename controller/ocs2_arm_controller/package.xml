@@ -14,6 +14,8 @@
     <depend>pluginlib</depend>
     <depend>control_input_msgs</depend>
     <depend>std_msgs</depend>
+    <depend>ocs2_mobile_manipulator_ros</depend>
+    <depend>ocs2_ros_interfaces</depend>
 
     <exec_depend>controller_manager</exec_depend>
     <exec_depend>joint_state_broadcaster</exec_depend>

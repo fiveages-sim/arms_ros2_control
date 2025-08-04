@@ -60,7 +60,6 @@ def launch_setup(context, *args, **kwargs):
     )
     
     robot_description = {"robot_description": robot_description_config.toxml()}
-    print(robot_description_config.toxml())
 
     # Robot state publisher
     node_robot_state_publisher = Node(
@@ -96,7 +95,10 @@ def launch_setup(context, *args, **kwargs):
     ros2_control_node = Node(
         package="controller_manager",
         executable="ros2_control_node",
-        parameters=[ros2_controllers_path],
+        parameters=[
+            ros2_controllers_path,
+            {'use_sim_time': use_sim_time}
+        ],
         remappings=[
             ("/controller_manager/robot_description", "/robot_description"),
         ],
@@ -122,6 +124,30 @@ def launch_setup(context, *args, **kwargs):
         executable='spawner',
         arguments=['ocs2_arm_controller'],
         output='screen',
+        parameters=[{'use_sim_time': use_sim_time}],
+    )
+
+    # Mobile Manipulator Target node for sending target trajectories
+    task_file_path = os.path.join(
+        get_package_share_directory(robot_name + "_description"),
+        "config",
+        "ocs2",
+        "task.info"
+    )
+    
+    mobile_manipulator_target_node = Node(
+        package='ocs2_mobile_manipulator_ros',
+        executable='mobile_manipulator_target',
+        name='mobile_manipulator_target',
+        output='screen',
+        parameters=[
+            {'taskFile': task_file_path},
+            {'use_sim_time': use_sim_time}
+        ],
+        remappings=[
+            ('mobile_manipulator_mpc_target', robot_name + '_mpc_target'),
+            ('mobile_manipulator_mpc_observation', robot_name + '_mpc_observation'),
+        ],
     )
 
     # Bridge for clock (仅在gazebo模式下使用)
@@ -171,6 +197,7 @@ def launch_setup(context, *args, **kwargs):
             node_robot_state_publisher,
             gz_spawn_entity,
             rviz_node,
+            mobile_manipulator_target_node,
         ]
     else:
         # Mock components模式：直接启动所有节点
@@ -180,6 +207,7 @@ def launch_setup(context, *args, **kwargs):
             ros2_control_node,
             joint_state_broadcaster_spawner,
             ocs2_arm_controller_spawner,
+            mobile_manipulator_target_node,
         ]
 
 

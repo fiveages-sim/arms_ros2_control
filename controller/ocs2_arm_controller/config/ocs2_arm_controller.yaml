@@ -1,20 +1,24 @@
 ocs2_arm_controller:
-  type: ocs2_arm_controller/Ocs2ArmController
-  
-  # Joint configuration
-  joints:
-    - joint1
-    - joint2
-    - joint3
-    - joint4
-    - joint5
-    - joint6
+  ros__parameters:
+    # Joint configuration
+    joints:
+      - joint1
+      - joint2
+      - joint3
+      - joint4
+      - joint5
+      - joint6
 
-  command_interfaces:
-    - position
-  state_interfaces:
-    - position
-  
-  # Control parameters
-  home_pos: [0.0, 0.0, 0.0, 0.0, 0.0, 0.0]
-  zero_pos: [0.0, 0.0, 0.0, 0.0, 0.0, 0.0]
+    # Interface configuration - only position command, position and velocity state
+    command_interfaces:
+      - position
+    state_interfaces:
+      - position
+      - velocity
+
+    # Control parameters
+    home_pos: [0.0, 0.0, -1.5708, 0.0, 1.5708, 0.0]
+    zero_pos: [0.0, 0.0, 0.0, 0.0, 0.0, 0.0]
+    
+    # OCS2 parameters
+    robot_pkg: "cr5_description"  # 机器人包名称

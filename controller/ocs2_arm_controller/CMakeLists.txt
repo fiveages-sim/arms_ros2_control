@@ -1,4 +1,4 @@
-cmake_minimum_required(VERSION 3.8)
+cmake_minimum_required(VERSION 3.14)
 project(ocs2_arm_controller)
 
 if (CMAKE_COMPILER_IS_GNUCXX OR CMAKE_CXX_COMPILER_ID MATCHES "Clang")
@@ -12,10 +12,11 @@ set(CONTROLLER_INCLUDE_DEPENDS
         pluginlib
         rcpputils
         controller_interface
-        realtime_tools
-        std_msgs
-        control_input_msgs
         controller_common
+
+        ocs2_mobile_manipulator
+        ocs2_ros_interfaces
+        control_input_msgs
 )
 
 # find dependencies
@@ -26,8 +27,11 @@ endforeach ()
 
 add_library(${PROJECT_NAME} SHARED
         src/Ocs2ArmController.cpp
+
         src/FSM/StateHome.cpp
         src/FSM/StateZero.cpp
+        src/FSM/StateOCS2.cpp
+        src/FSM/StateHold.cpp
 )
 
 target_include_directories(${PROJECT_NAME}
@@ -36,8 +40,7 @@ target_include_directories(${PROJECT_NAME}
         "$<INSTALL_INTERFACE:include/${PROJECT_NAME}>"
         PRIVATE
         src)
-ament_target_dependencies(
-        ${PROJECT_NAME} PUBLIC
+ament_target_dependencies(${PROJECT_NAME}
         ${CONTROLLER_INCLUDE_DEPENDS}
 )
 
