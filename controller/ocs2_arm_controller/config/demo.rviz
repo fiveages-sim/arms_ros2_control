@@ -3,11 +3,7 @@ Panels:
     Help Height: 78
     Name: Displays
     Property Tree Widget:
-      Expanded:
-        - /Global Options1
-        - /Status1
-        - /Grid1
-        - /RobotModel1
+      Expanded: ~
       Splitter Ratio: 0.5
     Tree Height: 549
   - Class: rviz_common/Selection
@@ -107,42 +103,52 @@ Visualization Manager:
           Show Axes: false
           Show Trail: false
           Value: true
-        left_1_link:
+        left_inner_finger:
           Alpha: 1
           Show Axes: false
           Show Trail: false
           Value: true
-        left_2_link:
+        left_inner_finger_pad:
           Alpha: 1
           Show Axes: false
           Show Trail: false
           Value: true
-        left_pad_link:
+        left_inner_knuckle:
           Alpha: 1
           Show Axes: false
           Show Trail: false
           Value: true
-        left_support_link:
+        left_outer_finger:
           Alpha: 1
           Show Axes: false
           Show Trail: false
           Value: true
-        right_1_link:
+        left_outer_knuckle:
           Alpha: 1
           Show Axes: false
           Show Trail: false
           Value: true
-        right_2_link:
+        right_inner_finger:
           Alpha: 1
           Show Axes: false
           Show Trail: false
           Value: true
-        right_pad_link:
+        right_inner_finger_pad:
           Alpha: 1
           Show Axes: false
           Show Trail: false
           Value: true
-        right_support_link:
+        right_inner_knuckle:
+          Alpha: 1
+          Show Axes: false
+          Show Trail: false
+          Value: true
+        right_outer_finger:
+          Alpha: 1
+          Show Axes: false
+          Show Trail: false
+          Value: true
+        right_outer_knuckle:
           Alpha: 1
           Show Axes: false
           Show Trail: false
@@ -164,7 +170,7 @@ Visualization Manager:
       Enabled: true
       Interactive Markers Namespace: /simple_marker
       Name: InteractiveMarkers
-      Show Axes: false
+      Show Axes: true
       Show Descriptions: true
       Show Visual Aids: false
       Value: true
@@ -214,7 +220,7 @@ Visualization Manager:
   Views:
     Current:
       Class: rviz_default_plugins/Orbit
-      Distance: 3.223806858062744
+      Distance: 1.9614644050598145
       Enable Stereo Rendering:
         Stereo Eye Separation: 0.05999999865889549
         Stereo Focal Distance: 1
