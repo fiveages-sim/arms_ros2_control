@@ -142,7 +142,9 @@ def launch_setup(context, *args, **kwargs):
         output='screen',
         parameters=[
             {'taskFile': task_file_path},
-            {'use_sim_time': use_sim_time}
+            {'use_sim_time': use_sim_time},
+            {'enableJoystick': True},  # 默认启用手柄控制
+            {'enableAutoPosition': True},  # 默认启用自动位置同步
         ],
         remappings=[
             ('mobile_manipulator_mpc_target', robot_name + '_mpc_target'),
