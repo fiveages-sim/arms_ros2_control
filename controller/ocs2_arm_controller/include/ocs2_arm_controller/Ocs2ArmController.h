@@ -17,6 +17,8 @@
 #include <hardware_interface/loaned_command_interface.hpp>
 #include <hardware_interface/loaned_state_interface.hpp>
 #include <rclcpp/rclcpp.hpp>
+#include <ocs2_core/Types.h>
+#include "ocs2_arm_controller/control/CtrlComponent.h"
 
 namespace ocs2::mobile_manipulator
 {
@@ -158,5 +160,8 @@ namespace ocs2::mobile_manipulator
 
         // ROS订阅
         rclcpp::Subscription<control_input_msgs::msg::Inputs>::SharedPtr control_input_subscription_;
+        
+        // CtrlComponent for OCS2 interface access
+        std::shared_ptr<CtrlComponent> ctrl_comp_;
     };
 }

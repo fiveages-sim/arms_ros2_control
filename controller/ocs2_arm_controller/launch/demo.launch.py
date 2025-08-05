@@ -147,6 +147,7 @@ def launch_setup(context, *args, **kwargs):
         remappings=[
             ('mobile_manipulator_mpc_target', robot_name + '_mpc_target'),
             ('mobile_manipulator_mpc_observation', robot_name + '_mpc_observation'),
+            ('mobile_manipulator_end_effector_pose', robot_name + '_end_effector_pose'),
         ],
     )
 

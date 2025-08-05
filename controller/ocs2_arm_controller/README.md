@@ -55,6 +55,11 @@ colcon build --packages-up-to ocs2_arm_controller --symlink-install
 source ~/ros2_ws/install/setup.bash
 ros2 launch ocs2_arm_controller demo.launch.py type:=AG2F90-C
 ```
+```bash
+source ~/ros2_ws/install/setup.bash
+ros2 launch ocs2_arm_controller demo.launch.py robot:=arx5 type:=r5
+```
+
 
 ```bash
 source ~/ros2_ws/install/setup.bash

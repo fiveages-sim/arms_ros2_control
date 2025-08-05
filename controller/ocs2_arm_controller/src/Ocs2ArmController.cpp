@@ -56,6 +56,9 @@ namespace ocs2::mobile_manipulator
     controller_interface::return_type Ocs2ArmController::update(const rclcpp::Time& time,
                                                                 const rclcpp::Duration& period)
     {
+        // 发布末端执行器位置（无论当前状态如何）
+        ctrl_comp_->updateObservation(time);
+
         if (mode_ == FSMMode::NORMAL)
         {
             current_state_->run(time, period);
@@ -75,6 +78,8 @@ namespace ocs2::mobile_manipulator
             current_state_->enter();
             mode_ = FSMMode::NORMAL;
         }
+
+        ctrl_comp_->publishEndEffectorPose(time);
 
         return controller_interface::return_type::OK;
     }
@@ -108,10 +113,13 @@ namespace ocs2::mobile_manipulator
             home_pos_ = auto_declare<std::vector<double>>("home_pos", home_pos_);
             zero_pos_ = auto_declare<std::vector<double>>("zero_pos", zero_pos_);
 
+            // 创建CtrlComponent（自动初始化接口）
+            ctrl_comp_ = std::make_shared<CtrlComponent>(get_node(), ctrl_interfaces_);
+
             // 创建状态
             state_list_.home = std::make_shared<StateHome>(ctrl_interfaces_, home_pos_);
             state_list_.zero = std::make_shared<StateZero>(ctrl_interfaces_, zero_pos_);
-            state_list_.ocs2 = std::make_shared<StateOCS2>(ctrl_interfaces_, get_node());
+            state_list_.ocs2 = std::make_shared<StateOCS2>(ctrl_interfaces_, get_node(), ctrl_comp_);
             state_list_.hold = std::make_shared<StateHold>(ctrl_interfaces_);
 
             return CallbackReturn::SUCCESS;
@@ -135,6 +143,9 @@ namespace ocs2::mobile_manipulator
                 ctrl_interfaces_.control_inputs_.rx = msg->rx;
                 ctrl_interfaces_.control_inputs_.ry = msg->ry;
             });
+
+        RCLCPP_INFO(get_node()->get_logger(), "End effector pose publisher created for %s_end_effector_pose topic",
+                    robot_name_.c_str());
 
         return CallbackReturn::SUCCESS;
     }

@@ -28,6 +28,8 @@ endforeach ()
 add_library(${PROJECT_NAME} SHARED
         src/Ocs2ArmController.cpp
 
+        src/control/CtrlComponent.cpp
+
         src/FSM/StateHome.cpp
         src/FSM/StateZero.cpp
         src/FSM/StateOCS2.cpp
