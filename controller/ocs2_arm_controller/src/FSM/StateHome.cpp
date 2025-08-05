@@ -37,13 +37,10 @@ namespace ocs2::mobile_manipulator
     FSMStateName StateHome::checkChange()
     {
         // Check control input to determine state transition
-        // Allow transition to ZERO (command 2)
         switch (ctrl_interfaces_.control_inputs_.command)
         {
-        case 1:
-            return FSMStateName::ZERO;
-        case 3:
-            return FSMStateName::OCS2;
+        case 2:
+            return FSMStateName::HOLD;
         default:
             return FSMStateName::HOME;
         }

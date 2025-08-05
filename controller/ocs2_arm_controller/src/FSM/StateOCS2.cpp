@@ -104,8 +104,7 @@ namespace ocs2::mobile_manipulator
         // 检查控制输入进行状态切换
         switch (ctrl_interfaces_.control_inputs_.command)
         {
-        case 1: return FSMStateName::ZERO;
-        case 2: return FSMStateName::HOME;
+        case 2: return FSMStateName::HOLD;
         default: return FSMStateName::OCS2;
         }
     }

@@ -25,7 +25,6 @@ namespace ocs2::mobile_manipulator
     // Forward declarations
     class FSMState;
     class StateHome;
-    class StateZero;
     class StateOCS2;
     class StateHold;
 
@@ -34,7 +33,6 @@ namespace ocs2::mobile_manipulator
     {
         INVALID,
         HOME,
-        ZERO,
         OCS2, // OCS2 MPC控制状态
         HOLD // 保持当前位置状态
     };
@@ -92,7 +90,6 @@ namespace ocs2::mobile_manipulator
     {
         std::shared_ptr<FSMState> invalid;
         std::shared_ptr<StateHome> home;
-        std::shared_ptr<StateZero> zero;
         std::shared_ptr<StateOCS2> ocs2; // OCS2状态
         std::shared_ptr<StateHold> hold; // 保持位置状态
     };

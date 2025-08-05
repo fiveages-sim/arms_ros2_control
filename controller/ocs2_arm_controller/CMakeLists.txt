@@ -31,7 +31,6 @@ add_library(${PROJECT_NAME} SHARED
         src/control/CtrlComponent.cpp
 
         src/FSM/StateHome.cpp
-        src/FSM/StateZero.cpp
         src/FSM/StateOCS2.cpp
         src/FSM/StateHold.cpp
 )

@@ -1,0 +1,69 @@
+repos:
+  # Standard hooks
+  - repo: https://github.com/pre-commit/pre-commit-hooks
+    rev: v5.0.0
+    hooks:
+      - id: check-added-large-files
+      - id: check-ast
+      - id: check-builtin-literals
+      - id: check-byte-order-marker
+      - id: check-case-conflict
+      - id: check-docstring-first
+      - id: check-executables-have-shebangs
+      - id: check-json
+      - id: check-merge-conflict
+      - id: check-symlinks
+      - id: check-toml
+      - id: check-vcs-permalinks
+      - id: check-yaml
+      - id: debug-statements
+      - id: destroyed-symlinks
+      - id: detect-private-key
+      - id: end-of-file-fixer
+      - id: fix-byte-order-marker
+      - id: fix-encoding-pragma
+      - id: forbid-new-submodules
+      - id: mixed-line-ending
+      - id: name-tests-test
+      - id: no-commit-to-branch
+      - id: requirements-txt-fixer
+      - id: sort-simple-yaml
+      - id: trailing-whitespace
+  - repo: https://github.com/astral-sh/ruff-pre-commit
+    rev: v0.6.9
+    hooks:
+      - id: ruff
+        args: ['--output-format=full', '--fix', '--config', 'pyproject.toml']
+      - id: ruff-format
+  - repo: https://github.com/codespell-project/codespell
+    rev: v2.4.1
+    hooks:
+      - id: codespell
+        args: ['--write-changes']
+        exclude: CHANGELOG.rst
+  - repo: https://github.com/pre-commit/mirrors-clang-format
+    rev: v19.1.7
+    hooks:
+      - id: clang-format
+        files: \.(c|cc|cxx|cpp|frag|glsl|h|hpp|hxx|ih|ispc|ipp|java|m|proto|vert)$
+        # -i arg is included by default by the hook
+        args: ['-fallback-style=none']
+  - repo: https://github.com/adrienverge/yamllint
+    rev: v1.35.1
+    hooks:
+      - id: yamllint
+        args: ["--no-warnings", "--config-data", "{extends: default, rules: {line-length: disable}}"]
+        types: [text]
+        files: (moveit_studio.repos|docker-compose.yaml)
+  - repo: https://github.com/hadolint/hadolint
+    rev: v2.13.1-beta
+    hooks:
+      - id: hadolint-docker
+  - repo: https://github.com/pre-commit/mirrors-prettier
+    rev: "v3.1.0"
+    hooks:
+      - id: prettier
+        additional_dependencies:
+          - "prettier@3.1.0"
+          - "@prettier/plugin-xml@3.3.1"
+        files: \.(xml|xacro|srdf)$

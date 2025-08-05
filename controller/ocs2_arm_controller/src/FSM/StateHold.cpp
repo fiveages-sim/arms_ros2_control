@@ -21,7 +21,8 @@ namespace ocs2::mobile_manipulator
 
     void StateHold::run(const rclcpp::Time& /*time*/, const rclcpp::Duration& /*period*/)
     {
-        // 第一次运行时记录当前位置
+        // HOLD状态不发送任何指令，让机器人保持当前位置
+        // 第一次运行时记录当前位置（仅用于日志）
         if (!positions_recorded_)
         {
             hold_positions_.clear();
@@ -33,15 +34,8 @@ namespace ocs2::mobile_manipulator
             }
 
             positions_recorded_ = true;
-            RCLCPP_INFO(rclcpp::get_logger("StateHold"), "Recorded hold positions for %zu joints",
+            RCLCPP_INFO(rclcpp::get_logger("StateHold"), "HOLD state active - no commands sent, maintaining current position for %zu joints",
                         hold_positions_.size());
-        }
-
-        // 保持记录的位置
-        for (size_t i = 0; i < ctrl_interfaces_.joint_position_command_interface_.size() && i < hold_positions_.size();
-             ++i)
-        {
-            ctrl_interfaces_.joint_position_command_interface_[i].get().set_value(hold_positions_[i]);
         }
     }
 
@@ -57,8 +51,7 @@ namespace ocs2::mobile_manipulator
         switch (ctrl_interfaces_.control_inputs_.command)
         {
         case 1: return FSMStateName::HOME;
-        case 2: return FSMStateName::ZERO;
-        case 4: return FSMStateName::OCS2;
+        case 3: return FSMStateName::OCS2;
         default: return FSMStateName::HOLD;
         }
     }

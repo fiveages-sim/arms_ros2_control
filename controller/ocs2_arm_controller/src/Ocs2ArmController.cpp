@@ -4,7 +4,6 @@
 
 #include "ocs2_arm_controller/Ocs2ArmController.h"
 #include "ocs2_arm_controller/FSM/StateHome.h"
-#include "ocs2_arm_controller/FSM/StateZero.h"
 #include "ocs2_arm_controller/FSM/StateOCS2.h"
 #include "ocs2_arm_controller/FSM/StateHold.h"
 
@@ -118,7 +117,6 @@ namespace ocs2::mobile_manipulator
 
             // 创建状态
             state_list_.home = std::make_shared<StateHome>(ctrl_interfaces_, home_pos_);
-            state_list_.zero = std::make_shared<StateZero>(ctrl_interfaces_, zero_pos_);
             state_list_.ocs2 = std::make_shared<StateOCS2>(ctrl_interfaces_, get_node(), ctrl_comp_);
             state_list_.hold = std::make_shared<StateHold>(ctrl_interfaces_);
 
@@ -177,7 +175,7 @@ namespace ocs2::mobile_manipulator
         }
 
         // Initialize FSM
-        current_state_ = state_list_.home;
+        current_state_ = state_list_.hold;
         current_state_->enter();
         next_state_ = current_state_;
         next_state_name_ = current_state_->state_name;
@@ -218,8 +216,6 @@ namespace ocs2::mobile_manipulator
             return state_list_.invalid;
         case FSMStateName::HOME:
             return state_list_.home;
-        case FSMStateName::ZERO:
-            return state_list_.zero;
         case FSMStateName::OCS2:
             return state_list_.ocs2;
         case FSMStateName::HOLD:
