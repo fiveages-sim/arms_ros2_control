@@ -10,9 +10,8 @@
     <buildtool_depend>ament_cmake</buildtool_depend>
 
     <depend>controller_interface</depend>
-    <depend>controller_common</depend>
     <depend>pluginlib</depend>
-    <depend>control_input_msgs</depend>
+    <depend>arms_ros2_control_msgs</depend>
     <depend>std_msgs</depend>
     <depend>ocs2_mobile_manipulator_ros</depend>
     <depend>ocs2_ros_interfaces</depend>

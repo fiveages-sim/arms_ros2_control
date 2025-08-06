@@ -7,7 +7,6 @@ A ROS2 Control controller for arm control based on OCS2 (Optimal Control for Swi
 This controller implements a finite state machine (FSM) for arm control with the following states:
 
 - **HOME**: Move arm to home position
-- **ZERO**: Move arm to zero position
 - **OCS2**: OCS2 MPC optimal control
 - **HOLD**: Hold current position
 
@@ -25,9 +24,7 @@ This controller implements a finite state machine (FSM) for arm control with the
 - Moves arm to predefined home position
 - Uses position control to reach target joint angles
 
-### StateZero
-- Moves arm to predefined zero position
-- Uses position control to reach target joint angles
+
 
 ### StateOCS2
 - Implements OCS2 MPC optimal control
@@ -55,6 +52,7 @@ colcon build --packages-up-to ocs2_arm_controller --symlink-install
 source ~/ros2_ws/install/setup.bash
 ros2 launch ocs2_arm_controller demo.launch.py type:=AG2F90-C
 ```
+
 ```bash
 source ~/ros2_ws/install/setup.bash
 ros2 launch ocs2_arm_controller demo.launch.py robot:=arx5 type:=r5
@@ -96,11 +94,20 @@ This configuration is suitable for most industrial and research robotic arms.
 The controller supports state transitions based on control input commands:
 
 - **Command 1**: Transition to HOME state  
-- **Command 2**: Transition to ZERO state
-- **Command 3**: Transition to HOLD state
-- **Command 4**: Transition to OCS2 state
+- **Command 2**: Transition to HOLD state
+- **Command 3**: Transition to OCS2 state
 
 States can transition between each other based on the control input received on the `/control_input` topic.
+
+**Note**: The controller starts in HOLD state by default. OCS2 state can only transition back to HOLD state.
+
+**State Transition Rules:**
+- **HOLD → OCS2**: Command 3
+- **OCS2 → HOLD**: Command 2  
+- **HOLD → HOME**: Command 1
+- **HOME → HOLD**: Command 2
+
+**Note**: The controller starts in HOLD state by default. OCS2 state can only transition back to HOLD state.
 
 ## OCS2 Integration
 

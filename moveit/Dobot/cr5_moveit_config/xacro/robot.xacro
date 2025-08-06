@@ -1,5 +1,0 @@
-<?xml version="1.0"?>
-<robot xmlns:xacro="http://www.ros.org/wiki/xacro" name="CR5">
-  <!-- Import R5 ros2_control description -->
-  <xacro:include filename="$(find cr5_description)/xacro/ros2_control/robot.xacro"/>
-</robot>

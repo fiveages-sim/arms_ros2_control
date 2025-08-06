@@ -132,8 +132,8 @@ namespace ocs2::mobile_manipulator
     controller_interface::CallbackReturn Ocs2ArmController::on_configure(
         const rclcpp_lifecycle::State& /*previous_state*/)
     {
-        control_input_subscription_ = get_node()->create_subscription<control_input_msgs::msg::Inputs>(
-            "/control_input", 10, [this](const control_input_msgs::msg::Inputs::SharedPtr msg)
+        control_input_subscription_ = get_node()->create_subscription<arms_ros2_control_msgs::msg::Inputs>(
+            "/control_input", 10, [this](const arms_ros2_control_msgs::msg::Inputs::SharedPtr msg)
             {
                 ctrl_interfaces_.control_inputs_.command = msg->command;
                 ctrl_interfaces_.control_inputs_.lx = msg->lx;

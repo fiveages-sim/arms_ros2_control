@@ -33,18 +33,46 @@ def launch_setup(context, *args, **kwargs):
     if use_gazebo:
         mappings['gazebo'] = 'true'
     
-    # World file (仅在gazebo模式下使用)
-    world_path = os.path.join(get_package_share_directory('moveit_common_config'), 'gazebo', world + '.world')
-    gazebo = IncludeLaunchDescription(
-        PythonLaunchDescriptionSource([
-            os.path.join(get_package_share_directory('ros_gz_sim'), 'launch'),
-            '/gz_sim.launch.py',
-        ]),
-        launch_arguments=[
-            ('gz_args', ['-r -v 4 ', world_path])
-        ],
-        condition=IfCondition(str(use_gazebo)),
-    )
+    # Gazebo相关节点（仅在gazebo模式下创建）
+    gazebo = None
+    gz_spawn_entity = None
+    bridge = None
+    
+    if use_gazebo:
+        # World file (仅在gazebo模式下使用)
+        world_path = os.path.join(get_package_share_directory('gz_ros2_control'), 'worlds', world + '.world')
+        gazebo = IncludeLaunchDescription(
+            PythonLaunchDescriptionSource([
+                os.path.join(get_package_share_directory('ros_gz_sim'), 'launch'),
+                '/gz_sim.launch.py',
+            ]),
+            launch_arguments=[
+                ('gz_args', ['-r -v 4 ', world_path])
+            ],
+        )
+
+        # Spawn robot in Gazebo (仅在gazebo模式下使用)
+        gz_spawn_entity = Node(
+            package='ros_gz_sim',
+            executable='create',
+            output='screen',
+            arguments=[
+                '-topic',
+                'robot_description',
+                '-name',
+                robot_name,
+                '-allow_renaming',
+                'true',
+            ],
+        )
+
+        # Bridge for clock (仅在gazebo模式下使用)
+        bridge = Node(
+            package='ros_gz_bridge',
+            executable='parameter_bridge',
+            arguments=['/clock@rosgraph_msgs/msg/Clock[gz.msgs.Clock'],
+            output='screen',
+        )
 
     # Robot description
     robot_description_file_path = os.path.join(
@@ -67,22 +95,6 @@ def launch_setup(context, *args, **kwargs):
         executable='robot_state_publisher',
         output='screen',
         parameters=[robot_description],
-    )
-
-    # Spawn robot in Gazebo (仅在gazebo模式下使用)
-    gz_spawn_entity = Node(
-        package='ros_gz_sim',
-        executable='create',
-        output='screen',
-        arguments=[
-            '-topic',
-            'robot_description',
-            '-name',
-            robot_name,
-            '-allow_renaming',
-            'true',
-        ],
-        condition=IfCondition(str(use_gazebo)),
     )
 
     # ros2_control using FakeSystem as hardware (仅在非gazebo模式下使用)
@@ -151,15 +163,6 @@ def launch_setup(context, *args, **kwargs):
             ('mobile_manipulator_mpc_observation', robot_name + '_mpc_observation'),
             ('mobile_manipulator_end_effector_pose', robot_name + '_end_effector_pose'),
         ],
-    )
-
-    # Bridge for clock (仅在gazebo模式下使用)
-    bridge = Node(
-        package='ros_gz_bridge',
-        executable='parameter_bridge',
-        arguments=['/clock@rosgraph_msgs/msg/Clock[gz.msgs.Clock'],
-        output='screen',
-        condition=IfCondition(str(use_gazebo)),
     )
 
     # RViz for visualization

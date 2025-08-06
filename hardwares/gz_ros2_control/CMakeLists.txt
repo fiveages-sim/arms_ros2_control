@@ -96,6 +96,11 @@ install(DIRECTORY
         DESTINATION include
 )
 
+install(DIRECTORY
+        worlds
+        DESTINATION share/${PROJECT_NAME}
+)
+
 # Testing and linting
 if (BUILD_TESTING)
     find_package(ament_lint_auto REQUIRED)

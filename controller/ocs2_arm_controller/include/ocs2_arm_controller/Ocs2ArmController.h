@@ -13,7 +13,7 @@
 
 #include <controller_interface/controller_interface.hpp>
 #include <std_msgs/msg/string.hpp>
-#include <control_input_msgs/msg/inputs.hpp>
+#include <arms_ros2_control_msgs/msg/inputs.hpp>
 #include <hardware_interface/loaned_command_interface.hpp>
 #include <hardware_interface/loaned_state_interface.hpp>
 #include <rclcpp/rclcpp.hpp>
@@ -75,7 +75,7 @@ namespace ocs2::mobile_manipulator
         std::vector<std::reference_wrapper<hardware_interface::LoanedStateInterface>> joint_position_state_interface_;
         std::vector<std::reference_wrapper<hardware_interface::LoanedStateInterface>> joint_velocity_state_interface_;
 
-        control_input_msgs::msg::Inputs control_inputs_;
+        arms_ros2_control_msgs::msg::Inputs control_inputs_;
         int frequency_ = 1000;
 
         void clear()
@@ -156,7 +156,7 @@ namespace ocs2::mobile_manipulator
         };
 
         // ROS订阅
-        rclcpp::Subscription<control_input_msgs::msg::Inputs>::SharedPtr control_input_subscription_;
+        rclcpp::Subscription<arms_ros2_control_msgs::msg::Inputs>::SharedPtr control_input_subscription_;
         
         // CtrlComponent for OCS2 interface access
         std::shared_ptr<CtrlComponent> ctrl_comp_;

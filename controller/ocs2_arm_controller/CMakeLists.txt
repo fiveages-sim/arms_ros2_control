@@ -12,11 +12,10 @@ set(CONTROLLER_INCLUDE_DEPENDS
         pluginlib
         rcpputils
         controller_interface
-        controller_common
 
         ocs2_mobile_manipulator
         ocs2_ros_interfaces
-        control_input_msgs
+        arms_ros2_control_msgs
 )
 
 # find dependencies
