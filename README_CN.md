@@ -7,6 +7,7 @@
 - [项目结构](#项目结构)
 - [依赖项](#依赖项)
 - [支持的机器人](#支持的机器人)
+- [测试环境](#测试环境)
 - [开始前准备](#开始前准备)
 - [快速开始](#快速开始)
 - [组件](#组件)
@@ -64,6 +65,13 @@ ros2_ws/
 - Airbots机器人
 - Ragtime-Lab机器人
 
+## 测试环境
+
+本包已在以下ROS2发行版中测试并验证可用：
+
+- **ROS2 Humble** (Ubuntu 22.04)
+- **ROS2 Jazzy** (Ubuntu 24.04)
+
 ## 开始前准备
 
 ### 验证OCS2设置
@@ -119,7 +127,8 @@ colcon build --packages-up-to ocs2_arm_controller cr5_description arms_teleop --
 
 ### 3. 使用Gazebo仿真启动
 
-* 安装Gazebo Harmonic（ROS2 Humble）
+#### 对于ROS2 Humble：
+* 安装Gazebo Harmonic
     ```bash
     sudo apt-get install ros-humble-ros-gzharmonic
     ```
@@ -128,21 +137,33 @@ colcon build --packages-up-to ocs2_arm_controller cr5_description arms_teleop --
     cd ~/ros2_ws
     colcon build --packages-up-to gz_ros2_control --symlink-install
     ```
-* 启动控制器
+
+#### 对于ROS2 Jazzy：
+* 安装Gazebo Harmonic
+    ```bash
+    sudo apt-get install ros-jazzy-gz-ros2-control
+    ```
+
+#### 启动控制器（适用于两个发行版）：
+* 您可以使用`world`来选择gazebo世界
   ```bash
   source ~/ros2_ws/install/setup.bash
   ros2 launch ocs2_arm_controller demo.launch.py type:=AG2F90-C hardware:=gz world:=warehouse
   ```
   ![ocs2_dobot_gazebo](.images/ocs2%20gazebo.png)
-  您可以在启动命令中添加`robot:=`来使用其他机器人。例如，使用ARX5机器人：
+
+#### 使用其他机器人
+您可以在启动命令中添加`robot:=`来使用其他机器人。例如，使用ARX5机器人：
+* 编译机器人描述
   ```bash
   cd ~/ros2_ws
   colcon build --packages-up-to arx5_description --symlink-install
   ```
-   ```bash
+* 启动Gazebo仿真
+  ```bash
   source ~/ros2_ws/install/setup.bash
   ros2 launch ocs2_arm_controller demo.launch.py robot:=arx5 type:=r5 hardware:=gz
-    ```
+  ```
   ![ocs2_arx_gazebo](.images/arx5%20gazebo.png)
 
 ### 4. 使用Isaac Sim仿真启动

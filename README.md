@@ -8,6 +8,7 @@ interfaces for various robotic manipulators in ROS2 environment.
 - [Project Structure](#project-structure)
 - [Dependencies](#dependencies)
 - [Supported Robots](#supported-robots)
+- [Tested Environments](#tested-environments)
 - [Before You Start](#before-you-start)
 - [Quick Start](#quick-start)
 - [Components](#components)
@@ -61,6 +62,13 @@ The following robots are supported through the `robot_descriptions` package:
 
 - Dobot CR5
 - ARX robots
+
+## Tested Environments
+
+This package has been tested and verified to work with the following ROS2 distributions:
+
+- **ROS2 Humble** (Ubuntu 22.04)
+- **ROS2 Jazzy** (Ubuntu 24.04)
 
 ## Before You Start
 
@@ -121,7 +129,8 @@ colcon build --packages-up-to ocs2_arm_controller cr5_description arms_teleop --
 
 ### 3. Launch with Gazebo Simulation
 
-* Install Gazebo Harmonic (ROS2 Humble)
+#### For ROS2 Humble:
+* Install Gazebo Harmonic
     ```bash
     sudo apt-get install ros-humble-ros-gzharmonic
     ```
@@ -130,21 +139,33 @@ colcon build --packages-up-to ocs2_arm_controller cr5_description arms_teleop --
     cd ~/ros2_ws
     colcon build --packages-up-to gz_ros2_control --symlink-install
     ```
-* Launch controller
+
+#### For ROS2 Jazzy:
+* Install Gazebo Harmonic
+    ```bash
+    sudo apt-get install ros-jazzy-gz-ros2-control
+    ```
+
+#### Launch controller (for both distributions):
+* You can use `world` to choose the gazebo worlds
   ```bash
   source ~/ros2_ws/install/setup.bash
   ros2 launch ocs2_arm_controller demo.launch.py type:=AG2F90-C hardware:=gz world:=warehouse
   ```
   ![ocs2_dobot_gazebo](.images/ocs2%20gazebo.png)
-  You can add `robot:=` in the launch command to use other robots. for example, use ARX5 robots:
+
+#### Use other robots
+You can add `robot:=` in the launch command to use other robots. for example, use ARX5 robots:
+* Compile robot description
   ```bash
   cd ~/ros2_ws
   colcon build --packages-up-to arx5_description --symlink-install
   ```
-   ```bash
+* Launch Gazebo Simulation
+  ```bash
   source ~/ros2_ws/install/setup.bash
   ros2 launch ocs2_arm_controller demo.launch.py robot:=arx5 type:=r5 hardware:=gz
-    ```
+  ```
   ![ocs2_arx_gazebo](.images/arx5%20gazebo.png)
 
 ### 4. Launch with Isaac Sim Simulation

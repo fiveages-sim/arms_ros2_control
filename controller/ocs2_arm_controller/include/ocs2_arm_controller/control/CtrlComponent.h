@@ -29,7 +29,11 @@ namespace ocs2::mobile_manipulator
 
         // End effector pose computation and publishing
         vector_t computeEndEffectorPose(const vector_t& joint_positions) const;
+        vector_t computeLeftEndEffectorPose(const vector_t& joint_positions) const;
+        vector_t computeRightEndEffectorPose(const vector_t& joint_positions) const;
         void publishEndEffectorPose(const rclcpp::Time& time) const;
+        void publishLeftEndEffectorPose(const rclcpp::Time& time) const;
+        void publishRightEndEffectorPose(const rclcpp::Time& time) const;
 
         // MPC management
         void setupMpcComponents();
@@ -60,13 +64,15 @@ namespace ocs2::mobile_manipulator
         std::shared_ptr<rclcpp_lifecycle::LifecycleNode> node_;
         CtrlInterfaces& ctrl_interfaces_;
 
-        // ROS publisher
-        rclcpp::Publisher<geometry_msgs::msg::PoseStamped>::SharedPtr end_effector_pose_publisher_;
+        // ROS publishers - 统一使用左臂和右臂的发布器
+        rclcpp::Publisher<geometry_msgs::msg::PoseStamped>::SharedPtr left_end_effector_pose_publisher_;
+        rclcpp::Publisher<geometry_msgs::msg::PoseStamped>::SharedPtr right_end_effector_pose_publisher_;
         rclcpp::Publisher<ocs2_msgs::msg::MpcObservation>::SharedPtr mpc_observation_publisher_;
 
         // Configuration
         std::string robot_name_;
         std::vector<std::string> joint_names_;
+        bool dual_arm_mode_;
     };
 }
 

@@ -35,6 +35,10 @@ namespace ocs2::mobile_manipulator
         // 初始化接口
         setupInterface(task_file, lib_folder, urdf_file);
 
+        // 检测是否为双臂模式
+        dual_arm_mode_ = interface_->dual_arm_;
+        RCLCPP_INFO(node_->get_logger(), "Dual arm mode: %s", dual_arm_mode_ ? "enabled" : "disabled");
+
         // 初始化MPC组件
         setupMpcComponents();
 
@@ -61,16 +65,25 @@ namespace ocs2::mobile_manipulator
 
     void CtrlComponent::setupPublisher()
     {
-        // 初始化末端执行器位置发布器
-        end_effector_pose_publisher_ = node_->create_publisher<geometry_msgs::msg::PoseStamped>(
-            robot_name_ + "_end_effector_pose", 1);
+        // 统一创建左臂和右臂的末端执行器发布器
+        left_end_effector_pose_publisher_ = node_->create_publisher<geometry_msgs::msg::PoseStamped>(
+            robot_name_ + "_left_end_effector_pose", 1);
+        right_end_effector_pose_publisher_ = node_->create_publisher<geometry_msgs::msg::PoseStamped>(
+            robot_name_ + "_right_end_effector_pose", 1);
+        
+        if (dual_arm_mode_) {
+            RCLCPP_INFO(node_->get_logger(), "Dual arm mode: Left and right end effector pose publishers created");
+            RCLCPP_INFO(node_->get_logger(), "  Left: %s_left_end_effector_pose", robot_name_.c_str());
+            RCLCPP_INFO(node_->get_logger(), "  Right: %s_right_end_effector_pose", robot_name_.c_str());
+        } else {
+            RCLCPP_INFO(node_->get_logger(), "Single arm mode: Using left end effector pose publisher");
+            RCLCPP_INFO(node_->get_logger(), "  Left: %s_left_end_effector_pose", robot_name_.c_str());
+        }
 
         // 初始化MPC观测发布器
         mpc_observation_publisher_ = node_->create_publisher<ocs2_msgs::msg::MpcObservation>(
             robot_name_ + "_mpc_observation", 1);
 
-        RCLCPP_INFO(node_->get_logger(), "End effector pose publisher created for %s_end_effector_pose topic",
-                    robot_name_.c_str());
         RCLCPP_INFO(node_->get_logger(), "MPC observation publisher created for %s_mpc_observation topic",
                     robot_name_.c_str());
     }
@@ -83,10 +96,21 @@ namespace ocs2::mobile_manipulator
             return;
         }
 
-        // 计算末端执行器位置
-        const auto ee_pose = computeEndEffectorPose(observation_.state);
+        if (dual_arm_mode_) {
+            // 双臂模式：发布左臂和右臂的末端执行器位置
+            publishLeftEndEffectorPose(time);
+            publishRightEndEffectorPose(time);
+        } else {
+            // 单臂模式：使用左臂发布器
+            publishLeftEndEffectorPose(time);
+        }
+    }
 
-        // 发布位置信息
+    void CtrlComponent::publishLeftEndEffectorPose(const rclcpp::Time& time) const
+    {
+        // 计算左臂末端执行器位置
+        const auto ee_pose = computeLeftEndEffectorPose(observation_.state);
+        // 发布左臂位置信息
         geometry_msgs::msg::PoseStamped ee_pose_msg;
         ee_pose_msg.header.stamp = time;
         ee_pose_msg.header.frame_id = "world";
@@ -97,7 +121,25 @@ namespace ocs2::mobile_manipulator
         ee_pose_msg.pose.orientation.x = ee_pose(3);
         ee_pose_msg.pose.orientation.y = ee_pose(4);
         ee_pose_msg.pose.orientation.z = ee_pose(5);
-        end_effector_pose_publisher_->publish(ee_pose_msg);
+        left_end_effector_pose_publisher_->publish(ee_pose_msg);
+    }
+
+    void CtrlComponent::publishRightEndEffectorPose(const rclcpp::Time& time) const
+    {
+        // 计算右臂末端执行器位置
+        const auto ee_pose = computeRightEndEffectorPose(observation_.state);
+        // 发布右臂位置信息
+        geometry_msgs::msg::PoseStamped ee_pose_msg;
+        ee_pose_msg.header.stamp = time;
+        ee_pose_msg.header.frame_id = "world";
+        ee_pose_msg.pose.position.x = ee_pose(0);
+        ee_pose_msg.pose.position.y = ee_pose(1);
+        ee_pose_msg.pose.position.z = ee_pose(2);
+        ee_pose_msg.pose.orientation.w = ee_pose(6);
+        ee_pose_msg.pose.orientation.x = ee_pose(3);
+        ee_pose_msg.pose.orientation.y = ee_pose(4);
+        ee_pose_msg.pose.orientation.z = ee_pose(5);
+        right_end_effector_pose_publisher_->publish(ee_pose_msg);
     }
 
     vector_t CtrlComponent::computeEndEffectorPose(const vector_t& joint_positions) const
@@ -133,6 +175,90 @@ namespace ocs2::mobile_manipulator
         catch (const std::exception& e)
         {
             RCLCPP_WARN(node_->get_logger(), "Failed to compute end-effector pose: %s", e.what());
+            // 如果计算失败，使用默认值
+            ee_state.head<3>() = vector_t::Zero(3);
+            ee_state.tail<4>() = vector_t::Zero(4);
+            ee_state(3) = 1.0; // w分量设为1
+        }
+
+        return ee_state;
+    }
+
+    vector_t CtrlComponent::computeLeftEndEffectorPose(const vector_t& joint_positions) const
+    {
+        vector_t ee_state = vector_t::Zero(7); // 3维位置 + 4维四元数
+
+        try
+        {
+            // 使用Pinocchio计算左臂末端执行器位置和姿态
+            const auto& pinocchioInterface = interface_->getPinocchioInterface();
+            const auto& model = pinocchioInterface.getModel();
+            auto data = pinocchioInterface.getData();
+
+            // 前向运动学
+            pinocchio::forwardKinematics(model, data, joint_positions);
+            pinocchio::updateFramePlacements(model, data);
+
+            // 获取左臂末端执行器frame的ID (eeFrame - 左臂)
+            const auto& eeFrameName = interface_->getManipulatorModelInfo().eeFrame;
+            const auto eeFrameId = model.getFrameId(eeFrameName);
+
+            // 获取左臂末端执行器的位置和姿态
+            const auto& framePlacement = data.oMf[eeFrameId];
+            ee_state.head<3>() = framePlacement.translation();
+            
+            // 获取四元数并转换为ROS格式 [w, x, y, z]
+            Eigen::Quaterniond quat(framePlacement.rotation());
+            ee_state(3) = quat.x(); // x
+            ee_state(4) = quat.y(); // y
+            ee_state(5) = quat.z(); // z
+            ee_state(6) = quat.w(); // w
+        }
+        catch (const std::exception& e)
+        {
+            RCLCPP_WARN(node_->get_logger(), "Failed to compute left end-effector pose: %s", e.what());
+            // 如果计算失败，使用默认值
+            ee_state.head<3>() = vector_t::Zero(3);
+            ee_state.tail<4>() = vector_t::Zero(4);
+            ee_state(3) = 1.0; // w分量设为1
+        }
+
+        return ee_state;
+    }
+
+    vector_t CtrlComponent::computeRightEndEffectorPose(const vector_t& joint_positions) const
+    {
+        vector_t ee_state = vector_t::Zero(7); // 3维位置 + 4维四元数
+
+        try
+        {
+            // 使用Pinocchio计算右臂末端执行器位置和姿态
+            const auto& pinocchioInterface = interface_->getPinocchioInterface();
+            const auto& model = pinocchioInterface.getModel();
+            auto data = pinocchioInterface.getData();
+
+            // 前向运动学
+            pinocchio::forwardKinematics(model, data, joint_positions);
+            pinocchio::updateFramePlacements(model, data);
+
+            // 获取右臂末端执行器frame的ID (eeFrame1 - 右臂)
+            const auto& eeFrameName = interface_->getManipulatorModelInfo().eeFrame1;
+            const auto eeFrameId = model.getFrameId(eeFrameName);
+
+            // 获取右臂末端执行器的位置和姿态
+            const auto& framePlacement = data.oMf[eeFrameId];
+            ee_state.head<3>() = framePlacement.translation();
+            
+            // 获取四元数并转换为ROS格式 [w, x, y, z]
+            Eigen::Quaterniond quat(framePlacement.rotation());
+            ee_state(3) = quat.x(); // x
+            ee_state(4) = quat.y(); // y
+            ee_state(5) = quat.z(); // z
+            ee_state(6) = quat.w(); // w
+        }
+        catch (const std::exception& e)
+        {
+            RCLCPP_WARN(node_->get_logger(), "Failed to compute right end-effector pose: %s", e.what());
             // 如果计算失败，使用默认值
             ee_state.head<3>() = vector_t::Zero(3);
             ee_state.tail<4>() = vector_t::Zero(4);
@@ -257,21 +383,54 @@ namespace ocs2::mobile_manipulator
         // 更新观测时间到当前时间
         observation_.time = node_->now().seconds();
 
-        // 计算初始末端执行器的位置和姿态
-        vector_t initial_ee_state = computeEndEffectorPose(observation_.state);
+        TargetTrajectories target_trajectories;
 
-        // 输出初始目标轨迹信息
-        RCLCPP_INFO(node_->get_logger(),
-                    "Initial Target Trajectory - Time: %.3f, EE State: [%.3f, %.3f, %.3f, %.3f, %.3f, %.3f, %.3f]",
-                    observation_.time,
-                    initial_ee_state(0), initial_ee_state(1), initial_ee_state(2), // 位置 x, y, z
-                    initial_ee_state(3), initial_ee_state(4), initial_ee_state(5),
-                    initial_ee_state(6)); // 四元数 w, x, y, z
+        if (dual_arm_mode_) {
+            // 双臂模式：计算左臂和右臂的初始末端执行器位置
+            vector_t left_initial_ee_state = computeLeftEndEffectorPose(observation_.state);
+            vector_t right_initial_ee_state = computeRightEndEffectorPose(observation_.state);
 
-        // 初始化TargetTrajectories - 使用末端执行器的位置和姿态
-        const TargetTrajectories target_trajectories({observation_.time},
+            // 输出初始目标轨迹信息
+            RCLCPP_INFO(node_->get_logger(),
+                        "Initial Target Trajectory - Time: %.3f", observation_.time);
+            RCLCPP_INFO(node_->get_logger(),
+                        "Left EE State: [%.3f, %.3f, %.3f, %.3f, %.3f, %.3f, %.3f]",
+                        left_initial_ee_state(0), left_initial_ee_state(1), left_initial_ee_state(2), // 位置 x, y, z
+                        left_initial_ee_state(3), left_initial_ee_state(4), left_initial_ee_state(5),
+                        left_initial_ee_state(6)); // 四元数 w, x, y, z
+            RCLCPP_INFO(node_->get_logger(),
+                        "Right EE State: [%.3f, %.3f, %.3f, %.3f, %.3f, %.3f, %.3f]",
+                        right_initial_ee_state(0), right_initial_ee_state(1), right_initial_ee_state(2), // 位置 x, y, z
+                        right_initial_ee_state(3), right_initial_ee_state(4), right_initial_ee_state(5),
+                        right_initial_ee_state(6)); // 四元数 w, x, y, z
+
+            // 双臂模式：创建包含两个末端执行器的目标轨迹
+            // 14维状态向量：[left_x, left_y, left_z, left_qw, left_qx, left_qy, left_qz,
+            //                right_x, right_y, right_z, right_qw, right_qx, right_qy, right_qz]
+            vector_t dual_arm_target = (vector_t(14) << 
+                left_initial_ee_state, right_initial_ee_state).finished();
+            
+            target_trajectories = TargetTrajectories({observation_.time},
+                                                     {dual_arm_target},
+                                                     {observation_.input});
+        } else {
+            // 单臂模式：保持原有逻辑
+            // 计算初始末端执行器的位置和姿态
+            vector_t initial_ee_state = computeEndEffectorPose(observation_.state);
+
+            // 输出初始目标轨迹信息
+            RCLCPP_INFO(node_->get_logger(),
+                        "Initial Target Trajectory - Time: %.3f, EE State: [%.3f, %.3f, %.3f, %.3f, %.3f, %.3f, %.3f]",
+                        observation_.time,
+                        initial_ee_state(0), initial_ee_state(1), initial_ee_state(2), // 位置 x, y, z
+                        initial_ee_state(3), initial_ee_state(4), initial_ee_state(5),
+                        initial_ee_state(6)); // 四元数 w, x, y, z
+
+            // 初始化TargetTrajectories - 使用末端执行器的位置和姿态
+            target_trajectories = TargetTrajectories({observation_.time},
                                                      {initial_ee_state},
                                                      {observation_.input});
+        }
 
         // 设置初始观测和目标轨迹
         mpc_mrt_interface_->setCurrentObservation(observation_);

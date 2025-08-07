@@ -40,7 +40,7 @@ def launch_setup(context, *args, **kwargs):
     
     if use_gazebo:
         # World file (仅在gazebo模式下使用)
-        world_path = os.path.join(get_package_share_directory('gz_ros2_control'), 'worlds', world + '.world')
+        world_path = os.path.join(get_package_share_directory('ocs2_arm_controller'), 'worlds', world + '.world')
         gazebo = IncludeLaunchDescription(
             PythonLaunchDescriptionSource([
                 os.path.join(get_package_share_directory('ros_gz_sim'), 'launch'),
@@ -147,6 +147,8 @@ def launch_setup(context, *args, **kwargs):
         "task.info"
     )
     
+    # 统一映射两个话题，保持接口一致性
+    # 单臂模式下左臂话题不会被发布，但订阅了也不会有问题
     mobile_manipulator_target_node = Node(
         package='ocs2_mobile_manipulator_ros',
         executable='mobile_manipulator_target',
@@ -161,7 +163,8 @@ def launch_setup(context, *args, **kwargs):
         remappings=[
             ('mobile_manipulator_mpc_target', robot_name + '_mpc_target'),
             ('mobile_manipulator_mpc_observation', robot_name + '_mpc_observation'),
-            ('mobile_manipulator_end_effector_pose', robot_name + '_end_effector_pose'),
+            ('mobile_manipulator_left_end_effector_pose', robot_name + '_left_end_effector_pose'),
+            ('mobile_manipulator_right_end_effector_pose', robot_name + '_right_end_effector_pose'),
         ],
     )
 
