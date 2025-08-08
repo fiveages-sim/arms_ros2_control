@@ -3,7 +3,8 @@ Panels:
     Help Height: 78
     Name: Displays
     Property Tree Widget:
-      Expanded: ~
+      Expanded:
+        - /Global Options1
       Splitter Ratio: 0.5
     Tree Height: 549
   - Class: rviz_common/Selection
@@ -63,32 +64,7 @@ Visualization Manager:
         Expand Link Details: false
         Expand Tree: false
         Link Tree Style: Links in Alphabetic Order
-        Link1:
-          Alpha: 1
-          Show Axes: false
-          Show Trail: false
-          Value: true
-        Link2:
-          Alpha: 1
-          Show Axes: false
-          Show Trail: false
-          Value: true
-        Link3:
-          Alpha: 1
-          Show Axes: false
-          Show Trail: false
-          Value: true
-        Link4:
-          Alpha: 1
-          Show Axes: false
-          Show Trail: false
-          Value: true
-        Link5:
-          Alpha: 1
-          Show Axes: false
-          Show Trail: false
-          Value: true
-        Link6:
+        base:
           Alpha: 1
           Show Axes: false
           Show Trail: false
@@ -97,62 +73,172 @@ Visualization Manager:
           Alpha: 1
           Show Axes: false
           Show Trail: false
-          Value: true
-        gripper_base:
+        h_base_link:
           Alpha: 1
           Show Axes: false
           Show Trail: false
           Value: true
-        left_inner_finger:
+        h_link1_1:
           Alpha: 1
           Show Axes: false
           Show Trail: false
           Value: true
-        left_inner_finger_pad:
+        h_link2_1:
           Alpha: 1
           Show Axes: false
           Show Trail: false
           Value: true
-        left_inner_knuckle:
+        left_base_link:
           Alpha: 1
           Show Axes: false
           Show Trail: false
           Value: true
-        left_outer_finger:
+        left_camera:
           Alpha: 1
           Show Axes: false
           Show Trail: false
           Value: true
-        left_outer_knuckle:
+        left_camera_support:
           Alpha: 1
           Show Axes: false
           Show Trail: false
           Value: true
-        right_inner_finger:
+        left_gripper_center:
+          Alpha: 1
+          Show Axes: false
+          Show Trail: false
+        left_left_pad:
+          Alpha: 1
+          Show Axes: false
+          Show Trail: false
+        left_link1:
           Alpha: 1
           Show Axes: false
           Show Trail: false
           Value: true
-        right_inner_finger_pad:
+        left_link2:
           Alpha: 1
           Show Axes: false
           Show Trail: false
           Value: true
-        right_inner_knuckle:
+        left_link3:
           Alpha: 1
           Show Axes: false
           Show Trail: false
           Value: true
-        right_outer_finger:
+        left_link4:
           Alpha: 1
           Show Axes: false
           Show Trail: false
           Value: true
-        right_outer_knuckle:
+        left_link5:
           Alpha: 1
           Show Axes: false
           Show Trail: false
           Value: true
+        left_link6:
+          Alpha: 1
+          Show Axes: false
+          Show Trail: false
+          Value: true
+        left_link7:
+          Alpha: 1
+          Show Axes: false
+          Show Trail: false
+          Value: true
+        left_link8:
+          Alpha: 1
+          Show Axes: false
+          Show Trail: false
+          Value: true
+        left_right_pad:
+          Alpha: 1
+          Show Axes: false
+          Show Trail: false
+        lift_link:
+          Alpha: 1
+          Show Axes: false
+          Show Trail: false
+          Value: true
+        right_base_link:
+          Alpha: 1
+          Show Axes: false
+          Show Trail: false
+          Value: true
+        right_camera:
+          Alpha: 1
+          Show Axes: false
+          Show Trail: false
+          Value: true
+        right_camera_support:
+          Alpha: 1
+          Show Axes: false
+          Show Trail: false
+          Value: true
+        right_gripper_center:
+          Alpha: 1
+          Show Axes: false
+          Show Trail: false
+        right_left_pad:
+          Alpha: 1
+          Show Axes: false
+          Show Trail: false
+        right_link1:
+          Alpha: 1
+          Show Axes: false
+          Show Trail: false
+          Value: true
+        right_link2:
+          Alpha: 1
+          Show Axes: false
+          Show Trail: false
+          Value: true
+        right_link3:
+          Alpha: 1
+          Show Axes: false
+          Show Trail: false
+          Value: true
+        right_link4:
+          Alpha: 1
+          Show Axes: false
+          Show Trail: false
+          Value: true
+        right_link5:
+          Alpha: 1
+          Show Axes: false
+          Show Trail: false
+          Value: true
+        right_link6:
+          Alpha: 1
+          Show Axes: false
+          Show Trail: false
+          Value: true
+        right_link7:
+          Alpha: 1
+          Show Axes: false
+          Show Trail: false
+          Value: true
+        right_link8:
+          Alpha: 1
+          Show Axes: false
+          Show Trail: false
+          Value: true
+        right_right_pad:
+          Alpha: 1
+          Show Axes: false
+          Show Trail: false
+        wheel_1:
+          Alpha: 1
+          Show Axes: false
+          Show Trail: false
+        wheel_2:
+          Alpha: 1
+          Show Axes: false
+          Show Trail: false
+        wheel_3:
+          Alpha: 1
+          Show Axes: false
+          Show Trail: false
         world:
           Alpha: 1
           Show Axes: false
@@ -177,7 +263,7 @@ Visualization Manager:
   Enabled: true
   Global Options:
     Background Color: 255; 255; 255
-    Fixed Frame: world
+    Fixed Frame: base_link
     Frame Rate: 30
   Name: root
   Tools:
@@ -220,25 +306,25 @@ Visualization Manager:
   Views:
     Current:
       Class: rviz_default_plugins/Orbit
-      Distance: 1.9614644050598145
+      Distance: 2.4204323291778564
       Enable Stereo Rendering:
         Stereo Eye Separation: 0.05999999865889549
         Stereo Focal Distance: 1
         Swap Stereo Eyes: false
         Value: false
       Focal Point:
-        X: 0.07040251791477203
-        Y: -0.20091675221920013
-        Z: 0.14331285655498505
+        X: -0.013999860733747482
+        Y: -0.30077388882637024
+        Z: 0.5801938772201538
       Focal Shape Fixed Size: true
       Focal Shape Size: 0.05000000074505806
       Invert Z Axis: false
       Name: Current View
       Near Clip Distance: 0.009999999776482582
-      Pitch: 0.2903980314731598
+      Pitch: -0.06960181891918182
       Target Frame: <Fixed Frame>
       Value: Orbit (rviz)
-      Yaw: 0.8153983354568481
+      Yaw: 0.800398588180542
     Saved: ~
 Window Geometry:
   Displays:

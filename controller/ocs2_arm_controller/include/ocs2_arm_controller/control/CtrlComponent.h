@@ -49,7 +49,7 @@ namespace ocs2::mobile_manipulator
         std::unique_ptr<MPC_BASE> mpc_;
         std::unique_ptr<MPC_MRT_Interface> mpc_mrt_interface_;
         std::shared_ptr<RosReferenceManager> ros_reference_manager_;
-        
+
         // Observation state
         SystemObservation observation_;
         vector_t optimized_state_;
@@ -73,6 +73,7 @@ namespace ocs2::mobile_manipulator
         std::string robot_name_;
         std::vector<std::string> joint_names_;
         bool dual_arm_mode_;
+        std::string base_frame_; // 存储baseFrame信息
     };
 }
 

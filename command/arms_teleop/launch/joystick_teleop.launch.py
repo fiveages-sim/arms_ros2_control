@@ -19,6 +19,19 @@ def generate_launch_description():
         description='Joystick device file'
     )
     
+    # Joy node to read joystick input
+    joy_node = Node(
+        package='joy',
+        executable='joy_node',
+        name='joy_node',
+        output='screen',
+        parameters=[{
+            'device_id': 0,
+            'deadzone': 0.05,
+            'autorepeat_rate': 20.0
+        }]
+    )
+    
     # Joystick teleop node
     joystick_teleop_node = Node(
         package='arms_teleop',
@@ -32,5 +45,6 @@ def generate_launch_description():
     
     return LaunchDescription([
         joy_dev_arg,
+        joy_node,
         joystick_teleop_node
     ]) 
