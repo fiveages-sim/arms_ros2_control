@@ -1,4 +1,5 @@
 import os
+import yaml
 from pathlib import Path
 
 from ament_index_python.packages import get_package_share_directory
@@ -12,6 +13,35 @@ from launch.substitutions import LaunchConfiguration, TextSubstitution
 from launch_ros.actions import Node
 from launch.conditions import IfCondition, UnlessCondition
 import xacro
+
+def get_info_file_name(robot_name):
+    """Get info_file_name from ROS2 controller configuration, fallback to 'task'"""
+    try:
+        ros2_controllers_path = os.path.join(
+            get_package_share_directory(robot_name + "_description"),
+            "config",
+            "ros2_control",
+            "ros2_controllers.yaml",
+        )
+        
+        print(f"[INFO] Reading controller config from: {ros2_controllers_path}")
+        
+        with open(ros2_controllers_path, 'r') as file:
+            config = yaml.safe_load(file)
+            
+        # Extract info_file_name from ocs2_arm_controller parameters
+        info_file_name = config.get('ocs2_arm_controller', {}).get('ros__parameters', {}).get('info_file_name', 'task')
+        print(f"[INFO] Found info_file_name: '{info_file_name}' for robot '{robot_name}'")
+        return info_file_name
+    except FileNotFoundError:
+        print(f"[WARN] Controller config file not found for robot '{robot_name}', using default 'task'")
+        return 'task'
+    except yaml.YAMLError as e:
+        print(f"[ERROR] Failed to parse YAML config for robot '{robot_name}': {e}, using default 'task'")
+        return 'task'
+    except KeyError as e:
+        print(f"[WARN] Key error in config for robot '{robot_name}': {e}, using default 'task'")
+        return 'task'
 
 def launch_setup(context, *args, **kwargs):
     """Launch setup function using OpaqueFunction"""
@@ -139,13 +169,17 @@ def launch_setup(context, *args, **kwargs):
         parameters=[{'use_sim_time': use_sim_time}],
     )
 
+    # Get info file name from controller configuration
+    info_file_name = get_info_file_name(robot_name)
+    
     # Mobile Manipulator Target node for sending target trajectories
     task_file_path = os.path.join(
         get_package_share_directory(robot_name + "_description"),
         "config",
         "ocs2",
-        "task.info"
+        f"{info_file_name}.info"
     )
+    print(f"[INFO] Using task file: {task_file_path}")
     
     # 统一映射两个话题，保持接口一致性
     # 单臂模式下左臂话题不会被发布，但订阅了也不会有问题
