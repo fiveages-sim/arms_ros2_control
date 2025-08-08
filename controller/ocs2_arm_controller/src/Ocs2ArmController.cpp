@@ -104,7 +104,7 @@ namespace ocs2::mobile_manipulator
             RCLCPP_INFO(get_node()->get_logger(), "Robot name: %s", robot_name_.c_str());
 
             // info文件名参数
-            auto_declare<std::string>("info_file_name", "task.info");
+            auto_declare<std::string>("info_file_name", "task");
 
             // 控制输入参数
             control_input_name_ = auto_declare<std::string>("control_input_name", control_input_name_);
