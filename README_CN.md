@@ -8,7 +8,6 @@
 - [依赖项](#依赖项)
 - [支持的机器人](#支持的机器人)
 - [测试环境](#测试环境)
-- [开始前准备](#开始前准备)
 - [快速开始](#快速开始)
 - [组件](#组件)
 - [配置](#配置)
@@ -72,11 +71,37 @@ ros2_ws/
 - **ROS2 Humble** (Ubuntu 22.04)
 - **ROS2 Jazzy** (Ubuntu 24.04)
 
-## 开始前准备
 
-### 验证OCS2设置
 
-在使用arms_ros2_control包之前，通过运行移动机械臂演示之一来验证OCS2是否正确安装：
+## 快速开始
+
+<details>
+<summary><strong>📥 Git克隆项目及依赖项（点击展开）</strong></summary>
+
+要获取此项目及其依赖项，请在ROS2工作空间中克隆以下仓库：
+
+```bash
+# 导航到ROS2工作空间
+cd ~/ros2_ws/src
+
+# 克隆主项目（浅克隆 - 仅最新提交）
+git clone --depth 1 git@github.com:fiveages-sim/arms_ros2_control.git
+
+# 克隆必需的依赖项（浅克隆 - 仅最新提交）
+git clone --depth 1 git@github.com:fiveages-sim/robot_descriptions.git
+git clone --depth 1 git@github.com:legubiao/ocs2_ros2.git
+```
+
+**注意**：
+- `--depth 1` 标志创建浅克隆，仅下载最新提交，显著减少克隆时间和磁盘使用量
+- 如果以后需要完整的git历史记录，可以使用 `git fetch --unshallow` 将浅克隆转换为完整克隆
+
+</details>
+
+<details>
+<summary><strong>🔧 验证OCS2设置（新手必读）</strong></summary>
+
+如果您是第一次接触OCS2，请先验证OCS2环境是否正确配置。通过运行移动机械臂演示之一来验证：
 
 ```bash
 # 构建移动机械臂包
@@ -97,7 +122,7 @@ ros2 launch ocs2_mobile_manipulator_ros manipulator_mabi_mobile.launch.py
 
 ![ocs2_franka](.images/ocs2_franka.png)
 
-## 快速开始
+</details>
 
 ### 1. 构建包
 
