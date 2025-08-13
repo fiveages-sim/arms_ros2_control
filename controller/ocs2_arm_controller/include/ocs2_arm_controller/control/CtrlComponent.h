@@ -63,8 +63,7 @@ namespace ocs2::mobile_manipulator
 
         std::shared_ptr<rclcpp_lifecycle::LifecycleNode> node_;
         CtrlInterfaces& ctrl_interfaces_;
-
-        // ROS publishers - 统一使用左臂和右臂的发布器
+        
         rclcpp::Publisher<geometry_msgs::msg::PoseStamped>::SharedPtr left_end_effector_pose_publisher_;
         rclcpp::Publisher<geometry_msgs::msg::PoseStamped>::SharedPtr right_end_effector_pose_publisher_;
         rclcpp::Publisher<ocs2_msgs::msg::MpcObservation>::SharedPtr mpc_observation_publisher_;
@@ -73,7 +72,8 @@ namespace ocs2::mobile_manipulator
         std::string robot_name_;
         std::vector<std::string> joint_names_;
         bool dual_arm_mode_;
-        std::string base_frame_; // 存储baseFrame信息
+        std::string base_frame_; // Store baseFrame information
+        double future_time_offset_; // Future time offset
     };
 }
 
