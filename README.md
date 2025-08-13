@@ -9,7 +9,6 @@ interfaces for various robotic manipulators in ROS2 environment.
 - [Dependencies](#dependencies)
 - [Supported Robots](#supported-robots)
 - [Tested Environments](#tested-environments)
-
 - [Quick Start](#quick-start)
 - [Components](#components)
 - [Configuration](#configuration)
