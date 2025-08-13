@@ -24,11 +24,11 @@ namespace ocs2::mobile_manipulator
 
         // 获取关节名称
         joint_names_ = node_->get_parameter("joints").as_string_array();
-
+        const std::string info_file_name = node_->get_parameter("info_file_name").as_string();
         // 自动构建文件路径并初始化接口
         const std::string robot_pkg = robot_name_ + "_description";
         const std::string config_path = ament_index_cpp::get_package_share_directory(robot_pkg);
-        const std::string task_file = config_path + "/config/ocs2/task.info";
+        const std::string task_file = config_path + "/config/ocs2/" + info_file_name + ".info";
         const std::string lib_folder = config_path + "/ocs2";
         const std::string urdf_file = config_path + "/urdf/" + robot_name_ + ".urdf";
 
@@ -55,6 +55,10 @@ namespace ocs2::mobile_manipulator
         // 创建Mobile Manipulator接口
         interface_ = std::make_shared<MobileManipulatorInterface>(task_file, lib_folder, urdf_file);
 
+        // 获取baseFrame信息
+        base_frame_ = interface_->getManipulatorModelInfo().baseFrame;
+        RCLCPP_INFO(node_->get_logger(), "Base frame: %s", base_frame_.c_str());
+
         // 设置发布器
         setupPublisher();
 
@@ -70,12 +74,15 @@ namespace ocs2::mobile_manipulator
             robot_name_ + "_left_end_effector_pose", 1);
         right_end_effector_pose_publisher_ = node_->create_publisher<geometry_msgs::msg::PoseStamped>(
             robot_name_ + "_right_end_effector_pose", 1);
-        
-        if (dual_arm_mode_) {
+
+        if (dual_arm_mode_)
+        {
             RCLCPP_INFO(node_->get_logger(), "Dual arm mode: Left and right end effector pose publishers created");
             RCLCPP_INFO(node_->get_logger(), "  Left: %s_left_end_effector_pose", robot_name_.c_str());
             RCLCPP_INFO(node_->get_logger(), "  Right: %s_right_end_effector_pose", robot_name_.c_str());
-        } else {
+        }
+        else
+        {
             RCLCPP_INFO(node_->get_logger(), "Single arm mode: Using left end effector pose publisher");
             RCLCPP_INFO(node_->get_logger(), "  Left: %s_left_end_effector_pose", robot_name_.c_str());
         }
@@ -96,11 +103,14 @@ namespace ocs2::mobile_manipulator
             return;
         }
 
-        if (dual_arm_mode_) {
+        if (dual_arm_mode_)
+        {
             // 双臂模式：发布左臂和右臂的末端执行器位置
             publishLeftEndEffectorPose(time);
             publishRightEndEffectorPose(time);
-        } else {
+        }
+        else
+        {
             // 单臂模式：使用左臂发布器
             publishLeftEndEffectorPose(time);
         }
@@ -113,7 +123,7 @@ namespace ocs2::mobile_manipulator
         // 发布左臂位置信息
         geometry_msgs::msg::PoseStamped ee_pose_msg;
         ee_pose_msg.header.stamp = time;
-        ee_pose_msg.header.frame_id = "world";
+        ee_pose_msg.header.frame_id = base_frame_; // 使用baseFrame而不是"world"
         ee_pose_msg.pose.position.x = ee_pose(0);
         ee_pose_msg.pose.position.y = ee_pose(1);
         ee_pose_msg.pose.position.z = ee_pose(2);
@@ -131,7 +141,7 @@ namespace ocs2::mobile_manipulator
         // 发布右臂位置信息
         geometry_msgs::msg::PoseStamped ee_pose_msg;
         ee_pose_msg.header.stamp = time;
-        ee_pose_msg.header.frame_id = "world";
+        ee_pose_msg.header.frame_id = base_frame_; // 使用baseFrame而不是"world"
         ee_pose_msg.pose.position.x = ee_pose(0);
         ee_pose_msg.pose.position.y = ee_pose(1);
         ee_pose_msg.pose.position.z = ee_pose(2);
@@ -164,7 +174,7 @@ namespace ocs2::mobile_manipulator
             // 获取末端执行器的位置和姿态
             const auto& framePlacement = data.oMf[eeFrameId];
             ee_state.head<3>() = framePlacement.translation();
-            
+
             // 获取四元数并转换为ROS格式 [w, x, y, z]
             Eigen::Quaterniond quat(framePlacement.rotation());
             ee_state(3) = quat.x(); // x
@@ -206,7 +216,7 @@ namespace ocs2::mobile_manipulator
             // 获取左臂末端执行器的位置和姿态
             const auto& framePlacement = data.oMf[eeFrameId];
             ee_state.head<3>() = framePlacement.translation();
-            
+
             // 获取四元数并转换为ROS格式 [w, x, y, z]
             Eigen::Quaterniond quat(framePlacement.rotation());
             ee_state(3) = quat.x(); // x
@@ -248,7 +258,7 @@ namespace ocs2::mobile_manipulator
             // 获取右臂末端执行器的位置和姿态
             const auto& framePlacement = data.oMf[eeFrameId];
             ee_state.head<3>() = framePlacement.translation();
-            
+
             // 获取四元数并转换为ROS格式 [w, x, y, z]
             Eigen::Quaterniond quat(framePlacement.rotation());
             ee_state(3) = quat.x(); // x
@@ -385,7 +395,8 @@ namespace ocs2::mobile_manipulator
 
         TargetTrajectories target_trajectories;
 
-        if (dual_arm_mode_) {
+        if (dual_arm_mode_)
+        {
             // 双臂模式：计算左臂和右臂的初始末端执行器位置
             vector_t left_initial_ee_state = computeLeftEndEffectorPose(observation_.state);
             vector_t right_initial_ee_state = computeRightEndEffectorPose(observation_.state);
@@ -407,13 +418,15 @@ namespace ocs2::mobile_manipulator
             // 双臂模式：创建包含两个末端执行器的目标轨迹
             // 14维状态向量：[left_x, left_y, left_z, left_qw, left_qx, left_qy, left_qz,
             //                right_x, right_y, right_z, right_qw, right_qx, right_qy, right_qz]
-            vector_t dual_arm_target = (vector_t(14) << 
+            vector_t dual_arm_target = (vector_t(14) <<
                 left_initial_ee_state, right_initial_ee_state).finished();
-            
+
             target_trajectories = TargetTrajectories({observation_.time},
                                                      {dual_arm_target},
                                                      {observation_.input});
-        } else {
+        }
+        else
+        {
             // 单臂模式：保持原有逻辑
             // 计算初始末端执行器的位置和姿态
             vector_t initial_ee_state = computeEndEffectorPose(observation_.state);

@@ -9,7 +9,6 @@ interfaces for various robotic manipulators in ROS2 environment.
 - [Dependencies](#dependencies)
 - [Supported Robots](#supported-robots)
 - [Tested Environments](#tested-environments)
-- [Before You Start](#before-you-start)
 - [Quick Start](#quick-start)
 - [Components](#components)
 - [Configuration](#configuration)
@@ -70,12 +69,37 @@ This package has been tested and verified to work with the following ROS2 distri
 - **ROS2 Humble** (Ubuntu 22.04)
 - **ROS2 Jazzy** (Ubuntu 24.04)
 
-## Before You Start
 
-### Verify OCS2 Setup
 
-Before using the arms_ros2_control package, verify that OCS2 is properly installed by running one of the mobile
-manipulator demos:
+## Quick Start
+
+<details>
+<summary><strong>📥 Git Clone Project & Dependencies (Click to expand)</strong></summary>
+
+To get this project and its dependencies, clone the following repositories into your ROS2 workspace:
+
+```bash
+# Navigate to your ROS2 workspace
+cd ~/ros2_ws/src
+
+# Clone the main project (shallow clone - latest commit only)
+git clone --depth 1 git@github.com:fiveages-sim/arms_ros2_control.git
+
+# Clone required dependencies (shallow clone - latest commit only)
+git clone --depth 1 git@github.com:fiveages-sim/robot_descriptions.git
+git clone --depth 1 git@github.com:legubiao/ocs2_ros2.git
+```
+
+**Note**: 
+- The `--depth 1` flag creates a shallow clone that only downloads the latest commit, significantly reducing clone time and disk usage
+- If you need the full git history later, you can convert shallow clones to full clones using: `git fetch --unshallow`
+
+</details>
+
+<details>
+<summary><strong>🔧 Verify OCS2 Setup (Required for Beginners)</strong></summary>
+
+If you're new to OCS2, please verify that your OCS2 environment is properly configured by running one of the mobile manipulator demos:
 
 ```bash
 # Build the mobile manipulator package
@@ -92,13 +116,11 @@ ros2 launch ocs2_mobile_manipulator_ros franka.launch.py
 ros2 launch ocs2_mobile_manipulator_ros manipulator_mabi_mobile.launch.py
 ```
 
-If any of these demos run successfully, your OCS2 environment is properly configured. See
-the [ocs2_mobile_manipulator_ros README](https://github.com/legubiao/ocs2_ros2/tree/ros2/basic%20examples/ocs2_mobile_manipulator_ros)
-for more available demos.
+If any of these demos run successfully, your OCS2 environment is properly configured. See the [ocs2_mobile_manipulator_ros README](https://github.com/legubiao/ocs2_ros2/tree/ros2/basic%20examples/ocs2_mobile_manipulator_ros) for more available demos.
 
 ![ocs2_franka](.images/ocs2_franka.png)
 
-## Quick Start
+</details>
 
 ### 1. Build the Package
 

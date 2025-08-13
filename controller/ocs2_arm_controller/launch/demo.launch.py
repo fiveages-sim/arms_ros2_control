@@ -1,4 +1,5 @@
 import os
+import yaml
 from pathlib import Path
 
 from ament_index_python.packages import get_package_share_directory
@@ -13,6 +14,35 @@ from launch_ros.actions import Node
 from launch.conditions import IfCondition, UnlessCondition
 import xacro
 
+def get_info_file_name(robot_name):
+    """Get info_file_name from ROS2 controller configuration, fallback to 'task'"""
+    try:
+        ros2_controllers_path = os.path.join(
+            get_package_share_directory(robot_name + "_description"),
+            "config",
+            "ros2_control",
+            "ros2_controllers.yaml",
+        )
+        
+        print(f"[INFO] Reading controller config from: {ros2_controllers_path}")
+        
+        with open(ros2_controllers_path, 'r') as file:
+            config = yaml.safe_load(file)
+            
+        # Extract info_file_name from ocs2_arm_controller parameters
+        info_file_name = config.get('ocs2_arm_controller', {}).get('ros__parameters', {}).get('info_file_name', 'task')
+        print(f"[INFO] Found info_file_name: '{info_file_name}' for robot '{robot_name}'")
+        return info_file_name
+    except FileNotFoundError:
+        print(f"[WARN] Controller config file not found for robot '{robot_name}', using default 'task'")
+        return 'task'
+    except yaml.YAMLError as e:
+        print(f"[ERROR] Failed to parse YAML config for robot '{robot_name}': {e}, using default 'task'")
+        return 'task'
+    except KeyError as e:
+        print(f"[WARN] Key error in config for robot '{robot_name}': {e}, using default 'task'")
+        return 'task'
+
 def launch_setup(context, *args, **kwargs):
     """Launch setup function using OpaqueFunction"""
     robot_name = context.launch_configurations['robot']
@@ -20,26 +50,26 @@ def launch_setup(context, *args, **kwargs):
     hardware = context.launch_configurations.get('hardware', 'mock_components')
     world = context.launch_configurations.get('world', 'empty')
     
-    # 构建mappings，只在robot_type有值时才包含
+    # Build mappings, only include when robot_type has a value
     mappings = {
         'ros2_control_hardware_type': hardware,
     }
     if robot_type and robot_type.strip():
         mappings["type"] = robot_type
     
-    # 如果是gazebo模式，添加gazebo相关mappings
+    # If in gazebo mode, add gazebo-related mappings
     use_gazebo = hardware == 'gz'
     use_sim_time = hardware in ['gz', 'isaac']
     if use_gazebo:
         mappings['gazebo'] = 'true'
     
-    # Gazebo相关节点（仅在gazebo模式下创建）
+    # Gazebo-related nodes (only created in gazebo mode)
     gazebo = None
     gz_spawn_entity = None
     bridge = None
     
     if use_gazebo:
-        # World file (仅在gazebo模式下使用)
+        # World file (only used in gazebo mode)
         world_path = os.path.join(get_package_share_directory('ocs2_arm_controller'), 'worlds', world + '.world')
         gazebo = IncludeLaunchDescription(
             PythonLaunchDescriptionSource([
@@ -51,7 +81,7 @@ def launch_setup(context, *args, **kwargs):
             ],
         )
 
-        # Spawn robot in Gazebo (仅在gazebo模式下使用)
+        # Spawn robot in Gazebo (only used in gazebo mode)
         gz_spawn_entity = Node(
             package='ros_gz_sim',
             executable='create',
@@ -66,7 +96,7 @@ def launch_setup(context, *args, **kwargs):
             ],
         )
 
-        # Bridge for clock (仅在gazebo模式下使用)
+        # Bridge for clock (only used in gazebo mode)
         bridge = Node(
             package='ros_gz_bridge',
             executable='parameter_bridge',
@@ -97,7 +127,7 @@ def launch_setup(context, *args, **kwargs):
         parameters=[robot_description],
     )
 
-    # ros2_control using FakeSystem as hardware (仅在非gazebo模式下使用)
+    # ros2_control using FakeSystem as hardware (only used in non-gazebo mode)
     ros2_controllers_path = os.path.join(
         get_package_share_directory(robot_name+"_description"),
         "config",
@@ -139,16 +169,20 @@ def launch_setup(context, *args, **kwargs):
         parameters=[{'use_sim_time': use_sim_time}],
     )
 
+    # Get info file name from controller configuration
+    info_file_name = get_info_file_name(robot_name)
+    
     # Mobile Manipulator Target node for sending target trajectories
     task_file_path = os.path.join(
         get_package_share_directory(robot_name + "_description"),
         "config",
         "ocs2",
-        "task.info"
+        f"{info_file_name}.info"
     )
+    print(f"[INFO] Using task file: {task_file_path}")
     
-    # 统一映射两个话题，保持接口一致性
-    # 单臂模式下左臂话题不会被发布，但订阅了也不会有问题
+    # Unified mapping for both arms to maintain interface consistency
+    
     mobile_manipulator_target_node = Node(
         package='ocs2_mobile_manipulator_ros',
         executable='mobile_manipulator_target',
@@ -157,8 +191,9 @@ def launch_setup(context, *args, **kwargs):
         parameters=[
             {'taskFile': task_file_path},
             {'use_sim_time': use_sim_time},
-            {'enableJoystick': True},  # 默认启用手柄控制
-            {'enableAutoPosition': True},  # 默认启用自动位置同步
+            {'enableJoystick': True},  # Enable joystick control by default
+            {'enableAutoPosition': True},  # Enable automatic position sync by default
+            {'enableDynamicFrame': True},  # Enable dynamic frame selection
         ],
         remappings=[
             ('mobile_manipulator_mpc_target', robot_name + '_mpc_target'),
@@ -185,9 +220,9 @@ def launch_setup(context, *args, **kwargs):
         ],
     )
 
-    # 根据hardware模式返回不同的节点列表
+    # Return different node lists based on hardware mode
     if use_gazebo:
-        # Gazebo模式：使用事件处理器来确保正确的启动顺序
+        # Gazebo mode: use event handlers to ensure correct startup order
         return [
             RegisterEventHandler(
                 event_handler=OnProcessExit(
@@ -209,7 +244,7 @@ def launch_setup(context, *args, **kwargs):
             mobile_manipulator_target_node,
         ]
     else:
-        # Mock components模式：直接启动所有节点
+        # Mock components mode: start all nodes directly
         return [
             rviz_node,
             node_robot_state_publisher,
