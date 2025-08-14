@@ -12,6 +12,7 @@
 #include <pinocchio/algorithm/frames.hpp>
 #include <pinocchio/algorithm/kinematics.hpp>
 #include <exception>
+#include <fstream> // Added for file existence check
 
 namespace ocs2::mobile_manipulator
 {
@@ -20,15 +21,43 @@ namespace ocs2::mobile_manipulator
         : node_(node), ctrl_interfaces_(ctrl_interfaces)
     {
         robot_name_ = node_->get_parameter("robot_name").as_string();
+        robot_type_ = node_->get_parameter("robot_type").as_string();
         future_time_offset_ = node_->get_parameter("future_time_offset").as_double();
         joint_names_ = node_->get_parameter("joints").as_string_array();
         const std::string info_file_name = node_->get_parameter("info_file_name").as_string();
+        
         // Automatically build file paths and initialize interface
         const std::string robot_pkg = robot_name_ + "_description";
         const std::string config_path = ament_index_cpp::get_package_share_directory(robot_pkg);
         const std::string task_file = config_path + "/config/ocs2/" + info_file_name + ".info";
         const std::string lib_folder = config_path + "/ocs2";
-        const std::string urdf_file = config_path + "/urdf/" + robot_name_ + ".urdf";
+        
+        // Generate URDF file path based on robot type
+        std::string urdf_file;
+        if (!robot_type_.empty()) {
+            // If robot type is specified, try to use type-specific URDF
+            const std::string robot_identifier = robot_name_ + "_" + robot_type_;
+            const std::string type_specific_urdf = config_path + "/urdf/" + robot_identifier + ".urdf";
+            
+            // Check if type-specific URDF exists
+            std::ifstream file_check(type_specific_urdf);
+            if (file_check.good()) {
+                urdf_file = type_specific_urdf;
+                file_check.close();
+                RCLCPP_INFO(node_->get_logger(), "Using type-specific URDF: %s", urdf_file.c_str());
+            } else {
+                file_check.close();
+                // Fallback to default URDF if type-specific doesn't exist
+                urdf_file = config_path + "/urdf/" + robot_name_ + ".urdf";
+                RCLCPP_WARN(node_->get_logger(), 
+                    "Type-specific URDF not found: %s, falling back to default: %s", 
+                    type_specific_urdf.c_str(), urdf_file.c_str());
+            }
+        } else {
+            // Use default URDF
+            urdf_file = config_path + "/urdf/" + robot_name_ + ".urdf";
+            RCLCPP_INFO(node_->get_logger(), "Using default URDF: %s", urdf_file.c_str());
+        }
 
         // Initialize interface
         setupInterface(task_file, lib_folder, urdf_file);
@@ -44,6 +73,9 @@ namespace ocs2::mobile_manipulator
         setupPublisher();
 
         RCLCPP_INFO(node_->get_logger(), "CtrlComponent initialized for robot: %s", robot_name_.c_str());
+        if (!robot_type_.empty()) {
+            RCLCPP_INFO(node_->get_logger(), "Robot type: %s", robot_type_.c_str());
+        }
         RCLCPP_INFO(node_->get_logger(), "Future time offset: %.2f seconds", future_time_offset_);
     }
 

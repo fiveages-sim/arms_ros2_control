@@ -70,6 +70,7 @@ namespace ocs2::mobile_manipulator
 
         // Configuration
         std::string robot_name_;
+        std::string robot_type_;  // Robot type/variant (e.g., red, blue, long_arm, short_arm, etc.)
         std::vector<std::string> joint_names_;
         bool dual_arm_mode_;
         std::string base_frame_; // Store baseFrame information

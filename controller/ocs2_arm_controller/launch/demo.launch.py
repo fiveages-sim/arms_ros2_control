@@ -139,7 +139,9 @@ def launch_setup(context, *args, **kwargs):
         executable="ros2_control_node",
         parameters=[
             ros2_controllers_path,
-            {'use_sim_time': use_sim_time}
+            {'use_sim_time': use_sim_time},
+            # Pass robot_type parameter to the controller if specified
+            {'robot_type': robot_type} if robot_type and robot_type.strip() else {}
         ],
         remappings=[
             ("/controller_manager/robot_description", "/robot_description"),
@@ -166,7 +168,9 @@ def launch_setup(context, *args, **kwargs):
         executable='spawner',
         arguments=['ocs2_arm_controller'],
         output='screen',
-        parameters=[{'use_sim_time': use_sim_time}],
+        parameters=[
+            {'use_sim_time': use_sim_time},
+        ],
     )
 
     # Get info file name from controller configuration

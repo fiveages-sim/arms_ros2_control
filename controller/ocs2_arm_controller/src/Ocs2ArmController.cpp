@@ -101,6 +101,7 @@ namespace ocs2::mobile_manipulator
 
             // Robot parameters - use robot_name to auto-generate package names
             auto_declare<std::string>("robot_name", "cr5");
+            auto_declare<std::string>("robot_type", "");  // Optional robot type/variant
             auto_declare<double>("future_time_offset", 1.0);
             auto_declare<std::string>("info_file_name", "task");
 
