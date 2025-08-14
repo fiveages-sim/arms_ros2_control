@@ -112,12 +112,26 @@ namespace ocs2::mobile_manipulator
 
             // State machine parameters
             home_pos_ = auto_declare<std::vector<double>>("home_pos", home_pos_);
+            rest_pos_ = auto_declare<std::vector<double>>("rest_pos", rest_pos_);
 
             // Create CtrlComponent (auto-initialize interface)
             ctrl_comp_ = std::make_shared<CtrlComponent>(get_node(), ctrl_interfaces_);
 
             // Create states
             state_list_.home = std::make_shared<StateHome>(ctrl_interfaces_, home_pos_);
+            
+            // Configure rest pose if available
+            if (!rest_pos_.empty())
+            {
+                state_list_.home->setRestPose(rest_pos_);
+                RCLCPP_INFO(get_node()->get_logger(), 
+                            "Rest pose configured with %zu joints", rest_pos_.size());
+            }
+            else
+            {
+                RCLCPP_INFO(get_node()->get_logger(), "No rest pose configured, using home pose only");
+            }
+            
             state_list_.ocs2 = std::make_shared<StateOCS2>(ctrl_interfaces_, get_node(), ctrl_comp_);
             state_list_.hold = std::make_shared<StateHold>(ctrl_interfaces_);
 

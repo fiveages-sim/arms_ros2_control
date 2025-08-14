@@ -15,93 +15,167 @@ namespace ocs2::mobile_manipulator
                          const std::shared_ptr<CtrlComponent>& ctrl_comp)
         : FSMState(FSMStateName::OCS2, "OCS2"), ctrl_comp_(ctrl_comp), ctrl_interfaces_(ctrl_interfaces), node_(node)
     {
-        // 获取关节名称
+        // Get joint names
         joint_names_ = node_->get_parameter("joints").as_string_array();
 
-        // 获取MPC更新频率
+        // Get MPC update frequency
         double mpc_frequency = 0.0;
         const double controller_frequency = ctrl_interfaces_.frequency_;
 
-        // 尝试从参数获取MPC频率
+        // Try to get MPC frequency from parameters
         if (node_->has_parameter("mpc_frequency"))
         {
             mpc_frequency = node_->get_parameter("mpc_frequency").as_double();
             RCLCPP_INFO(node_->get_logger(), "MPC frequency from parameter: %.1f Hz", mpc_frequency);
         }
 
-        // 综合判断MPC频率是否有效
-
+        // Validate MPC frequency
         if (const bool mpc_frequency_valid = mpc_frequency > 0.0 && mpc_frequency <= controller_frequency; !
             mpc_frequency_valid)
         {
-            // 使用控制器频率的一半作为默认值
+            // Use 1/4 of controller frequency as default to ensure MPC updates are frequent enough
             const double original_frequency = mpc_frequency;
-            mpc_frequency = controller_frequency / 2.0;
+            mpc_frequency = controller_frequency / 4.0;
 
             if (original_frequency <= 0.0)
             {
                 RCLCPP_WARN(node_->get_logger(),
-                            "Invalid MPC frequency (%.1f Hz), using half of controller frequency: %.1f Hz (controller: %.1f Hz)",
+                            "Invalid MPC frequency (%.1f Hz), using 1/4 of controller frequency: %.1f Hz (controller: %.1f Hz)",
                             original_frequency, mpc_frequency, controller_frequency);
             }
             else if (original_frequency > controller_frequency)
             {
                 RCLCPP_WARN(node_->get_logger(),
-                            "MPC frequency (%.1f Hz) exceeds controller frequency (%.1f Hz), using half of controller frequency: %.1f Hz",
+                            "MPC frequency (%.1f Hz) exceeds controller frequency (%.1f Hz), using 1/4 of controller frequency: %.1f Hz",
                             original_frequency, mpc_frequency, controller_frequency);
             }
             else
             {
                 RCLCPP_INFO(node_->get_logger(),
-                            "MPC frequency not set, using half of controller frequency: %.1f Hz (controller: %.1f Hz)",
+                            "MPC frequency not set, using 1/4 of controller frequency: %.1f Hz (controller: %.1f Hz)",
                             mpc_frequency, controller_frequency);
             }
         }
 
+        // Ensure MPC frequency is not too low, minimum frequency is 10Hz
+        if (mpc_frequency < 10.0)
+        {
+            RCLCPP_WARN(node_->get_logger(),
+                        "MPC frequency (%.1f Hz) is too low, setting minimum frequency to 10.0 Hz", mpc_frequency);
+            mpc_frequency = 10.0;
+        }
+
         mpc_period_ = 1.0 / mpc_frequency;
 
-        // 使用CtrlComponent的接口
+        // Calculate thread sleep duration based on controller frequency
+        // Sleep time is set to 2x controller period to ensure MPC update requests are not missed
+        thread_sleep_duration_ms_ = static_cast<int>((2.0 / controller_frequency) * 1000.0);
+
+        // Use CtrlComponent interface
         RCLCPP_INFO(node_->get_logger(), "Using CtrlComponent interface for StateOCS2");
+        RCLCPP_INFO(node_->get_logger(), "Thread sleep duration: %d ms (based on controller frequency: %.1f Hz)", 
+                    thread_sleep_duration_ms_, controller_frequency);
 
         RCLCPP_INFO(node_->get_logger(), "StateOCS2 initialized successfully");
+    }
+
+    StateOCS2::~StateOCS2()
+    {
+        // Ensure thread is properly stopped when destructing
+        stopMpcThread();
     }
 
     void StateOCS2::enter()
     {
         RCLCPP_INFO(node_->get_logger(), "Entering OCS2 state");
 
-        // 重置MPC
+        // Reset MPC
         ctrl_comp_->resetMpc();
 
-        // 重置时间
+        // Reset time
         last_mpc_time_ = node_->now();
 
-        RCLCPP_INFO(node_->get_logger(), "OCS2 state entered successfully");
+        // Start MPC update thread
+        mpc_thread_should_stop_ = false;
+        mpc_running_ = true;
+        mpc_thread_ = std::thread(&StateOCS2::mpcUpdateThread, this);
+
+        RCLCPP_INFO(node_->get_logger(), "OCS2 state entered successfully, MPC update thread started");
     }
 
-    void StateOCS2::run(const rclcpp::Time& time, const rclcpp::Duration& period)
+    void StateOCS2::run(const rclcpp::Time& time, const rclcpp::Duration& /* period */)
     {
-        // 检查是否需要更新MPC
+        // Check if MPC update is needed
         if ((time - last_mpc_time_).seconds() >= mpc_period_)
         {
-            // 使用CtrlComponent评估策略
-            ctrl_comp_->advanceMpc();
-
+            // Set MPC update flag
+            mpc_update_requested_ = true;
             last_mpc_time_ = time;
         }
 
+        // Execute policy evaluation
         ctrl_comp_->evaluatePolicy(time);
     }
 
     void StateOCS2::exit()
     {
         RCLCPP_INFO(node_->get_logger(), "Exiting OCS2 state");
-        // 清理工作（如果需要）
+        
+        // Stop MPC update thread
+        stopMpcThread();
+        
+        RCLCPP_INFO(node_->get_logger(), "OCS2 state exited successfully, MPC update thread stopped");
+    }
+
+    void StateOCS2::mpcUpdateThread()
+    {
+        RCLCPP_INFO(node_->get_logger(), "MPC update thread started");
+        
+        while (!mpc_thread_should_stop_.load())
+        {
+            // Check if MPC update is needed
+            if (mpc_update_requested_.load())
+            {
+                try
+                {
+                    ctrl_comp_->advanceMpc();
+                    mpc_update_requested_ = false; // Clear flag
+                }
+                catch (const std::exception& e)
+                {
+                    RCLCPP_ERROR(node_->get_logger(), "Error in MPC update: %s", e.what());
+                    mpc_update_requested_ = false; // Clear flag even on error
+                }
+            }
+            
+            // Brief sleep to avoid busy waiting
+            std::this_thread::sleep_for(std::chrono::milliseconds(thread_sleep_duration_ms_));
+        }
+        
+        RCLCPP_INFO(node_->get_logger(), "MPC update thread stopped");
+    }
+
+    void StateOCS2::stopMpcThread()
+    {
+        if (mpc_running_)
+        {
+            // Set stop flag
+            mpc_thread_should_stop_ = true;
+            
+            // Wait for thread to finish
+            if (mpc_thread_.joinable())
+            {
+                mpc_thread_.join();
+            }
+            
+            mpc_running_ = false;
+            RCLCPP_INFO(node_->get_logger(), "MPC update thread stopped successfully");
+        }
     }
 
     FSMStateName StateOCS2::checkChange()
     {
-        // 检查控制输入进行状态切换
+        // Check control inputs for state transition
         switch (ctrl_interfaces_.control_inputs_.command)
         {
         case 2: return FSMStateName::HOLD;

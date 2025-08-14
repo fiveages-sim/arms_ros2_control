@@ -138,6 +138,7 @@ namespace ocs2::mobile_manipulator
 
         // State machine parameters
         std::vector<double> home_pos_;
+        std::vector<double> rest_pos_;  // Rest pose configuration
 
         // Interface mapping
         std::unordered_map<std::string, std::vector<std::reference_wrapper<hardware_interface::LoanedCommandInterface>>*>
