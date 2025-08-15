@@ -9,6 +9,7 @@
 #include <atomic>
 #include <string>
 #include <vector>
+#include <thread>
 
 #include <rclcpp/rclcpp.hpp>
 #include <rclcpp_lifecycle/lifecycle_node.hpp>
@@ -28,7 +29,7 @@ namespace ocs2::mobile_manipulator
                   const std::shared_ptr<rclcpp_lifecycle::LifecycleNode>& node,
                   const std::shared_ptr<CtrlComponent>& ctrl_comp = nullptr);
 
-        ~StateOCS2() override = default;
+        ~StateOCS2() override;
 
         void enter() override;
         void run(const rclcpp::Time& time, const rclcpp::Duration& period) override;
@@ -36,6 +37,11 @@ namespace ocs2::mobile_manipulator
         FSMStateName checkChange() override;
 
     private:
+        // MPC update thread function
+        void mpcUpdateThread();
+        
+        // Stop MPC update thread
+        void stopMpcThread();
 
         // CtrlComponent reference
         std::shared_ptr<CtrlComponent> ctrl_comp_;
@@ -48,9 +54,13 @@ namespace ocs2::mobile_manipulator
         std::vector<std::string> joint_names_;
         double mpc_period_;
         rclcpp::Time last_mpc_time_;
+        int thread_sleep_duration_ms_; // Thread sleep duration in milliseconds
         
-        // MPC running flag
+        // MPC thread related
+        std::thread mpc_thread_;
         std::atomic_bool mpc_running_{false};
+        std::atomic_bool mpc_thread_should_stop_{false};
+        std::atomic_bool mpc_update_requested_{false};
     };
 }
 

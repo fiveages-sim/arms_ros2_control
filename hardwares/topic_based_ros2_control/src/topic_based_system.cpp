@@ -51,11 +51,10 @@ void sumRotationFromMinus2PiTo2Pi(const double current_wrapped_rad, double& tota
   // Add the corrected delta to the total rotation
   total_rotation += delta;
 }
-}  // namespace
+} // namespace
 
 namespace topic_based_ros2_control
 {
-
 static constexpr std::size_t POSITION_INTERFACE_INDEX = 0;
 static constexpr std::size_t VELOCITY_INTERFACE_INDEX = 1;
 // JointState doesn't contain an acceleration field, so right now it's not used
@@ -98,13 +97,14 @@ CallbackReturn TopicBasedSystem::on_init(const hardware_interface::HardwareInfo&
         if (!interface.initial_value.empty())
         {
           joint_states_[index][i] = std::stod(interface.initial_value);
-          
+
           // Set command initial value based on parameter
           if (!initialize_commands_from_state_)
           {
             // Use initial_value from config (may cause sudden movement for real hardware)
             joint_commands_[index][i] = std::stod(interface.initial_value);
-            RCLCPP_WARN(node_->get_logger(), "Setting command initial value for joint %s to %s (may cause sudden movement)", 
+            RCLCPP_WARN(node_->get_logger(),
+                        "Setting command initial value for joint %s to %s (may cause sudden movement)",
                         component.name.c_str(), interface.initial_value.c_str());
           }
           // If initialize_commands_from_state_ is true, commands will be set from first read
@@ -154,12 +154,13 @@ CallbackReturn TopicBasedSystem::on_init(const hardware_interface::HardwareInfo&
   options.arguments({ "--ros-args", "-r", "__node:=topic_based_ros2_control_" + info_.name });
 
   node_ = rclcpp::Node::make_shared("_", options);
-  
+
   // Log the initialization parameter after node is created
-  RCLCPP_INFO(node_->get_logger(), "TopicBasedSystem: initialize_commands_from_state = %s", 
+  RCLCPP_INFO(node_->get_logger(), "TopicBasedSystem: initialize_commands_from_state = %s",
               initialize_commands_from_state_ ? "true" : "false");
 
-  if (auto it = info_.hardware_parameters.find("trigger_joint_command_threshold"); it != info_.hardware_parameters.end())
+  if (auto it = info_.hardware_parameters.find("trigger_joint_command_threshold");
+    it != info_.hardware_parameters.end())
   {
     trigger_joint_command_threshold_ = std::stod(it->second);
   }
@@ -237,14 +238,16 @@ hardware_interface::return_type TopicBasedSystem::read(const rclcpp::Time& /*tim
       const auto& joints = info_.joints;
       auto it = std::find_if(joints.begin(), joints.end(),
                              [&joint_name = std::as_const(latest_joint_state_.name[i])](
-                                 const hardware_interface::ComponentInfo& info) { return joint_name == info.name; });
+                             const hardware_interface::ComponentInfo& info) {
+                               return joint_name == info.name;
+                             });
       if (it != joints.end())
       {
         auto j = static_cast<std::size_t>(std::distance(joints.begin(), it));
         if (!latest_joint_state_.position.empty())
         {
           joint_commands_[POSITION_INTERFACE_INDEX][j] = latest_joint_state_.position[i];
-          RCLCPP_INFO(node_->get_logger(), "Initialized command for joint %s to position %.3f", 
+          RCLCPP_INFO(node_->get_logger(), "Initialized command for joint %s to position %.3f",
                       latest_joint_state_.name[i].c_str(), latest_joint_state_.position[i]);
         }
         if (!latest_joint_state_.velocity.empty())
@@ -258,6 +261,7 @@ hardware_interface::return_type TopicBasedSystem::read(const rclcpp::Time& /*tim
       }
     }
     commands_initialized_ = true;
+    RCLCPP_INFO(node_->get_logger(), "Commands initialized from joint state. Now allowing command publishing.");
   }
 
   for (std::size_t i = 0; i < latest_joint_state_.name.size(); ++i)
@@ -265,7 +269,9 @@ hardware_interface::return_type TopicBasedSystem::read(const rclcpp::Time& /*tim
     const auto& joints = info_.joints;
     auto it = std::find_if(joints.begin(), joints.end(),
                            [&joint_name = std::as_const(latest_joint_state_.name[i])](
-                               const hardware_interface::ComponentInfo& info) { return joint_name == info.name; });
+                           const hardware_interface::ComponentInfo& info) {
+                             return joint_name == info.name;
+                           });
     if (it != joints.end())
     {
       auto j = static_cast<std::size_t>(std::distance(joints.begin(), it));
@@ -314,8 +320,16 @@ bool TopicBasedSystem::getInterface(const std::string& name, const std::string& 
   return false;
 }
 
-hardware_interface::return_type TopicBasedSystem::write(const rclcpp::Time& /*time*/, const rclcpp::Duration& /*period*/)
+hardware_interface::return_type TopicBasedSystem::write(const rclcpp::Time& /*time*/,
+                                                        const rclcpp::Duration& /*period*/)
 {
+  // If initialize_commands_from_state is enabled, wait until we have received initial state
+  if (initialize_commands_from_state_ && !commands_initialized_)
+  {
+    RCLCPP_INFO(node_->get_logger(), "Waiting for initial joint state before publishing commands...");
+    return hardware_interface::return_type::OK;
+  }
+
   // To avoid spamming TopicBased's joint command topic we check the difference between the joint states and
   // the current joint commands, if it's smaller than a threshold we don't publish it.
   const auto diff = std::transform_reduce(
@@ -384,7 +398,7 @@ hardware_interface::return_type TopicBasedSystem::write(const rclcpp::Time& /*ti
 
   return hardware_interface::return_type::OK;
 }
-}  // end namespace topic_based_ros2_control
+} // end namespace topic_based_ros2_control
 
 #include "pluginlib/class_list_macros.hpp"
 PLUGINLIB_EXPORT_CLASS(topic_based_ros2_control::TopicBasedSystem, hardware_interface::SystemInterface)

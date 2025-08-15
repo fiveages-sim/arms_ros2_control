@@ -55,7 +55,7 @@ namespace ocs2::mobile_manipulator
     controller_interface::return_type Ocs2ArmController::update(const rclcpp::Time& time,
                                                                 const rclcpp::Duration& period)
     {
-        // 发布末端执行器位置（无论当前状态如何）
+        // Publish end effector pose (regardless of current state)
         ctrl_comp_->updateObservation(time);
 
         if (mode_ == FSMMode::NORMAL)
@@ -87,11 +87,11 @@ namespace ocs2::mobile_manipulator
     {
         try
         {
-            // 获取更新频率
+            // Get update frequency
             get_node()->get_parameter("update_rate", ctrl_interfaces_.frequency_);
             RCLCPP_INFO(get_node()->get_logger(), "Controller Manager Update Rate: %d Hz", ctrl_interfaces_.frequency_);
 
-            // 硬件参数
+            // Hardware parameters
             command_prefix_ = auto_declare<std::string>("command_prefix", command_prefix_);
             joint_names_ = auto_declare<std::vector<std::string>>("joints", joint_names_);
             command_interface_types_ =
@@ -99,27 +99,39 @@ namespace ocs2::mobile_manipulator
             state_interface_types_ =
                 auto_declare<std::vector<std::string>>("state_interfaces", state_interface_types_);
 
-            // 机器人参数 - 使用robot_name自动生成包名
-            robot_name_ = auto_declare<std::string>("robot_name", robot_name_);
-            RCLCPP_INFO(get_node()->get_logger(), "Robot name: %s", robot_name_.c_str());
-
-            // info文件名参数
+            // Robot parameters - use robot_name to auto-generate package names
+            auto_declare<std::string>("robot_name", "cr5");
+            auto_declare<std::string>("robot_type", "");  // Optional robot type/variant
+            auto_declare<double>("future_time_offset", 1.0);
             auto_declare<std::string>("info_file_name", "task");
 
-            // 控制输入参数
+            // Control input parameters
             control_input_name_ = auto_declare<std::string>("control_input_name", control_input_name_);
             control_input_interface_types_ =
                 auto_declare<std::vector<std::string>>("control_input_interfaces", control_input_interface_types_);
 
-            // 状态机参数
+            // State machine parameters
             home_pos_ = auto_declare<std::vector<double>>("home_pos", home_pos_);
-            zero_pos_ = auto_declare<std::vector<double>>("zero_pos", zero_pos_);
+            rest_pos_ = auto_declare<std::vector<double>>("rest_pos", rest_pos_);
 
-            // 创建CtrlComponent（自动初始化接口）
+            // Create CtrlComponent (auto-initialize interface)
             ctrl_comp_ = std::make_shared<CtrlComponent>(get_node(), ctrl_interfaces_);
 
-            // 创建状态
+            // Create states
             state_list_.home = std::make_shared<StateHome>(ctrl_interfaces_, home_pos_);
+            
+            // Configure rest pose if available
+            if (!rest_pos_.empty())
+            {
+                state_list_.home->setRestPose(rest_pos_);
+                RCLCPP_INFO(get_node()->get_logger(), 
+                            "Rest pose configured with %zu joints", rest_pos_.size());
+            }
+            else
+            {
+                RCLCPP_INFO(get_node()->get_logger(), "No rest pose configured, using home pose only");
+            }
+            
             state_list_.ocs2 = std::make_shared<StateOCS2>(ctrl_interfaces_, get_node(), ctrl_comp_);
             state_list_.hold = std::make_shared<StateHold>(ctrl_interfaces_);
 
@@ -144,9 +156,6 @@ namespace ocs2::mobile_manipulator
                 ctrl_interfaces_.control_inputs_.rx = msg->rx;
                 ctrl_interfaces_.control_inputs_.ry = msg->ry;
             });
-
-        RCLCPP_INFO(get_node()->get_logger(), "End effector pose publisher created for %s_end_effector_pose topic",
-                    robot_name_.c_str());
 
         return CallbackReturn::SUCCESS;
     }

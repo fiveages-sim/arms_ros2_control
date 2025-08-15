@@ -33,8 +33,8 @@ namespace ocs2::mobile_manipulator
     {
         INVALID,
         HOME,
-        OCS2, // OCS2 MPC控制状态
-        HOLD // 保持当前位置状态
+        OCS2, // OCS2 MPC control state
+        HOLD // Hold current position state
     };
 
     // FSM Mode enum
@@ -90,8 +90,8 @@ namespace ocs2::mobile_manipulator
     {
         std::shared_ptr<FSMState> invalid;
         std::shared_ptr<StateHome> home;
-        std::shared_ptr<StateOCS2> ocs2; // OCS2状态
-        std::shared_ptr<StateHold> hold; // 保持位置状态
+        std::shared_ptr<StateOCS2> ocs2; // OCS2 state
+        std::shared_ptr<StateHold> hold; // Hold position state
     };
 
     class Ocs2ArmController final : public controller_interface::ControllerInterface
@@ -116,34 +116,31 @@ namespace ocs2::mobile_manipulator
         std::shared_ptr<FSMState> getNextState(FSMStateName stateName) const;
         void updateControlInputs();
 
-        // 硬件参数
+        // Hardware parameters
         std::string command_prefix_;
         std::vector<std::string> joint_names_;
         std::vector<std::string> command_interface_types_;
         std::vector<std::string> state_interface_types_;
 
-        // 机器人参数
-        std::string robot_name_{"cr5"}; // 默认机器人名称
-
-        // 控制输入参数
+        // Control input parameters
         std::string control_input_name_;
         std::vector<std::string> control_input_interface_types_;
 
-        // 控制接口
+        // Control interfaces
         CtrlInterfaces ctrl_interfaces_;
 
-        // 状态机
+        // State machine
         FSMStateList state_list_;
         std::shared_ptr<FSMState> current_state_;
         std::shared_ptr<FSMState> next_state_;
         FSMStateName next_state_name_{FSMStateName::INVALID};
         FSMMode mode_{FSMMode::NORMAL};
 
-        // 状态机参数
+        // State machine parameters
         std::vector<double> home_pos_;
-        std::vector<double> zero_pos_;
+        std::vector<double> rest_pos_;  // Rest pose configuration
 
-        // 接口映射
+        // Interface mapping
         std::unordered_map<std::string, std::vector<std::reference_wrapper<hardware_interface::LoanedCommandInterface>>*>
         command_interface_map_ = {
             {"position", &ctrl_interfaces_.joint_position_command_interface_}
@@ -155,7 +152,7 @@ namespace ocs2::mobile_manipulator
             {"velocity", &ctrl_interfaces_.joint_velocity_state_interface_}
         };
 
-        // ROS订阅
+        // ROS subscriptions
         rclcpp::Subscription<arms_ros2_control_msgs::msg::Inputs>::SharedPtr control_input_subscription_;
         
         // CtrlComponent for OCS2 interface access

@@ -4,28 +4,84 @@
 
 #include "ocs2_arm_controller/FSM/StateHome.h"
 #include <rclcpp/rclcpp.hpp>
+#include <cmath>
 
 namespace ocs2::mobile_manipulator
 {
     StateHome::StateHome(CtrlInterfaces& ctrl_interfaces, const std::vector<double>& target_pos)
         : FSMState(FSMStateName::HOME, "home"),
           ctrl_interfaces_(ctrl_interfaces),
-          target_pos_(target_pos)
+          target_pos_(target_pos),
+          duration_(3.0),  // Default interpolation duration: 3 seconds
+          percent_(0.0),   // Start from 0%
+          has_rest_pose_(false),
+          is_rest_pose_(false),  // Default to home pose
+          last_switch_command_(false),
+          switch_debounced_(false)
     {
+        // Initialize current target to home pose by default
+        current_target_ = target_pos_;
+        
+        RCLCPP_INFO(rclcpp::get_logger("StateHome"), 
+                    "StateHome initialized with home pose, rest pose not configured");
     }
 
     void StateHome::enter()
     {
         RCLCPP_INFO(rclcpp::get_logger("StateHome"), "Entering HOME state");
+        
+        // Always start with home pose when entering the state
+        is_rest_pose_ = false;
+        current_target_ = target_pos_;
+        
+        // Get current joint positions as starting positions
+        start_pos_.clear();
+        for (size_t i = 0; i < ctrl_interfaces_.joint_position_state_interface_.size(); ++i)
+        {
+            start_pos_.push_back(ctrl_interfaces_.joint_position_state_interface_[i].get().get_value());
+        }
+        
+        // Reset interpolation progress
+        percent_ = 0.0;
+        
+        RCLCPP_INFO(rclcpp::get_logger("StateHome"), 
+                    "Starting linear interpolation to home pose over %.1f seconds", duration_);
     }
 
     void StateHome::run(const rclcpp::Time& /*time*/, const rclcpp::Duration& /*period*/)
     {
-        // Move arm to home position using position control
-        // Simple position control: set target position directly
-        for (size_t i = 0; i < ctrl_interfaces_.joint_position_command_interface_.size() && i < target_pos_.size(); ++i)
+        // Check for pose switching command with debouncing
+        bool current_switch_command = (ctrl_interfaces_.control_inputs_.command == 4);
+        
+        // Detect rising edge (command just became 4)
+        if (current_switch_command && !last_switch_command_ && !switch_debounced_)
         {
-            ctrl_interfaces_.joint_position_command_interface_[i].get().set_value(target_pos_[i]);
+            switchPose();
+            switch_debounced_ = true;  // Prevent further triggers
+        }
+        
+        // Reset debounce when command is no longer 4
+        if (!current_switch_command)
+        {
+            switch_debounced_ = false;
+        }
+        
+        // Update last command state
+        last_switch_command_ = current_switch_command;
+        
+        // Update interpolation progress based on actual controller frequency
+        double controller_frequency = ctrl_interfaces_.frequency_;
+        percent_ += 1.0 / (duration_ * controller_frequency);
+        
+        // Calculate interpolation phase using tanh for smooth transition
+        double phase = std::tanh(percent_);
+        
+        // Apply interpolated position to joints
+        for (size_t i = 0; i < ctrl_interfaces_.joint_position_command_interface_.size() && 
+             i < current_target_.size() && i < start_pos_.size(); ++i)
+        {
+            double interpolated_value = phase * current_target_[i] + (1.0 - phase) * start_pos_[i];
+            ctrl_interfaces_.joint_position_command_interface_[i].get().set_value(interpolated_value);
         }
     }
 
@@ -45,4 +101,53 @@ namespace ocs2::mobile_manipulator
             return FSMStateName::HOME;
         }
     }
-} // namespace ocs2_arm_controller
+
+    void StateHome::switchPose()
+    {
+        // Only allow switching if rest pose is configured
+        if (!has_rest_pose_)
+        {
+            RCLCPP_WARN(rclcpp::get_logger("StateHome"), 
+                        "Cannot switch pose: rest pose not configured");
+            return;
+        }
+        
+        // Toggle between home and rest pose
+        is_rest_pose_ = !is_rest_pose_;
+        
+        // Update current target
+        current_target_ = is_rest_pose_ ? rest_pos_ : target_pos_;
+        
+        // Start new interpolation
+        startInterpolation();
+        
+        RCLCPP_INFO(rclcpp::get_logger("StateHome"), 
+                    "Switching to %s pose", is_rest_pose_ ? "rest" : "home");
+    }
+
+    void StateHome::startInterpolation()
+    {
+        // Get current joint positions as new starting positions
+        start_pos_.clear();
+        for (size_t i = 0; i < ctrl_interfaces_.joint_position_state_interface_.size(); ++i)
+        {
+            start_pos_.push_back(ctrl_interfaces_.joint_position_state_interface_[i].get().get_value());
+        }
+        
+        // Reset interpolation progress
+        percent_ = 0.0;
+        
+        RCLCPP_INFO(rclcpp::get_logger("StateHome"), 
+                    "Starting interpolation to %s pose over %.1f seconds", 
+                    is_rest_pose_ ? "rest" : "home", duration_);
+    }
+
+    void StateHome::setRestPose(const std::vector<double>& rest_pos)
+    {
+        rest_pos_ = rest_pos;
+        has_rest_pose_ = true;
+        
+        RCLCPP_INFO(rclcpp::get_logger("StateHome"), 
+                    "Rest pose configured with %zu joints", rest_pos_.size());
+    }
+} // namespace ocs2::mobile_manipulator
