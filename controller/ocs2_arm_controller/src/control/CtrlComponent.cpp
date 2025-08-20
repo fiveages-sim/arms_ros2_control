@@ -471,6 +471,7 @@ namespace ocs2::mobile_manipulator
         }
 
         // Set initial observation and target trajectory
+        mpc_mrt_interface_->reset();
         mpc_mrt_interface_->setCurrentObservation(observation_);
         mpc_mrt_interface_->resetMpcNode(target_trajectories);
 
