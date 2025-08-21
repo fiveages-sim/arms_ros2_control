@@ -16,7 +16,7 @@ namespace ocs2::mobile_manipulator
     void StateHold::enter()
     {
         RCLCPP_INFO(rclcpp::get_logger("StateHold"), "Entering HOLD state");
-        
+
         // HOLD state does not send any commands, let robot maintain current position
         // Record current position on first run (only for logging)
         if (hold_positions_.empty())
@@ -27,9 +27,9 @@ namespace ocs2::mobile_manipulator
             {
                 hold_positions_[i] = ctrl_interfaces_.joint_position_state_interface_[i].get().get_value();
             }
-            
-            RCLCPP_INFO(rclcpp::get_logger("StateHold"), 
-                "HOLD state entered, current positions recorded for %zu joints", hold_positions_.size());
+
+            RCLCPP_INFO(rclcpp::get_logger("StateHold"),
+                        "HOLD state entered, current positions recorded for %zu joints", hold_positions_.size());
         }
         else
         {
@@ -53,8 +53,8 @@ namespace ocs2::mobile_manipulator
         // Check control inputs for state transition
         switch (ctrl_interfaces_.control_inputs_.command)
         {
-        case 1: return FSMStateName::OCS2;
-        case 3: return FSMStateName::HOME;
+        case 3: return FSMStateName::OCS2;
+        case 1: return FSMStateName::HOME;
         default: return FSMStateName::HOLD;
         }
     }
