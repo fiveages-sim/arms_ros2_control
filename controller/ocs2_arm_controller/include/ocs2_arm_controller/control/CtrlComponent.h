@@ -13,8 +13,8 @@
 #include <ocs2_mpc/MPC_MRT_Interface.h>
 #include <ocs2_mpc/MPC_BASE.h>
 #include <ocs2_ros_interfaces/synchronized_module/RosReferenceManager.h>
-#include <geometry_msgs/msg/pose_stamped.hpp>
 #include <ocs2_msgs/msg/mpc_observation.hpp>
+#include "ocs2_arm_controller/control/Visualizer.h"
 
 namespace ocs2::mobile_manipulator
 {
@@ -27,20 +27,15 @@ namespace ocs2::mobile_manipulator
         explicit CtrlComponent(const std::shared_ptr<rclcpp_lifecycle::LifecycleNode>& node,
                                CtrlInterfaces& ctrl_interfaces);
 
-        // End effector pose computation and publishing
-        vector_t computeEndEffectorPose(const vector_t& joint_positions) const;
-        vector_t computeLeftEndEffectorPose(const vector_t& joint_positions) const;
-        vector_t computeRightEndEffectorPose(const vector_t& joint_positions) const;
-        void publishEndEffectorPose(const rclcpp::Time& time) const;
-        void publishLeftEndEffectorPose(const rclcpp::Time& time) const;
-        void publishRightEndEffectorPose(const rclcpp::Time& time) const;
-
         // MPC management
         void setupMpcComponents();
         void updateObservation(const rclcpp::Time& time);
         void evaluatePolicy(const rclcpp::Time& time);
         void resetMpc();
-        void advanceMpc() const;
+        void advanceMpc();
+
+        // Visualization management
+        void clearTrajectoryVisualization();
 
         // OCS2 interface (public access)
         std::shared_ptr<MobileManipulatorInterface> interface_;
@@ -61,19 +56,24 @@ namespace ocs2::mobile_manipulator
                             const std::string& urdf_file);
         void setupPublisher();
 
+        // URDF path generation helper
+        std::string generateUrdfPath(const std::string& robot_name, 
+                                    const std::string& robot_type,
+                                    const std::string& config_path) const;
+
         std::shared_ptr<rclcpp_lifecycle::LifecycleNode> node_;
         CtrlInterfaces& ctrl_interfaces_;
         
-        rclcpp::Publisher<geometry_msgs::msg::PoseStamped>::SharedPtr left_end_effector_pose_publisher_;
-        rclcpp::Publisher<geometry_msgs::msg::PoseStamped>::SharedPtr right_end_effector_pose_publisher_;
         rclcpp::Publisher<ocs2_msgs::msg::MpcObservation>::SharedPtr mpc_observation_publisher_;
+
+        // Visualization component
+        std::unique_ptr<Visualizer> visualizer_;
 
         // Configuration
         std::string robot_name_;
         std::string robot_type_;  // Robot type/variant (e.g., red, blue, long_arm, short_arm, etc.)
         std::vector<std::string> joint_names_;
         bool dual_arm_mode_;
-        std::string base_frame_; // Store baseFrame information
         double future_time_offset_; // Future time offset
     };
 }

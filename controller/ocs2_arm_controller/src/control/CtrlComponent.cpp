@@ -12,7 +12,7 @@
 #include <pinocchio/algorithm/frames.hpp>
 #include <pinocchio/algorithm/kinematics.hpp>
 #include <exception>
-#include <fstream> // Added for file existence check
+#include <filesystem> // Added for modern file operations
 
 namespace ocs2::mobile_manipulator
 {
@@ -25,39 +25,15 @@ namespace ocs2::mobile_manipulator
         future_time_offset_ = node_->get_parameter("future_time_offset").as_double();
         joint_names_ = node_->get_parameter("joints").as_string_array();
         const std::string info_file_name = node_->get_parameter("info_file_name").as_string();
-        
+
         // Automatically build file paths and initialize interface
         const std::string robot_pkg = robot_name_ + "_description";
         const std::string config_path = ament_index_cpp::get_package_share_directory(robot_pkg);
         const std::string task_file = config_path + "/config/ocs2/" + info_file_name + ".info";
         const std::string lib_folder = config_path + "/ocs2";
-        
-        // Generate URDF file path based on robot type
-        std::string urdf_file;
-        if (!robot_type_.empty()) {
-            // If robot type is specified, try to use type-specific URDF
-            const std::string robot_identifier = robot_name_ + "_" + robot_type_;
-            const std::string type_specific_urdf = config_path + "/urdf/" + robot_identifier + ".urdf";
-            
-            // Check if type-specific URDF exists
-            std::ifstream file_check(type_specific_urdf);
-            if (file_check.good()) {
-                urdf_file = type_specific_urdf;
-                file_check.close();
-                RCLCPP_INFO(node_->get_logger(), "Using type-specific URDF: %s", urdf_file.c_str());
-            } else {
-                file_check.close();
-                // Fallback to default URDF if type-specific doesn't exist
-                urdf_file = config_path + "/urdf/" + robot_name_ + ".urdf";
-                RCLCPP_WARN(node_->get_logger(), 
-                    "Type-specific URDF not found: %s, falling back to default: %s", 
-                    type_specific_urdf.c_str(), urdf_file.c_str());
-            }
-        } else {
-            // Use default URDF
-            urdf_file = config_path + "/urdf/" + robot_name_ + ".urdf";
-            RCLCPP_INFO(node_->get_logger(), "Using default URDF: %s", urdf_file.c_str());
-        }
+
+        // Generate URDF file path
+        const std::string urdf_file = generateUrdfPath(robot_name_, robot_type_, config_path);
 
         // Initialize interface
         setupInterface(task_file, lib_folder, urdf_file);
@@ -72,8 +48,14 @@ namespace ocs2::mobile_manipulator
         // Initialize publishers
         setupPublisher();
 
+        // Initialize visualization component
+        visualizer_ = std::make_unique<Visualizer>(node_, interface_, robot_name_);
+        visualizer_->initialize();
+        RCLCPP_INFO(node_->get_logger(), "Visualization component initialized");
+
         RCLCPP_INFO(node_->get_logger(), "CtrlComponent initialized for robot: %s", robot_name_.c_str());
-        if (!robot_type_.empty()) {
+        if (!robot_type_.empty())
+        {
             RCLCPP_INFO(node_->get_logger(), "Robot type: %s", robot_type_.c_str());
         }
         RCLCPP_INFO(node_->get_logger(), "Future time offset: %.2f seconds", future_time_offset_);
@@ -86,10 +68,6 @@ namespace ocs2::mobile_manipulator
         // Create Mobile Manipulator interface
         interface_ = std::make_shared<MobileManipulatorInterface>(task_file, lib_folder, urdf_file);
 
-        // Get baseFrame information
-        base_frame_ = interface_->getManipulatorModelInfo().baseFrame;
-        RCLCPP_INFO(node_->get_logger(), "Base frame: %s", base_frame_.c_str());
-
         // Setup publishers
         setupPublisher();
 
@@ -100,213 +78,12 @@ namespace ocs2::mobile_manipulator
 
     void CtrlComponent::setupPublisher()
     {
-        // Create unified left and right arm end effector pose publishers
-        left_end_effector_pose_publisher_ = node_->create_publisher<geometry_msgs::msg::PoseStamped>(
-            robot_name_ + "_left_end_effector_pose", 1);
-        right_end_effector_pose_publisher_ = node_->create_publisher<geometry_msgs::msg::PoseStamped>(
-            robot_name_ + "_right_end_effector_pose", 1);
-
-        if (dual_arm_mode_)
-        {
-            RCLCPP_INFO(node_->get_logger(), "Dual arm mode: Left and right end effector pose publishers created");
-            RCLCPP_INFO(node_->get_logger(), "  Left: %s_left_end_effector_pose", robot_name_.c_str());
-            RCLCPP_INFO(node_->get_logger(), "  Right: %s_right_end_effector_pose", robot_name_.c_str());
-        }
-        else
-        {
-            RCLCPP_INFO(node_->get_logger(), "Single arm mode: Using left end effector pose publisher");
-            RCLCPP_INFO(node_->get_logger(), "  Left: %s_left_end_effector_pose", robot_name_.c_str());
-        }
-
         // Initialize MPC observation publisher
         mpc_observation_publisher_ = node_->create_publisher<ocs2_msgs::msg::MpcObservation>(
             robot_name_ + "_mpc_observation", 1);
 
         RCLCPP_INFO(node_->get_logger(), "MPC observation publisher created for %s_mpc_observation topic",
                     robot_name_.c_str());
-    }
-
-    void CtrlComponent::publishEndEffectorPose(const rclcpp::Time& time) const
-    {
-        if (!interface_)
-        {
-            RCLCPP_WARN(node_->get_logger(), "Interface not available, cannot publish end effector pose");
-            return;
-        }
-
-        if (dual_arm_mode_)
-        {
-            // Dual arm mode: publish left and right arm end effector poses
-            publishLeftEndEffectorPose(time);
-            publishRightEndEffectorPose(time);
-        }
-        else
-        {
-            // Single arm mode: use left arm publisher
-            publishLeftEndEffectorPose(time);
-        }
-    }
-
-    void CtrlComponent::publishLeftEndEffectorPose(const rclcpp::Time& time) const
-    {
-        // Calculate left arm end effector pose
-        const auto ee_pose = computeLeftEndEffectorPose(observation_.state);
-        // Publish left arm pose information
-        geometry_msgs::msg::PoseStamped ee_pose_msg;
-        ee_pose_msg.header.stamp = time;
-        ee_pose_msg.header.frame_id = base_frame_; // Use baseFrame instead of "world"
-        ee_pose_msg.pose.position.x = ee_pose(0);
-        ee_pose_msg.pose.position.y = ee_pose(1);
-        ee_pose_msg.pose.position.z = ee_pose(2);
-        ee_pose_msg.pose.orientation.w = ee_pose(6);
-        ee_pose_msg.pose.orientation.x = ee_pose(3);
-        ee_pose_msg.pose.orientation.y = ee_pose(4);
-        ee_pose_msg.pose.orientation.z = ee_pose(5);
-        left_end_effector_pose_publisher_->publish(ee_pose_msg);
-    }
-
-    void CtrlComponent::publishRightEndEffectorPose(const rclcpp::Time& time) const
-    {
-        // Calculate right arm end effector pose
-        const auto ee_pose = computeRightEndEffectorPose(observation_.state);
-        // Publish right arm pose information
-        geometry_msgs::msg::PoseStamped ee_pose_msg;
-        ee_pose_msg.header.stamp = time;
-        ee_pose_msg.header.frame_id = base_frame_; // Use baseFrame instead of "world"
-        ee_pose_msg.pose.position.x = ee_pose(0);
-        ee_pose_msg.pose.position.y = ee_pose(1);
-        ee_pose_msg.pose.position.z = ee_pose(2);
-        ee_pose_msg.pose.orientation.w = ee_pose(6);
-        ee_pose_msg.pose.orientation.x = ee_pose(3);
-        ee_pose_msg.pose.orientation.y = ee_pose(4);
-        ee_pose_msg.pose.orientation.z = ee_pose(5);
-        right_end_effector_pose_publisher_->publish(ee_pose_msg);
-    }
-
-    vector_t CtrlComponent::computeEndEffectorPose(const vector_t& joint_positions) const
-    {
-        vector_t ee_state = vector_t::Zero(7); // 3D position + 4D quaternion
-
-        try
-        {
-            // Use Pinocchio to compute end effector position and orientation
-            const auto& pinocchioInterface = interface_->getPinocchioInterface();
-            const auto& model = pinocchioInterface.getModel();
-            auto data = pinocchioInterface.getData();
-
-            // Forward kinematics
-            pinocchio::forwardKinematics(model, data, joint_positions);
-            pinocchio::updateFramePlacements(model, data);
-
-            // Get end effector frame ID
-            const auto& eeFrameName = interface_->getManipulatorModelInfo().eeFrame;
-            const auto eeFrameId = model.getFrameId(eeFrameName);
-
-            // Get end effector position and orientation
-            const auto& framePlacement = data.oMf[eeFrameId];
-            ee_state.head<3>() = framePlacement.translation();
-
-            // Get quaternion and convert to ROS format [w, x, y, z]
-            Eigen::Quaterniond quat(framePlacement.rotation());
-            ee_state(3) = quat.x(); // x
-            ee_state(4) = quat.y(); // y
-            ee_state(5) = quat.z(); // z
-            ee_state(6) = quat.w(); // w
-        }
-        catch (const std::exception& e)
-        {
-            RCLCPP_WARN(node_->get_logger(), "Failed to compute end-effector pose: %s", e.what());
-            // If computation fails, use default values
-            ee_state.head<3>() = vector_t::Zero(3);
-            ee_state.tail<4>() = vector_t::Zero(4);
-            ee_state(3) = 1.0; // Set w component to 1
-        }
-
-        return ee_state;
-    }
-
-    vector_t CtrlComponent::computeLeftEndEffectorPose(const vector_t& joint_positions) const
-    {
-        vector_t ee_state = vector_t::Zero(7); // 3D position + 4D quaternion
-
-        try
-        {
-            // Use Pinocchio to compute left arm end effector position and orientation
-            const auto& pinocchioInterface = interface_->getPinocchioInterface();
-            const auto& model = pinocchioInterface.getModel();
-            auto data = pinocchioInterface.getData();
-
-            // Forward kinematics
-            pinocchio::forwardKinematics(model, data, joint_positions);
-            pinocchio::updateFramePlacements(model, data);
-
-            // Get left arm end effector frame ID (eeFrame - left arm)
-            const auto& eeFrameName = interface_->getManipulatorModelInfo().eeFrame;
-            const auto eeFrameId = model.getFrameId(eeFrameName);
-
-            // Get left arm end effector position and orientation
-            const auto& framePlacement = data.oMf[eeFrameId];
-            ee_state.head<3>() = framePlacement.translation();
-
-            // Get quaternion and convert to ROS format [w, x, y, z]
-            Eigen::Quaterniond quat(framePlacement.rotation());
-            ee_state(3) = quat.x(); // x
-            ee_state(4) = quat.y(); // y
-            ee_state(5) = quat.z(); // z
-            ee_state(6) = quat.w(); // w
-        }
-        catch (const std::exception& e)
-        {
-            RCLCPP_WARN(node_->get_logger(), "Failed to compute left end-effector pose: %s", e.what());
-            // If computation fails, use default values
-            ee_state.head<3>() = vector_t::Zero(3);
-            ee_state.tail<4>() = vector_t::Zero(4);
-            ee_state(3) = 1.0; // Set w component to 1
-        }
-
-        return ee_state;
-    }
-
-    vector_t CtrlComponent::computeRightEndEffectorPose(const vector_t& joint_positions) const
-    {
-        vector_t ee_state = vector_t::Zero(7); // 3D position + 4D quaternion
-
-        try
-        {
-            // Use Pinocchio to compute right arm end effector position and orientation
-            const auto& pinocchioInterface = interface_->getPinocchioInterface();
-            const auto& model = pinocchioInterface.getModel();
-            auto data = pinocchioInterface.getData();
-
-            // Forward kinematics
-            pinocchio::forwardKinematics(model, data, joint_positions);
-            pinocchio::updateFramePlacements(model, data);
-
-            // Get right arm end effector frame ID (eeFrame1 - right arm)
-            const auto& eeFrameName = interface_->getManipulatorModelInfo().eeFrame1;
-            const auto eeFrameId = model.getFrameId(eeFrameName);
-
-            // Get right arm end effector position and orientation
-            const auto& framePlacement = data.oMf[eeFrameId];
-            ee_state.head<3>() = framePlacement.translation();
-
-            // Get quaternion and convert to ROS format [w, x, y, z]
-            Eigen::Quaterniond quat(framePlacement.rotation());
-            ee_state(3) = quat.x(); // x
-            ee_state(4) = quat.y(); // y
-            ee_state(5) = quat.z(); // z
-            ee_state(6) = quat.w(); // w
-        }
-        catch (const std::exception& e)
-        {
-            RCLCPP_WARN(node_->get_logger(), "Failed to compute right end-effector pose: %s", e.what());
-            // If computation fails, use default values
-            ee_state.head<3>() = vector_t::Zero(3);
-            ee_state.tail<4>() = vector_t::Zero(4);
-            ee_state(3) = 1.0; // Set w component to 1
-        }
-
-        return ee_state;
     }
 
     void CtrlComponent::setupMpcComponents()
@@ -351,6 +128,8 @@ namespace ocs2::mobile_manipulator
             observation_.state[i] = ctrl_interfaces_.joint_position_state_interface_[i].get().get_value();
         }
         observation_.input = vector_t::Zero(interface_->getManipulatorModelInfo().inputDim);
+        visualizer_->publishSelfCollisionVisualization(observation_.state);
+        visualizer_->publishEndEffectorPose(time, observation_.state);
     }
 
     void CtrlComponent::evaluatePolicy(const rclcpp::Time& time)
@@ -379,7 +158,7 @@ namespace ocs2::mobile_manipulator
             const auto& policy = mpc_mrt_interface_->getPolicy();
 
             // Calculate future time point (using configurable time offset)
-            double future_time = observation_.time + future_time_offset_/ctrl_interfaces_.frequency_;
+            double future_time = observation_.time + future_time_offset_ / ctrl_interfaces_.frequency_;
 
             // Use linear interpolation to get state at future time point
             vector_t future_state = LinearInterpolation::interpolate(
@@ -411,6 +190,8 @@ namespace ocs2::mobile_manipulator
                 ctrl_interfaces_.joint_position_command_interface_[i].get().set_value(new_position);
             }
         }
+        visualizer_->updateEndEffectorTrajectory(mpc_mrt_interface_->getPolicy());
+        visualizer_->publishEndEffectorTrajectory(node_->now());
     }
 
     void CtrlComponent::resetMpc()
@@ -423,20 +204,22 @@ namespace ocs2::mobile_manipulator
         if (dual_arm_mode_)
         {
             // Dual arm mode: calculate initial end effector positions for left and right arms
-            vector_t left_initial_ee_state = computeLeftEndEffectorPose(observation_.state);
-            vector_t right_initial_ee_state = computeRightEndEffectorPose(observation_.state);
+            vector_t left_initial_ee_state = visualizer_->computeEndEffectorPose(observation_.state);
+            vector_t right_initial_ee_state = visualizer_->computeRightEndEffectorPose(observation_.state);
 
             // Output initial target trajectory information
             RCLCPP_INFO(node_->get_logger(),
                         "Initial Target Trajectory - Time: %.3f", observation_.time);
             RCLCPP_INFO(node_->get_logger(),
                         "Left EE State: [%.3f, %.3f, %.3f, %.3f, %.3f, %.3f, %.3f]",
-                        left_initial_ee_state(0), left_initial_ee_state(1), left_initial_ee_state(2), // Position x, y, z
+                        left_initial_ee_state(0), left_initial_ee_state(1), left_initial_ee_state(2),
+                        // Position x, y, z
                         left_initial_ee_state(3), left_initial_ee_state(4), left_initial_ee_state(5),
                         left_initial_ee_state(6)); // Quaternion w, x, y, z
             RCLCPP_INFO(node_->get_logger(),
                         "Right EE State: [%.3f, %.3f, %.3f, %.3f, %.3f, %.3f, %.3f]",
-                        right_initial_ee_state(0), right_initial_ee_state(1), right_initial_ee_state(2), // Position x, y, z
+                        right_initial_ee_state(0), right_initial_ee_state(1), right_initial_ee_state(2),
+                        // Position x, y, z
                         right_initial_ee_state(3), right_initial_ee_state(4), right_initial_ee_state(5),
                         right_initial_ee_state(6)); // Quaternion w, x, y, z
 
@@ -454,7 +237,7 @@ namespace ocs2::mobile_manipulator
         {
             // Single arm mode: maintain original logic
             // Calculate initial end effector position and orientation
-            vector_t initial_ee_state = computeEndEffectorPose(observation_.state);
+            vector_t initial_ee_state = visualizer_->computeEndEffectorPose(observation_.state);
 
             // Output initial target trajectory information
             RCLCPP_INFO(node_->get_logger(),
@@ -483,8 +266,40 @@ namespace ocs2::mobile_manipulator
         }
     }
 
-    void CtrlComponent::advanceMpc() const
+    void CtrlComponent::advanceMpc()
     {
         mpc_mrt_interface_->advanceMpc();
+    }
+
+    void CtrlComponent::clearTrajectoryVisualization()
+    {
+        if (visualizer_) {
+            visualizer_->clearTrajectoryHistory();
+        }
+    }
+
+    std::string CtrlComponent::generateUrdfPath(const std::string& robot_name, 
+                                               const std::string& robot_type,
+                                               const std::string& config_path) const
+    {
+        const std::string urdf_dir = config_path + "/urdf/";
+        
+        // If robot type is specified, try to use type-specific URDF
+        if (!robot_type.empty()) {
+            const std::string type_specific_urdf = urdf_dir + robot_name + "_" + robot_type + ".urdf";
+            
+            if (std::filesystem::exists(type_specific_urdf)) {
+                RCLCPP_INFO(node_->get_logger(), "Using type-specific URDF: %s", type_specific_urdf.c_str());
+                return type_specific_urdf;
+            } else {
+                RCLCPP_WARN(node_->get_logger(), 
+                    "Type-specific URDF not found: %s, falling back to default", type_specific_urdf.c_str());
+            }
+        }
+        
+        // Use default URDF
+        const std::string default_urdf = urdf_dir + robot_name + ".urdf";
+        RCLCPP_INFO(node_->get_logger(), "Using default URDF: %s", default_urdf.c_str());
+        return default_urdf;
     }
 } // namespace ocs2::mobile_manipulator

@@ -16,6 +16,7 @@ set(CONTROLLER_INCLUDE_DEPENDS
         ocs2_mobile_manipulator
         ocs2_ros_interfaces
         arms_ros2_control_msgs
+        ocs2_self_collision_visualization
 )
 
 # find dependencies
@@ -28,6 +29,7 @@ add_library(${PROJECT_NAME} SHARED
         src/Ocs2ArmController.cpp
 
         src/control/CtrlComponent.cpp
+        src/control/Visualizer.cpp
 
         src/FSM/StateHome.cpp
         src/FSM/StateOCS2.cpp

@@ -26,7 +26,8 @@ namespace ocs2::mobile_manipulator
 
     private:
         CtrlInterfaces& ctrl_interfaces_;
-        std::vector<double> hold_positions_; // 进入时记录的位置
+        // State variables
+        std::vector<double> hold_positions_; // Positions recorded when entering
         bool positions_recorded_{false};
     };
 } // namespace ocs2_arm_controller

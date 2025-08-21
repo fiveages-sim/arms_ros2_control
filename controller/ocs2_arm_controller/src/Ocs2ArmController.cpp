@@ -78,8 +78,6 @@ namespace ocs2::mobile_manipulator
             mode_ = FSMMode::NORMAL;
         }
 
-        ctrl_comp_->publishEndEffectorPose(time);
-
         return controller_interface::return_type::OK;
     }
 

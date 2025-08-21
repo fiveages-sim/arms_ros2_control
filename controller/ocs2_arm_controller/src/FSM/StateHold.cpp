@@ -16,42 +16,45 @@ namespace ocs2::mobile_manipulator
     void StateHold::enter()
     {
         RCLCPP_INFO(rclcpp::get_logger("StateHold"), "Entering HOLD state");
-        positions_recorded_ = false;
+        
+        // HOLD state does not send any commands, let robot maintain current position
+        // Record current position on first run (only for logging)
+        if (hold_positions_.empty())
+        {
+            // Get current joint positions
+            hold_positions_.resize(ctrl_interfaces_.joint_position_state_interface_.size());
+            for (size_t i = 0; i < ctrl_interfaces_.joint_position_state_interface_.size(); ++i)
+            {
+                hold_positions_[i] = ctrl_interfaces_.joint_position_state_interface_[i].get().get_value();
+            }
+            
+            RCLCPP_INFO(rclcpp::get_logger("StateHold"), 
+                "HOLD state entered, current positions recorded for %zu joints", hold_positions_.size());
+        }
+        else
+        {
+            RCLCPP_INFO(rclcpp::get_logger("StateHold"), "HOLD state entered, using previously recorded positions");
+        }
     }
 
-    void StateHold::run(const rclcpp::Time& /*time*/, const rclcpp::Duration& /*period*/)
+    void StateHold::run(const rclcpp::Time& /* time */, const rclcpp::Duration& /* period */)
     {
-        // HOLD状态不发送任何指令，让机器人保持当前位置
-        // 第一次运行时记录当前位置（仅用于日志）
-        if (!positions_recorded_)
-        {
-            hold_positions_.clear();
-            hold_positions_.reserve(ctrl_interfaces_.joint_position_state_interface_.size());
-
-            for (const auto& interface : ctrl_interfaces_.joint_position_state_interface_)
-            {
-                hold_positions_.push_back(interface.get().get_value());
-            }
-
-            positions_recorded_ = true;
-            RCLCPP_INFO(rclcpp::get_logger("StateHold"), "HOLD state active - no commands sent, maintaining current position for %zu joints",
-                        hold_positions_.size());
-        }
+        // HOLD state does not send any commands
+        // Robot will maintain its current position
     }
 
     void StateHold::exit()
     {
         RCLCPP_INFO(rclcpp::get_logger("StateHold"), "Exiting HOLD state");
-        positions_recorded_ = false;
     }
 
     FSMStateName StateHold::checkChange()
     {
-        // 检查控制输入进行状态切换
+        // Check control inputs for state transition
         switch (ctrl_interfaces_.control_inputs_.command)
         {
-        case 1: return FSMStateName::HOME;
-        case 3: return FSMStateName::OCS2;
+        case 1: return FSMStateName::OCS2;
+        case 3: return FSMStateName::HOME;
         default: return FSMStateName::HOLD;
         }
     }
