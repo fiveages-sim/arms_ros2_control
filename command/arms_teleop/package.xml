@@ -12,6 +12,8 @@
   <depend>rclcpp</depend>
   <depend>sensor_msgs</depend>
   <depend>arms_ros2_control_msgs</depend>
+  <depend>control_msgs</depend>
+  <depend>rclcpp_action</depend>
 
   <export>
     <build_type>ament_cmake</build_type>

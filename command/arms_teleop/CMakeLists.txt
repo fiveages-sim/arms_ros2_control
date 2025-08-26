@@ -12,6 +12,8 @@ find_package(ament_cmake REQUIRED)
 find_package(rclcpp REQUIRED)
 find_package(sensor_msgs REQUIRED)
 find_package(arms_ros2_control_msgs REQUIRED)
+find_package(control_msgs REQUIRED)
+find_package(rclcpp_action REQUIRED)
 
 # Joystick teleop node
 add_executable(joystick_teleop src/joystick_teleop.cpp)
@@ -24,6 +26,8 @@ ament_target_dependencies(
         rclcpp
         sensor_msgs
         arms_ros2_control_msgs
+        control_msgs
+        rclcpp_action
 )
 
 # Keyboard teleop node
