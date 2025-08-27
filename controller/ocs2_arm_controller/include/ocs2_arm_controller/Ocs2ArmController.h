@@ -16,8 +16,6 @@
 #include <arms_ros2_control_msgs/msg/inputs.hpp>
 #include <hardware_interface/loaned_command_interface.hpp>
 #include <hardware_interface/loaned_state_interface.hpp>
-#include <rclcpp/rclcpp.hpp>
-#include <ocs2_core/Types.h>
 #include "ocs2_arm_controller/control/CtrlComponent.h"
 
 namespace ocs2::mobile_manipulator

@@ -129,9 +129,9 @@ namespace ocs2::mobile_manipulator
     {
         // Get current joint positions as new starting positions
         start_pos_.clear();
-        for (size_t i = 0; i < ctrl_interfaces_.joint_position_state_interface_.size(); ++i)
+        for (auto i : ctrl_interfaces_.joint_position_state_interface_)
         {
-            start_pos_.push_back(ctrl_interfaces_.joint_position_state_interface_[i].get().get_value());
+            start_pos_.push_back(i.get().get_value());
         }
         
         // Reset interpolation progress

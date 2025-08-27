@@ -8,8 +8,7 @@
 #include <rclcpp/rclcpp.hpp>
 #include <sensor_msgs/msg/joy.hpp>
 #include <arms_ros2_control_msgs/msg/inputs.hpp>
-#include <control_msgs/action/parallel_gripper_command.hpp>
-#include <rclcpp_action/rclcpp_action.hpp>
+#include <arms_ros2_control_msgs/msg/gripper.hpp>
 
 class JoystickTeleop final : public rclcpp::Node {
 public:
@@ -19,19 +18,15 @@ public:
 
 private:
     void joy_callback(sensor_msgs::msg::Joy::SharedPtr msg);
-    bool sendGripperCommand(double position);
+    void sendGripperCommand(bool open);
 
     arms_ros2_control_msgs::msg::Inputs inputs_;
     rclcpp::Publisher<arms_ros2_control_msgs::msg::Inputs>::SharedPtr publisher_;
+    rclcpp::Publisher<arms_ros2_control_msgs::msg::Gripper>::SharedPtr gripper_publisher_;
     rclcpp::Subscription<sensor_msgs::msg::Joy>::SharedPtr subscription_;
     
-    // Action client for gripper control
-    rclcpp_action::Client<control_msgs::action::ParallelGripperCommand>::SharedPtr gripper_action_client_;
-    bool gripper_open_;
+    // Gripper control
     bool last_x_pressed_;
-    double gripper_open_position_;
-    double gripper_closed_position_;
-    double gripper_max_effort_;
 };
 
 #endif //JOYSTICK_TELEOP_H 

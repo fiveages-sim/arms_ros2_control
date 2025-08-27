@@ -1,0 +1,27 @@
+<?xml version="1.0"?>
+<?xml-model
+		href="http://download.ros.org/schema/package_format3.xsd"
+		schematypens="http://www.w3.org/2001/XMLSchema"?>
+<package format="3">
+	<name>adaptive_gripper_controller</name>
+	<version>1.0.0</version>
+	<description>简单的夹爪控制器，实现基本的位置读取和输出功能</description>
+
+	<maintainer email="your_email@example.com">Your Name</maintainer>
+	<license>Apache License 2.0</license>
+
+	<buildtool_depend>ament_cmake</buildtool_depend>
+
+	<build_depend>ros2_control_cmake</build_depend>
+
+	<depend>controller_interface</depend>
+	<depend>hardware_interface</depend>
+	<depend>pluginlib</depend>
+	<depend>rclcpp</depend>
+	<depend>rclcpp_lifecycle</depend>
+	<depend>arms_ros2_control_msgs</depend>
+
+	<export>
+		<build_type>ament_cmake</build_type>
+	</export>
+</package>
