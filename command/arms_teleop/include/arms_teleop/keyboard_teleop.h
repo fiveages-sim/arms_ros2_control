@@ -7,6 +7,7 @@
 
 #include <rclcpp/rclcpp.hpp>
 #include <arms_ros2_control_msgs/msg/inputs.hpp>
+#include <arms_ros2_control_msgs/msg/gripper.hpp>
 #include <termios.h>
 
 template <typename T1, typename T2>
@@ -32,11 +33,13 @@ private:
 
     void check_command(char key);
     void check_value(char key);
+    void sendGripperCommand(bool open);
 
     static bool kbhit();
 
     arms_ros2_control_msgs::msg::Inputs inputs_;
     rclcpp::Publisher<arms_ros2_control_msgs::msg::Inputs>::SharedPtr publisher_;
+    rclcpp::Publisher<arms_ros2_control_msgs::msg::Gripper>::SharedPtr gripper_publisher_;
     rclcpp::TimerBase::SharedPtr timer_;
 
     bool just_published_ = false;

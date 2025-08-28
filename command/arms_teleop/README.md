@@ -46,7 +46,7 @@ ros2 run arms_teleop keyboard_teleop
 - **WASD**: Control arm movement
 - **Arrow Keys**: Control end-effector orientation
 - **1-9**: Different command modes
-- **Space**: Reset position
+- **Space**: Toggle gripper open/close
 - **Q**: Quit
 
 ## Topics

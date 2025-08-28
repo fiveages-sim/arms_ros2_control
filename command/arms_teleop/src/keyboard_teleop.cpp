@@ -6,6 +6,7 @@
 
 KeyboardTeleop::KeyboardTeleop() : Node("keyboard_teleop_node") {
     publisher_ = create_publisher<arms_ros2_control_msgs::msg::Inputs>("control_input", 10);
+    gripper_publisher_ = create_publisher<arms_ros2_control_msgs::msg::Gripper>("/gripper_command", 10);
     timer_ = create_wall_timer(std::chrono::microseconds(100), std::bind(&KeyboardTeleop::timer_callback, this));
     inputs_ = arms_ros2_control_msgs::msg::Inputs();
 
@@ -15,7 +16,7 @@ KeyboardTeleop::KeyboardTeleop() : Node("keyboard_teleop_node") {
     tcsetattr(STDIN_FILENO, TCSANOW, &new_tio_);
     RCLCPP_INFO(get_logger(), "Keyboard input node started.");
     RCLCPP_INFO(get_logger(), "Press 1-0 to switch between different modes");
-    RCLCPP_INFO(get_logger(), "Use W/S/A/D and I/K/J/L to move the robot.");
+    RCLCPP_INFO(get_logger(), "Press SPACE to toggle gripper open/close");
     RCLCPP_INFO(get_logger(), "Please input keys, press Ctrl+C to quit.");
 }
 
@@ -80,11 +81,17 @@ void KeyboardTeleop::check_command(const char key) {
             inputs_.command = 10;
         break;
         case ' ':
-            inputs_.lx = 0;
-            inputs_.ly = 0;
-            inputs_.rx = 0;
-            inputs_.ry = 0;
-            inputs_.command = 0;
+            // Toggle gripper open/close
+            static bool gripper_open = false;
+            gripper_open = !gripper_open;
+            
+            sendGripperCommand(gripper_open);
+            
+            if (gripper_open) {
+                RCLCPP_INFO(this->get_logger(), "Gripper opened");
+            } else {
+                RCLCPP_INFO(this->get_logger(), "Gripper closed");
+            }
             break;
         default:
             inputs_.command = 0;
@@ -138,6 +145,23 @@ bool KeyboardTeleop::kbhit() {
     FD_ZERO(&fds);
     FD_SET(STDIN_FILENO, &fds);
     return select(STDIN_FILENO + 1, &fds, NULL, NULL, &tv);
+}
+
+void KeyboardTeleop::sendGripperCommand(bool open)
+{
+    auto gripper_msg = arms_ros2_control_msgs::msg::Gripper();
+    
+    if (open) {
+        gripper_msg.target = 1;  // 打开夹爪
+        gripper_msg.direction = 1;
+    } else {
+        gripper_msg.target = 0;  // 关闭夹爪
+        gripper_msg.direction = -1;
+    }
+    
+    gripper_publisher_->publish(gripper_msg);
+    RCLCPP_DEBUG(get_logger(), "Sent gripper command: target=%d, direction=%d", 
+                  gripper_msg.target, gripper_msg.direction);
 }
 
 

@@ -9,6 +9,7 @@ Panels:
         - /RobotModel2/Description Topic1
         - /MarkerArray1
         - /MarkerArray2
+        - /DepthCloud1
       Splitter Ratio: 0.5
     Tree Height: 542
   - Class: rviz_common/Selection
@@ -73,189 +74,58 @@ Visualization Manager:
           Show Axes: false
           Show Trail: false
           Value: true
-        left_base_link:
+        camera:
+          Alpha: 1
+          Show Axes: false
+          Show Trail: false
+        gripper_center:
+          Alpha: 1
+          Show Axes: false
+          Show Trail: false
+        link1:
           Alpha: 1
           Show Axes: false
           Show Trail: false
           Value: true
-        left_finger1:
+        link2:
           Alpha: 1
           Show Axes: false
           Show Trail: false
           Value: true
-        left_finger2:
+        link3:
           Alpha: 1
           Show Axes: false
           Show Trail: false
           Value: true
-        left_gripper_base:
+        link4:
           Alpha: 1
           Show Axes: false
           Show Trail: false
           Value: true
-        left_gripper_center:
-          Alpha: 1
-          Show Axes: false
-          Show Trail: false
-        left_link1:
+        link5:
           Alpha: 1
           Show Axes: false
           Show Trail: false
           Value: true
-        left_link2:
+        link6:
           Alpha: 1
           Show Axes: false
           Show Trail: false
           Value: true
-        left_link3:
+        link7:
           Alpha: 1
           Show Axes: false
           Show Trail: false
           Value: true
-        left_link4:
+        link8:
           Alpha: 1
           Show Axes: false
           Show Trail: false
           Value: true
-        left_link5:
+        world:
           Alpha: 1
           Show Axes: false
           Show Trail: false
-          Value: true
-        left_link6:
-          Alpha: 1
-          Show Axes: false
-          Show Trail: false
-          Value: true
-        left_link7:
-          Alpha: 1
-          Show Axes: false
-          Show Trail: false
-          Value: true
-        left_realsense_link:
-          Alpha: 1
-          Show Axes: false
-          Show Trail: false
-          Value: true
-        right_base_link:
-          Alpha: 1
-          Show Axes: false
-          Show Trail: false
-          Value: true
-        right_finger1:
-          Alpha: 1
-          Show Axes: false
-          Show Trail: false
-          Value: true
-        right_finger2:
-          Alpha: 1
-          Show Axes: false
-          Show Trail: false
-          Value: true
-        right_gripper_base:
-          Alpha: 1
-          Show Axes: false
-          Show Trail: false
-          Value: true
-        right_gripper_center:
-          Alpha: 1
-          Show Axes: false
-          Show Trail: false
-        right_link1:
-          Alpha: 1
-          Show Axes: false
-          Show Trail: false
-          Value: true
-        right_link2:
-          Alpha: 1
-          Show Axes: false
-          Show Trail: false
-          Value: true
-        right_link3:
-          Alpha: 1
-          Show Axes: false
-          Show Trail: false
-          Value: true
-        right_link4:
-          Alpha: 1
-          Show Axes: false
-          Show Trail: false
-          Value: true
-        right_link5:
-          Alpha: 1
-          Show Axes: false
-          Show Trail: false
-          Value: true
-        right_link6:
-          Alpha: 1
-          Show Axes: false
-          Show Trail: false
-          Value: true
-        right_link7:
-          Alpha: 1
-          Show Axes: false
-          Show Trail: false
-          Value: true
-        right_realsense_link:
-          Alpha: 1
-          Show Axes: false
-          Show Trail: false
-          Value: true
-        steer_motor_link1:
-          Alpha: 1
-          Show Axes: false
-          Show Trail: false
-          Value: true
-        steer_motor_link2:
-          Alpha: 1
-          Show Axes: false
-          Show Trail: false
-          Value: true
-        steer_motor_link3:
-          Alpha: 1
-          Show Axes: false
-          Show Trail: false
-          Value: true
-        torso_link1:
-          Alpha: 1
-          Show Axes: false
-          Show Trail: false
-          Value: true
-        torso_link2:
-          Alpha: 1
-          Show Axes: false
-          Show Trail: false
-          Value: true
-        torso_link3:
-          Alpha: 1
-          Show Axes: false
-          Show Trail: false
-          Value: true
-        torso_link4:
-          Alpha: 1
-          Show Axes: false
-          Show Trail: false
-          Value: true
-        wheel_motor_link1:
-          Alpha: 1
-          Show Axes: false
-          Show Trail: false
-          Value: true
-        wheel_motor_link2:
-          Alpha: 1
-          Show Axes: false
-          Show Trail: false
-          Value: true
-        wheel_motor_link3:
-          Alpha: 1
-          Show Axes: false
-          Show Trail: false
-          Value: true
-        zed_link:
-          Alpha: 1
-          Show Axes: false
-          Show Trail: false
-          Value: true
       Mass Properties:
         Inertia: false
         Mass: false
@@ -296,185 +166,50 @@ Visualization Manager:
           Show Axes: false
           Show Trail: false
           Value: true
-        left_base_link:
+        camera:
+          Alpha: 1
+          Show Axes: false
+          Show Trail: false
+        gripper_center:
+          Alpha: 1
+          Show Axes: false
+          Show Trail: false
+        link1:
           Alpha: 1
           Show Axes: false
           Show Trail: false
           Value: true
-        left_finger1:
+        link2:
           Alpha: 1
           Show Axes: false
           Show Trail: false
           Value: true
-        left_finger2:
+        link3:
           Alpha: 1
           Show Axes: false
           Show Trail: false
           Value: true
-        left_gripper_base:
+        link4:
           Alpha: 1
           Show Axes: false
           Show Trail: false
           Value: true
-        left_gripper_center:
-          Alpha: 1
-          Show Axes: false
-          Show Trail: false
-        left_link1:
+        link5:
           Alpha: 1
           Show Axes: false
           Show Trail: false
           Value: true
-        left_link2:
+        link6:
           Alpha: 1
           Show Axes: false
           Show Trail: false
           Value: true
-        left_link3:
+        link7:
           Alpha: 1
           Show Axes: false
           Show Trail: false
           Value: true
-        left_link4:
-          Alpha: 1
-          Show Axes: false
-          Show Trail: false
-          Value: true
-        left_link5:
-          Alpha: 1
-          Show Axes: false
-          Show Trail: false
-          Value: true
-        left_link6:
-          Alpha: 1
-          Show Axes: false
-          Show Trail: false
-          Value: true
-        left_link7:
-          Alpha: 1
-          Show Axes: false
-          Show Trail: false
-          Value: true
-        left_realsense_link:
-          Alpha: 1
-          Show Axes: false
-          Show Trail: false
-          Value: true
-        right_base_link:
-          Alpha: 1
-          Show Axes: false
-          Show Trail: false
-          Value: true
-        right_finger1:
-          Alpha: 1
-          Show Axes: false
-          Show Trail: false
-          Value: true
-        right_finger2:
-          Alpha: 1
-          Show Axes: false
-          Show Trail: false
-          Value: true
-        right_gripper_base:
-          Alpha: 1
-          Show Axes: false
-          Show Trail: false
-          Value: true
-        right_gripper_center:
-          Alpha: 1
-          Show Axes: false
-          Show Trail: false
-        right_link1:
-          Alpha: 1
-          Show Axes: false
-          Show Trail: false
-          Value: true
-        right_link2:
-          Alpha: 1
-          Show Axes: false
-          Show Trail: false
-          Value: true
-        right_link3:
-          Alpha: 1
-          Show Axes: false
-          Show Trail: false
-          Value: true
-        right_link4:
-          Alpha: 1
-          Show Axes: false
-          Show Trail: false
-          Value: true
-        right_link5:
-          Alpha: 1
-          Show Axes: false
-          Show Trail: false
-          Value: true
-        right_link6:
-          Alpha: 1
-          Show Axes: false
-          Show Trail: false
-          Value: true
-        right_link7:
-          Alpha: 1
-          Show Axes: false
-          Show Trail: false
-          Value: true
-        right_realsense_link:
-          Alpha: 1
-          Show Axes: false
-          Show Trail: false
-          Value: true
-        steer_motor_link1:
-          Alpha: 1
-          Show Axes: false
-          Show Trail: false
-          Value: true
-        steer_motor_link2:
-          Alpha: 1
-          Show Axes: false
-          Show Trail: false
-          Value: true
-        steer_motor_link3:
-          Alpha: 1
-          Show Axes: false
-          Show Trail: false
-          Value: true
-        torso_link1:
-          Alpha: 1
-          Show Axes: false
-          Show Trail: false
-          Value: true
-        torso_link2:
-          Alpha: 1
-          Show Axes: false
-          Show Trail: false
-          Value: true
-        torso_link3:
-          Alpha: 1
-          Show Axes: false
-          Show Trail: false
-          Value: true
-        torso_link4:
-          Alpha: 1
-          Show Axes: false
-          Show Trail: false
-          Value: true
-        wheel_motor_link1:
-          Alpha: 1
-          Show Axes: false
-          Show Trail: false
-          Value: true
-        wheel_motor_link2:
-          Alpha: 1
-          Show Axes: false
-          Show Trail: false
-          Value: true
-        wheel_motor_link3:
-          Alpha: 1
-          Show Axes: false
-          Show Trail: false
-          Value: true
-        zed_link:
+        link8:
           Alpha: 1
           Show Axes: false
           Show Trail: false
@@ -510,6 +245,45 @@ Visualization Manager:
         History Policy: Keep Last
         Reliability Policy: Reliable
         Value: /trajectory_markers
+      Value: true
+    - Alpha: 1
+      Auto Size:
+        Auto Size Factor: 1
+        Value: true
+      Autocompute Intensity Bounds: true
+      Autocompute Value Bounds:
+        Max Value: 10
+        Min Value: -10
+        Value: true
+      Axis: Z
+      Channel Name: intensity
+      Class: rviz_default_plugins/DepthCloud
+      Color: 255; 255; 255
+      Color Image Topic: /rgb
+      Color Transformer: RGB8
+      Color Transport Hint: raw
+      Decay Time: 0
+      Depth Map Topic: /depth
+      Depth Map Transport Hint: raw
+      Enabled: true
+      Invert Rainbow: false
+      Max Color: 255; 255; 255
+      Max Intensity: 4096
+      Min Color: 0; 0; 0
+      Min Intensity: 0
+      Name: DepthCloud
+      Occlusion Compensation:
+        Occlusion Time-Out: 30
+        Value: false
+      Position Transformer: XYZ
+      Queue Size: 1
+      Reliability Policy: System Default
+      Selectable: false
+      Size (Pixels): 3
+      Style: Flat Squares
+      Topic Filter: true
+      Use Fixed Frame: true
+      Use rainbow: true
       Value: true
   Enabled: true
   Global Options:
@@ -557,25 +331,25 @@ Visualization Manager:
   Views:
     Current:
       Class: rviz_default_plugins/Orbit
-      Distance: 1.6125468015670776
+      Distance: 1.403297781944275
       Enable Stereo Rendering:
         Stereo Eye Separation: 0.05999999865889549
         Stereo Focal Distance: 1
         Swap Stereo Eyes: false
         Value: false
       Focal Point:
-        X: 0.47894513607025146
-        Y: 0.2687937021255493
-        Z: 0.418382853269577
+        X: 0.0638628825545311
+        Y: 0.42497745156288147
+        Z: 0.4350861608982086
       Focal Shape Fixed Size: true
       Focal Shape Size: 0.05000000074505806
       Invert Z Axis: false
       Name: Current View
       Near Clip Distance: 0.009999999776482582
-      Pitch: 0.2203976958990097
+      Pitch: -0.019602257758378983
       Target Frame: <Fixed Frame>
       Value: Orbit (rviz)
-      Yaw: 1.055389165878296
+      Yaw: 1.5303889513015747
     Saved: ~
 Window Geometry:
   Displays:
@@ -593,5 +367,5 @@ Window Geometry:
   Views:
     collapsed: true
   Width: 1200
-  X: 580
-  Y: 75
+  X: 720
+  Y: 113

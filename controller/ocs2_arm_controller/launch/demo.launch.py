@@ -246,7 +246,7 @@ def launch_setup(context, *args, **kwargs):
         package='robot_state_publisher',
         executable='robot_state_publisher',
         output='screen',
-        parameters=[robot_description],
+        parameters=[robot_description, {'use_sim_time': use_sim_time}],
     )
 
     # Planning robot state publisher for OCS2 planning URDF
@@ -308,6 +308,9 @@ def launch_setup(context, *args, **kwargs):
             'joint_state_broadcaster',
             '--controller-manager',
             '/controller_manager',
+        ],
+        parameters=[
+            {'use_sim_time': use_sim_time},
         ],
         output='screen',
     )
