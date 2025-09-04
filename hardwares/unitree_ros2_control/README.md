@@ -53,3 +53,7 @@ After modified the config, you can tried to visualize the robot info from real r
 source ~/ros2_ws/install/setup.bash
 ros2 launch unitree_ros2_control visualize.launch.py
 ```
+
+
+https://github.com/user-attachments/assets/54511d3c-b88c-48aa-b4fe-45aee4746d9e
+
