@@ -24,26 +24,30 @@ def get_robot_paths(robot_name):
         print(f"[ERROR] Failed to get package path for '{robot_pkg}': {e}")
         return None
 
-def get_robot_config(robot_name):
+def get_robot_config(robot_name, robot_type=""):
     """Get robot configuration from ROS2 controller configuration file"""
     robot_pkg_path = get_robot_paths(robot_name)
     if robot_pkg_path is None:
         return None, None
         
     try:
-        ros2_controllers_path = os.path.join(
-            robot_pkg_path,
-            "config",
-            "ros2_control",
-            "ros2_controllers.yaml",
-        )
+        # Try type-specific config file first, fallback to default
+        config_file = f"{robot_type}.yaml" if robot_type and robot_type.strip() else "ros2_controllers.yaml"
+        config_path = os.path.join(robot_pkg_path, "config", "ros2_control", config_file)
         
-        print(f"[INFO] Reading controller config from: {ros2_controllers_path}")
+        if not os.path.exists(config_path):
+            config_file = "ros2_controllers.yaml"
+            config_path = os.path.join(robot_pkg_path, "config", "ros2_control", config_file)
+            print(f"[INFO] Type-specific config not found, using default: {config_file}")
+        else:
+            print(f"[INFO] Using config file: {config_file}")
+            
+        print(f"[INFO] Reading controller config from: {config_path}")
         
-        with open(ros2_controllers_path, 'r') as file:
+        with open(config_path, 'r') as file:
             config = yaml.safe_load(file)
             
-        return config, ros2_controllers_path
+        return config, config_path
         
     except FileNotFoundError:
         print(f"[WARN] Controller config file not found for robot '{robot_name}'")
@@ -55,9 +59,9 @@ def get_robot_config(robot_name):
         print(f"[ERROR] Unexpected error reading config for robot '{robot_name}': {e}")
         return None, None
 
-def get_info_file_name(robot_name):
+def get_info_file_name(robot_name, robot_type=""):
     """Get info_file_name from ROS2 controller configuration, fallback to 'task'"""
-    config, _ = get_robot_config(robot_name)
+    config, _ = get_robot_config(robot_name, robot_type)
     
     if config is None:
         print(f"[WARN] Using default info_file_name: 'task' for robot '{robot_name}'")
@@ -72,9 +76,9 @@ def get_info_file_name(robot_name):
         print(f"[WARN] Key error in config for robot '{robot_name}': {e}, using default 'task'")
         return 'task'
 
-def detect_hand_controllers(robot_name):
+def detect_hand_controllers(robot_name, robot_type=""):
     """Detect hand controllers from ROS2 controller configuration"""
-    config, _ = get_robot_config(robot_name)
+    config, _ = get_robot_config(robot_name, robot_type)
     
     if config is None:
         print(f"[WARN] No hand controllers will be loaded for robot '{robot_name}'")
@@ -116,7 +120,6 @@ def create_hand_controller_spawners(hand_controllers, use_sim_time=False):
     
     for controller in hand_controllers:
         controller_name = controller['name']
-        controller_type = controller['type']
         
         print(f"[INFO] Creating spawner for hand controller: {controller_name}")
         
@@ -279,7 +282,7 @@ def launch_setup(context, *args, **kwargs):
         print(f"[WARN] No planning URDF available for robot '{robot_name}'")
 
     # ros2_control using FakeSystem as hardware (only used in non-gazebo mode)
-    _, ros2_controllers_path = get_robot_config(robot_name)
+    _, ros2_controllers_path = get_robot_config(robot_name, robot_type)
     if ros2_controllers_path is None:
         print(f"[ERROR] Cannot create ros2_control_node without controller config for robot '{robot_name}'")
         ros2_control_node = None
@@ -327,7 +330,7 @@ def launch_setup(context, *args, **kwargs):
     )
 
     # Get info file name from controller configuration
-    info_file_name = get_info_file_name(robot_name)
+    info_file_name = get_info_file_name(robot_name, robot_type)
     
     # Mobile Manipulator Target node for sending target trajectories
     task_file_path = os.path.join(
@@ -378,7 +381,7 @@ def launch_setup(context, *args, **kwargs):
     )
 
     # Detect hand controllers
-    hand_controllers = detect_hand_controllers(robot_name)
+    hand_controllers = detect_hand_controllers(robot_name, robot_type)
     hand_controller_spawners = create_hand_controller_spawners(hand_controllers, use_sim_time)
 
     # Return different node lists based on hardware mode
