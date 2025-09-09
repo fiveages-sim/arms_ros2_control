@@ -25,6 +25,12 @@ source ~/ros2_ws/install/setup.bash
 ros2 launch arms_teleop joystick_teleop.launch.py joy_dev:=/dev/input/js1
 ```
 
+DiffDrive Controller:
+```bash
+source ~/ros2_ws/install/setup.bash
+ros2 launch arms_teleop diff_drive.launch.py
+```
+
 ### Keyboard Teleop
 
 Launch keyboard teleop:

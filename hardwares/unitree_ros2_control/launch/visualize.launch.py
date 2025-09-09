@@ -1,153 +1,16 @@
 import os
-import yaml
-from pathlib import Path
 
 from ament_index_python.packages import get_package_share_directory
 from launch import LaunchDescription
 from launch.actions import DeclareLaunchArgument, OpaqueFunction
-from launch.actions import IncludeLaunchDescription
-from launch.actions import RegisterEventHandler
-from launch.event_handlers import OnProcessExit
-from launch.launch_description_sources import PythonLaunchDescriptionSource
-from launch.substitutions import LaunchConfiguration, TextSubstitution
 from launch_ros.actions import Node
-from launch.conditions import IfCondition, UnlessCondition
 import xacro
 
-def get_robot_paths(robot_name):
-    """Get common robot-related paths"""
-    robot_pkg = robot_name + "_description"
-    try:
-        robot_pkg_path = get_package_share_directory(robot_pkg)
-        return robot_pkg_path
-    except Exception as e:
-        print(f"[ERROR] Failed to get package path for '{robot_pkg}': {e}")
-        return None
-
-def get_robot_config(robot_name):
-    """Get robot configuration from ROS2 controller configuration file"""
-    robot_pkg_path = get_robot_paths(robot_name)
-    if robot_pkg_path is None:
-        return None, None
-
-    try:
-        ros2_controllers_path = os.path.join(
-            robot_pkg_path,
-            "config",
-            "ros2_control",
-            "ros2_controllers.yaml",
-        )
-
-        print(f"[INFO] Reading controller config from: {ros2_controllers_path}")
-
-        with open(ros2_controllers_path, 'r') as file:
-            config = yaml.safe_load(file)
-
-        return config, ros2_controllers_path
-
-    except FileNotFoundError:
-        print(f"[WARN] Controller config file not found for robot '{robot_name}'")
-        return None, None
-    except yaml.YAMLError as e:
-        print(f"[ERROR] Failed to parse YAML config for robot '{robot_name}': {e}")
-        return None, None
-    except Exception as e:
-        print(f"[ERROR] Unexpected error reading config for robot '{robot_name}': {e}")
-        return None, None
-
-def detect_hand_controllers(robot_name):
-    """Detect hand controllers from ROS2 controller configuration"""
-    config, _ = get_robot_config(robot_name)
-
-    if config is None:
-        print(f"[WARN] No hand controllers will be loaded for robot '{robot_name}'")
-        return []
-
-    hand_controllers = []
-
-    # Check controller_manager section for hand controllers
-    controller_manager = config.get('controller_manager', {}).get('ros__parameters', {})
-
-    for controller_name, controller_config in controller_manager.items():
-        if 'hand' in controller_name.lower() or 'gripper' in controller_name.lower():
-            # Extract controller type and parameters
-            controller_type = controller_config.get('type', '')
-            hand_controllers.append({
-                'name': controller_name,
-                'type': controller_type,
-                'config': controller_config
-            })
-            print(f"[INFO] Detected hand controller: {controller_name} ({controller_type})")
-
-    # Also check for hand controller parameter sections
-    for section_name, section_config in config.items():
-        if 'hand' in section_name.lower() or 'gripper' in section_name.lower():
-            if section_name not in [c['name'] for c in hand_controllers]:
-                hand_controllers.append({
-                    'name': section_name,
-                    'type': 'unknown',
-                    'config': section_config
-                })
-                print(f"[INFO] Detected hand controller section: {section_name}")
-
-    print(f"[INFO] Total hand controllers detected: {len(hand_controllers)}")
-    return hand_controllers
-
-def create_hand_controller_spawners(hand_controllers, use_sim_time=False):
-    """Create spawner nodes for hand controllers"""
-    spawners = []
-
-    for controller in hand_controllers:
-        controller_name = controller['name']
-        controller_type = controller['type']
-
-        print(f"[INFO] Creating spawner for hand controller: {controller_name}")
-
-        spawner = Node(
-            package='controller_manager',
-            executable='spawner',
-            arguments=[controller_name],
-            output='screen',
-            parameters=[
-                {'use_sim_time': use_sim_time},
-            ],
-        )
-
-        spawners.append(spawner)
-
-    return spawners
-
-def get_planning_urdf_path(robot_name, robot_type):
-    """Get planning URDF file path based on robot type, similar to CtrlComponent logic"""
-    robot_pkg_path = get_robot_paths(robot_name)
-    if robot_pkg_path is None:
-        return None
-
-    if robot_type and robot_type.strip():
-        # Try type-specific URDF first
-        robot_identifier = robot_name + "_" + robot_type
-        type_specific_urdf = os.path.join(robot_pkg_path, "urdf", robot_identifier + ".urdf")
-
-        # Check if type-specific URDF exists
-        if os.path.exists(type_specific_urdf):
-            print(f"[INFO] Using type-specific planning URDF: {type_specific_urdf}")
-            return type_specific_urdf
-        else:
-            # Fallback to default URDF if type-specific doesn't exist
-            default_urdf = os.path.join(robot_pkg_path, "urdf", robot_name + ".urdf")
-            print(f"[WARN] Type-specific planning URDF not found: {type_specific_urdf}, falling back to default: {default_urdf}")
-            return default_urdf
-    else:
-        # Use default URDF
-        default_urdf = os.path.join(robot_pkg_path, "urdf", robot_name + ".urdf")
-        print(f"[INFO] Using default planning URDF: {default_urdf}")
-        return default_urdf
 
 def launch_setup(context, *args, **kwargs):
     """Launch setup function using OpaqueFunction"""
     robot_name = context.launch_configurations['robot']
     robot_type = context.launch_configurations.get('type', '')
-    world = context.launch_configurations.get('world', 'empty')
 
     # Build mappings, only include when robot_type has a value
     mappings = {
@@ -156,18 +19,15 @@ def launch_setup(context, *args, **kwargs):
     if robot_type and robot_type.strip():
         mappings["type"] = robot_type
 
-    # If in gazebo mode, add gazebo-related mappings
+    # Simulation time setting
     use_sim_time = False
 
-    # Gazebo-related nodes (only created in gazebo mode)
-    gazebo = None
-    gz_spawn_entity = None
-    bridge = None
-
     # Robot description
-    robot_pkg_path = get_robot_paths(robot_name)
-    if robot_pkg_path is None:
-        print(f"[ERROR] Cannot create robot description without package path for robot '{robot_name}'")
+    robot_pkg = robot_name + "_description"
+    try:
+        robot_pkg_path = get_package_share_directory(robot_pkg)
+    except Exception as e:
+        print(f"[ERROR] Package '{robot_pkg}' not found: {e}")
         return []
 
     robot_description_file_path = os.path.join(
@@ -192,10 +52,18 @@ def launch_setup(context, *args, **kwargs):
         parameters=[robot_description, {'use_sim_time': use_sim_time}],
     )
 
-    # ros2_control using FakeSystem as hardware (only used in non-gazebo mode)
-    _, ros2_controllers_path = get_robot_config(robot_name)
-    if ros2_controllers_path is None:
-        print(f"[ERROR] Cannot create ros2_control_node without controller config for robot '{robot_name}'")
+    # ros2_control using unitree hardware
+    ros2_controllers_path = os.path.join(
+        robot_pkg_path,
+        "config",
+        "ros2_control",
+        "ros2_controllers.yaml",
+    )
+
+    print(f"[INFO] Controller config: {os.path.basename(ros2_controllers_path)}")
+
+    if not os.path.exists(ros2_controllers_path):
+        print(f"[ERROR] Controller config not found for '{robot_name}'")
         ros2_control_node = None
     else:
         ros2_control_node = Node(
@@ -245,10 +113,6 @@ def launch_setup(context, *args, **kwargs):
         ],
     )
 
-    # Detect hand controllers
-    hand_controllers = detect_hand_controllers(robot_name)
-    hand_controller_spawners = create_hand_controller_spawners(hand_controllers, use_sim_time)
-
     # Return different node lists based on hardware mode
     nodes = [
         rviz_node,
@@ -258,8 +122,6 @@ def launch_setup(context, *args, **kwargs):
     # Add ros2_control_node if available
     if ros2_control_node:
         nodes.append(ros2_control_node)
-    # Add hand controller spawners if any were detected
-    nodes.extend(hand_controller_spawners)
     return nodes
 
 
@@ -275,12 +137,6 @@ def generate_launch_description():
         "type",
         default_value="",
         description="Robot type (x5, r5, robotiq85, etc.). Leave empty to not pass type parameter to xacro."
-    )
-
-    hardware_arg = DeclareLaunchArgument(
-        "hardware",
-        default_value="mock_components",
-        description="Hardware type: 'gz' for Gazebo simulation, 'isaac' for Isaac simulation, 'mock_components' for mock components"
     )
 
     return LaunchDescription([
