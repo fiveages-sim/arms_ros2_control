@@ -1,0 +1,21 @@
+<?xml version="1.0"?>
+<library path="unitree_g1_controller">
+
+  <class name="unitree_g1_controller/MyRobotController"
+         type="MyRobotController"
+         base_class_type="controller_interface::ControllerInterface">
+    <description>
+      A custom controller for Unitree G1 robot that controls left hip pitch joint.
+      This controller demonstrates how to claim and control hardware interfaces.
+    </description>
+  </class>
+
+  <class name="unitree_g1_controller/SimpleController"
+         type="SimpleController"
+         base_class_type="controller_interface::ControllerInterface">
+    <description>
+      A simple test controller for debugging.
+    </description>
+  </class>
+
+</library>
