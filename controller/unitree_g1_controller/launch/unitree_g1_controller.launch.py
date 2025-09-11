@@ -51,7 +51,6 @@ def launch_setup(context, *args, **kwargs):
     
     return [
         controller_manager_node,
-        # joint_state_broadcaster_spawner,
         my_controller_spawner,
     ]
 

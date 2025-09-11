@@ -62,6 +62,14 @@ namespace ocs2::mobile_manipulator
         std::string state_name_string;
     };
 
+    // CHENHZHU: Control output mode enum
+    enum class ControlOutputMode
+    {
+        POSITION,
+        FORCE,
+        MIXED
+    };
+
     // Control interfaces structure for arm control
     struct CtrlInterfaces
     {
@@ -69,12 +77,28 @@ namespace ocs2::mobile_manipulator
         std::vector<std::reference_wrapper<hardware_interface::LoanedCommandInterface>>
         joint_position_command_interface_;
 
+        // CHENHZHU: Add force, velocity, kp, kq command interface for force and mixed control
+        std::vector<std::reference_wrapper<hardware_interface::LoanedCommandInterface>>
+        joint_force_command_interface_;
+        std::vector<std::reference_wrapper<hardware_interface::LoanedCommandInterface>>
+        joint_velocity_command_interface_;
+        std::vector<std::reference_wrapper<hardware_interface::LoanedCommandInterface>>
+        joint_kp_command_interface_;
+        std::vector<std::reference_wrapper<hardware_interface::LoanedCommandInterface>>
+        joint_kd_command_interface_;
+
         // State interfaces - position and velocity state for arm
         std::vector<std::reference_wrapper<hardware_interface::LoanedStateInterface>> joint_position_state_interface_;
         std::vector<std::reference_wrapper<hardware_interface::LoanedStateInterface>> joint_velocity_state_interface_;
 
+        // CHENHZHU: Add force state interface if available
+        std::vector<std::reference_wrapper<hardware_interface::LoanedStateInterface>> joint_force_state_interface_;
+
         arms_ros2_control_msgs::msg::Inputs control_inputs_;
         int frequency_ = 1000;
+
+        // CHENHZHU: Control output mode enum
+        ControlOutputMode control_output_mode_ = ControlOutputMode::POSITION; // Default to position control
 
         void clear()
         {

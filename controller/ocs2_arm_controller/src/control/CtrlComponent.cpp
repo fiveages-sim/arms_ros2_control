@@ -167,11 +167,64 @@ namespace ocs2::mobile_manipulator
                 policy.stateTrajectory_
             );
 
+            // CHENHZHU: get force commands from optimized_input_ if in force or mixed control mode
+            vector_t future_input = LinearInterpolation::interpolate(
+                future_time,
+                policy.timeTrajectory_,
+                policy.inputTrajectory_
+            );
+
+            // CHENHZHU: Set commands based on control mode
             // Extract joint positions from state and set as commands
-            for (size_t i = 0; i < joint_names_.size() && i < future_state.size(); ++i)
+            if (ctrl_interfaces_.control_output_mode_ == ControlOutputMode::POSITION)
             {
-                ctrl_interfaces_.joint_position_command_interface_[i].get().set_value(future_state(i));
+                for (size_t i = 0; i < joint_names_.size() && i < future_state.size(); ++i)
+                {
+                    ctrl_interfaces_.joint_position_command_interface_[i].get().set_value(future_state(i));
+                }
             }
+            else if (ctrl_interfaces_.control_output_mode_ == ControlOutputMode::FORCE)
+            {
+                for (size_t i = 0; i < joint_names_.size() && i < future_input.size(); ++i)
+                {
+                    ctrl_interfaces_.joint_force_command_interface_[i].get().set_value(future_input(i));
+                }
+            }
+            else if (ctrl_interfaces_.control_output_mode_ == ControlOutputMode::MIXED)
+            {   
+                if (future_input.size() != joint_names_.size() || future_state.size() != joint_names_.size())
+                {
+                    RCLCPP_ERROR(node_->get_logger(), "Size mismatch: future_input size %zu, future_state size %zu, joint_names size %zu",
+                                 future_input.size(), future_state.size(), joint_names_.size());
+                }
+
+                // Set forces and positions
+                for (size_t i = 0; i < joint_names_.size() && i < joint_names_.size(); ++i)
+                {
+                    ctrl_interfaces_.joint_force_command_interface_[i].get().set_value(future_input(i));
+                    ctrl_interfaces_.joint_position_command_interface_[i].get().set_value(future_state(i));
+                }
+
+                // // Set forces
+                // for (size_t i = 0; i < joint_names_.size() && i < future_input.size(); ++i)
+                // {
+                //     ctrl_interfaces_.joint_force_command_interface_[i].get().set_value(future_input(i));
+                // }
+                // // Set positions
+                // for (size_t i = 0; i < joint_names_.size() && i < future_state.size(); ++i)
+                // {
+                //     ctrl_interfaces_.joint_position_command_interface_[i].get().set_value(future_state(i));
+                // }
+            }
+            else
+            {
+                RCLCPP_ERROR(node_->get_logger(), "Unknown control output mode");
+            }
+            // Set joint positions for position or mixed control modes
+            // for (size_t i = 0; i < joint_names_.size() && i < future_state.size(); ++i)
+            // {
+            //     ctrl_interfaces_.joint_position_command_interface_[i].get().set_value(future_state(i));
+            // }
         }
         catch (const std::exception& e)
         {

@@ -40,22 +40,7 @@ public:
     return {controller_interface::interface_configuration_type::NONE, {}};
   }
 
-  // 生命周期：控制器启动时的回调
-  controller_interface::CallbackReturn on_activate(const rclcpp_lifecycle::State &) override
-  {
-    // 基类方法会帮我们“claim”在 command_interface_configuration 中指定的接口
-    // 这些接口会存储在 command_interfaces_ 向量中
-    phase_ = 3.0;
-    cycle_duration_ = 1.0;
-    return controller_interface::CallbackReturn::SUCCESS;
-  }
 
-  // 生命周期：控制器停用时的回调
-  controller_interface::CallbackReturn on_deactivate(const rclcpp_lifecycle::State &) override
-  {
-    // 控制器停用时，基类会自动释放所有已声明的接口
-    return controller_interface::CallbackReturn::SUCCESS;
-  }
 
   // 核心更新函数，在每个控制周期被调用
   controller_interface::return_type update(const rclcpp::Time &, const rclcpp::Duration &period) override
@@ -123,8 +108,45 @@ public:
   {
     return controller_interface::CallbackReturn::SUCCESS;
   }
+
+  // 生命周期：控制器启动时的回调
+  controller_interface::CallbackReturn on_activate(const rclcpp_lifecycle::State &) override
+  {
+    // 基类方法会帮我们“claim”在 command_interface_configuration 中指定的接口
+    // 这些接口会存储在 command_interfaces_ 向量中
+    phase_ = 3.0;
+    cycle_duration_ = 1.0;
+    return controller_interface::CallbackReturn::SUCCESS;
+  }
+
+  // 生命周期：控制器停用时的回调
+  controller_interface::CallbackReturn on_deactivate(const rclcpp_lifecycle::State &) override
+  {
+    // 控制器停用时，基类会自动释放所有已声明的接口
+    return controller_interface::CallbackReturn::SUCCESS;
+  }
+
+  controller_interface::CallbackReturn on_cleanup(
+      const rclcpp_lifecycle::State& /*previous_state*/) override
+  {
+      return controller_interface::CallbackReturn::SUCCESS;
+  }
+
+  controller_interface::CallbackReturn on_error(const rclcpp_lifecycle::State& /*previous_state*/) override
+  {
+      return controller_interface::CallbackReturn::SUCCESS;
+  }
+
+  controller_interface::CallbackReturn on_shutdown(
+      const rclcpp_lifecycle::State& /*previous_state*/) override
+  {
+      return controller_interface::CallbackReturn::SUCCESS;
+  }
+
+
+
 };
 
 // 将控制器注册为插件
 #include "pluginlib/class_list_macros.hpp"
-PLUGINLIB_EXPORT_CLASS(MyRobotController, controller_interface::ControllerInterface)
+PLUGINLIB_EXPORT_CLASS(MyRobotController, controller_interface::ControllerInterface);
