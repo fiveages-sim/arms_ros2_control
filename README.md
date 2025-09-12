@@ -126,7 +126,7 @@ If any of these demos run successfully, your OCS2 environment is properly config
 
 ```bash
 cd ~/ros2_ws
-colcon build --packages-up-to ocs2_arm_controller cr5_description arms_teleop --symlink-install
+colcon build --packages-up-to ocs2_arm_controller cr5_description arms_teleop adaptive_gripper_controller --symlink-install
 ```
 
 ### 2. Launch with Mock Hardware

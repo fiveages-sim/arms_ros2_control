@@ -57,8 +57,7 @@ bool HumanoidCommunicator::writeCommand(const RobotCommand& command) {
             }
         }
 
-        low_cmd_.crc() = crc32_core(reinterpret_cast<uint32_t*>(&low_cmd_),
-                                   (sizeof(unitree_hg::msg::dds_::LowCmd_) >> 2) - 1);
+        low_cmd_.crc() = crc32_core(reinterpret_cast<uint32_t *>(&low_cmd_), (sizeof(unitree_hg::msg::dds_::LowCmd_) >> 2) - 1);
         low_cmd_publisher_->Write(low_cmd_);
         return true;
     } catch (const std::exception& e) {

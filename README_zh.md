@@ -128,7 +128,7 @@ ros2 launch ocs2_mobile_manipulator_ros manipulator_mabi_mobile.launch.py
 
 ```bash
 cd ~/ros2_ws
-colcon build --packages-up-to ocs2_arm_controller cr5_description arms_teleop --symlink-install
+colcon build --packages-up-to ocs2_arm_controller cr5_description arms_teleop adaptive_gripper_controller --symlink-install
 ```
 
 ### 2. 使用模拟硬件启动

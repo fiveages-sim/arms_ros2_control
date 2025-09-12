@@ -146,6 +146,19 @@ return_type HardwareUnitree::read(const rclcpp::Time& /*time*/, const rclcpp::Du
         joint_effort_[i] = robot_state.joint_effort[i];
     }
 
+    // 第一次读取到状态时，将当前位置设置为command初始值
+    if (!commands_initialized_) {
+        for (int i = 0; i < joint_count && i < static_cast<int>(joint_position_command_.size()); ++i) {
+            joint_position_command_[i] = joint_position_[i];
+            joint_velocities_command_[i] = 0.0;  // 速度命令初始化为0
+            joint_torque_command_[i] = 0.0;      // 力矩命令初始化为0
+            joint_kp_command_[i] = 0.0;          // kp初始化为0
+            joint_kd_command_[i] = 0.0;          // kd初始化为0
+        }
+        commands_initialized_ = true;
+        RCLCPP_INFO(get_logger(), "Initialized command values with current joint positions");
+    }
+
     imu_states_[0] = robot_state.imu_quaternion[0];
     imu_states_[1] = robot_state.imu_quaternion[1];
     imu_states_[2] = robot_state.imu_quaternion[2];
@@ -186,6 +199,13 @@ return_type HardwareUnitree::write(const rclcpp::Time& /*time*/, const rclcpp::D
     if (!communicator_) {
         RCLCPP_ERROR(get_logger(), "Communicator not initialized");
         return return_type::ERROR;
+    }
+
+    // 如果命令还没有根据当前位置初始化，则不发送任何指令
+    if (!commands_initialized_) {
+        RCLCPP_WARN_THROTTLE(get_logger(), *get_clock(), 5000, 
+                            "Commands not initialized yet, skipping command write");
+        return return_type::OK;
     }
 
     UnitreeCommunicator::RobotCommand command;

@@ -48,4 +48,5 @@ protected:
     int domain_ = 1;
     bool show_foot_force_ = false;
     bool enable_high_state_ = true; // 是否启用高状态读取（仿真环境）
+    bool commands_initialized_ = false; // 命令是否已根据当前位置初始化
 };
