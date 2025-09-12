@@ -95,9 +95,9 @@ namespace ocs2::mobile_manipulator
             
             // CHENHZHU: Control type parameter
             control_output_type_ = auto_declare<std::string>("control_output_type", control_output_type_);
-            if (control_output_type_ != "position" && control_output_type_ != "force")
+            if (control_output_type_ != "position" && control_output_type_ != "force" && control_output_type_ != "mixed")
             {
-                RCLCPP_ERROR(get_node()->get_logger(), "Invalid control_type: %s. Must be 'position' or 'force'.", control_output_type_.c_str());
+                RCLCPP_ERROR(get_node()->get_logger(), "Invalid control_type: %s. Must be 'position', 'force', or 'mixed'.", control_output_type_.c_str());
                 return controller_interface::CallbackReturn::ERROR;
             }
             RCLCPP_INFO(get_node()->get_logger(), "Control type set to: %s", control_output_type_.c_str());

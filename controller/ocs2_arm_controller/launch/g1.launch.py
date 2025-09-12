@@ -178,12 +178,15 @@ def launch_setup(context, *args, **kwargs):
         mappings["type"] = robot_type
     
     # If in gazebo mode, add gazebo-related mappings
-    use_sim_time = hardware in ['mujoco', 'isaac']
+    # use_gazebo = hardware == 'gz'
+    use_sim_time = hardware in ['gz','mujoco', 'isaac']
+    # if use_gazebo:
+    #     mappings['gazebo'] = 'true'
     
     # Gazebo-related nodes (only created in gazebo mode)
-    gazebo = None
-    gz_spawn_entity = None
-    bridge = None
+    # gazebo = None
+    # gz_spawn_entity = None
+    # bridge = None
     
 
     # Robot description
@@ -266,19 +269,19 @@ def launch_setup(context, *args, **kwargs):
         )
 
     # Controller spawner nodes
-    # joint_state_broadcaster_spawner = Node(
-    #     package='controller_manager',
-    #     executable='spawner',
-    #     arguments=[
-    #         'joint_state_broadcaster',
-    #         '--controller-manager',
-    #         '/controller_manager',
-    #     ],
-    #     parameters=[
-    #         {'use_sim_time': use_sim_time},
-    #     ],
-    #     output='screen',
-    # )
+    joint_state_broadcaster_spawner = Node(
+        package='controller_manager',
+        executable='spawner',
+        arguments=[
+            'joint_state_broadcaster',
+            '--controller-manager',
+            '/controller_manager',
+        ],
+        parameters=[
+            {'use_sim_time': use_sim_time},
+        ],
+        output='screen',
+    )
 
     # OCS2 G1 Controller spawner
     ocs2_g1_controller_spawner = Node(
@@ -351,7 +354,7 @@ def launch_setup(context, *args, **kwargs):
     nodes = [
         rviz_node,
         node_robot_state_publisher,
-        # joint_state_broadcaster_spawner,
+        joint_state_broadcaster_spawner,
         ocs2_g1_controller_spawner,
         mobile_manipulator_target_node,
     ]
@@ -382,7 +385,7 @@ def generate_launch_description():
 
     hardware_arg = DeclareLaunchArgument(
         "hardware",
-        default_value="mujoco",
+        default_value="mock_components",
         description="Hardware type: 'gz' for Gazebo simulation, 'isaac' for Isaac simulation, 'mock_components' for mock components"
     )
 

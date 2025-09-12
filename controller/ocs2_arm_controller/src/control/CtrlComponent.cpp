@@ -167,7 +167,7 @@ namespace ocs2::mobile_manipulator
                 policy.stateTrajectory_
             );
 
-            // CHENHZHU: get force commands from optimized_input_ if in force or mixed control mode
+            // CHENHZHU: get velocity commands from optimized_input_ if in force or mixed control mode
             vector_t future_input = LinearInterpolation::interpolate(
                 future_time,
                 policy.timeTrajectory_,
@@ -176,6 +176,7 @@ namespace ocs2::mobile_manipulator
 
             // CHENHZHU: Set commands based on control mode
             // Extract joint positions from state and set as commands
+            // TODO: Need to use Pinnochi to compute force input 
             if (ctrl_interfaces_.control_output_mode_ == ControlOutputMode::POSITION)
             {
                 for (size_t i = 0; i < joint_names_.size() && i < future_state.size(); ++i)
@@ -187,7 +188,7 @@ namespace ocs2::mobile_manipulator
             {
                 for (size_t i = 0; i < joint_names_.size() && i < future_input.size(); ++i)
                 {
-                    ctrl_interfaces_.joint_force_command_interface_[i].get().set_value(future_input(i));
+                    ctrl_interfaces_.joint_velocity_command_interface_[i].get().set_value(future_input(i));
                 }
             }
             else if (ctrl_interfaces_.control_output_mode_ == ControlOutputMode::MIXED)
@@ -201,7 +202,7 @@ namespace ocs2::mobile_manipulator
                 // Set forces and positions
                 for (size_t i = 0; i < joint_names_.size() && i < joint_names_.size(); ++i)
                 {
-                    ctrl_interfaces_.joint_force_command_interface_[i].get().set_value(future_input(i));
+                    ctrl_interfaces_.joint_velocity_command_interface_[i].get().set_value(future_input(i));
                     ctrl_interfaces_.joint_position_command_interface_[i].get().set_value(future_state(i));
                 }
 
