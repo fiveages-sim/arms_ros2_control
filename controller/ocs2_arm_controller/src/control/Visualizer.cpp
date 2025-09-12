@@ -54,7 +54,7 @@ namespace ocs2::mobile_manipulator
             {
                 geometry_visualization_ = std::make_unique<GeometryInterfaceVisualization>(
                     interface_->getPinocchioInterface(),
-                    std::move(*pinocchio_geometry_interface));
+                    std::move(*pinocchio_geometry_interface), base_frame_);
 
                 enable_self_collision_ = true;
                 RCLCPP_INFO(node_->get_logger(), "Self-collision visualization initialized using interface geometry");
