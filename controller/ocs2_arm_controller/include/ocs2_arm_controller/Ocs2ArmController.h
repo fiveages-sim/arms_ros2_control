@@ -62,12 +62,12 @@ namespace ocs2::mobile_manipulator
         std::string state_name_string;
     };
 
-    // CHENHZHU: Control output mode enum
-    enum class ControlOutputMode
+    // Control mode enum for automatic detection
+    enum class ControlMode
     {
-        POSITION,
-        FORCE,
-        MIXED
+        POSITION,    // Position control only
+        FORCE,       // Force control with kp, kd, velocity, effort, position
+        AUTO         // Automatic detection based on available interfaces
     };
 
     // Control interfaces structure for arm control
@@ -97,14 +97,56 @@ namespace ocs2::mobile_manipulator
         arms_ros2_control_msgs::msg::Inputs control_inputs_;
         int frequency_ = 1000;
 
-        // CHENHZHU: Control output mode enum
-        ControlOutputMode control_output_mode_ = ControlOutputMode::POSITION; // Default to position control
+        // Control mode - automatically detected based on available interfaces
+        ControlMode control_mode_ = ControlMode::POSITION;  // Will be set during initialization
+        bool mode_detected_ = false;  // Flag to ensure detection only happens once
+
+        // Auto mode detection function - called once during initialization
+        void detectAndSetControlMode()
+        {
+            if (mode_detected_) return;  // Only detect once
+
+            // Check if command interfaces include kp, kd, velocity, effort, position
+            bool has_kp_cmd = !joint_kp_command_interface_.empty();
+            bool has_kd_cmd = !joint_kd_command_interface_.empty();
+            bool has_velocity_cmd = !joint_velocity_command_interface_.empty();
+            bool has_effort_cmd = !joint_force_command_interface_.empty();
+            bool has_position_cmd = !joint_position_command_interface_.empty();
+
+            // Check if state interfaces include velocity, effort, position
+            bool has_velocity_state = !joint_velocity_state_interface_.empty();
+            bool has_effort_state = !joint_force_state_interface_.empty();
+            bool has_position_state = !joint_position_state_interface_.empty();
+
+            // Enable force control mode if all required interfaces are available
+            bool command_has_force_control = has_kp_cmd && has_kd_cmd && has_velocity_cmd && has_effort_cmd && has_position_cmd;
+            bool state_has_force_control = has_velocity_state && has_effort_state && has_position_state;
+
+            if (command_has_force_control && state_has_force_control)
+            {
+                control_mode_ = ControlMode::FORCE;
+            }
+            else
+            {
+                control_mode_ = ControlMode::POSITION;
+            }
+
+            mode_detected_ = true;
+        }
+
+        // Force control gains [kp, kd]
+        std::vector<double> default_gains_;
 
         void clear()
         {
             joint_position_command_interface_.clear();
             joint_position_state_interface_.clear();
             joint_velocity_state_interface_.clear();
+            joint_force_command_interface_.clear();
+            joint_velocity_command_interface_.clear();
+            joint_kp_command_interface_.clear();
+            joint_kd_command_interface_.clear();
+            joint_force_state_interface_.clear();
         }
     };
 
@@ -165,13 +207,18 @@ namespace ocs2::mobile_manipulator
         // Interface mapping
         std::unordered_map<std::string, std::vector<std::reference_wrapper<hardware_interface::LoanedCommandInterface>>*>
         command_interface_map_ = {
-            {"position", &ctrl_interfaces_.joint_position_command_interface_}
+            {"position", &ctrl_interfaces_.joint_position_command_interface_},
+            {"velocity", &ctrl_interfaces_.joint_velocity_command_interface_},
+            {"effort", &ctrl_interfaces_.joint_force_command_interface_},
+            {"kp", &ctrl_interfaces_.joint_kp_command_interface_},
+            {"kd", &ctrl_interfaces_.joint_kd_command_interface_}
         };
 
         std::unordered_map<std::string, std::vector<std::reference_wrapper<hardware_interface::LoanedStateInterface>>*>
         state_interface_map_ = {
             {"position", &ctrl_interfaces_.joint_position_state_interface_},
-            {"velocity", &ctrl_interfaces_.joint_velocity_state_interface_}
+            {"velocity", &ctrl_interfaces_.joint_velocity_state_interface_},
+            {"effort", &ctrl_interfaces_.joint_force_state_interface_}
         };
 
         // ROS subscriptions

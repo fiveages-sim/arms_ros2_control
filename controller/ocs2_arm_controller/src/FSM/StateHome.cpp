@@ -8,9 +8,11 @@
 
 namespace ocs2::mobile_manipulator
 {
-    StateHome::StateHome(CtrlInterfaces& ctrl_interfaces, const std::vector<double>& target_pos)
+    StateHome::StateHome(CtrlInterfaces& ctrl_interfaces, const std::vector<double>& target_pos, 
+                         const std::shared_ptr<CtrlComponent>& ctrl_comp)
         : FSMState(FSMStateName::HOME, "home"),
           ctrl_interfaces_(ctrl_interfaces),
+          ctrl_comp_(ctrl_comp),
           target_pos_(target_pos),
           duration_(3.0),  // Default interpolation duration: 3 seconds
           percent_(0.0),   // Start from 0%
@@ -43,6 +45,25 @@ namespace ocs2::mobile_manipulator
         
         // Reset interpolation progress
         percent_ = 0.0;
+        
+        // Set kp and kd gains for force control if available (only once when entering state)
+        if (ctrl_interfaces_.control_mode_ == ControlMode::FORCE && ctrl_interfaces_.default_gains_.size() >= 2)
+        {
+            double kp = ctrl_interfaces_.default_gains_[0];  // Position gain
+            double kd = ctrl_interfaces_.default_gains_[1];  // Velocity gain
+            
+            // Set kp gains
+            for (auto& kp_interface : ctrl_interfaces_.joint_kp_command_interface_)
+            {
+                kp_interface.get().set_value(kp);
+            }
+            
+            // Set kd gains
+            for (auto& kd_interface : ctrl_interfaces_.joint_kd_command_interface_)
+            {
+                kd_interface.get().set_value(kd);
+            }
+        }
         
         RCLCPP_INFO(rclcpp::get_logger("StateHome"), 
                     "Starting linear interpolation to home pose over %.1f seconds", duration_);
@@ -82,6 +103,26 @@ namespace ocs2::mobile_manipulator
         {
             double interpolated_value = phase * current_target_[i] + (1.0 - phase) * start_pos_[i];
             ctrl_interfaces_.joint_position_command_interface_[i].get().set_value(interpolated_value);
+        }
+
+        // In force control mode, calculate static torques for interpolated position
+        if (ctrl_interfaces_.control_mode_ == ControlMode::FORCE && ctrl_comp_)
+        {
+            // Get interpolated joint positions
+            vector_t interpolated_positions(ctrl_interfaces_.joint_position_command_interface_.size());
+            for (size_t i = 0; i < ctrl_interfaces_.joint_position_command_interface_.size(); ++i)
+            {
+                interpolated_positions(i) = ctrl_interfaces_.joint_position_command_interface_[i].get().get_value();
+            }
+            
+            // Calculate static torques for interpolated position using CtrlComponent
+            vector_t static_torques = ctrl_comp_->calculateStaticTorques(interpolated_positions);
+            
+            // Set effort commands (torques) for force control
+            for (size_t i = 0; i < ctrl_interfaces_.joint_force_command_interface_.size() && i < static_torques.size(); ++i)
+            {
+                ctrl_interfaces_.joint_force_command_interface_[i].get().set_value(static_torques(i));
+            }
         }
     }
 

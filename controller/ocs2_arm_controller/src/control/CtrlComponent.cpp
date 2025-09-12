@@ -11,6 +11,7 @@
 #include <ocs2_ddp/GaussNewtonDDP_MPC.h>
 #include <pinocchio/algorithm/frames.hpp>
 #include <pinocchio/algorithm/kinematics.hpp>
+#include <pinocchio/algorithm/rnea.hpp>
 #include <exception>
 #include <filesystem> // Added for modern file operations
 
@@ -123,7 +124,7 @@ namespace ocs2::mobile_manipulator
         }
         // Update observation state
         observation_.time = time.seconds();
-        for (int i = 0; i < joint_names_.size(); ++i)
+        for (size_t i = 0; i < joint_names_.size(); ++i)
         {
             observation_.state[i] = ctrl_interfaces_.joint_position_state_interface_[i].get().get_value();
         }
@@ -176,63 +177,41 @@ namespace ocs2::mobile_manipulator
 
             // CHENHZHU: Set commands based on control mode
             // Extract joint positions from state and set as commands
-            // TODO: Need to use Pinnochi to compute force input 
-            if (ctrl_interfaces_.control_output_mode_ == ControlOutputMode::POSITION)
+            if (ctrl_interfaces_.control_mode_ == ControlMode::POSITION)
             {
                 for (size_t i = 0; i < joint_names_.size() && i < future_state.size(); ++i)
                 {
                     ctrl_interfaces_.joint_position_command_interface_[i].get().set_value(future_state(i));
                 }
             }
-            else if (ctrl_interfaces_.control_output_mode_ == ControlOutputMode::FORCE)
+            else if (ctrl_interfaces_.control_mode_ == ControlMode::FORCE)
             {
-                for (size_t i = 0; i < joint_names_.size() && i < future_input.size(); ++i)
+                // Calculate static torques for force control
+                vector_t static_torques = calculateStaticTorques(future_state);
+                
+                // Set effort commands (torques) for force control
+                for (size_t i = 0; i < joint_names_.size() && i < static_torques.size(); ++i)
                 {
-                    ctrl_interfaces_.joint_velocity_command_interface_[i].get().set_value(future_input(i));
+                    ctrl_interfaces_.joint_force_command_interface_[i].get().set_value(static_torques(i));
                 }
-            }
-            else if (ctrl_interfaces_.control_output_mode_ == ControlOutputMode::MIXED)
-            {   
-                if (future_input.size() != joint_names_.size() || future_state.size() != joint_names_.size())
+                
+                // Set position commands as reference
+                for (size_t i = 0; i < joint_names_.size() && i < future_state.size(); ++i)
                 {
-                    RCLCPP_ERROR(node_->get_logger(), "Size mismatch: future_input size %zu, future_state size %zu, joint_names size %zu",
-                                 future_input.size(), future_state.size(), joint_names_.size());
-                }
-
-                // Set forces and positions
-                for (size_t i = 0; i < joint_names_.size() && i < joint_names_.size(); ++i)
-                {
-                    ctrl_interfaces_.joint_velocity_command_interface_[i].get().set_value(future_input(i));
                     ctrl_interfaces_.joint_position_command_interface_[i].get().set_value(future_state(i));
                 }
-
-                // // Set forces
-                // for (size_t i = 0; i < joint_names_.size() && i < future_input.size(); ++i)
-                // {
-                //     ctrl_interfaces_.joint_force_command_interface_[i].get().set_value(future_input(i));
-                // }
-                // // Set positions
-                // for (size_t i = 0; i < joint_names_.size() && i < future_state.size(); ++i)
-                // {
-                //     ctrl_interfaces_.joint_position_command_interface_[i].get().set_value(future_state(i));
-                // }
             }
             else
             {
                 RCLCPP_ERROR(node_->get_logger(), "Unknown control output mode");
             }
-            // Set joint positions for position or mixed control modes
-            // for (size_t i = 0; i < joint_names_.size() && i < future_state.size(); ++i)
-            // {
-            //     ctrl_interfaces_.joint_position_command_interface_[i].get().set_value(future_state(i));
-            // }
         }
         catch (const std::exception& e)
         {
             RCLCPP_WARN(node_->get_logger(), "Failed to get trajectory, falling back to integration: %s", e.what());
             // Fallback to integration method
             vector_t current_positions(joint_names_.size());
-            for (int i = 0; i < joint_names_.size(); ++i)
+            for (size_t i = 0; i < joint_names_.size(); ++i)
             {
                 current_positions(i) = ctrl_interfaces_.joint_position_state_interface_[i].get().get_value();
             }
@@ -355,5 +334,30 @@ namespace ocs2::mobile_manipulator
         const std::string default_urdf = urdf_dir + robot_name + ".urdf";
         RCLCPP_INFO(node_->get_logger(), "Using default URDF: %s", default_urdf.c_str());
         return default_urdf;
+    }
+
+    vector_t CtrlComponent::calculateStaticTorques(const vector_t& joint_positions, const vector_t& joint_velocities) const
+    {
+        // Get the Pinocchio model and data from the interface
+        const auto& pinocchio_model = interface_->getPinocchioInterface().getModel();
+        auto pinocchio_data = interface_->getPinocchioInterface().getData();
+
+        // Convert OCS2 vector_t to Eigen::VectorXd for Pinocchio
+        Eigen::VectorXd q = joint_positions;
+        Eigen::VectorXd v = joint_velocities.size() > 0 ? joint_velocities : Eigen::VectorXd::Zero(pinocchio_model.nv);
+        Eigen::VectorXd a = Eigen::VectorXd::Zero(pinocchio_model.nv);  // Zero acceleration for static torques
+
+        // Calculate torques using RNEA (Recursive Newton-Euler Algorithm)
+        // This computes the torques needed to maintain the given position with zero velocity and acceleration
+        Eigen::VectorXd torques = pinocchio::rnea(pinocchio_model, pinocchio_data, q, v, a);
+
+        // Convert back to OCS2 vector_t
+        vector_t result = vector_t::Zero(torques.size());
+        for (size_t i = 0; i < torques.size(); ++i)
+        {
+            result(i) = torques(i);
+        }
+
+        return result;
     }
 } // namespace ocs2::mobile_manipulator

@@ -7,9 +7,10 @@
 
 namespace ocs2::mobile_manipulator
 {
-    StateHold::StateHold(CtrlInterfaces& ctrl_interfaces)
+    StateHold::StateHold(CtrlInterfaces& ctrl_interfaces, const std::shared_ptr<CtrlComponent>& ctrl_comp)
         : FSMState(FSMStateName::HOLD, "HOLD"),
-          ctrl_interfaces_(ctrl_interfaces)
+          ctrl_interfaces_(ctrl_interfaces),
+          ctrl_comp_(ctrl_comp)
     {
     }
 
@@ -41,6 +42,45 @@ namespace ocs2::mobile_manipulator
     {
         // HOLD state does not send any commands
         // Robot will maintain its current position
+        
+        // In force control mode, calculate static torques to maintain current position
+        if (ctrl_interfaces_.control_mode_ == ControlMode::FORCE && ctrl_comp_)
+        {
+            // Get current joint positions
+            vector_t current_positions(ctrl_interfaces_.joint_position_state_interface_.size());
+            for (size_t i = 0; i < ctrl_interfaces_.joint_position_state_interface_.size(); ++i)
+            {
+                current_positions(i) = ctrl_interfaces_.joint_position_state_interface_[i].get().get_value();
+            }
+            
+            // Calculate static torques needed to maintain current position using CtrlComponent
+            vector_t static_torques = ctrl_comp_->calculateStaticTorques(current_positions);
+            
+            // Set effort commands (torques) for force control
+            for (size_t i = 0; i < ctrl_interfaces_.joint_force_command_interface_.size() && i < static_torques.size(); ++i)
+            {
+                ctrl_interfaces_.joint_force_command_interface_[i].get().set_value(static_torques(i));
+            }
+            
+            // Set kp and kd gains for force control if available
+            if (ctrl_interfaces_.default_gains_.size() >= 2)
+            {
+                double kp = ctrl_interfaces_.default_gains_[0];  // Position gain
+                double kd = ctrl_interfaces_.default_gains_[1];  // Velocity gain
+                
+                // Set kp gains
+                for (auto& kp_interface : ctrl_interfaces_.joint_kp_command_interface_)
+                {
+                    kp_interface.get().set_value(kp);
+                }
+                
+                // Set kd gains
+                for (auto& kd_interface : ctrl_interfaces_.joint_kd_command_interface_)
+                {
+                    kd_interface.get().set_value(kd);
+                }
+            }
+        }
     }
 
     void StateHold::exit()
