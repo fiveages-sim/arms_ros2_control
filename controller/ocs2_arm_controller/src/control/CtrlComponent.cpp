@@ -184,7 +184,7 @@ namespace ocs2::mobile_manipulator
                     ctrl_interfaces_.joint_position_command_interface_[i].get().set_value(future_state(i));
                 }
             }
-            else if (ctrl_interfaces_.control_mode_ == ControlMode::FORCE)
+            else if (ctrl_interfaces_.control_mode_ == ControlMode::MIX)
             {
                 // Calculate static torques for force control
                 vector_t static_torques = calculateStaticTorques(future_state);
@@ -199,6 +199,12 @@ namespace ocs2::mobile_manipulator
                 for (size_t i = 0; i < joint_names_.size() && i < future_state.size(); ++i)
                 {
                     ctrl_interfaces_.joint_position_command_interface_[i].get().set_value(future_state(i));
+                }
+                
+                // Set velocity commands from MPC input
+                for (size_t i = 0; i < joint_names_.size() && i < future_input.size(); ++i)
+                {
+                    ctrl_interfaces_.joint_velocity_command_interface_[i].get().set_value(future_input(i));
                 }
             }
             else
@@ -344,20 +350,12 @@ namespace ocs2::mobile_manipulator
 
         // Convert OCS2 vector_t to Eigen::VectorXd for Pinocchio
         Eigen::VectorXd q = joint_positions;
-        Eigen::VectorXd v = joint_velocities.size() > 0 ? joint_velocities : Eigen::VectorXd::Zero(pinocchio_model.nv);
-        Eigen::VectorXd a = Eigen::VectorXd::Zero(pinocchio_model.nv);  // Zero acceleration for static torques
 
-        // Calculate torques using RNEA (Recursive Newton-Euler Algorithm)
-        // This computes the torques needed to maintain the given position with zero velocity and acceleration
-        Eigen::VectorXd torques = pinocchio::rnea(pinocchio_model, pinocchio_data, q, v, a);
-
-        // Convert back to OCS2 vector_t
-        vector_t result = vector_t::Zero(torques.size());
-        for (size_t i = 0; i < torques.size(); ++i)
-        {
-            result(i) = torques(i);
-        }
-
-        return result;
+        // 使用RNEA算法，但速度设为0（静态情况）
+        // 这样可以保持RNEA的完整性，但跳过速度相关的计算
+        // 直接使用零向量，避免重复创建对象
+        return pinocchio::rnea(pinocchio_model, pinocchio_data, q, 
+                              Eigen::VectorXd::Zero(pinocchio_model.nv), 
+                              Eigen::VectorXd::Zero(pinocchio_model.nv));
     }
 } // namespace ocs2::mobile_manipulator

@@ -47,7 +47,7 @@ namespace ocs2::mobile_manipulator
         percent_ = 0.0;
         
         // Set kp and kd gains for force control if available (only once when entering state)
-        if (ctrl_interfaces_.control_mode_ == ControlMode::FORCE && ctrl_interfaces_.default_gains_.size() >= 2)
+        if (ctrl_interfaces_.control_mode_ == ControlMode::MIX && ctrl_interfaces_.default_gains_.size() >= 2)
         {
             double kp = ctrl_interfaces_.default_gains_[0];  // Position gain
             double kd = ctrl_interfaces_.default_gains_[1];  // Velocity gain
@@ -106,7 +106,7 @@ namespace ocs2::mobile_manipulator
         }
 
         // In force control mode, calculate static torques for interpolated position
-        if (ctrl_interfaces_.control_mode_ == ControlMode::FORCE && ctrl_comp_)
+        if (ctrl_interfaces_.control_mode_ == ControlMode::MIX && ctrl_comp_)
         {
             // Get interpolated joint positions
             vector_t interpolated_positions(ctrl_interfaces_.joint_position_command_interface_.size());

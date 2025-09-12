@@ -44,7 +44,7 @@ namespace ocs2::mobile_manipulator
         // Robot will maintain its current position
         
         // In force control mode, calculate static torques to maintain current position
-        if (ctrl_interfaces_.control_mode_ == ControlMode::FORCE && ctrl_comp_)
+        if (ctrl_interfaces_.control_mode_ == ControlMode::MIX && ctrl_comp_)
         {
             // Get current joint positions
             vector_t current_positions(ctrl_interfaces_.joint_position_state_interface_.size());

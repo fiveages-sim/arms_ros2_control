@@ -25,7 +25,7 @@ namespace ocs2::mobile_manipulator
         // Try to get MPC frequency from parameters
         if (node_->has_parameter("mpc_frequency"))
         {
-            mpc_frequency = node_->get_parameter("mpc_frequency").as_double();
+            mpc_frequency = node_->get_parameter("mpc_frequency").as_int();
             RCLCPP_INFO(node_->get_logger(), "MPC frequency from parameter: %.1f Hz", mpc_frequency);
         }
 
@@ -88,6 +88,36 @@ namespace ocs2::mobile_manipulator
     void StateOCS2::enter()
     {
         RCLCPP_INFO(node_->get_logger(), "Entering OCS2 state");
+
+        // Set OCS2 gains only in MIX control mode (kp, kd available)
+        if (ctrl_interfaces_.control_mode_ == ControlMode::MIX)
+        {
+            if (ctrl_interfaces_.ocs2_gains_.size() >= 2)
+            {
+                double kp = ctrl_interfaces_.ocs2_gains_[0];  // Position gain
+                double kd = ctrl_interfaces_.ocs2_gains_[1];  // Velocity gain
+                
+                RCLCPP_INFO(node_->get_logger(), "Setting OCS2 gains: kp=%.2f, kd=%.2f", kp, kd);
+                
+                // Set kp and kd gains for all joints
+                for (size_t i = 0; i < ctrl_interfaces_.joint_kp_command_interface_.size(); ++i)
+                {
+                    ctrl_interfaces_.joint_kp_command_interface_[i].get().set_value(kp);
+                }
+                for (size_t i = 0; i < ctrl_interfaces_.joint_kd_command_interface_.size(); ++i)
+                {
+                    ctrl_interfaces_.joint_kd_command_interface_[i].get().set_value(kd);
+                }
+            }
+            else
+            {
+                RCLCPP_WARN(node_->get_logger(), "OCS2 gains not configured, using default gains");
+            }
+        }
+        else
+        {
+            RCLCPP_INFO(node_->get_logger(), "Position control mode - no kp/kd interfaces available");
+        }
 
         // Reset MPC
         ctrl_comp_->resetMpc();

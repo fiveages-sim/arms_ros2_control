@@ -113,7 +113,10 @@ namespace ocs2::mobile_manipulator
             rest_pos_ = auto_declare<std::vector<double>>("rest_pos", rest_pos_);
             
             // Force control parameters
-            ctrl_interfaces_.default_gains_ = auto_declare<std::vector<double>>("force_gains", ctrl_interfaces_.default_gains_);
+            ctrl_interfaces_.default_gains_ = auto_declare<std::vector<double>>("default_gains", ctrl_interfaces_.default_gains_);
+            
+            // OCS2 control parameters
+            ctrl_interfaces_.ocs2_gains_ = auto_declare<std::vector<double>>("ocs2_gains", ctrl_interfaces_.ocs2_gains_);
 
             // Create CtrlComponent (auto-initialize interface)
             ctrl_comp_ = std::make_shared<CtrlComponent>(get_node(), ctrl_interfaces_);
@@ -191,9 +194,9 @@ namespace ocs2::mobile_manipulator
         ctrl_interfaces_.detectAndSetControlMode();
         
         // Log detected control mode
-        if (ctrl_interfaces_.control_mode_ == ControlMode::FORCE)
+        if (ctrl_interfaces_.control_mode_ == ControlMode::MIX)
         {
-            RCLCPP_INFO(get_node()->get_logger(), "Force control mode enabled - detected kp, kd, velocity, effort, position interfaces");
+            RCLCPP_INFO(get_node()->get_logger(), "Mixed control mode enabled - detected kp, kd, velocity, effort, position interfaces");
         }
         else
         {
