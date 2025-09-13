@@ -41,6 +41,7 @@ protected:
     void initializeCommunicator();
     void exportSensorStateInterfaces(std::vector<hardware_interface::StateInterface>& state_interfaces);
     bool findSensorByName(const std::string& sensor_name, hardware_interface::ComponentInfo& sensor_info);
+    void initializeCommandsFromFirstData();
 
     std::unique_ptr<UnitreeCommunicator> communicator_;
     std::string robot_type_ = "quadruped"; // 默认机器人类型
@@ -48,5 +49,7 @@ protected:
     int domain_ = 1;
     bool show_foot_force_ = false;
     bool enable_high_state_ = true; // 是否启用高状态读取（仿真环境）
-    bool commands_initialized_ = false; // 命令是否已根据当前位置初始化
+    bool command_initialized_ = false; // 是否已经初始化command
+    double default_kp_ = 0.0; // 默认kp值
+    double default_kd_ = 0.0; // 默认kd值
 };

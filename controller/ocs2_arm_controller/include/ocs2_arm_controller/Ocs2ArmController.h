@@ -66,7 +66,7 @@ namespace ocs2::mobile_manipulator
     enum class ControlMode
     {
         POSITION,    // Position control only
-        FORCE,       // Force control with kp, kd, velocity, effort, position
+        MIX,         // Mixed control with kp, kd, velocity, effort, position
         AUTO         // Automatic detection based on available interfaces
     };
 
@@ -118,17 +118,15 @@ namespace ocs2::mobile_manipulator
             bool has_effort_state = !joint_force_state_interface_.empty();
             bool has_position_state = !joint_position_state_interface_.empty();
 
-            // Enable force control mode if all required interfaces are available
-            bool command_has_force_control = has_kp_cmd && has_kd_cmd && has_velocity_cmd && has_effort_cmd && has_position_cmd;
-            bool state_has_force_control = has_velocity_state && has_effort_state && has_position_state;
-
-            if (command_has_force_control && state_has_force_control)
+            // Determine control mode based on available interfaces
+            if (has_kp_cmd && has_kd_cmd && has_velocity_cmd && has_effort_cmd && has_position_cmd &&
+                has_velocity_state && has_effort_state && has_position_state)
             {
-                control_mode_ = ControlMode::FORCE;
+                control_mode_ = ControlMode::MIX;  // Mixed control with kp, kd
             }
             else
             {
-                control_mode_ = ControlMode::POSITION;
+                control_mode_ = ControlMode::POSITION;  // Position control only
             }
 
             mode_detected_ = true;
@@ -136,6 +134,9 @@ namespace ocs2::mobile_manipulator
 
         // Force control gains [kp, kd]
         std::vector<double> default_gains_;
+        
+        // OCS2 control gains [kp, kd] - used when entering OCS2 state
+        std::vector<double> ocs2_gains_;
 
         void clear()
         {

@@ -61,9 +61,19 @@ rclcpp_lifecycle::node_interfaces::LifecycleNodeInterface::CallbackReturn Hardwa
     {
         enable_high_state_ = enable_high_state_param->second == "true";
     }
+    if (const auto default_kp_param = info.hardware_parameters.find("default_kp"); default_kp_param !=
+        info.hardware_parameters.end())
+    {
+        default_kp_ = std::stod(default_kp_param->second);
+    }
+    if (const auto default_kd_param = info.hardware_parameters.find("default_kd"); default_kd_param !=
+        info.hardware_parameters.end())
+    {
+        default_kd_ = std::stod(default_kd_param->second);
+    }
 
-    RCLCPP_INFO(get_logger(), " robot_type: %s, network_interface: %s, domain: %d, enable_high_state: %s", 
-                robot_type_.c_str(), network_interface_.c_str(), domain_, enable_high_state_ ? "true" : "false");
+    RCLCPP_INFO(get_logger(), " robot_type: %s, network_interface: %s, domain: %d, enable_high_state: %s, default_kp: %f, default_kd: %f", 
+                robot_type_.c_str(), network_interface_.c_str(), domain_, enable_high_state_ ? "true" : "false", default_kp_, default_kd_);
 
     initializeCommunicator();
 
@@ -146,17 +156,9 @@ return_type HardwareUnitree::read(const rclcpp::Time& /*time*/, const rclcpp::Du
         joint_effort_[i] = robot_state.joint_effort[i];
     }
 
-    // 第一次读取到状态时，将当前位置设置为command初始值
-    if (!commands_initialized_) {
-        for (int i = 0; i < joint_count && i < static_cast<int>(joint_position_command_.size()); ++i) {
-            joint_position_command_[i] = joint_position_[i];
-            joint_velocities_command_[i] = 0.0;  // 速度命令初始化为0
-            joint_torque_command_[i] = 0.0;      // 力矩命令初始化为0
-            joint_kp_command_[i] = 0.0;          // kp初始化为0
-            joint_kd_command_[i] = 0.0;          // kd初始化为0
-        }
-        commands_initialized_ = true;
-        RCLCPP_INFO(get_logger(), "Initialized command values with current joint positions");
+    // 第一次读取到数据时初始化command
+    if (!command_initialized_) {
+        initializeCommandsFromFirstData();
     }
 
     imu_states_[0] = robot_state.imu_quaternion[0];
@@ -199,13 +201,6 @@ return_type HardwareUnitree::write(const rclcpp::Time& /*time*/, const rclcpp::D
     if (!communicator_) {
         RCLCPP_ERROR(get_logger(), "Communicator not initialized");
         return return_type::ERROR;
-    }
-
-    // 如果命令还没有根据当前位置初始化，则不发送任何指令
-    if (!commands_initialized_) {
-        RCLCPP_WARN_THROTTLE(get_logger(), *get_clock(), 5000, 
-                            "Commands not initialized yet, skipping command write");
-        return return_type::OK;
     }
 
     UnitreeCommunicator::RobotCommand command;
@@ -318,6 +313,28 @@ bool HardwareUnitree::findSensorByName(const std::string& sensor_name, hardware_
         }
     }
     return false;
+}
+
+void HardwareUnitree::initializeCommandsFromFirstData() {
+    if (command_initialized_) {
+        return; // 已经初始化过了
+    }
+    
+    int joint_count = static_cast<int>(joint_position_.size());
+    RCLCPP_INFO(get_logger(), "Initializing commands from first data with %d joints", joint_count);
+    
+    // 将当前位置设置为初始command值
+    for (int i = 0; i < joint_count && i < static_cast<int>(joint_position_command_.size()); ++i) {
+        joint_position_command_[i] = joint_position_[i];
+        joint_velocities_command_[i] = joint_velocities_[i];
+        joint_torque_command_[i] = joint_effort_[i];
+        // 使用配置的默认kp和kd值
+        joint_kp_command_[i] = default_kp_;
+        joint_kd_command_[i] = default_kd_;
+    }
+    
+    command_initialized_ = true;
+    RCLCPP_INFO(get_logger(), "Commands initialized from first data");
 }
 
 #include "pluginlib/class_list_macros.hpp"
