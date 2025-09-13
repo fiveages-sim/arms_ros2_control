@@ -187,7 +187,7 @@ namespace ocs2::mobile_manipulator
             else if (ctrl_interfaces_.control_mode_ == ControlMode::MIX)
             {
                 // Calculate static torques for force control
-                vector_t static_torques = calculateStaticTorques(future_state);
+                vector_t static_torques = calculateStaticTorques();
                 
                 // Set effort commands (torques) for force control
                 for (size_t i = 0; i < joint_names_.size() && i < static_torques.size(); ++i)
@@ -342,14 +342,15 @@ namespace ocs2::mobile_manipulator
         return default_urdf;
     }
 
-    vector_t CtrlComponent::calculateStaticTorques(const vector_t& joint_positions, const vector_t& joint_velocities) const
+    vector_t CtrlComponent::calculateStaticTorques() const
     {
         // Get the Pinocchio model and data from the interface
         const auto& pinocchio_model = interface_->getPinocchioInterface().getModel();
         auto pinocchio_data = interface_->getPinocchioInterface().getData();
 
+        // Use current joint positions from observation state (already updated in updateObservation)
         // Convert OCS2 vector_t to Eigen::VectorXd for Pinocchio
-        Eigen::VectorXd q = joint_positions;
+        Eigen::VectorXd q = observation_.state;
 
         // 使用RNEA算法，但速度设为0（静态情况）
         // 这样可以保持RNEA的完整性，但跳过速度相关的计算

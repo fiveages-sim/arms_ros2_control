@@ -38,7 +38,7 @@ namespace ocs2::mobile_manipulator
         void clearTrajectoryVisualization();
 
         // Torque calculation for force control
-        vector_t calculateStaticTorques(const vector_t& joint_positions, const vector_t& joint_velocities = vector_t()) const;
+        vector_t calculateStaticTorques() const;
 
         // OCS2 interface (public access)
         std::shared_ptr<MobileManipulatorInterface> interface_;

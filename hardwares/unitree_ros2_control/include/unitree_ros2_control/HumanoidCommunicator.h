@@ -23,6 +23,9 @@ public:
     void setJointCount(int joint_count) override;
     bool supportsFootForce() const override { return false; }
     bool supportsHighState() const override { return false; }
+    
+    // Set control mode
+    void setControlMode(uint8_t mode_pr, uint8_t mode_machine = 0);
 
 private:
     void lowStateMessageHandle(const void* messages);
@@ -47,4 +50,8 @@ private:
     
     // Joint count (set from configuration)
     int joint_count_ = 20;
+    
+    // Control mode settings
+    uint8_t mode_pr_ = 0;        // PR = 0, AB = 1
+    uint8_t mode_machine_ = 0;   // Machine mode from robot
 };

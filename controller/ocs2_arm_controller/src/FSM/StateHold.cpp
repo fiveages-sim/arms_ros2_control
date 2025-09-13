@@ -54,7 +54,7 @@ namespace ocs2::mobile_manipulator
             }
             
             // Calculate static torques needed to maintain current position using CtrlComponent
-            vector_t static_torques = ctrl_comp_->calculateStaticTorques(current_positions);
+            vector_t static_torques = ctrl_comp_->calculateStaticTorques();
             
             // Set effort commands (torques) for force control
             for (size_t i = 0; i < ctrl_interfaces_.joint_force_command_interface_.size() && i < static_torques.size(); ++i)

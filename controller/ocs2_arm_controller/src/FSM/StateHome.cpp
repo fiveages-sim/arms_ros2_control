@@ -17,9 +17,7 @@ namespace ocs2::mobile_manipulator
           duration_(3.0),  // Default interpolation duration: 3 seconds
           percent_(0.0),   // Start from 0%
           has_rest_pose_(false),
-          is_rest_pose_(false),  // Default to home pose
-          last_switch_command_(false),
-          switch_debounced_(false)
+          is_rest_pose_(false)
     {
         // Initialize current target to home pose by default
         current_target_ = target_pos_;
@@ -38,9 +36,9 @@ namespace ocs2::mobile_manipulator
         
         // Get current joint positions as starting positions
         start_pos_.clear();
-        for (size_t i = 0; i < ctrl_interfaces_.joint_position_state_interface_.size(); ++i)
+        for (auto i : ctrl_interfaces_.joint_position_state_interface_)
         {
-            start_pos_.push_back(ctrl_interfaces_.joint_position_state_interface_[i].get().get_value());
+            start_pos_.push_back(i.get().get_value());
         }
         
         // Reset interpolation progress
@@ -115,8 +113,8 @@ namespace ocs2::mobile_manipulator
                 interpolated_positions(i) = ctrl_interfaces_.joint_position_command_interface_[i].get().get_value();
             }
             
-            // Calculate static torques for interpolated position using CtrlComponent
-            vector_t static_torques = ctrl_comp_->calculateStaticTorques(interpolated_positions);
+            // Calculate static torques for current position using CtrlComponent
+            vector_t static_torques = ctrl_comp_->calculateStaticTorques();
             
             // Set effort commands (torques) for force control
             for (size_t i = 0; i < ctrl_interfaces_.joint_force_command_interface_.size() && i < static_torques.size(); ++i)
