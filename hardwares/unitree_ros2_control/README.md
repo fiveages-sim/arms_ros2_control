@@ -48,11 +48,16 @@ Since the real unitree robot has different network and domain name, you need to 
 </hardware>
 ```
 
-After modified the config, you can tried to visualize the robot info from real robot by following command:
-```bash
-source ~/ros2_ws/install/setup.bash
-ros2 launch unitree_ros2_control visualize.launch.py
-```
+* Unitree Mujoco
+  ```bash
+  source ~/ros2_ws/install/setup.bash
+  ros2 launch unitree_ros2_control visualize.launch.py
+  ```
+* Real Unitree G1
+  ```bash
+  source ~/ros2_ws/install/setup.bash
+  ros2 launch unitree_ros2_control visualize.launch.py hardware:=unitree_real
+  ```
 
 
 https://github.com/user-attachments/assets/54511d3c-b88c-48aa-b4fe-45aee4746d9e

@@ -11,10 +11,11 @@ def launch_setup(context, *args, **kwargs):
     """Launch setup function using OpaqueFunction"""
     robot_name = context.launch_configurations['robot']
     robot_type = context.launch_configurations.get('type', '')
+    hardware = context.launch_configurations.get('hardware', 'unitree_sim')
 
     # Build mappings, only include when robot_type has a value
     mappings = {
-        'ros2_control_hardware_type': 'unitree',
+        'ros2_control_hardware_type': hardware,
     }
     if robot_type and robot_type.strip():
         mappings["type"] = robot_type
@@ -139,8 +140,15 @@ def generate_launch_description():
         description="Robot type (x5, r5, robotiq85, etc.). Leave empty to not pass type parameter to xacro."
     )
 
+    hardware_arg = DeclareLaunchArgument(
+        "hardware",
+        default_value="unitree_sim",
+        description="Hardware type: 'gz' for Gazebo simulation, 'isaac' for Isaac simulation, 'mock_components' for mock components"
+    )
+
     return LaunchDescription([
         robot_name_arg,
         robot_type_arg,
+        hardware_arg,
         OpaqueFunction(function=launch_setup),
     ])

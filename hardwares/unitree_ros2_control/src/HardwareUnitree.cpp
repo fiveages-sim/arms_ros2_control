@@ -1,5 +1,7 @@
 #include "unitree_ros2_control/HardwareUnitree.h"
+#include "unitree_ros2_control/UnitreeCommunicatorFactory.h"
 #include "unitree_ros2_control/QuadrupedCommunicator.h"
+#include "unitree_ros2_control/HumanoidCommunicator.h"
 using hardware_interface::return_type;
 
 rclcpp_lifecycle::node_interfaces::LifecycleNodeInterface::CallbackReturn HardwareUnitree::on_init(
@@ -79,6 +81,28 @@ rclcpp_lifecycle::node_interfaces::LifecycleNodeInterface::CallbackReturn Hardwa
 
 
     return SystemInterface::on_init(info);
+}
+
+rclcpp_lifecycle::node_interfaces::LifecycleNodeInterface::CallbackReturn HardwareUnitree::on_activate(
+    const rclcpp_lifecycle::State& previous_state)
+{
+    // 调用communicator的activate（阻塞式）
+    if (communicator_) {
+        communicator_->activate();  // 这里会阻塞直到激活完成
+    }
+    
+    return SystemInterface::on_activate(previous_state);
+}
+
+rclcpp_lifecycle::node_interfaces::LifecycleNodeInterface::CallbackReturn HardwareUnitree::on_deactivate(
+    const rclcpp_lifecycle::State& previous_state)
+{
+    // 调用communicator的deactivate（阻塞式）
+    if (communicator_) {
+        communicator_->deactivate();  // 这里会阻塞直到停用完成
+    }
+    
+    return SystemInterface::on_deactivate(previous_state);
 }
 
 std::vector<hardware_interface::StateInterface> HardwareUnitree::export_state_interfaces()
@@ -203,6 +227,7 @@ return_type HardwareUnitree::write(const rclcpp::Time& /*time*/, const rclcpp::D
         return return_type::ERROR;
     }
 
+
     UnitreeCommunicator::RobotCommand command;
     int joint_count = communicator_->getJointCount();
     
@@ -239,6 +264,12 @@ void HardwareUnitree::initializeCommunicator()
     int config_joint_count = static_cast<int>(joint_position_.size());
     communicator_->setJointCount(config_joint_count);
     RCLCPP_INFO(get_logger(), "Set communicator joint count to: %d", config_joint_count);
+
+    // 设置robot_type到communicator（如果是HumanoidCommunicator）
+    auto* humanoid_comm = dynamic_cast<HumanoidCommunicator*>(communicator_.get());
+    if (humanoid_comm) {
+        humanoid_comm->setRobotType(robot_type_);
+    }
 
     bool init_success = false;
     if (robot_type_ == "quadruped") {
@@ -336,6 +367,7 @@ void HardwareUnitree::initializeCommandsFromFirstData() {
     command_initialized_ = true;
     RCLCPP_INFO(get_logger(), "Commands initialized from first data");
 }
+
 
 #include "pluginlib/class_list_macros.hpp"
 

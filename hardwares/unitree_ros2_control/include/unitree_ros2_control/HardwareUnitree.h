@@ -2,11 +2,14 @@
 
 #include "hardware_interface/system_interface.hpp"
 #include "unitree_ros2_control/UnitreeCommunicator.h"
-#include "unitree_ros2_control/UnitreeCommunicatorFactory.h"
 
 class HardwareUnitree final : public hardware_interface::SystemInterface {
 public:
     CallbackReturn on_init(const hardware_interface::HardwareInfo &info) override;
+    
+    CallbackReturn on_activate(const rclcpp_lifecycle::State &previous_state) override;
+    
+    CallbackReturn on_deactivate(const rclcpp_lifecycle::State &previous_state) override;
 
     std::vector<hardware_interface::StateInterface> export_state_interfaces() override;
 
@@ -52,4 +55,5 @@ protected:
     bool command_initialized_ = false; // 是否已经初始化command
     double default_kp_ = 0.0; // 默认kp值
     double default_kd_ = 0.0; // 默认kd值
+
 };

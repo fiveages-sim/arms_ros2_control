@@ -26,6 +26,13 @@ public:
     
     // Set control mode
     void setControlMode(uint8_t mode_pr, uint8_t mode_machine = 0);
+    
+    // Set robot type for different behavior
+    void setRobotType(const std::string& robot_type);
+    
+    // Lifecycle management
+    void activate() override;
+    void deactivate() override;
 
 private:
     void lowStateMessageHandle(const void* messages);
@@ -54,4 +61,10 @@ private:
     // Control mode settings
     uint8_t mode_pr_ = 0;        // PR = 0, AB = 1
     uint8_t mode_machine_ = 0;   // Machine mode from robot
+    
+    // Robot type for different behavior
+    std::string robot_type_ = "humanoid";  // Default type
+    
+    // Weight control for arm_sdk mode
+    double current_weight_ = 0.0;
 };
