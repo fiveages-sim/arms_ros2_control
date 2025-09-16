@@ -27,9 +27,9 @@ endforeach ()
 
 add_library(${PROJECT_NAME} SHARED
         src/Ocs2ArmController.cpp
-        # src/Ocs2G1Controller.cpp  # Temporarily disabled
 
         src/control/CtrlComponent.cpp
+        src/control/PoseBasedReferenceManager.cpp
         src/control/Visualizer.cpp
 
         src/FSM/StateHome.cpp

@@ -332,36 +332,25 @@ def launch_setup(context, *args, **kwargs):
     # Get info file name from controller configuration
     info_file_name = get_info_file_name(robot_name, robot_type)
     
-    # Mobile Manipulator Target node for sending target trajectories
+    # OCS2 ArmsTargetManager for interactive pose control (auto-detects dual_arm_mode and frame_id from task.info)
     task_file_path = os.path.join(
         robot_pkg_path,
         "config",
         "ocs2",
         f"{info_file_name}.info"
     )
-    print(f"[INFO] Using task file: {task_file_path}")
+    print(f"[INFO] Using task file for ArmsTargetManager: {task_file_path}")
     
-    # Unified mapping for both arms to maintain interface consistency
-    
-    mobile_manipulator_target_node = Node(
-        package='ocs2_mobile_manipulator_ros',
-        executable='mobile_manipulator_target',
-        name='mobile_manipulator_target',
-        output='screen',
-        parameters=[
-            {'taskFile': task_file_path},
-            {'use_sim_time': use_sim_time},
-            {'enableVR': True},  # Enable VR control by default
-            {'enableJoystick': True},  # Enable joystick control by default
-            {'enableAutoPosition': True},  # Enable automatic position sync by default
-            {'enableDynamicFrame': True},  # Enable dynamic frame selection
+    ocs2_arms_target_manager = IncludeLaunchDescription(
+        PythonLaunchDescriptionSource([
+            os.path.join(get_package_share_directory('arms_target_manager'), 'launch'),
+            '/ocs2_arm_target_manager.launch.py',
+        ]),
+        launch_arguments=[
+            ('robot', robot_name),
+            ('task_file', task_file_path),
         ],
-        remappings=[
-            ('mobile_manipulator_mpc_target', robot_name + '_mpc_target'),
-            ('mobile_manipulator_mpc_observation', robot_name + '_mpc_observation'),
-            ('mobile_manipulator_left_end_effector_pose', robot_name + '_left_end_effector_pose'),
-            ('mobile_manipulator_right_end_effector_pose', robot_name + '_right_end_effector_pose'),
-        ],
+        condition=IfCondition(LaunchConfiguration('enable_arms_target_manager'))
     )
 
     # RViz for visualization
@@ -413,7 +402,7 @@ def launch_setup(context, *args, **kwargs):
             node_robot_state_publisher,
             gz_spawn_entity,
             rviz_node,
-            mobile_manipulator_target_node,
+            ocs2_arms_target_manager,
         ]
         # Add planning robot state publisher if available
         if planning_robot_state_publisher:
@@ -428,7 +417,7 @@ def launch_setup(context, *args, **kwargs):
             node_robot_state_publisher,
             joint_state_broadcaster_spawner,
             ocs2_arm_controller_spawner,
-            mobile_manipulator_target_node,
+            ocs2_arms_target_manager,
         ]
         # Add ros2_control_node if available
         if ros2_control_node:
@@ -464,11 +453,18 @@ def generate_launch_description():
     world_arg = DeclareLaunchArgument(
         'world', default_value='empty', description='Gz sim World (only used when hardware=gz)'
     )
+    
+    enable_arms_target_manager_arg = DeclareLaunchArgument(
+        'enable_arms_target_manager',
+        default_value='true',
+        description='Enable ArmsTargetManager for interactive pose control'
+    )
 
     return LaunchDescription([
         robot_name_arg,
         robot_type_arg,
         hardware_arg,
         world_arg,
+        enable_arms_target_manager_arg,
         OpaqueFunction(function=launch_setup),
     ]) 

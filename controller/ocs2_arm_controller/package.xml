@@ -12,6 +12,7 @@
 	<depend>controller_interface</depend>
 	<depend>pluginlib</depend>
 	<depend>arms_ros2_control_msgs</depend>
+	<depend>arms_target_manager</depend>
 	<depend>std_msgs</depend>
 	<depend>ocs2_mobile_manipulator_ros</depend>
 	<depend>ocs2_ros_interfaces</depend>

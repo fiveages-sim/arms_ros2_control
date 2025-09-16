@@ -6,7 +6,7 @@
 #include "ocs2_arm_controller/Ocs2ArmController.h"
 #include <ament_index_cpp/get_package_share_directory.hpp>
 #include <ocs2_mpc/MPC_MRT_Interface.h>
-#include <ocs2_ros_interfaces/synchronized_module/RosReferenceManager.h>
+#include "ocs2_arm_controller/control/PoseBasedReferenceManager.h"
 #include <ocs2_ros_interfaces/common/RosMsgConversions.h>
 #include <ocs2_ddp/GaussNewtonDDP_MPC.h>
 #include <pinocchio/algorithm/frames.hpp>
@@ -89,10 +89,10 @@ namespace ocs2::mobile_manipulator
 
     void CtrlComponent::setupMpcComponents()
     {
-        // Create RosReferenceManager and subscribe to ROS topics
-        ros_reference_manager_ = std::make_shared<RosReferenceManager>(
-            robot_name_, interface_->getReferenceManagerPtr());
-        ros_reference_manager_->subscribe(node_);
+        // Create PoseBasedReferenceManager and subscribe to ROS topics
+        pose_reference_manager_ = std::make_shared<PoseBasedReferenceManager>(
+            robot_name_, interface_->getReferenceManagerPtr(), interface_);
+        pose_reference_manager_->subscribe(node_);
 
         // Create MPC solver
         mpc_ = std::make_unique<GaussNewtonDDP_MPC>(
@@ -102,18 +102,22 @@ namespace ocs2::mobile_manipulator
             interface_->getOptimalControlProblem(),
             interface_->getInitializer());
 
-        // Create unified MPC_MRT_Interface using RosReferenceManager
+        // Create unified MPC_MRT_Interface using PoseBasedReferenceManager
         mpc_mrt_interface_ = std::make_unique<MPC_MRT_Interface>(*mpc_);
 
-        // Important: Set RosReferenceManager to MPC solver
-        mpc_->getSolverPtr()->setReferenceManager(ros_reference_manager_);
+        // Important: Set PoseBasedReferenceManager to MPC solver
+        mpc_->getSolverPtr()->setReferenceManager(pose_reference_manager_);
 
         observation_.state = interface_->getInitialState();
         observation_.input = vector_t::Zero(interface_->getManipulatorModelInfo().inputDim);
         observation_.time = 0.0; // Will be updated to current time in enter() method
 
         RCLCPP_INFO(node_->get_logger(), "MPC components setup completed");
-        RCLCPP_INFO(node_->get_logger(), "RosReferenceManager subscribed to %s_mpc_target topic", robot_name_.c_str());
+        RCLCPP_INFO(node_->get_logger(), "PoseBasedReferenceManager subscribed to %s_left_pose_target topic", robot_name_.c_str());
+        if (dual_arm_mode_)
+        {
+            RCLCPP_INFO(node_->get_logger(), "PoseBasedReferenceManager subscribed to %s_right_pose_target topic", robot_name_.c_str());
+        }
     }
 
     void CtrlComponent::updateObservation(const rclcpp::Time& time)
@@ -129,6 +133,13 @@ namespace ocs2::mobile_manipulator
             observation_.state[i] = ctrl_interfaces_.joint_position_state_interface_[i].get().get_value();
         }
         observation_.input = vector_t::Zero(interface_->getManipulatorModelInfo().inputDim);
+        
+        // 更新PoseBasedReferenceManager的当前观测
+        if (pose_reference_manager_)
+        {
+            pose_reference_manager_->setCurrentObservation(observation_);
+        }
+        
         visualizer_->publishSelfCollisionVisualization(observation_.state);
         visualizer_->publishEndEffectorPose(time, observation_.state);
     }

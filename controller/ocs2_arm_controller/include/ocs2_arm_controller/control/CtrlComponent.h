@@ -12,7 +12,7 @@
 #include <ocs2_core/Types.h>
 #include <ocs2_mpc/MPC_MRT_Interface.h>
 #include <ocs2_mpc/MPC_BASE.h>
-#include <ocs2_ros_interfaces/synchronized_module/RosReferenceManager.h>
+#include "ocs2_arm_controller/control/PoseBasedReferenceManager.h"
 #include <ocs2_msgs/msg/mpc_observation.hpp>
 #include "ocs2_arm_controller/control/Visualizer.h"
 
@@ -46,7 +46,7 @@ namespace ocs2::mobile_manipulator
         // MPC components
         std::unique_ptr<MPC_BASE> mpc_;
         std::unique_ptr<MPC_MRT_Interface> mpc_mrt_interface_;
-        std::shared_ptr<RosReferenceManager> ros_reference_manager_;
+        std::shared_ptr<PoseBasedReferenceManager> pose_reference_manager_;
 
         // Observation state
         SystemObservation observation_;
