@@ -190,7 +190,7 @@ def launch_setup(context, *args, **kwargs):
     
     if use_gazebo:
         # World file (only used in gazebo mode)
-        world_path = os.path.join(get_package_share_directory('ocs2_arm_controller'), 'worlds', world + '.world')
+        world_path = os.path.join(get_package_share_directory('ocs2_arm_controller'), 'worlds', world + '.sdf')
         gazebo = IncludeLaunchDescription(
             PythonLaunchDescriptionSource([
                 os.path.join(get_package_share_directory('ros_gz_sim'), 'launch'),
