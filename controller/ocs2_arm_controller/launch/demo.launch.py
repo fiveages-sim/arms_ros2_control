@@ -351,6 +351,7 @@ def launch_setup(context, *args, **kwargs):
         parameters=[
             {'taskFile': task_file_path},
             {'use_sim_time': use_sim_time},
+            {'enableVR': True},  # Enable VR control by default
             {'enableJoystick': True},  # Enable joystick control by default
             {'enableAutoPosition': True},  # Enable automatic position sync by default
             {'enableDynamicFrame': True},  # Enable dynamic frame selection
