@@ -63,7 +63,7 @@ install(
 )
 
 install(
-        DIRECTORY launch config worlds
+        DIRECTORY launch config
         DESTINATION share/${PROJECT_NAME}/
 )
 
