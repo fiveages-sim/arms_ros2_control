@@ -10,14 +10,20 @@
 #include <vector>
 #include <mutex>
 #include <algorithm>
+#include <array>
 #include <rclcpp/rclcpp.hpp>
 #include <geometry_msgs/msg/pose.hpp>
 #include <geometry_msgs/msg/pose_stamped.hpp>
+#include <geometry_msgs/msg/point.hpp>
+#include <geometry_msgs/msg/quaternion.hpp>
 #include <visualization_msgs/msg/interactive_marker.hpp>
 #include <visualization_msgs/msg/interactive_marker_feedback.hpp>
 #include <interactive_markers/interactive_marker_server.hpp>
 #include <interactive_markers/menu_handler.hpp>
 #include <arms_ros2_control_msgs/msg/inputs.hpp>
+#include <tf2/LinearMath/Quaternion.h>
+#include <Eigen/Core>
+#include <Eigen/Geometry>
 
 namespace arms_ros2_control::command
 {
@@ -82,6 +88,17 @@ namespace arms_ros2_control::command
             const geometry_msgs::msg::Quaternion& orientation);
 
         /**
+         * 基于增量更新marker位置
+         * @param armType 手臂类型 ("left" 或 "right")
+         * @param positionDelta 已缩放的位置增量 [x, y, z]
+         * @param rpyDelta 已缩放的旋转增量 [roll, pitch, yaw]
+         */
+        void updateMarkerPoseIncremental(
+            const std::string& armType,
+            const std::array<double, 3>& positionDelta,
+            const std::array<double, 3>& rpyDelta);
+
+        /**
          * 获取marker位置
          * @param armType 手臂类型 ("left" 或 "right")
          * @return pose消息
@@ -130,6 +147,12 @@ namespace arms_ros2_control::command
          * @return 如果应该更新marker返回true
          */
         bool shouldUpdateMarker();
+
+        /**
+         * 控制输入回调函数
+         * @param msg 控制输入消息
+         */
+        void controlInputCallback(const arms_ros2_control_msgs::msg::Inputs::ConstSharedPtr msg);
 
     private:
         /**
@@ -193,11 +216,6 @@ namespace arms_ros2_control::command
          */
         visualization_msgs::msg::Marker createSphereMarker(const std::string& color = "grey") const;
 
-        /**
-         * 控制输入回调函数
-         * @param msg 控制输入消息
-         */
-        void controlInputCallback(const arms_ros2_control_msgs::msg::Inputs::ConstSharedPtr msg);
 
         /**
          * 左臂末端执行器位置回调函数

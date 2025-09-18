@@ -154,11 +154,7 @@ namespace ocs2::mobile_manipulator
         control_input_subscription_ = get_node()->create_subscription<arms_ros2_control_msgs::msg::Inputs>(
             "/control_input", 10, [this](const arms_ros2_control_msgs::msg::Inputs::SharedPtr msg)
             {
-                ctrl_interfaces_.control_inputs_.command = msg->command;
-                ctrl_interfaces_.control_inputs_.lx = msg->lx;
-                ctrl_interfaces_.control_inputs_.ly = msg->ly;
-                ctrl_interfaces_.control_inputs_.rx = msg->rx;
-                ctrl_interfaces_.control_inputs_.ry = msg->ry;
+                ctrl_interfaces_.control_inputs_ = *msg;
             });
 
         return CallbackReturn::SUCCESS;

@@ -55,11 +55,12 @@ namespace arms_ros2_control::command
                 "right_target", 1);
         }
 
-        control_input_subscription_ = node_->create_subscription<arms_ros2_control_msgs::msg::Inputs>(
-            "/control_input", 10, [this](const arms_ros2_control_msgs::msg::Inputs::ConstSharedPtr msg)
-            {
-                controlInputCallback(msg);
-            });
+        // 注释掉重复的订阅，由node统一管理
+        // control_input_subscription_ = node_->create_subscription<arms_ros2_control_msgs::msg::Inputs>(
+        //     "/control_input", 10, [this](const arms_ros2_control_msgs::msg::Inputs::ConstSharedPtr msg)
+        //     {
+        //         controlInputCallback(msg);
+        //     });
     }
 
     void ArmsTargetManager::initialize()
@@ -144,17 +145,108 @@ namespace arms_ros2_control::command
         server_->applyChanges();
     }
 
+    void ArmsTargetManager::updateMarkerPoseIncremental(
+        const std::string& armType,
+        const std::array<double, 3>& positionDelta,
+        const std::array<double, 3>& rpyDelta)
+    {
+        std::lock_guard<std::mutex> lock(state_update_mutex_);
+        
+        // 检查是否在禁用状态，只有在禁用状态下才允许增量更新
+        if (!isStateDisabled(current_controller_state_))
+        {
+            RCLCPP_DEBUG(node_->get_logger(), "🎮 Incremental update blocked - controller state %d is not disabled", 
+                         current_controller_state_);
+            return;
+        }
+
+        geometry_msgs::msg::Pose* current_pose = nullptr;
+        std::string marker_name;
+        
+        if (armType == "left")
+        {
+            current_pose = &left_pose_;
+            marker_name = "left_arm_target";
+        }
+        else if (armType == "right" && dual_arm_mode_)
+        {
+            current_pose = &right_pose_;
+            marker_name = "right_arm_target";
+        }
+        else
+        {
+            return; // 无效的手臂类型
+        }
+
+        // 更新位置
+        current_pose->position.x += positionDelta[0];
+        current_pose->position.y += positionDelta[1];
+        current_pose->position.z += positionDelta[2];
+
+        // 更新旋转（使用RPY增量）
+        if (std::abs(rpyDelta[0]) > 0.001 || std::abs(rpyDelta[1]) > 0.001 || std::abs(rpyDelta[2]) > 0.001)
+        {
+            // 将当前四元数转换为Eigen
+            Eigen::Quaterniond current_quat(
+                current_pose->orientation.w,
+                current_pose->orientation.x,
+                current_pose->orientation.y,
+                current_pose->orientation.z
+            );
+
+            // 创建旋转增量
+            Eigen::AngleAxisd rollAngle(rpyDelta[0], Eigen::Vector3d::UnitX());
+            Eigen::AngleAxisd pitchAngle(rpyDelta[1], Eigen::Vector3d::UnitY());
+            Eigen::AngleAxisd yawAngle(rpyDelta[2], Eigen::Vector3d::UnitZ());
+
+            // 组合旋转（ZYX顺序）
+            Eigen::Quaterniond rotationIncrement = yawAngle * pitchAngle * rollAngle;
+            current_quat = current_quat * rotationIncrement;
+            current_quat.normalize();
+
+            // 转换回geometry_msgs
+            current_pose->orientation.w = current_quat.w();
+            current_pose->orientation.x = current_quat.x();
+            current_pose->orientation.y = current_quat.y();
+            current_pose->orientation.z = current_quat.z();
+        }
+
+        // 更新marker
+        if (server_)
+        {
+            server_->setPose(marker_name, *current_pose);
+            if (shouldUpdateMarker())
+            {
+                server_->applyChanges();
+            }
+        }
+
+        // 在连续发布模式下，发送target pose
+        if (current_mode_ == MarkerState::CONTINUOUS)
+        {
+            if (armType == "left" && left_pose_publisher_)
+            {
+                left_pose_publisher_->publish(*current_pose);
+            }
+            else if (armType == "right" && dual_arm_mode_ && right_pose_publisher_)
+            {
+                right_pose_publisher_->publish(*current_pose);
+            }
+        }
+    }
+
+
     geometry_msgs::msg::Pose ArmsTargetManager::getMarkerPose(const std::string& armType) const
     {
         if (armType == "left")
         {
             return left_pose_;
         }
-        else if (armType == "right" && dual_arm_mode_)
+        if (armType == "right" && dual_arm_mode_)
         {
             return right_pose_;
         }
-        
+
         geometry_msgs::msg::Pose zero_pose;
         zero_pose.position.x = 0.0;
         zero_pose.position.y = 0.0;
@@ -277,6 +369,7 @@ namespace arms_ros2_control::command
     void ArmsTargetManager::leftMarkerCallback(
         const visualization_msgs::msg::InteractiveMarkerFeedback::ConstSharedPtr& feedback)
     {
+        std::lock_guard<std::mutex> lock(state_update_mutex_);
         left_pose_ = feedback->pose;
 
         if (current_mode_ == MarkerState::CONTINUOUS)
@@ -288,6 +381,7 @@ namespace arms_ros2_control::command
     void ArmsTargetManager::rightMarkerCallback(
         const visualization_msgs::msg::InteractiveMarkerFeedback::ConstSharedPtr& feedback)
     {
+        std::lock_guard<std::mutex> lock(state_update_mutex_);
         right_pose_ = feedback->pose;
 
         if (current_mode_ == MarkerState::CONTINUOUS)
@@ -494,11 +588,11 @@ namespace arms_ros2_control::command
 
     void ArmsTargetManager::leftEndEffectorPoseCallback(const geometry_msgs::msg::PoseStamped::ConstSharedPtr msg)
     {
+        std::lock_guard<std::mutex> lock(state_update_mutex_);
         if (auto_update_enabled_ && !isStateDisabled(current_controller_state_))
         {
             geometry_msgs::msg::Pose new_pose = msg->pose;
             server_->setPose("left_arm_target", new_pose);
-            
             left_pose_ = new_pose;
             
             if (shouldUpdateMarker())
@@ -510,11 +604,11 @@ namespace arms_ros2_control::command
 
     void ArmsTargetManager::rightEndEffectorPoseCallback(const geometry_msgs::msg::PoseStamped::ConstSharedPtr msg)
     {
+        std::lock_guard<std::mutex> lock(state_update_mutex_);
         if (auto_update_enabled_ && !isStateDisabled(current_controller_state_))
         {
             geometry_msgs::msg::Pose new_pose = msg->pose;
             server_->setPose("right_arm_target", new_pose);
-            
             right_pose_ = new_pose;
             
             if (shouldUpdateMarker())

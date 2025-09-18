@@ -4,6 +4,7 @@
 
 #include <rclcpp/rclcpp.hpp>
 #include "arms_target_manager/ArmsTargetManager.h"
+#include "arms_target_manager/ControlInputHandler.h"
 
 using namespace arms_ros2_control::command;
 
@@ -19,12 +20,18 @@ int main(int argc, char** argv)
     std::string topic_prefix = node->declare_parameter("topic_prefix", "arm_controller");
     bool dual_arm_mode = node->declare_parameter("dual_arm_mode", false);
     std::string frame_id = node->declare_parameter("frame_id", "world");
+    double linear_scale = node->declare_parameter("linear_scale", 0.005);
+    double angular_scale = node->declare_parameter("angular_scale", 0.05);
+    double deadzone = node->declare_parameter("deadzone", 0.1);
 
     RCLCPP_INFO(node->get_logger(), 
                "Starting ArmsTargetManager with topic_prefix: %s, dual_arm_mode: %s, frame_id: %s",
                topic_prefix.c_str(), 
                dual_arm_mode ? "true" : "false",
                frame_id.c_str());
+    RCLCPP_INFO(node->get_logger(), 
+               "Control scales: linear=%.3f, angular=%.3f, deadzone=%.3f",
+               linear_scale, angular_scale, deadzone);
 
     try
     {
@@ -35,8 +42,27 @@ int main(int argc, char** argv)
         // 初始化
         target_manager->initialize();
 
+        // 创建ControlInputHandler
+        auto control_handler = std::make_unique<ControlInputHandler>(
+            node, target_manager.get(), linear_scale, angular_scale, deadzone);
+
+        // 创建control input订阅器，同时处理两个回调
+        auto control_subscription = node->create_subscription<arms_ros2_control_msgs::msg::Inputs>(
+            "control_input", 10, 
+            [control_handler_ptr = control_handler.get(), target_manager_ptr = target_manager.get()](const arms_ros2_control_msgs::msg::Inputs::ConstSharedPtr msg) {
+                // 先处理ControlInputHandler
+                if (control_handler_ptr) {
+                    control_handler_ptr->processControlInput(msg);
+                }
+                // 再处理ArmsTargetManager的状态更新
+                if (target_manager_ptr) {
+                    target_manager_ptr->controlInputCallback(msg);
+                }
+            });
+
         RCLCPP_INFO(node->get_logger(), "ArmsTargetManager is ready!");
         RCLCPP_INFO(node->get_logger(), "Use RViz to interact with the markers.");
+        RCLCPP_INFO(node->get_logger(), "Control input handler is ready for joystick/keyboard control!");
 
         // 保持节点运行
         rclcpp::spin(node);

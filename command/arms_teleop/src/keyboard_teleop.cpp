@@ -8,15 +8,27 @@ KeyboardTeleop::KeyboardTeleop() : Node("keyboard_teleop_node") {
     publisher_ = create_publisher<arms_ros2_control_msgs::msg::Inputs>("control_input", 10);
     gripper_publisher_ = create_publisher<arms_ros2_control_msgs::msg::Gripper>("/gripper_command", 10);
     timer_ = create_wall_timer(std::chrono::microseconds(100), std::bind(&KeyboardTeleop::timer_callback, this));
-    inputs_ = arms_ros2_control_msgs::msg::Inputs();
+    
+    // Initialize state
+    currentTarget_ = 1; // Start with left arm
+    
+    // Initialize inputs message
+    inputs_.command = 0;
+    inputs_.x = 0.0;
+    inputs_.y = 0.0;
+    inputs_.z = 0.0;
+    inputs_.roll = 0.0;
+    inputs_.pitch = 0.0;
+    inputs_.yaw = 0.0;
+    inputs_.target = currentTarget_;
 
     tcgetattr(STDIN_FILENO, &old_tio_);
     new_tio_ = old_tio_;
     new_tio_.c_lflag &= (~ICANON & ~ECHO);
     tcsetattr(STDIN_FILENO, TCSANOW, &new_tio_);
-    RCLCPP_INFO(get_logger(), "Keyboard input node started.");
-    RCLCPP_INFO(get_logger(), "Press 1-0 to switch between different modes");
-    RCLCPP_INFO(get_logger(), "Press SPACE to toggle gripper open/close");
+    RCLCPP_INFO(get_logger(), "⌨️ Keyboard input node started.");
+    RCLCPP_INFO(get_logger(), "⌨️ Controls: t=switch target arm, 1-0=commands, SPACE=gripper");
+    RCLCPP_INFO(get_logger(), "⌨️ Movement: WASD=xy, IJKL=z+yaw, QE=roll, RF=pitch");
     RCLCPP_INFO(get_logger(), "Please input keys, press Ctrl+C to quit.");
 }
 
@@ -24,14 +36,22 @@ void KeyboardTeleop::timer_callback() {
     if (kbhit()) {
         char key = getchar();
         check_command(key);
-        if (inputs_.command == 0) check_value(key);
-        else {
-            inputs_.lx = 0;
-            inputs_.ly = 0;
-            inputs_.rx = 0;
-            inputs_.ry = 0;
+        
+        // Process movement if no command is active
+        if (inputs_.command == 0) {
+            check_value(key);
+        } else {
+            // Clear movement when command is active
+            inputs_.x = 0;
+            inputs_.y = 0;
+            inputs_.z = 0;
+            inputs_.roll = 0;
+            inputs_.pitch = 0;
+            inputs_.yaw = 0;
             reset_count_ = 100;
         }
+        
+        // Always publish when there's input
         publisher_->publish(inputs_);
         just_published_ = true;
     } else {
@@ -50,6 +70,14 @@ void KeyboardTeleop::timer_callback() {
 
 void KeyboardTeleop::check_command(const char key) {
     switch (key) {
+        case 't':
+        case 'T':
+            // Switch target arm
+            currentTarget_ = (currentTarget_ == 1) ? 2 : 1;
+            inputs_.target = currentTarget_;
+            RCLCPP_INFO(get_logger(), "⌨️ Switched target arm to: %s", 
+                        (currentTarget_ == 1) ? "LEFT" : "RIGHT");
+            break;
         case '1':
             inputs_.command = 1; // L2_B
             break;
@@ -79,7 +107,7 @@ void KeyboardTeleop::check_command(const char key) {
             break;
         case '0':
             inputs_.command = 10;
-        break;
+            break;
         case ' ':
             // Toggle gripper open/close
             static bool gripper_open = false;
@@ -88,9 +116,9 @@ void KeyboardTeleop::check_command(const char key) {
             sendGripperCommand(gripper_open);
             
             if (gripper_open) {
-                RCLCPP_INFO(this->get_logger(), "Gripper opened");
+                RCLCPP_INFO(this->get_logger(), "⌨️ Gripper opened");
             } else {
-                RCLCPP_INFO(this->get_logger(), "Gripper closed");
+                RCLCPP_INFO(this->get_logger(), "⌨️ Gripper closed");
             }
             break;
         default:
@@ -101,38 +129,60 @@ void KeyboardTeleop::check_command(const char key) {
 
 void KeyboardTeleop::check_value(char key) {
     switch (key) {
+        // Position control (x, y)
         case 'w':
         case 'W':
-            inputs_.ly = min<float>(inputs_.ly + sensitivity_left_, 1.0);
+            inputs_.x = min<float>(inputs_.x + sensitivity_left_, 1.0);
             break;
         case 's':
         case 'S':
-            inputs_.ly = max<float>(inputs_.ly - sensitivity_left_, -1.0);
+            inputs_.x = max<float>(inputs_.x - sensitivity_left_, -1.0);
             break;
         case 'd':
         case 'D':
-            inputs_.lx = min<float>(inputs_.lx + sensitivity_left_, 1.0);
+            inputs_.y = min<float>(inputs_.y + sensitivity_left_, 1.0);
             break;
         case 'a':
         case 'A':
-            inputs_.lx = max<float>(inputs_.lx - sensitivity_left_, -1.0);
+            inputs_.y = max<float>(inputs_.y - sensitivity_left_, -1.0);
             break;
 
+        // Position control (z) and rotation (yaw)
         case 'i':
         case 'I':
-            inputs_.ry = min<float>(inputs_.ry + sensitivity_right_, 1.0);
+            inputs_.z = min<float>(inputs_.z + sensitivity_right_, 1.0);
             break;
         case 'k':
         case 'K':
-            inputs_.ry = max<float>(inputs_.ry - sensitivity_right_, -1.0);
+            inputs_.z = max<float>(inputs_.z - sensitivity_right_, -1.0);
             break;
         case 'l':
         case 'L':
-            inputs_.rx = min<float>(inputs_.rx + sensitivity_right_, 1.0);
+            inputs_.yaw = min<float>(inputs_.yaw + sensitivity_right_, 1.0);
             break;
         case 'j':
         case 'J':
-            inputs_.rx = max<float>(inputs_.rx - sensitivity_right_, -1.0);
+            inputs_.yaw = max<float>(inputs_.yaw - sensitivity_right_, -1.0);
+            break;
+            
+        // Rotation control (roll)
+        case 'q':
+        case 'Q':
+            inputs_.roll = max<float>(inputs_.roll - sensitivity_right_, -1.0);
+            break;
+        case 'e':
+        case 'E':
+            inputs_.roll = min<float>(inputs_.roll + sensitivity_right_, 1.0);
+            break;
+            
+        // Rotation control (pitch)
+        case 'r':
+        case 'R':
+            inputs_.pitch = min<float>(inputs_.pitch + sensitivity_right_, 1.0);
+            break;
+        case 'f':
+        case 'F':
+            inputs_.pitch = max<float>(inputs_.pitch - sensitivity_right_, -1.0);
             break;
         default:
             break;

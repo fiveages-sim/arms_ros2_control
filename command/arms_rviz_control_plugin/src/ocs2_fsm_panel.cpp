@@ -155,10 +155,13 @@ void OCS2FSMPanel::publishCommand(int32_t command)
 {
   auto msg = arms_ros2_control_msgs::msg::Inputs();
   msg.command = command;
-  msg.lx = 0.0;
-  msg.ly = 0.0;
-  msg.rx = 0.0;
-  msg.ry = 0.0;
+  msg.x = 0.0;
+  msg.y = 0.0;
+  msg.z = 0.0;
+  msg.roll = 0.0;
+  msg.pitch = 0.0;
+  msg.yaw = 0.0;
+  msg.target = 1; // 默认左臂
   
   publisher_->publish(msg);
   current_command_ = command;

@@ -14,6 +14,7 @@ find_package(geometry_msgs REQUIRED)
 find_package(visualization_msgs REQUIRED)
 find_package(interactive_markers REQUIRED)
 find_package(arms_ros2_control_msgs REQUIRED)
+find_package(Eigen3 REQUIRED)
 
 # 包含目录
 include_directories(include)
@@ -21,6 +22,7 @@ include_directories(include)
 # 创建库
 add_library(${PROJECT_NAME} SHARED
   src/ArmsTargetManager.cpp
+  src/ControlInputHandler.cpp
 )
 
 # 链接库
@@ -30,6 +32,10 @@ ament_target_dependencies(${PROJECT_NAME}
   visualization_msgs
   interactive_markers
   arms_ros2_control_msgs
+)
+
+target_link_libraries(${PROJECT_NAME}
+  Eigen3::Eigen
 )
 
 # 创建可执行文件

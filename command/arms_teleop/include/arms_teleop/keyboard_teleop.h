@@ -42,6 +42,9 @@ private:
     rclcpp::Publisher<arms_ros2_control_msgs::msg::Gripper>::SharedPtr gripper_publisher_;
     rclcpp::TimerBase::SharedPtr timer_;
 
+    // State management
+    int32_t currentTarget_;
+
     bool just_published_ = false;
     int reset_count_ = 0;
 
