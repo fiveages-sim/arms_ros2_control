@@ -127,22 +127,51 @@ namespace arms_ros2_control::command
         const geometry_msgs::msg::Point& position,
         const geometry_msgs::msg::Quaternion& orientation)
     {
+
+        geometry_msgs::msg::Pose* current_pose = nullptr;
+        std::string marker_name;
+
+
         if (armType == "left")
         {
-            left_pose_.position = position;
-            left_pose_.orientation = orientation;
-            
-            server_->setPose("left_arm_target", left_pose_);
+            current_pose = &left_pose_;
+            marker_name = "left_arm_target";
         }
         else if (armType == "right" && dual_arm_mode_)
         {
-            right_pose_.position = position;
-            right_pose_.orientation = orientation;
-            
-            server_->setPose("right_arm_target", right_pose_);
+            current_pose = &right_pose_;
+            marker_name = "right_arm_target";
         }
-        
-        server_->applyChanges();
+        else
+        {
+            return; // 无效的手臂类型
+        }
+
+        current_pose->position = position;
+        current_pose->orientation = orientation;
+
+        // 更新marker
+        if (server_)
+        {
+            server_->setPose(marker_name, *current_pose);
+            if (shouldUpdateMarker())
+            {
+                server_->applyChanges();
+            }
+        }
+
+        // 在连续发布模式下，发送target pose
+        if (current_mode_ == MarkerState::CONTINUOUS)
+        {
+            if (armType == "left" && left_pose_publisher_)
+            {
+                left_pose_publisher_->publish(*current_pose);
+            }
+            else if (armType == "right" && dual_arm_mode_ && right_pose_publisher_)
+            {
+                right_pose_publisher_->publish(*current_pose);
+            }
+        }
     }
 
     void ArmsTargetManager::updateMarkerPoseIncremental(

@@ -5,6 +5,7 @@
 #include <rclcpp/rclcpp.hpp>
 #include "arms_target_manager/ArmsTargetManager.h"
 #include "arms_target_manager/ControlInputHandler.h"
+#include "arms_target_manager/VRInputHandler.h"
 
 using namespace arms_ros2_control::command;
 
@@ -23,6 +24,8 @@ int main(int argc, char** argv)
     double linear_scale = node->declare_parameter("linear_scale", 0.005);
     double angular_scale = node->declare_parameter("angular_scale", 0.05);
     double deadzone = node->declare_parameter("deadzone", 0.1);
+    double vr_update_rate = node->declare_parameter("vr_update_rate", 500.0);
+    bool enable_vr = node->declare_parameter("enable_vr", true);
 
     RCLCPP_INFO(node->get_logger(), 
                "Starting ArmsTargetManager with topic_prefix: %s, dual_arm_mode: %s, frame_id: %s",
@@ -32,6 +35,9 @@ int main(int argc, char** argv)
     RCLCPP_INFO(node->get_logger(), 
                "Control scales: linear=%.3f, angular=%.3f, deadzone=%.3f",
                linear_scale, angular_scale, deadzone);
+    RCLCPP_INFO(node->get_logger(), 
+               "VR control: enabled=%s, update_rate=%.1f Hz",
+               enable_vr ? "true" : "false", vr_update_rate);
 
     try
     {
@@ -45,6 +51,13 @@ int main(int argc, char** argv)
         // 创建ControlInputHandler
         auto control_handler = std::make_unique<ControlInputHandler>(
             node, target_manager.get(), linear_scale, angular_scale, deadzone);
+
+        // 创建VRInputHandler（如果启用）
+        std::unique_ptr<VRInputHandler> vr_handler = nullptr;
+        if (enable_vr) {
+            vr_handler = std::make_unique<VRInputHandler>(
+                node, target_manager.get(), vr_update_rate);
+        }
 
         // 创建control input订阅器，同时处理两个回调
         auto control_subscription = node->create_subscription<arms_ros2_control_msgs::msg::Inputs>(
@@ -63,6 +76,9 @@ int main(int argc, char** argv)
         RCLCPP_INFO(node->get_logger(), "ArmsTargetManager is ready!");
         RCLCPP_INFO(node->get_logger(), "Use RViz to interact with the markers.");
         RCLCPP_INFO(node->get_logger(), "Control input handler is ready for joystick/keyboard control!");
+        if (enable_vr) {
+            RCLCPP_INFO(node->get_logger(), "VR input handler is ready for VR control!");
+        }
 
         // 保持节点运行
         rclcpp::spin(node);
