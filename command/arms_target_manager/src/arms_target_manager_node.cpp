@@ -22,7 +22,6 @@ int main(int argc, char** argv)
     std::string frame_id = node->declare_parameter("frame_id", "world");
     double linear_scale = node->declare_parameter("linear_scale", 0.005);
     double angular_scale = node->declare_parameter("angular_scale", 0.05);
-    double deadzone = node->declare_parameter("deadzone", 0.1);
 
     RCLCPP_INFO(node->get_logger(), 
                "Starting ArmsTargetManager with topic_prefix: %s, dual_arm_mode: %s, frame_id: %s",
@@ -30,8 +29,8 @@ int main(int argc, char** argv)
                dual_arm_mode ? "true" : "false",
                frame_id.c_str());
     RCLCPP_INFO(node->get_logger(), 
-               "Control scales: linear=%.3f, angular=%.3f, deadzone=%.3f",
-               linear_scale, angular_scale, deadzone);
+               "Control scales: linear=%.3f, angular=%.3f (deadzone handled at input source)",
+               linear_scale, angular_scale);
 
     try
     {
@@ -44,7 +43,7 @@ int main(int argc, char** argv)
 
         // 创建ControlInputHandler
         auto control_handler = std::make_unique<ControlInputHandler>(
-            node, target_manager.get(), linear_scale, angular_scale, deadzone);
+            node, target_manager.get(), linear_scale, angular_scale);
 
         // 创建control input订阅器，同时处理两个回调
         auto control_subscription = node->create_subscription<arms_ros2_control_msgs::msg::Inputs>(

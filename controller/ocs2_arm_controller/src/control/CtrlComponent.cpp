@@ -323,9 +323,8 @@ namespace ocs2::mobile_manipulator
 
     void CtrlComponent::clearTrajectoryVisualization()
     {
-        if (visualizer_) {
-            visualizer_->clearTrajectoryHistory();
-        }
+        visualizer_->clearTrajectoryHistory();
+        pose_reference_manager_->resetTargetStateCache();
     }
 
     std::string CtrlComponent::generateUrdfPath(const std::string& robot_name, 

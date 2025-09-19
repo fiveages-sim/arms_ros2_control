@@ -150,4 +150,18 @@ namespace ocs2::mobile_manipulator
         updateTargetTrajectory();
     }
 
+    void PoseBasedReferenceManager::resetTargetStateCache()
+    {
+        std::lock_guard<std::mutex> lock(target_state_mutex_);
+        
+        // 重置target state缓存
+        left_target_state_ = vector_t::Zero(7);
+        right_target_state_ = vector_t::Zero(7);
+        left_target_valid_ = false;
+        right_target_valid_ = false;
+        
+        RCLCPP_INFO(rclcpp::get_logger("PoseBasedReferenceManager"), 
+                    "Target state cache reset - cleared all cached target states");
+    }
+
 } // namespace ocs2::mobile_manipulator

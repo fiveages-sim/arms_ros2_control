@@ -4,6 +4,8 @@
 
 #include "arms_target_manager/ArmsTargetManager.h"
 #include <rclcpp/rclcpp.hpp>
+#include <Eigen/Core>
+#include <Eigen/Geometry>
 
 namespace arms_ros2_control::command
 {
@@ -54,13 +56,6 @@ namespace arms_ros2_control::command
             right_pose_publisher_ = node_->create_publisher<geometry_msgs::msg::Pose>(
                 "right_target", 1);
         }
-
-        // 注释掉重复的订阅，由node统一管理
-        // control_input_subscription_ = node_->create_subscription<arms_ros2_control_msgs::msg::Inputs>(
-        //     "/control_input", 10, [this](const arms_ros2_control_msgs::msg::Inputs::ConstSharedPtr msg)
-        //     {
-        //         controlInputCallback(msg);
-        //     });
     }
 
     void ArmsTargetManager::initialize()
@@ -369,7 +364,7 @@ namespace arms_ros2_control::command
     void ArmsTargetManager::leftMarkerCallback(
         const visualization_msgs::msg::InteractiveMarkerFeedback::ConstSharedPtr& feedback)
     {
-        std::lock_guard<std::mutex> lock(state_update_mutex_);
+        std::lock_guard lock(state_update_mutex_);
         left_pose_ = feedback->pose;
 
         if (current_mode_ == MarkerState::CONTINUOUS)
@@ -381,7 +376,7 @@ namespace arms_ros2_control::command
     void ArmsTargetManager::rightMarkerCallback(
         const visualization_msgs::msg::InteractiveMarkerFeedback::ConstSharedPtr& feedback)
     {
-        std::lock_guard<std::mutex> lock(state_update_mutex_);
+        std::lock_guard lock(state_update_mutex_);
         right_pose_ = feedback->pose;
 
         if (current_mode_ == MarkerState::CONTINUOUS)

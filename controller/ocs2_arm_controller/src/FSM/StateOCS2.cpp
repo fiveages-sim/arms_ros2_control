@@ -154,7 +154,7 @@ namespace ocs2::mobile_manipulator
         // Stop MPC update thread
         stopMpcThread();
         
-        // Clear trajectory visualization
+        // Clear trajectory visualization and target state cache
         ctrl_comp_->clearTrajectoryVisualization();
         
         RCLCPP_INFO(node_->get_logger(), "OCS2 state exited successfully, MPC update thread stopped");
