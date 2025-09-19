@@ -50,6 +50,11 @@ namespace ocs2::mobile_manipulator
          */
         void setCurrentObservation(const SystemObservation& observation);
 
+        /**
+         * 重置target state缓存（在离开OCS2状态时调用）
+         */
+        void resetTargetStateCache();
+
     private:
         void leftPoseCallback(const geometry_msgs::msg::Pose::SharedPtr msg);
         void rightPoseCallback(const geometry_msgs::msg::Pose::SharedPtr msg);

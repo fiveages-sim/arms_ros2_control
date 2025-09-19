@@ -9,7 +9,6 @@
 #include <string>
 #include <vector>
 #include <mutex>
-#include <algorithm>
 #include <array>
 #include <rclcpp/rclcpp.hpp>
 #include <geometry_msgs/msg/pose.hpp>
@@ -21,9 +20,6 @@
 #include <interactive_markers/interactive_marker_server.hpp>
 #include <interactive_markers/menu_handler.hpp>
 #include <arms_ros2_control_msgs/msg/inputs.hpp>
-#include <tf2/LinearMath/Quaternion.h>
-#include <Eigen/Core>
-#include <Eigen/Geometry>
 
 namespace arms_ros2_control::command
 {
@@ -56,18 +52,18 @@ namespace arms_ros2_control::command
          * @param topicPrefix 主题前缀
          * @param dualArmMode 是否为双臂模式
          * @param frameId 坐标系ID，默认为"world"
-         * @param publishRate 连续发布频率，默认为10Hz
+         * @param publishRate 连续发布频率，默认为20Hz
          * @param disableAutoUpdateStates 禁用自动更新的状态值数组，默认为{3}（OCS2状态）
-         * @param markerUpdateInterval 最小marker更新间隔（秒），默认为0.1秒
+         * @param markerUpdateInterval 最小marker更新间隔（秒），默认为0.05秒（20Hz）
          */
         ArmsTargetManager(
             rclcpp::Node::SharedPtr node,
             const std::string& topicPrefix,
             bool dualArmMode = false,
             const std::string& frameId = "world",
-            double publishRate = 10.0,
+            double publishRate = 20.0,
             const std::vector<int32_t>& disableAutoUpdateStates = {3},
-            double markerUpdateInterval = 0.1);
+            double markerUpdateInterval = 0.05);
 
         ~ArmsTargetManager() = default;
 
@@ -152,7 +148,7 @@ namespace arms_ros2_control::command
          * 控制输入回调函数
          * @param msg 控制输入消息
          */
-        void controlInputCallback(const arms_ros2_control_msgs::msg::Inputs::ConstSharedPtr msg);
+        void controlInputCallback(arms_ros2_control_msgs::msg::Inputs::ConstSharedPtr msg);
 
     private:
         /**
@@ -221,13 +217,13 @@ namespace arms_ros2_control::command
          * 左臂末端执行器位置回调函数
          * @param msg 位置消息
          */
-        void leftEndEffectorPoseCallback(const geometry_msgs::msg::PoseStamped::ConstSharedPtr msg);
+        void leftEndEffectorPoseCallback(geometry_msgs::msg::PoseStamped::ConstSharedPtr msg);
 
         /**
          * 右臂末端执行器位置回调函数
          * @param msg 位置消息
          */
-        void rightEndEffectorPoseCallback(const geometry_msgs::msg::PoseStamped::ConstSharedPtr msg);
+        void rightEndEffectorPoseCallback(geometry_msgs::msg::PoseStamped::ConstSharedPtr msg);
 
 
         // 核心成员

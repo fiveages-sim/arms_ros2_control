@@ -23,7 +23,7 @@ int main(int argc, char** argv)
     std::string frame_id = node->declare_parameter("frame_id", "world");
     double linear_scale = node->declare_parameter("linear_scale", 0.005);
     double angular_scale = node->declare_parameter("angular_scale", 0.05);
-    double deadzone = node->declare_parameter("deadzone", 0.1);
+
     double vr_update_rate = node->declare_parameter("vr_update_rate", 500.0);
     bool enable_vr = node->declare_parameter("enable_vr", true);
 
@@ -33,8 +33,9 @@ int main(int argc, char** argv)
                dual_arm_mode ? "true" : "false",
                frame_id.c_str());
     RCLCPP_INFO(node->get_logger(), 
-               "Control scales: linear=%.3f, angular=%.3f, deadzone=%.3f",
-               linear_scale, angular_scale, deadzone);
+               "Control scales: linear=%.3f, angular=%.3f (deadzone handled at input source)",
+               linear_scale, angular_scale);
+               
     RCLCPP_INFO(node->get_logger(), 
                "VR control: enabled=%s, update_rate=%.1f Hz",
                enable_vr ? "true" : "false", vr_update_rate);
@@ -50,7 +51,7 @@ int main(int argc, char** argv)
 
         // 创建ControlInputHandler
         auto control_handler = std::make_unique<ControlInputHandler>(
-            node, target_manager.get(), linear_scale, angular_scale, deadzone);
+            node, target_manager.get(), linear_scale, angular_scale);
 
         // 创建VRInputHandler（如果启用）
         std::unique_ptr<VRInputHandler> vr_handler = nullptr;

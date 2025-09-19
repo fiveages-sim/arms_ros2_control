@@ -9,6 +9,13 @@ This package provides unified teleoperation interfaces for robotic arms, support
 - **Unified Interface**: Both methods publish to the same `/control_input` topic
 - **Configurable**: Easy to configure sensitivity and control mappings
 
+## Building
+
+```bash
+cd ~/ros2_ws
+colcon build --packages-up-to arms_teleop --symlink-install
+```
+
 ## Usage
 
 ### Joystick Teleop
@@ -65,13 +72,6 @@ ros2 run arms_teleop keyboard_teleop
 ### Keyboard Teleop Parameters
 - `sensitivity_left` (float, default: 0.05): Left stick sensitivity
 - `sensitivity_right` (float, default: 0.05): Right stick sensitivity
-
-## Building
-
-```bash
-cd ~/ros2_ws
-colcon build --packages-up-to arms_teleop --symlink-install
-```
 
 ## Dependencies
 
