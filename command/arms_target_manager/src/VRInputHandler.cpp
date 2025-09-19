@@ -71,7 +71,7 @@ namespace arms_ros2_control::command
             "right_current_pose", 10, robotRightCallback);
 
         RCLCPP_INFO(node_->get_logger(), "🕹️🕶️🕹️ VRInputHandler created");
-        RCLCPP_INFO(node_->get_logger(), "🕹️🕶️🕹️ VR control is DISABLED by default. Press right stick to enable.");
+        RCLCPP_INFO(node_->get_logger(), "🕹️🕶️🕹️ VR control is DISABLED by default.");
         RCLCPP_INFO(node_->get_logger(), "🕹️🕶️🕹️ Right thumbstick toggles between STORAGE and UPDATE modes.");
         RCLCPP_INFO(node_->get_logger(), "🕹️🕶️🕹️ STORAGE mode: Store VR and robot base poses (no marker update)");
         RCLCPP_INFO(node_->get_logger(), "🕹️🕶️🕹️ UPDATE mode: Calculate pose differences and update markers");
@@ -154,30 +154,12 @@ namespace arms_ros2_control::command
     {
         Eigen::Matrix4d pose = poseMsgToMatrix(msg);
         matrixToPosOri(pose, robot_current_left_position_, robot_current_left_orientation_);
-        
-        // // 调试：记录机器人pose变化（仅在存储模式）
-        // static Eigen::Vector3d lastLoggedRobotPos = Eigen::Vector3d::Zero();
-        // if (!is_update_mode_.load() && (robot_current_left_position_ - lastLoggedRobotPos).norm() > POSITION_THRESHOLD)
-        // {
-        //     RCLCPP_INFO(node_->get_logger(), "🕹️🕶️🕹️ In Storage mode, Robot Left pose changed: [%.3f, %.3f, %.3f]", 
-        //                robot_current_left_position_.x(), robot_current_left_position_.y(), robot_current_left_position_.z());
-        //     lastLoggedRobotPos = robot_current_left_position_;
-        // }
     }
 
     void VRInputHandler::robotRightPoseCallback(const geometry_msgs::msg::PoseStamped::SharedPtr msg)
     {
         Eigen::Matrix4d pose = poseMsgToMatrix(msg);
         matrixToPosOri(pose, robot_current_right_position_, robot_current_right_orientation_);
-
-        // // 调试：记录机器人pose变化（仅在存储模式）
-        // static Eigen::Vector3d lastLoggedRobotPos = Eigen::Vector3d::Zero();
-        // if (!is_update_mode_.load() && (robot_current_right_position_ - lastLoggedRobotPos).norm() > POSITION_THRESHOLD)
-        // {
-        //     RCLCPP_INFO(node_->get_logger(), "🕹️🕶️🕹️ In Storage mode, Robot Right pose changed: [%.3f, %.3f, %.3f]", 
-        //                robot_current_right_position_.x(), robot_current_right_position_.y(), robot_current_right_position_.z());
-        //     lastLoggedRobotPos = robot_current_right_position_;
-        // }
     }
     
     void VRInputHandler::vrLeftCallback(const geometry_msgs::msg::PoseStamped::SharedPtr msg)
