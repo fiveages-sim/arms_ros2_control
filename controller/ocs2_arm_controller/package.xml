@@ -16,6 +16,8 @@
 	<depend>std_msgs</depend>
 	<depend>ocs2_mobile_manipulator_ros</depend>
 	<depend>ocs2_ros_interfaces</depend>
+	<depend>arms_target_manager</depend>
+	<depend>adaptive_gripper_controller</depend>
 
 	<exec_depend>controller_manager</exec_depend>
 	<exec_depend>joint_state_broadcaster</exec_depend>
