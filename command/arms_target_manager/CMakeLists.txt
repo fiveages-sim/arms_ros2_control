@@ -23,6 +23,7 @@ include_directories(include)
 add_library(${PROJECT_NAME} SHARED
   src/ArmsTargetManager.cpp
   src/ControlInputHandler.cpp
+  src/VRInputHandler.cpp
 )
 
 # 链接库
