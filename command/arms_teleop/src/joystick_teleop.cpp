@@ -8,9 +8,12 @@ using std::placeholders::_1;
 
 JoystickTeleop::JoystickTeleop() : Node("joystick_teleop_node") {
     publisher_ = create_publisher<arms_ros2_control_msgs::msg::Inputs>("control_input", 10);
-    gripper_publisher_ = create_publisher<arms_ros2_control_msgs::msg::Gripper>("/gripper_command", 10);
+    gripper_publisher_ = create_publisher<arms_ros2_control_msgs::msg::Gripper>("/gripper_command", rclcpp::QoS(rclcpp::KeepLast(1)).transient_local());
     subscription_ = create_subscription<
         sensor_msgs::msg::Joy>("joy", 10, std::bind(&JoystickTeleop::joy_callback, this, _1));
+    gripper_command_subscription_ = create_subscription<arms_ros2_control_msgs::msg::Gripper>(
+        "/gripper_command", rclcpp::QoS(rclcpp::KeepLast(1)).transient_local(),
+        std::bind(&JoystickTeleop::gripper_command_callback, this, _1));
     
     // Initialize control parameters
     updateRate_ = 20.0;
@@ -31,6 +34,14 @@ JoystickTeleop::JoystickTeleop() : Node("joystick_teleop_node") {
     last_start_pressed_ = false;
     last_left_stick_pressed_ = false;
     last_right_stick_pressed_ = false;
+
+    // Initialize gripper command state tracking
+    current_gripper_target_ = 0;  // Initial state: closed
+    gripper_command_received_ = false;
+
+    // Initialize separate gripper states for left and right arms
+    left_gripper_open_ = false;   // Left arm gripper initially closed
+    right_gripper_open_ = false;  // Right arm gripper initially closed
     
     // Initialize inputs message
     inputs_.command = 0;
@@ -139,16 +150,15 @@ void JoystickTeleop::processButtons(const sensor_msgs::msg::Joy::SharedPtr msg) 
     }
 
     if (x_just_pressed && enabled_) {
-        // X button: toggle gripper
-        static bool gripper_open = false;
-        gripper_open = !gripper_open;
-        sendGripperCommand(gripper_open);
-        
-        if (gripper_open) {
-            RCLCPP_INFO(get_logger(), "🎮 Gripper opened");
-        } else {
-            RCLCPP_INFO(get_logger(), "🎮 Gripper closed");
-        }
+        // X button: toggle gripper - use separate state management like task3
+        bool& current_gripper_state = (currentTarget_ == 1) ? left_gripper_open_ : right_gripper_open_;
+        current_gripper_state = !current_gripper_state;
+
+        sendGripperCommand(current_gripper_state);
+
+        std::string arm_name = (currentTarget_ == 1) ? "LEFT" : "RIGHT";
+        RCLCPP_INFO(get_logger(), "🎮 %s gripper %s",
+                   arm_name.c_str(), current_gripper_state ? "OPENED" : "CLOSED");
     }
 }
 
@@ -194,7 +204,7 @@ double JoystickTeleop::applyDeadzone(double value, double deadzone) const {
 void JoystickTeleop::sendGripperCommand(bool open)
 {
     auto gripper_msg = arms_ros2_control_msgs::msg::Gripper();
-    
+
     if (open) {
         gripper_msg.target = 1;  // 打开夹爪
         gripper_msg.direction = 1;
@@ -202,10 +212,33 @@ void JoystickTeleop::sendGripperCommand(bool open)
         gripper_msg.target = 0;  // 关闭夹爪
         gripper_msg.direction = -1;
     }
-    
+
+    gripper_msg.arm_id = currentTarget_;  // 设置目标手臂
+
     gripper_publisher_->publish(gripper_msg);
-    RCLCPP_DEBUG(this->get_logger(), "Sent gripper command: target=%d, direction=%d", 
-                  gripper_msg.target, gripper_msg.direction);
+    RCLCPP_DEBUG(this->get_logger(), "Sent gripper command: target=%d, direction=%d, arm_id=%d",
+                  gripper_msg.target, gripper_msg.direction, gripper_msg.arm_id);
+}
+
+void JoystickTeleop::gripper_command_callback(arms_ros2_control_msgs::msg::Gripper::SharedPtr msg)
+{
+    // Update corresponding arm's local state based on received command
+    if (msg->arm_id == 1) {
+        left_gripper_open_ = (msg->target == 1);
+    } else if (msg->arm_id == 2) {
+        right_gripper_open_ = (msg->target == 1);
+    }
+
+    // Also maintain the old synchronization logic for backward compatibility
+    if (msg->arm_id == currentTarget_) {
+        current_gripper_target_ = msg->target;
+        gripper_command_received_ = true;
+    }
+
+    RCLCPP_DEBUG(this->get_logger(), "Received gripper command for arm %d: target=%d, direction=%d. Updated local states: left=%s, right=%s",
+                msg->arm_id, msg->target, msg->direction,
+                left_gripper_open_ ? "open" : "closed",
+                right_gripper_open_ ? "open" : "closed");
 }
 
 int main(int argc, char *argv[]) {

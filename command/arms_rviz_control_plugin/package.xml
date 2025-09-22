@@ -2,7 +2,7 @@
 <package format="3">
   <name>arms_rviz_control_plugin</name>
   <version>0.0.0</version>
-  <description>RViz plugin for OCS2 Arm Controller FSM state switching</description>
+  <description>RViz plugin for OCS2 Arm Controller FSM state switching and gripper control</description>
   <maintainer email="your.email@example.com">Your Name</maintainer>
   <license>Apache-2.0</license>
 

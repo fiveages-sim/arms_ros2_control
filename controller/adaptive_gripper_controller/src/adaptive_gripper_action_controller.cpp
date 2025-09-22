@@ -31,9 +31,18 @@ namespace adaptive_gripper_controller
         force_feedback_ratio_ = auto_declare<double>("force_feedback_ratio", 0.5);
         target_position_ = 0.0;
 
+        // 根据关节名称自动判断手臂标识
+        if (joint_name_.find("left") != std::string::npos) {
+            arm_id_ = 1;  // 左臂
+        } else if (joint_name_.find("right") != std::string::npos) {
+            arm_id_ = 2;  // 右臂
+        } else {
+            arm_id_ = 1;  // 默认为左臂（单臂机器人）
+        }
+
         RCLCPP_INFO(get_node()->get_logger(),
-                    "Simple gripper controller initialized for joint: %s, force threshold: %.3f, force feedback ratio: %.3f",
-                    joint_name_.c_str(), force_threshold_, force_feedback_ratio_);
+                    "Simple gripper controller initialized for joint: %s, arm_id: %d, force threshold: %.3f, force feedback ratio: %.3f",
+                    joint_name_.c_str(), arm_id_, force_threshold_, force_feedback_ratio_);
 
         return controller_interface::CallbackReturn::SUCCESS;
     }
@@ -44,6 +53,14 @@ namespace adaptive_gripper_controller
         gripper_subscription_ = get_node()->create_subscription<arms_ros2_control_msgs::msg::Gripper>(
             "/gripper_command", 10, [this](const arms_ros2_control_msgs::msg::Gripper::SharedPtr msg)
             {
+                // 检查消息是否发给此控制器
+                if (msg->arm_id != arm_id_) {
+                    RCLCPP_DEBUG(get_node()->get_logger(),
+                                "Ignoring gripper command: msg_arm_id=%d, my_arm_id=%d",
+                                msg->arm_id, arm_id_);
+                    return;  // 不是给此手臂的命令，忽略
+                }
+
                 gripper_target_ = msg->target;
                 gripper_direction_ = msg->direction;
 
@@ -51,8 +68,8 @@ namespace adaptive_gripper_controller
                 process_gripper_command();
 
                 RCLCPP_INFO(get_node()->get_logger(),
-                            "Received gripper command: target=%d, direction=%d, calculated target position: %.6f",
-                            gripper_target_, gripper_direction_, target_position_);
+                            "Received gripper command for arm %d: target=%d, direction=%d, calculated target position: %.6f",
+                            arm_id_, gripper_target_, gripper_direction_, target_position_);
             });
 
         robot_description_subscription_ = get_node()->create_subscription<std_msgs::msg::String>(
@@ -62,6 +79,8 @@ namespace adaptive_gripper_controller
                 RCLCPP_INFO(get_node()->get_logger(), "Received robot description, parsing joint limits...");
                 parse_joint_limits(msg->data);
             });
+
+        // 移除 control_input 订阅 - gripper_command 中已包含 arm_id 信息
 
         RCLCPP_INFO(get_node()->get_logger(), "Simple gripper controller configured");
         return controller_interface::CallbackReturn::SUCCESS;

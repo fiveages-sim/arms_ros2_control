@@ -15,11 +15,13 @@ find_package(Qt5 COMPONENTS Widgets REQUIRED)
 # 使用 qt5_wrap_cpp 宏生成MOC_FILES，用于处理Qt元对象编译
 qt5_wrap_cpp(MOC_FILES
         include/arms_rviz_control_plugin/ocs2_fsm_panel.hpp
+        include/arms_rviz_control_plugin/gripper_control_panel.hpp
 )
 
 # 设置源代码文件列表
 set(SRC_FILES
         src/ocs2_fsm_panel.cpp
+        src/gripper_control_panel.cpp
 )
 
 # Include directories

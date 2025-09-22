@@ -131,8 +131,9 @@ def launch_setup(context, *args, **kwargs):
         output="log",
         arguments=["-d", rviz_full_config],
         parameters=[
-            {'use_sim_time': use_sim_time}
+            {'use_sim_time': use_sim_time},
         ],
+        additional_env={'ROBOT_NAME': robot_name},  # Add to existing environment variables
     )
 
     # 统一的节点列表 - 不管是否使用 Gazebo，控制器都是一样的

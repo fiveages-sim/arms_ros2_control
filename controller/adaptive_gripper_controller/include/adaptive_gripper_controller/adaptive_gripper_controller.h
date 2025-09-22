@@ -124,6 +124,9 @@ namespace adaptive_gripper_controller
 
         GripperInterfaces gripper_interfaces_;
 
+        // 手臂标识 (1=左臂, 2=右臂)
+        int32_t arm_id_ = 1;  // 默认为左臂
+
         // ROS订阅器
         rclcpp::Subscription<arms_ros2_control_msgs::msg::Gripper>::SharedPtr gripper_subscription_;
         rclcpp::Subscription<std_msgs::msg::String>::SharedPtr robot_description_subscription_;
