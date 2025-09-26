@@ -294,6 +294,8 @@ colcon build --packages-up-to ocs2_arm_controller cr5_description arms_teleop ad
 
 - RViz中的3D交互式标记
 - 单臂/双臂支持
+- VR遥操作
+- 手柄遥操作
 
 #### Arms遥操作
 
