@@ -179,10 +179,16 @@ colcon build --packages-up-to ocs2_arm_controller cr5_description arms_teleop ad
     ```
 
 #### 启动控制器（适用于两个发行版）：
-* 您可以使用`world`来选择gazebo世界
+这里使用了智元精灵G1机器人作为例子
+* 编译机器人模型包
+  ```bash
+  cd ~/ros2_ws
+  colcon build --packages-up-to agibot_g1_description --symlink-install
+  ```
+* 你可以使用`world`参数来切换gazebo加载的环境模型
   ```bash
   source ~/ros2_ws/install/setup.bash
-  ros2 launch ocs2_arm_controller demo.launch.py type:=AG2F90-C hardware:=gz world:=warehouse
+  ros2 launch ocs2_arm_controller demo.launch.py robot:=agibot_g1 hardware:=gz world:=warehouse
   ```
   ![ocs2_dobot_gazebo](.images/ocs2%20agibot.png)
 
