@@ -29,10 +29,6 @@ namespace ocs2::mobile_manipulator
         
         // Get base frame information
         base_frame_ = interface_->getManipulatorModelInfo().baseFrame;
-        
-        RCLCPP_INFO(node_->get_logger(), "Visualizer initialized");
-        RCLCPP_INFO(node_->get_logger(), "Dual arm mode: %s", dual_arm_mode_ ? "enabled" : "disabled");
-        RCLCPP_INFO(node_->get_logger(), "Base frame: %s", base_frame_.c_str());
     }
 
     void Visualizer::initialize()

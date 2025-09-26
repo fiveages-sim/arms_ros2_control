@@ -55,13 +55,8 @@ def launch_setup(context, *args, **kwargs):
     if not task_file_path:
         print(f"[ERROR] No task_file provided for robot '{robot_name}'")
         return []
-    
-    print(f"[INFO] Using provided task file: {task_file_path}")
-    
-    # 解析task.info文件
+
     dual_arm_mode, frame_id = parse_task_info(task_file_path)
-    
-    # 创建ArmsTargetManager节点
     arms_target_manager_node = Node(
         package='arms_target_manager',
         executable='arms_target_manager_node',

@@ -13,7 +13,7 @@
 #include <pinocchio/algorithm/kinematics.hpp>
 #include <pinocchio/algorithm/rnea.hpp>
 #include <exception>
-#include <filesystem> // Added for modern file operations
+#include <filesystem>
 
 namespace ocs2::mobile_manipulator
 {
@@ -41,7 +41,6 @@ namespace ocs2::mobile_manipulator
 
         // Detect if dual arm mode is enabled
         dual_arm_mode_ = interface_->dual_arm_;
-        RCLCPP_INFO(node_->get_logger(), "Dual arm mode: %s", dual_arm_mode_ ? "enabled" : "disabled");
 
         // Initialize MPC components
         setupMpcComponents();
@@ -52,13 +51,6 @@ namespace ocs2::mobile_manipulator
         // Initialize visualization component
         visualizer_ = std::make_unique<Visualizer>(node_, interface_, robot_name_);
         visualizer_->initialize();
-        RCLCPP_INFO(node_->get_logger(), "Visualization component initialized");
-
-        RCLCPP_INFO(node_->get_logger(), "CtrlComponent initialized for robot: %s", robot_name_.c_str());
-        if (!robot_type_.empty())
-        {
-            RCLCPP_INFO(node_->get_logger(), "Robot type: %s", robot_type_.c_str());
-        }
         RCLCPP_INFO(node_->get_logger(), "Future time offset: %.2f seconds", future_time_offset_);
     }
 
@@ -71,10 +63,6 @@ namespace ocs2::mobile_manipulator
 
         // Setup publishers
         setupPublisher();
-
-        RCLCPP_INFO(node_->get_logger(), "Mobile Manipulator Interface setup completed");
-        RCLCPP_INFO(node_->get_logger(), "Task file: %s", task_file.c_str());
-        RCLCPP_INFO(node_->get_logger(), "URDF file: %s", urdf_file.c_str());
     }
 
     void CtrlComponent::setupPublisher()
@@ -82,9 +70,6 @@ namespace ocs2::mobile_manipulator
         // Initialize MPC observation publisher
         mpc_observation_publisher_ = node_->create_publisher<ocs2_msgs::msg::MpcObservation>(
             robot_name_ + "_mpc_observation", 1);
-
-        RCLCPP_INFO(node_->get_logger(), "MPC observation publisher created for %s_mpc_observation topic",
-                    robot_name_.c_str());
     }
 
     void CtrlComponent::setupMpcComponents()
@@ -110,14 +95,7 @@ namespace ocs2::mobile_manipulator
 
         observation_.state = interface_->getInitialState();
         observation_.input = vector_t::Zero(interface_->getManipulatorModelInfo().inputDim);
-        observation_.time = 0.0; // Will be updated to current time in enter() method
-
-        RCLCPP_INFO(node_->get_logger(), "MPC components setup completed");
-        RCLCPP_INFO(node_->get_logger(), "PoseBasedReferenceManager subscribed to %s_left_pose_target topic", robot_name_.c_str());
-        if (dual_arm_mode_)
-        {
-            RCLCPP_INFO(node_->get_logger(), "PoseBasedReferenceManager subscribed to %s_right_pose_target topic", robot_name_.c_str());
-        }
+        observation_.time = 0.0;
     }
 
     void CtrlComponent::updateObservation(const rclcpp::Time& time)
@@ -133,13 +111,13 @@ namespace ocs2::mobile_manipulator
             observation_.state[i] = ctrl_interfaces_.joint_position_state_interface_[i].get().get_value();
         }
         observation_.input = vector_t::Zero(interface_->getManipulatorModelInfo().inputDim);
-        
+
         // 更新PoseBasedReferenceManager的当前观测
         if (pose_reference_manager_)
         {
             pose_reference_manager_->setCurrentObservation(observation_);
         }
-        
+
         visualizer_->publishSelfCollisionVisualization(observation_.state);
         visualizer_->publishEndEffectorPose(time, observation_.state);
     }
@@ -162,8 +140,6 @@ namespace ocs2::mobile_manipulator
         // Evaluate MPC policy
         mpc_mrt_interface_->evaluatePolicy(time.seconds(), observation_.state, optimized_state_, optimized_input_,
                                            planned_mode);
-
-
         try
         {
             // Get complete trajectory from MPC policy
@@ -179,14 +155,12 @@ namespace ocs2::mobile_manipulator
                 policy.stateTrajectory_
             );
 
-            // CHENHZHU: get velocity commands from optimized_input_ if in force or mixed control mode
             vector_t future_input = LinearInterpolation::interpolate(
                 future_time,
                 policy.timeTrajectory_,
                 policy.inputTrajectory_
             );
 
-            // CHENHZHU: Set commands based on control mode
             // Extract joint positions from state and set as commands
             if (ctrl_interfaces_.control_mode_ == ControlMode::POSITION)
             {
@@ -199,20 +173,17 @@ namespace ocs2::mobile_manipulator
             {
                 // Calculate static torques for force control
                 vector_t static_torques = calculateStaticTorques();
-                
-                // Set effort commands (torques) for force control
+
                 for (size_t i = 0; i < joint_names_.size() && i < static_torques.size(); ++i)
                 {
                     ctrl_interfaces_.joint_force_command_interface_[i].get().set_value(static_torques(i));
                 }
-                
-                // Set position commands as reference
+
                 for (size_t i = 0; i < joint_names_.size() && i < future_state.size(); ++i)
                 {
                     ctrl_interfaces_.joint_position_command_interface_[i].get().set_value(future_state(i));
                 }
-                
-                // Set velocity commands from MPC input
+
                 for (size_t i = 0; i < joint_names_.size() && i < future_input.size(); ++i)
                 {
                     ctrl_interfaces_.joint_velocity_command_interface_[i].get().set_value(future_input(i));
@@ -253,7 +224,6 @@ namespace ocs2::mobile_manipulator
 
         if (dual_arm_mode_)
         {
-            // Dual arm mode: calculate initial end effector positions for left and right arms
             vector_t left_initial_ee_state = visualizer_->computeEndEffectorPose(observation_.state);
             vector_t right_initial_ee_state = visualizer_->computeRightEndEffectorPose(observation_.state);
 
@@ -327,25 +297,26 @@ namespace ocs2::mobile_manipulator
         pose_reference_manager_->resetTargetStateCache();
     }
 
-    std::string CtrlComponent::generateUrdfPath(const std::string& robot_name, 
-                                               const std::string& robot_type,
-                                               const std::string& config_path) const
+    std::string CtrlComponent::generateUrdfPath(const std::string& robot_name,
+                                                const std::string& robot_type,
+                                                const std::string& config_path) const
     {
         const std::string urdf_dir = config_path + "/urdf/";
-        
+
         // If robot type is specified, try to use type-specific URDF
-        if (!robot_type.empty()) {
+        if (!robot_type.empty())
+        {
             const std::string type_specific_urdf = urdf_dir + robot_name + "_" + robot_type + ".urdf";
-            
-            if (std::filesystem::exists(type_specific_urdf)) {
+
+            if (std::filesystem::exists(type_specific_urdf))
+            {
                 RCLCPP_INFO(node_->get_logger(), "Using type-specific URDF: %s", type_specific_urdf.c_str());
                 return type_specific_urdf;
-            } else {
-                RCLCPP_WARN(node_->get_logger(), 
-                    "Type-specific URDF not found: %s, falling back to default", type_specific_urdf.c_str());
             }
+            RCLCPP_WARN(node_->get_logger(),
+                        "Type-specific URDF not found: %s, falling back to default", type_specific_urdf.c_str());
         }
-        
+
         // Use default URDF
         const std::string default_urdf = urdf_dir + robot_name + ".urdf";
         RCLCPP_INFO(node_->get_logger(), "Using default URDF: %s", default_urdf.c_str());
@@ -358,15 +329,10 @@ namespace ocs2::mobile_manipulator
         const auto& pinocchio_model = interface_->getPinocchioInterface().getModel();
         auto pinocchio_data = interface_->getPinocchioInterface().getData();
 
-        // Use current joint positions from observation state (already updated in updateObservation)
-        // Convert OCS2 vector_t to Eigen::VectorXd for Pinocchio
-        Eigen::VectorXd q = observation_.state;
 
-        // 使用RNEA算法，但速度设为0（静态情况）
-        // 这样可以保持RNEA的完整性，但跳过速度相关的计算
-        // 直接使用零向量，避免重复创建对象
-        return pinocchio::rnea(pinocchio_model, pinocchio_data, q, 
-                              Eigen::VectorXd::Zero(pinocchio_model.nv), 
-                              Eigen::VectorXd::Zero(pinocchio_model.nv));
+        Eigen::VectorXd q = observation_.state;
+        return pinocchio::rnea(pinocchio_model, pinocchio_data, q,
+                               Eigen::VectorXd::Zero(pinocchio_model.nv),
+                               Eigen::VectorXd::Zero(pinocchio_model.nv));
     }
 } // namespace ocs2::mobile_manipulator

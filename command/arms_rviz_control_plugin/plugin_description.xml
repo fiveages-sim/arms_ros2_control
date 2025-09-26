@@ -1,4 +1,4 @@
-<?xml version="1.0"?><library path="libarms_rviz_control_plugin">
+<?xml version="1.0"?><library path="arms_rviz_control_plugin">
   <class
     name="arms_rviz_control_plugin/OCS2FSMPanel"
     type="arms_rviz_control_plugin::OCS2FSMPanel"
@@ -9,6 +9,6 @@
     name="arms_rviz_control_plugin/GripperControlPanel"
     type="arms_rviz_control_plugin::GripperControlPanel"
     base_class_type="rviz_common::Panel">
-    <description>Gripper Control Panel for single-arm robot</description>
+    <description>Gripper Control Panel for robot arms</description>
   </class>
 </library>

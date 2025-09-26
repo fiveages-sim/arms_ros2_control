@@ -1,14 +1,12 @@
 <?xml version="1.0"?>
-<?xml-model
-		href="http://download.ros.org/schema/package_format3.xsd"
-		schematypens="http://www.w3.org/2001/XMLSchema"?>
+<?xml-model href="http://download.ros.org/schema/package_format3.xsd" schematypens="http://www.w3.org/2001/XMLSchema"?>
 <package format="3">
 	<name>adaptive_gripper_controller</name>
 	<version>1.0.0</version>
-	<description>简单的夹爪控制器，实现基本的位置读取和输出功能</description>
+	<description>Simple Adaptive gripper control with force feedback</description>
 
-	<maintainer email="your_email@example.com">Your Name</maintainer>
-	<license>Apache License 2.0</license>
+	<maintainer email="biao876990970@hotmail.com">Huang Zhenbiao</maintainer>
+	<license>Apache-2.0</license>
 
 	<buildtool_depend>ament_cmake</buildtool_depend>
 

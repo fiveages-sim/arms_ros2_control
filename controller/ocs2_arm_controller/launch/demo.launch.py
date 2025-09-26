@@ -26,20 +26,20 @@ def launch_setup(context, *args, **kwargs):
     robot_type = context.launch_configurations.get('type', '')
     hardware = context.launch_configurations.get('hardware', 'mock_components')
     world = context.launch_configurations.get('world', 'empty')
-    
+
     # 基本参数
     use_sim_time = hardware in ['gz', 'isaac']
 
     # Planning robot state publisher for OCS2 planning URDF
     planning_urdf_path = get_planning_urdf_path(robot_name, robot_type)
-    
+
     planning_robot_state_publisher = None
     if planning_urdf_path is not None:
         try:
             # Read the planning URDF file directly (not through xacro)
             with open(planning_urdf_path, 'r') as urdf_file:
                 planning_urdf_content = urdf_file.read()
-            
+
             planning_robot_description = {"robot_description": planning_urdf_content}
             planning_robot_state_publisher = Node(
                 package='robot_state_publisher',
@@ -53,7 +53,6 @@ def launch_setup(context, *args, **kwargs):
                     ('/robot_description', '/ocs2_robot_description'),
                 ],
             )
-            print(f"[INFO] Planning robot state publisher created for: {planning_urdf_path}")
         except Exception as e:
             print(f"[WARN] Failed to create planning robot state publisher: {e}")
     else:
@@ -91,13 +90,13 @@ def launch_setup(context, *args, **kwargs):
 
     # Get info file name from controller configuration
     info_file_name = get_info_file_name(robot_name, robot_type)
-    
+
     # Get robot package path for task file
     robot_pkg_path = get_robot_package_path(robot_name)
     if robot_pkg_path is None:
         print(f"[ERROR] Cannot find robot package path for '{robot_name}'")
         return []
-    
+
     # OCS2 ArmsTargetManager for interactive pose control (auto-detects dual_arm_mode and frame_id from task.info)
     task_file_path = os.path.join(
         robot_pkg_path,
@@ -106,7 +105,7 @@ def launch_setup(context, *args, **kwargs):
         f"{info_file_name}.info"
     )
     print(f"[INFO] Using task file for ArmsTargetManager: {task_file_path}")
-    
+
     ocs2_arms_target_manager = IncludeLaunchDescription(
         PythonLaunchDescriptionSource([
             os.path.join(get_package_share_directory('arms_target_manager'), 'launch'),
@@ -144,14 +143,14 @@ def launch_setup(context, *args, **kwargs):
         ocs2_arm_controller_spawner,
         ocs2_arms_target_manager,
     ]
-    
+
     # Add planning robot state publisher if available
     if planning_robot_state_publisher:
         nodes.append(planning_robot_state_publisher)
-    
+
     # Add hand controller spawners if any were detected
     nodes.extend(hand_controller_spawners)
-    
+
     return nodes
 
 
@@ -162,10 +161,10 @@ def generate_launch_description():
         default_value="cr5",
         description="Robot name (arx5, cr5, etc.)"
     )
-    
+
     robot_type_arg = DeclareLaunchArgument(
         "type",
-        default_value="", 
+        default_value="",
         description="Robot type (x5, r5, robotiq85, etc.). Leave empty to not pass type parameter to xacro."
     )
 
@@ -178,7 +177,7 @@ def generate_launch_description():
     world_arg = DeclareLaunchArgument(
         'world', default_value='empty', description='Gz sim World (only used when hardware=gz)'
     )
-    
+
     enable_arms_target_manager_arg = DeclareLaunchArgument(
         'enable_arms_target_manager',
         default_value='true',
@@ -192,4 +191,4 @@ def generate_launch_description():
         world_arg,
         enable_arms_target_manager_arg,
         OpaqueFunction(function=launch_setup),
-    ]) 
+    ])

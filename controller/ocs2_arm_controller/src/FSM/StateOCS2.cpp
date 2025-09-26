@@ -69,11 +69,9 @@ namespace ocs2::mobile_manipulator
 
         // Calculate thread sleep duration based on controller frequency
         // Sleep time is set to 2x controller period to ensure MPC update requests are not missed
-        thread_sleep_duration_ms_ = static_cast<int>((2.0 / controller_frequency) * 1000.0);
+        thread_sleep_duration_ms_ = static_cast<int>(2.0 / controller_frequency * 1000.0);
 
-        // Use CtrlComponent interface
-        RCLCPP_INFO(node_->get_logger(), "Using CtrlComponent interface for StateOCS2");
-        RCLCPP_INFO(node_->get_logger(), "Thread sleep duration: %d ms (based on controller frequency: %.1f Hz)", 
+        RCLCPP_INFO(node_->get_logger(), "Thread sleep duration: %d ms (based on controller frequency: %.1f Hz)",
                     thread_sleep_duration_ms_, controller_frequency);
 
         RCLCPP_INFO(node_->get_logger(), "StateOCS2 initialized successfully");
@@ -87,18 +85,16 @@ namespace ocs2::mobile_manipulator
 
     void StateOCS2::enter()
     {
-        RCLCPP_INFO(node_->get_logger(), "Entering OCS2 state");
-
         // Set OCS2 gains only in MIX control mode (kp, kd available)
         if (ctrl_interfaces_.control_mode_ == ControlMode::MIX)
         {
             if (ctrl_interfaces_.ocs2_gains_.size() >= 2)
             {
-                double kp = ctrl_interfaces_.ocs2_gains_[0];  // Position gain
-                double kd = ctrl_interfaces_.ocs2_gains_[1];  // Velocity gain
-                
+                double kp = ctrl_interfaces_.ocs2_gains_[0]; // Position gain
+                double kd = ctrl_interfaces_.ocs2_gains_[1]; // Velocity gain
+
                 RCLCPP_INFO(node_->get_logger(), "Setting OCS2 gains: kp=%.2f, kd=%.2f", kp, kd);
-                
+
                 // Set kp and kd gains for all joints
                 for (size_t i = 0; i < ctrl_interfaces_.joint_kp_command_interface_.size(); ++i)
                 {
@@ -114,10 +110,6 @@ namespace ocs2::mobile_manipulator
                 RCLCPP_WARN(node_->get_logger(), "OCS2 gains not configured, using default gains");
             }
         }
-        else
-        {
-            RCLCPP_INFO(node_->get_logger(), "Position control mode - no kp/kd interfaces available");
-        }
 
         // Reset MPC
         ctrl_comp_->resetMpc();
@@ -129,8 +121,6 @@ namespace ocs2::mobile_manipulator
         mpc_thread_should_stop_ = false;
         mpc_running_ = true;
         mpc_thread_ = std::thread(&StateOCS2::mpcUpdateThread, this);
-
-        RCLCPP_INFO(node_->get_logger(), "OCS2 state entered successfully, MPC update thread started");
     }
 
     void StateOCS2::run(const rclcpp::Time& time, const rclcpp::Duration& /* period */)
@@ -149,21 +139,15 @@ namespace ocs2::mobile_manipulator
 
     void StateOCS2::exit()
     {
-        RCLCPP_INFO(node_->get_logger(), "Exiting OCS2 state");
-        
-        // Stop MPC update thread
         stopMpcThread();
-        
-        // Clear trajectory visualization and target state cache
         ctrl_comp_->clearTrajectoryVisualization();
-        
         RCLCPP_INFO(node_->get_logger(), "OCS2 state exited successfully, MPC update thread stopped");
     }
 
     void StateOCS2::mpcUpdateThread()
     {
         RCLCPP_INFO(node_->get_logger(), "MPC update thread started");
-        
+
         while (!mpc_thread_should_stop_.load())
         {
             // Check if MPC update is needed
@@ -180,11 +164,11 @@ namespace ocs2::mobile_manipulator
                     mpc_update_requested_ = false; // Clear flag even on error
                 }
             }
-            
+
             // Brief sleep to avoid busy waiting
             std::this_thread::sleep_for(std::chrono::milliseconds(thread_sleep_duration_ms_));
         }
-        
+
         RCLCPP_INFO(node_->get_logger(), "MPC update thread stopped");
     }
 
@@ -194,13 +178,13 @@ namespace ocs2::mobile_manipulator
         {
             // Set stop flag
             mpc_thread_should_stop_ = true;
-            
+
             // Wait for thread to finish
             if (mpc_thread_.joinable())
             {
                 mpc_thread_.join();
             }
-            
+
             mpc_running_ = false;
             RCLCPP_INFO(node_->get_logger(), "MPC update thread stopped successfully");
         }
