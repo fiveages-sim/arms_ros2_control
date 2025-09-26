@@ -157,7 +157,7 @@ colcon build --packages-up-to ocs2_arm_controller cr5_description arms_teleop ad
 > - 在终端中按数字键切换FSM状态（例如，按3进入OCS2状态，按2进入HOLD状态，按1进入HOME状态）
 > - 在RViz中，拖拽交互式标记设置目标位置，然后右键单击发送轨迹命令
 >
-> ![ocs2_dobot](.images/ocs2%20controller%20dobot.png)
+> ![ocs2_dobot](.images/ocs2%20dobot.png)
 
 ### 3. 使用Gazebo仿真启动
 
@@ -184,21 +184,21 @@ colcon build --packages-up-to ocs2_arm_controller cr5_description arms_teleop ad
   source ~/ros2_ws/install/setup.bash
   ros2 launch ocs2_arm_controller demo.launch.py type:=AG2F90-C hardware:=gz world:=warehouse
   ```
-  ![ocs2_dobot_gazebo](.images/ocs2%20gazebo.png)
+  ![ocs2_dobot_gazebo](.images/ocs2%20agibot.png)
 
 #### 使用其他机器人
-您可以在启动命令中添加`robot:=`来使用其他机器人。例如，使用ARX5机器人：
+这里我使用Agibot G1作为其他机器人的示例。
 * 编译机器人描述
   ```bash
   cd ~/ros2_ws
-  colcon build --packages-up-to arx5_description --symlink-install
+  colcon build --packages-up-to agibot_g1_description --symlink-install
   ```
-* 启动Gazebo仿真
+* 您可以使用`world`来选择gazebo世界
   ```bash
   source ~/ros2_ws/install/setup.bash
-  ros2 launch ocs2_arm_controller demo.launch.py robot:=arx5 type:=r5 hardware:=gz
+  ros2 launch ocs2_arm_controller demo.launch.py robot:=agibot_g1 hardware:=gz world:=warehouse
   ```
-  ![ocs2_arx_gazebo](.images/arx5%20gazebo.png)
+  ![ocs2_dobot_gazebo](.images/ocs2%20agibot.png)
 
 ### 4. 使用Isaac Sim仿真启动
 
