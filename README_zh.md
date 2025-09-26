@@ -94,11 +94,16 @@ git clone --depth 1 git@github.com:fiveages-sim/arms_ros2_control.git
 # 克隆必需的依赖项（浅克隆 - 仅最新提交）
 git clone --depth 1 git@github.com:fiveages-sim/robot_descriptions.git
 git clone --depth 1 git@github.com:legubiao/ocs2_ros2.git
+
+# 使用rosdep安装依赖项
+cd ~/ros2_ws
+rosdep install --from-paths src --ignore-src -r -y
 ```
 
 **注意**：
 - `--depth 1` 标志创建浅克隆，仅下载最新提交，显著减少克隆时间和磁盘使用量
 - 如果以后需要完整的git历史记录，可以使用 `git fetch --unshallow` 将浅克隆转换为完整克隆
+- `rosdep install` 命令将自动安装所有必需的系统依赖项
 
 </details>
 

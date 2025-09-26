@@ -92,11 +92,16 @@ git clone --depth 1 git@github.com:fiveages-sim/arms_ros2_control.git
 # Clone required dependencies (shallow clone - latest commit only)
 git clone --depth 1 git@github.com:fiveages-sim/robot_descriptions.git
 git clone --depth 1 git@github.com:legubiao/ocs2_ros2.git
+
+# Install dependencies using rosdep
+cd ~/ros2_ws
+rosdep install --from-paths src --ignore-src -r -y
 ```
 
 **Note**: 
 - The `--depth 1` flag creates a shallow clone that only downloads the latest commit, significantly reducing clone time and disk usage
 - If you need the full git history later, you can convert shallow clones to full clones using: `git fetch --unshallow`
+- The `rosdep install` command will automatically install all required system dependencies
 
 </details>
 
@@ -279,6 +284,8 @@ The `arms_target_manager` provides 3D interactive markers for setting robotic ar
 
 - 3D interactive markers in RViz
 - Single/dual arm support
+- VR Teleop Support
+- Joystick Teleop Support
 
 #### Arms Teleop
 
