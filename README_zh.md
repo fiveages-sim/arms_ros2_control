@@ -186,20 +186,6 @@ colcon build --packages-up-to ocs2_arm_controller cr5_description arms_teleop ad
   ```
   ![ocs2_dobot_gazebo](.images/ocs2%20agibot.png)
 
-#### 使用其他机器人
-这里我使用Agibot G1作为其他机器人的示例。
-* 编译机器人描述
-  ```bash
-  cd ~/ros2_ws
-  colcon build --packages-up-to agibot_g1_description --symlink-install
-  ```
-* 您可以使用`world`来选择gazebo世界
-  ```bash
-  source ~/ros2_ws/install/setup.bash
-  ros2 launch ocs2_arm_controller demo.launch.py robot:=agibot_g1 hardware:=gz world:=warehouse
-  ```
-  ![ocs2_dobot_gazebo](.images/ocs2%20agibot.png)
-
 ### 4. 使用Isaac Sim仿真启动
 
 * 编译增强的topic_based_ros2_control包
