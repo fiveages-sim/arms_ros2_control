@@ -16,8 +16,6 @@
 #include <arms_ros2_control_msgs/msg/inputs.hpp>
 #include <hardware_interface/loaned_command_interface.hpp>
 #include <hardware_interface/loaned_state_interface.hpp>
-#include <rclcpp/rclcpp.hpp>
-#include <ocs2_core/Types.h>
 #include "ocs2_arm_controller/control/CtrlComponent.h"
 
 namespace ocs2::mobile_manipulator
@@ -64,6 +62,14 @@ namespace ocs2::mobile_manipulator
         std::string state_name_string;
     };
 
+    // Control mode enum for automatic detection
+    enum class ControlMode
+    {
+        POSITION,    // Position control only
+        MIX,         // Mixed control with kp, kd, velocity, effort, position
+        AUTO         // Automatic detection based on available interfaces
+    };
+
     // Control interfaces structure for arm control
     struct CtrlInterfaces
     {
@@ -71,18 +77,77 @@ namespace ocs2::mobile_manipulator
         std::vector<std::reference_wrapper<hardware_interface::LoanedCommandInterface>>
         joint_position_command_interface_;
 
+        // CHENHZHU: Add force, velocity, kp, kq command interface for force and mixed control
+        std::vector<std::reference_wrapper<hardware_interface::LoanedCommandInterface>>
+        joint_force_command_interface_;
+        std::vector<std::reference_wrapper<hardware_interface::LoanedCommandInterface>>
+        joint_velocity_command_interface_;
+        std::vector<std::reference_wrapper<hardware_interface::LoanedCommandInterface>>
+        joint_kp_command_interface_;
+        std::vector<std::reference_wrapper<hardware_interface::LoanedCommandInterface>>
+        joint_kd_command_interface_;
+
         // State interfaces - position and velocity state for arm
         std::vector<std::reference_wrapper<hardware_interface::LoanedStateInterface>> joint_position_state_interface_;
         std::vector<std::reference_wrapper<hardware_interface::LoanedStateInterface>> joint_velocity_state_interface_;
 
+        // CHENHZHU: Add force state interface if available
+        std::vector<std::reference_wrapper<hardware_interface::LoanedStateInterface>> joint_force_state_interface_;
+
         arms_ros2_control_msgs::msg::Inputs control_inputs_;
         int frequency_ = 1000;
+
+        // Control mode - automatically detected based on available interfaces
+        ControlMode control_mode_ = ControlMode::POSITION;  // Will be set during initialization
+        bool mode_detected_ = false;  // Flag to ensure detection only happens once
+
+        // Auto mode detection function - called once during initialization
+        void detectAndSetControlMode()
+        {
+            if (mode_detected_) return;  // Only detect once
+
+            // Check if command interfaces include kp, kd, velocity, effort, position
+            bool has_kp_cmd = !joint_kp_command_interface_.empty();
+            bool has_kd_cmd = !joint_kd_command_interface_.empty();
+            bool has_velocity_cmd = !joint_velocity_command_interface_.empty();
+            bool has_effort_cmd = !joint_force_command_interface_.empty();
+            bool has_position_cmd = !joint_position_command_interface_.empty();
+
+            // Check if state interfaces include velocity, effort, position
+            bool has_velocity_state = !joint_velocity_state_interface_.empty();
+            bool has_effort_state = !joint_force_state_interface_.empty();
+            bool has_position_state = !joint_position_state_interface_.empty();
+
+            // Determine control mode based on available interfaces
+            if (has_kp_cmd && has_kd_cmd && has_velocity_cmd && has_effort_cmd && has_position_cmd &&
+                has_velocity_state && has_effort_state && has_position_state)
+            {
+                control_mode_ = ControlMode::MIX;  // Mixed control with kp, kd
+            }
+            else
+            {
+                control_mode_ = ControlMode::POSITION;  // Position control only
+            }
+
+            mode_detected_ = true;
+        }
+
+        // Force control gains [kp, kd]
+        std::vector<double> default_gains_;
+        
+        // OCS2 control gains [kp, kd] - used when entering OCS2 state
+        std::vector<double> ocs2_gains_;
 
         void clear()
         {
             joint_position_command_interface_.clear();
             joint_position_state_interface_.clear();
             joint_velocity_state_interface_.clear();
+            joint_force_command_interface_.clear();
+            joint_velocity_command_interface_.clear();
+            joint_kp_command_interface_.clear();
+            joint_kd_command_interface_.clear();
+            joint_force_state_interface_.clear();
         }
     };
 
@@ -143,13 +208,18 @@ namespace ocs2::mobile_manipulator
         // Interface mapping
         std::unordered_map<std::string, std::vector<std::reference_wrapper<hardware_interface::LoanedCommandInterface>>*>
         command_interface_map_ = {
-            {"position", &ctrl_interfaces_.joint_position_command_interface_}
+            {"position", &ctrl_interfaces_.joint_position_command_interface_},
+            {"velocity", &ctrl_interfaces_.joint_velocity_command_interface_},
+            {"effort", &ctrl_interfaces_.joint_force_command_interface_},
+            {"kp", &ctrl_interfaces_.joint_kp_command_interface_},
+            {"kd", &ctrl_interfaces_.joint_kd_command_interface_}
         };
 
         std::unordered_map<std::string, std::vector<std::reference_wrapper<hardware_interface::LoanedStateInterface>>*>
         state_interface_map_ = {
             {"position", &ctrl_interfaces_.joint_position_state_interface_},
-            {"velocity", &ctrl_interfaces_.joint_velocity_state_interface_}
+            {"velocity", &ctrl_interfaces_.joint_velocity_state_interface_},
+            {"effort", &ctrl_interfaces_.joint_force_state_interface_}
         };
 
         // ROS subscriptions

@@ -14,7 +14,8 @@ namespace ocs2::mobile_manipulator
     class StateHome final : public FSMState
     {
     public:
-        explicit StateHome(CtrlInterfaces& ctrl_interfaces, const std::vector<double>& target_pos);
+        explicit StateHome(CtrlInterfaces& ctrl_interfaces, const std::vector<double>& target_pos, 
+                          const std::shared_ptr<CtrlComponent>& ctrl_comp = nullptr);
 
         void enter() override;
         void run(const rclcpp::Time& time, const rclcpp::Duration& period) override;
@@ -35,6 +36,7 @@ namespace ocs2::mobile_manipulator
         void startInterpolation();
 
         CtrlInterfaces& ctrl_interfaces_;
+        std::shared_ptr<CtrlComponent> ctrl_comp_;  // CtrlComponent reference for torque calculation
         std::vector<double> target_pos_;  // Home pose
         std::vector<double> rest_pos_;    // Rest pose (if configured)
         std::vector<double> start_pos_;   // Starting position when entering state

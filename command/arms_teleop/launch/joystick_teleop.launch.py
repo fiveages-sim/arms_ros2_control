@@ -40,11 +40,7 @@ def generate_launch_description():
         output='screen',
         parameters=[
             {
-                'joy_dev': joy_dev,
-                # 夹爪参数配置
-                'gripper.open_position': 1.0,    # 夹爪开启位置 (米)
-                'gripper.closed_position': 0.0,    # 夹爪关闭位置 (米)
-                'gripper.max_effort': 10.0        # 夹爪最大力度 (牛顿)
+                'joy_dev': joy_dev
             }
         ]
     )

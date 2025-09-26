@@ -1,28 +1,31 @@
 <?xml version="1.0"?>
 <?xml-model href="http://download.ros.org/schema/package_format3.xsd" schematypens="http://www.w3.org/2001/XMLSchema"?>
 <package format="3">
-    <name>ocs2_arm_controller</name>
-    <version>0.0.0</version>
-    <description>A Ros2 Control Controller for OCS2 Arm Control</description>
-    <maintainer email="biao876990970@hotmail.com">Huang Zhenbiao</maintainer>
-    <license>Apache-2.0</license>
+	<name>ocs2_arm_controller</name>
+	<version>0.0.0</version>
+	<description>A Ros2 Control Controller for OCS2 Arm Control</description>
+	<maintainer email="biao876990970@hotmail.com">Huang Zhenbiao</maintainer>
+	<license>Apache-2.0</license>
 
-    <buildtool_depend>ament_cmake</buildtool_depend>
+	<buildtool_depend>ament_cmake</buildtool_depend>
 
-    <depend>controller_interface</depend>
-    <depend>pluginlib</depend>
-    <depend>arms_ros2_control_msgs</depend>
-    <depend>std_msgs</depend>
-    <depend>ocs2_mobile_manipulator_ros</depend>
-    <depend>ocs2_ros_interfaces</depend>
+	<depend>controller_interface</depend>
+	<depend>pluginlib</depend>
+	<depend>arms_teleop</depend>
+	<depend>robot_common_launch</depend>
+	<depend>std_msgs</depend>
+	<depend>ocs2_mobile_manipulator_ros</depend>
+	<depend>ocs2_ros_interfaces</depend>
+	<depend>arms_target_manager</depend>
+	<depend>adaptive_gripper_controller</depend>
 
-    <exec_depend>controller_manager</exec_depend>
-    <exec_depend>joint_state_broadcaster</exec_depend>
+	<exec_depend>controller_manager</exec_depend>
+	<exec_depend>joint_state_broadcaster</exec_depend>
 
-    <test_depend>ament_lint_auto</test_depend>
-    <test_depend>ament_lint_common</test_depend>
+	<test_depend>ament_lint_auto</test_depend>
+	<test_depend>ament_lint_common</test_depend>
 
-    <export>
-        <build_type>ament_cmake</build_type>
-    </export>
+	<export>
+		<build_type>ament_cmake</build_type>
+	</export>
 </package> 

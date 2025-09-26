@@ -8,8 +8,7 @@
 #include <rclcpp/rclcpp.hpp>
 #include <sensor_msgs/msg/joy.hpp>
 #include <arms_ros2_control_msgs/msg/inputs.hpp>
-#include <control_msgs/action/parallel_gripper_command.hpp>
-#include <rclcpp_action/rclcpp_action.hpp>
+#include <arms_ros2_control_msgs/msg/gripper.hpp>
 
 class JoystickTeleop final : public rclcpp::Node {
 public:
@@ -19,19 +18,47 @@ public:
 
 private:
     void joy_callback(sensor_msgs::msg::Joy::SharedPtr msg);
-    bool sendGripperCommand(double position);
+    void processButtons(const sensor_msgs::msg::Joy::SharedPtr msg);
+    void processAxes(const sensor_msgs::msg::Joy::SharedPtr msg);
+    void sendGripperCommand(bool open);
+    void gripper_command_callback(arms_ros2_control_msgs::msg::Gripper::SharedPtr msg);
+    double applyDeadzone(double value, double deadzone = 0.1) const;
 
     arms_ros2_control_msgs::msg::Inputs inputs_;
     rclcpp::Publisher<arms_ros2_control_msgs::msg::Inputs>::SharedPtr publisher_;
+    rclcpp::Publisher<arms_ros2_control_msgs::msg::Gripper>::SharedPtr gripper_publisher_;
     rclcpp::Subscription<sensor_msgs::msg::Joy>::SharedPtr subscription_;
+    rclcpp::Subscription<arms_ros2_control_msgs::msg::Gripper>::SharedPtr gripper_command_subscription_;
     
-    // Action client for gripper control
-    rclcpp_action::Client<control_msgs::action::ParallelGripperCommand>::SharedPtr gripper_action_client_;
-    bool gripper_open_;
+    // Control parameters
+    double updateRate_;
+    
+    // State management
+    bool enabled_;
+    rclcpp::Time lastUpdateTime_;
+    
+    // Button state tracking for edge detection
     bool last_x_pressed_;
-    double gripper_open_position_;
-    double gripper_closed_position_;
-    double gripper_max_effort_;
+    bool last_a_pressed_;
+    bool last_b_pressed_;
+    bool last_y_pressed_;
+    bool last_lb_pressed_;
+    bool last_rb_pressed_;
+    bool last_back_pressed_;
+    bool last_start_pressed_;
+    bool last_left_stick_pressed_;
+    bool last_right_stick_pressed_;
+    
+    // Target arm selection (1=left, 2=right)
+    int32_t currentTarget_;
+
+    // Gripper command state tracking (for synchronization with panel)
+    int32_t current_gripper_target_;  // 0=close, 1=open
+    bool gripper_command_received_;
+
+    // Separate gripper states for left and right arms (like task3)
+    bool left_gripper_open_;   // Left arm gripper state
+    bool right_gripper_open_;  // Right arm gripper state
 };
 
 #endif //JOYSTICK_TELEOP_H 

@@ -70,7 +70,7 @@ namespace ocs2::mobile_manipulator
         // Publishers
         rclcpp::Publisher<visualization_msgs::msg::MarkerArray>::SharedPtr trajectory_marker_publisher_;
         rclcpp::Publisher<geometry_msgs::msg::PoseStamped>::SharedPtr left_end_effector_pose_publisher_;
-        rclcpp::Publisher<geometry_msgs::msg::PoseStamped>::SharedPtr right_end_effector_pose_publisher_;
+        rclcpp::Publisher<geometry_msgs::msg::PoseStamped>::SharedPtr right_end_effector_pose_publisher_; // Only created in dual arm mode
 
         // Self-collision visualization component
         std::unique_ptr<GeometryInterfaceVisualization> geometry_visualization_;

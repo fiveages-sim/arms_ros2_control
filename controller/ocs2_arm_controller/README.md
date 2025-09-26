@@ -14,6 +14,7 @@ This controller implements a finite state machine (FSM) for arm control with the
 
 - Finite State Machine (FSM) implementation
 - Position-based control for arm joints
+- **Automatic Force Control Mode Detection** - Automatically detects and enables force control when kp, kd, velocity, effort, position interfaces are available
 - OCS2 MPC integration for optimal control
 - Configurable control parameters
 - Support for both simulation and real hardware
@@ -40,10 +41,15 @@ This controller implements a finite state machine (FSM) for arm control with the
 ## Usage
 
 ### Building
-
+* OCS2 Arm Controller
 ```bash
 cd ~/ros2_ws
 colcon build --packages-up-to ocs2_arm_controller --symlink-install
+```
+* Dobot CR5 description package with config files
+```bash
+cd ~/ros2_ws
+colcon build --packages-up-to cr5_description --symlink-install
 ```
 
 ### Running
@@ -80,14 +86,71 @@ Key parameters:
 - `zero_pos`: Zero position for each joint
 - `robot_pkg`: Robot package name for OCS2 configuration
 - `update_rate`: Controller update rate in Hz
+- `force_gains`: Default force control gains [kp, kd] for impedance control
 
 ## Interface Configuration
 
-The controller uses the following interfaces:
-- **Command Interface**: `position` only (realistic for most arm hardware)
-- **State Interface**: `position` and `velocity` (for state estimation)
+### Automatic Control Mode Detection
 
-This configuration is suitable for most industrial and research robotic arms.
+The controller automatically detects the available control mode based on the provided interfaces:
+
+**Position Control Mode** (Default):
+- **Command Interface**: `position` only
+- **State Interface**: `position` and `velocity`
+- Suitable for most industrial and research robotic arms
+
+**Force Control Mode** (Auto-detected):
+- **Command Interface**: `position`, `velocity`, `effort`, `kp`, `kd`
+- **State Interface**: `position`, `velocity`, `effort`
+- Automatically enabled when all required interfaces are available
+- Provides full force control capabilities with impedance control
+
+### Configuration Examples
+
+**Position Control Configuration:**
+```yaml
+command_interfaces:
+  - position
+state_interfaces:
+  - position
+  - velocity
+```
+
+**Force Control Configuration:**
+```yaml
+command_interfaces:
+  - position
+  - velocity
+  - effort
+  - kp
+  - kd
+state_interfaces:
+  - position
+  - velocity
+  - effort
+
+# Force control gains [kp, kd]
+force_gains: [100.0, 10.0]  # kp=100, kd=10
+```
+
+### Force Control Gains
+
+The `force_gains` parameter defines the default impedance control gains for force control mode:
+
+- **kp** (Position gain): Controls the stiffness of the position control loop
+  - Higher values make the robot more rigid
+  - Lower values make the robot more compliant
+  - Typical range: 10.0 - 1000.0
+
+- **kd** (Velocity gain): Controls the damping of the velocity control loop
+  - Higher values reduce oscillations and improve stability
+  - Lower values allow more natural motion
+  - Typical range: 1.0 - 100.0
+
+**Example configurations:**
+- High stiffness: `force_gains: [500.0, 50.0]` - For precise positioning tasks
+- Medium compliance: `force_gains: [100.0, 10.0]` - For general manipulation tasks
+- High compliance: `force_gains: [50.0, 5.0]` - For contact tasks and human interaction
 
 ## State Transitions
 

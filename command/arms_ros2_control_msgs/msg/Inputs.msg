@@ -2,7 +2,15 @@
 
 int32 command
 
-float32 lx
-float32 ly
-float32 rx
-float32 ry
+# position
+float32 x
+float32 y
+float32 z
+
+# rotation
+float32 roll
+float32 pitch
+float32 yaw
+
+# command target, left(1) or right arm(2)
+int32 target

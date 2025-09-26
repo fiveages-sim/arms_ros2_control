@@ -22,12 +22,16 @@
 ```
 arms_ros2_control/
 ├── controller/                    # 控制器实现
-│   └── ocs2_arm_controller/      # 基于OCS2的机械臂控制器
+│   ├── ocs2_arm_controller/      # 基于OCS2的机械臂控制器
+│   └── adaptive_gripper_controller/ # 自适应夹爪控制器
 ├── hardwares/                    # 硬件接口实现
 │   ├── gz_ros2_control/         # Gazebo硬件接口
-│   └── topic_based_ros2_control/ # 基于话题的硬件接口
+│   ├── topic_based_ros2_control/ # 基于话题的硬件接口
+│   └── unitree_ros2_control/    # Unitree机器人硬件接口
 ├── command/                      # 命令输入实现
 │   ├── arms_ros2_control_msgs/  # 控制输入消息定义
+│   ├── arms_rviz_control_plugin/ # RViz控制插件
+│   ├── arms_target_manager/     # 目标管理系统
 │   └── arms_teleop/             # 统一遥操作包
 │       ├── joystick_teleop      # 基于手柄的控制
 │       └── keyboard_teleop      # 基于键盘的控制
@@ -90,16 +94,21 @@ git clone --depth 1 git@github.com:fiveages-sim/arms_ros2_control.git
 # 克隆必需的依赖项（浅克隆 - 仅最新提交）
 git clone --depth 1 git@github.com:fiveages-sim/robot_descriptions.git
 git clone --depth 1 git@github.com:legubiao/ocs2_ros2.git
+
+# 使用rosdep安装依赖项
+cd ~/ros2_ws
+rosdep install --from-paths src --ignore-src -r -y
 ```
 
 **注意**：
 - `--depth 1` 标志创建浅克隆，仅下载最新提交，显著减少克隆时间和磁盘使用量
 - 如果以后需要完整的git历史记录，可以使用 `git fetch --unshallow` 将浅克隆转换为完整克隆
+- `rosdep install` 命令将自动安装所有必需的系统依赖项
 
 </details>
 
 <details>
-<summary><strong>🔧 验证OCS2设置（新手必读）</strong></summary>
+<summary><strong>🔧 验证OCS2设置（可选）</strong></summary>
 
 如果您是第一次接触OCS2，请先验证OCS2环境是否正确配置。通过运行移动机械臂演示之一来验证：
 
@@ -128,7 +137,7 @@ ros2 launch ocs2_mobile_manipulator_ros manipulator_mabi_mobile.launch.py
 
 ```bash
 cd ~/ros2_ws
-colcon build --packages-up-to ocs2_arm_controller cr5_description arms_teleop --symlink-install
+colcon build --packages-up-to ocs2_arm_controller cr5_description arms_teleop adaptive_gripper_controller --symlink-install
 ```
 
 ### 2. 使用模拟硬件启动
@@ -219,6 +228,17 @@ colcon build --packages-up-to ocs2_arm_controller cr5_description arms_teleop --
 - 实时优化
 - 支持各种机器人配置
 
+#### 自适应夹爪控制器
+
+`adaptive_gripper_controller`提供基础夹爪控制功能，具有位置读取和输出能力。
+
+**特性：**
+
+- 从硬件接口读取位置信息
+- 向硬件接口输出位置命令
+- 基础夹爪位置控制
+- 易于理解和扩展
+
 ### 硬件接口
 
 #### Gazebo硬件接口
@@ -240,6 +260,57 @@ colcon build --packages-up-to ocs2_arm_controller cr5_description arms_teleop --
 - 适用于任何硬件的通用接口
 - 基于话题的通信
 - 易于与自定义硬件集成
+
+#### Unitree硬件接口
+
+`unitree_ros2_control`包基于unitree_sdk2为Unitree机器人提供硬件接口。
+
+**特性：**
+
+- 支持Unitree G1和其他sdk2兼容机器人
+- Mujoco仿真集成
+- 真实机器人支持
+
+### 命令输入系统
+
+#### Arms RViz控制插件
+
+`arms_rviz_control_plugin`提供智能RViz插件，结合了OCS2机械臂控制器和自适应夹爪控制器的控制功能。
+
+**特性：**
+
+- **OCS2机械臂控制器控制：**
+  - 智能FSM状态显示和切换
+  - 动态按钮控制，只显示可用的状态转换
+  - 遵循OCS2机械臂控制器FSM规则的正确状态转换
+  - HOLD初始状态和正确的状态流程
+  - HOME状态下的姿态切换功能
+- **夹爪控制器控制：**
+  - 左右夹爪控制按钮
+  - 实时夹爪状态显示
+  - 单臂/双臂夹爪支持
+  - 自动控制器检测和UI适配
+
+#### Arms目标管理器
+
+`arms_target_manager`为设置机械臂末端执行器目标姿态提供3D交互式标记。
+
+**特性：**
+
+- RViz中的3D交互式标记
+- 单臂/双臂支持
+- VR遥操作
+- 手柄遥操作
+
+#### Arms遥操作
+
+`arms_teleop`包为机械臂提供统一的遥操作功能。
+
+**特性：**
+
+- 基于手柄的控制
+- 基于键盘的控制
+- 不同输入方法的统一接口
 
 ## 配置
 

@@ -29,10 +29,6 @@ namespace ocs2::mobile_manipulator
         
         // Get base frame information
         base_frame_ = interface_->getManipulatorModelInfo().baseFrame;
-        
-        RCLCPP_INFO(node_->get_logger(), "Visualizer initialized");
-        RCLCPP_INFO(node_->get_logger(), "Dual arm mode: %s", dual_arm_mode_ ? "enabled" : "disabled");
-        RCLCPP_INFO(node_->get_logger(), "Base frame: %s", base_frame_.c_str());
     }
 
     void Visualizer::initialize()
@@ -43,9 +39,14 @@ namespace ocs2::mobile_manipulator
         
         // Create end effector pose publisher
         left_end_effector_pose_publisher_ = node_->create_publisher<geometry_msgs::msg::PoseStamped>(
-            robot_name_ + "_left_end_effector_pose", 1);
-        right_end_effector_pose_publisher_ = node_->create_publisher<geometry_msgs::msg::PoseStamped>(
-            robot_name_ + "_right_end_effector_pose", 1);
+            "left_current_pose", 1);
+        
+        // Only create right arm publisher in dual arm mode
+        if (dual_arm_mode_)
+        {
+            right_end_effector_pose_publisher_ = node_->create_publisher<geometry_msgs::msg::PoseStamped>(
+                "right_current_pose", 1);
+        }
 
         // Get self-collision geometry interface from MobileManipulatorInterface and initialize visualization
         try
@@ -54,7 +55,7 @@ namespace ocs2::mobile_manipulator
             {
                 geometry_visualization_ = std::make_unique<GeometryInterfaceVisualization>(
                     interface_->getPinocchioInterface(),
-                    std::move(*pinocchio_geometry_interface));
+                    std::move(*pinocchio_geometry_interface), base_frame_);
 
                 enable_self_collision_ = true;
                 RCLCPP_INFO(node_->get_logger(), "Self-collision visualization initialized using interface geometry");

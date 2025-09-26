@@ -8,109 +8,237 @@ using std::placeholders::_1;
 
 JoystickTeleop::JoystickTeleop() : Node("joystick_teleop_node") {
     publisher_ = create_publisher<arms_ros2_control_msgs::msg::Inputs>("control_input", 10);
+    gripper_publisher_ = create_publisher<arms_ros2_control_msgs::msg::Gripper>("/gripper_command", rclcpp::QoS(rclcpp::KeepLast(1)).transient_local());
     subscription_ = create_subscription<
         sensor_msgs::msg::Joy>("joy", 10, std::bind(&JoystickTeleop::joy_callback, this, _1));
+    gripper_command_subscription_ = create_subscription<arms_ros2_control_msgs::msg::Gripper>(
+        "/gripper_command", rclcpp::QoS(rclcpp::KeepLast(1)).transient_local(),
+        std::bind(&JoystickTeleop::gripper_command_callback, this, _1));
     
-    // Initialize gripper action client
-    gripper_action_client_ = rclcpp_action::create_client<control_msgs::action::ParallelGripperCommand>(
-        this, "/hand_controller/gripper_cmd");
+    // Initialize control parameters
+    updateRate_ = 20.0;
     
-    // Declare gripper parameters with default values
-    this->declare_parameter("gripper.open_position", 1.0);
-    this->declare_parameter("gripper.closed_position", 0.0);
-    this->declare_parameter("gripper.max_effort", 10.0);
+    // Initialize state
+    enabled_ = false;
+    lastUpdateTime_ = now();
+    currentTarget_ = 1; // Start with left arm
     
-    // Get parameter values
-    gripper_open_position_ = this->get_parameter("gripper.open_position").as_double();
-    gripper_closed_position_ = this->get_parameter("gripper.closed_position").as_double();
-    gripper_max_effort_ = this->get_parameter("gripper.max_effort").as_double();
-    
-    // Initialize gripper state
-    gripper_open_ = false;
+    // Initialize button states
     last_x_pressed_ = false;
+    last_a_pressed_ = false;
+    last_b_pressed_ = false;
+    last_y_pressed_ = false;
+    last_lb_pressed_ = false;
+    last_rb_pressed_ = false;
+    last_back_pressed_ = false;
+    last_start_pressed_ = false;
+    last_left_stick_pressed_ = false;
+    last_right_stick_pressed_ = false;
+
+    // Initialize gripper command state tracking
+    current_gripper_target_ = 0;  // Initial state: closed
+    gripper_command_received_ = false;
+
+    // Initialize separate gripper states for left and right arms
+    left_gripper_open_ = false;   // Left arm gripper initially closed
+    right_gripper_open_ = false;  // Right arm gripper initially closed
+    
+    // Initialize inputs message
+    inputs_.command = 0;
+    inputs_.x = 0.0;
+    inputs_.y = 0.0;
+    inputs_.z = 0.0;
+    inputs_.roll = 0.0;
+    inputs_.pitch = 0.0;
+    inputs_.yaw = 0.0;
+    inputs_.target = currentTarget_;
+    
+    RCLCPP_INFO(get_logger(), "🎮 JoystickTeleop created");
+    RCLCPP_INFO(get_logger(), "🎮 Joystick control is DISABLED by default. Press right stick to enable.");
+    RCLCPP_INFO(get_logger(), "🎮 Controls: Right stick=toggle control, A=switch target arm, B=send command, X=toggle gripper");
 }
 
 void JoystickTeleop::joy_callback(sensor_msgs::msg::Joy::SharedPtr msg) {
-    // Check if X button is pressed
-    bool x_pressed = msg->buttons[2];
-    
-    // Original command logic
-    if (msg->buttons[1] && msg->buttons[4]) {
-        inputs_.command = 1; // LB + B
-    } else if (msg->buttons[0] && msg->buttons[4]) {
-        inputs_.command = 2; // LB + A
-    } else if (msg->buttons[7]) {
-        inputs_.command = 3; // START
-    } else if (msg->buttons[3] && msg->buttons[4]) {
-        inputs_.command = 4; // LB + Y
-    } else if (msg->axes[2] != 1 && msg->buttons[1]) {
-        inputs_.command = 5; // LT + B
-    } else if (msg->axes[2] != 1 && msg->buttons[0]) {
-        inputs_.command = 6; // LT + A
-    } else if (msg->axes[2] != 1 && msg->buttons[2]) {
-        inputs_.command = 7; // LT + X
-    } else if (msg->axes[2] != 1 && msg->buttons[3]) {
-        inputs_.command = 8; // LT + Y
-    } else if (msg->buttons[7]) {
-        inputs_.command = 9; // START
-    } else {
-        inputs_.command = 0;
-        inputs_.lx = -msg->axes[0];
-        inputs_.ly = msg->axes[1];
-        inputs_.rx = -msg->axes[3];
-        inputs_.ry = msg->axes[4];
-        
-        // If no command is set and X is pressed alone, toggle gripper
-        if (x_pressed && !last_x_pressed_) {
-            // Toggle gripper state
-            gripper_open_ = !gripper_open_;
-            
-            // Send gripper command
-            if (gripper_open_) {
-                if (sendGripperCommand(gripper_open_position_)) {
-                    RCLCPP_INFO(this->get_logger(), "Gripper opened");
-                }
-            } else {
-                if (sendGripperCommand(gripper_closed_position_)) {
-                    RCLCPP_INFO(this->get_logger(), "Gripper closed");
-                }
-            }
-        }
+    // Check update frequency
+    auto currentTime = now();
+    double timeSinceLastUpdate = (currentTime - lastUpdateTime_).seconds();
+    double updateInterval = 1.0 / updateRate_;
+
+    if (timeSinceLastUpdate < updateInterval) {
+        return;
     }
-    
-    // Update last X button state
-    last_x_pressed_ = x_pressed;
-    
-    publisher_->publish(inputs_);
+    lastUpdateTime_ = currentTime;
+
+    // Process buttons first (always process for enable/disable toggle)
+    processButtons(msg);
+
+    // Only process other logic if joystick is enabled
+    if (enabled_) {
+        // Original command logic - keep existing behavior
+        if (msg->buttons[1] && msg->buttons[4]) {
+            inputs_.command = 1; // LB + B
+        } else if (msg->buttons[0] && msg->buttons[4]) {
+            inputs_.command = 2; // LB + A
+        } else if (msg->buttons[7]) {
+            inputs_.command = 3; // START
+        } else if (msg->buttons[3] && msg->buttons[4]) {
+            inputs_.command = 4; // LB + Y
+        } else {
+            inputs_.command = 0;
+            
+            // Process axes if no command is active
+            processAxes(msg);
+        }
+        
+        // Publish the current state only when enabled
+        publisher_->publish(inputs_);
+    }
 }
 
-bool JoystickTeleop::sendGripperCommand(double position)
-{
-    if (!gripper_action_client_->action_server_is_ready())
-    {
-        RCLCPP_WARN(this->get_logger(), "Gripper action server not ready");
-        return false;
+void JoystickTeleop::processButtons(const sensor_msgs::msg::Joy::SharedPtr msg) {
+    if (msg->buttons.size() <= 10) {
+        return;
     }
 
-    auto goal_msg = control_msgs::action::ParallelGripperCommand::Goal();
-    goal_msg.command.position = {position}; // 将单个位置值包装成vector
-    goal_msg.command.effort = {gripper_max_effort_}; // 将单个力度值包装成vector
+    // Check button states
+    bool x_pressed = msg->buttons[2];
+    bool a_pressed = msg->buttons[0];
+    bool b_pressed = msg->buttons[1];
+    bool y_pressed = msg->buttons[3];
+    bool lb_pressed = msg->buttons[4];
+    bool rb_pressed = msg->buttons[5];
+    bool back_pressed = msg->buttons[6];
+    bool start_pressed = msg->buttons[7];
+    bool left_stick_pressed = msg->buttons[9];
+    bool right_stick_pressed = msg->buttons[10];
 
-    auto send_goal_options = rclcpp_action::Client<control_msgs::action::ParallelGripperCommand>::SendGoalOptions();
-    send_goal_options.result_callback = [this](const auto &result)
-    {
-        if (result.code == rclcpp_action::ResultCode::SUCCEEDED)
-        {
-            RCLCPP_DEBUG(this->get_logger(), "Gripper command succeeded");
-        }
-        else
-        {
-            RCLCPP_ERROR(this->get_logger(), "Gripper command failed");
-        }
-    };
+    // Detect button press events (rising edge)
+    bool right_stick_just_pressed = right_stick_pressed && !last_right_stick_pressed_;
+    bool a_just_pressed = a_pressed && !last_a_pressed_;
+    bool b_just_pressed = b_pressed && !last_b_pressed_;
+    bool x_just_pressed = x_pressed && !last_x_pressed_;
 
-    gripper_action_client_->async_send_goal(goal_msg, send_goal_options);
-    return true;
+    // Update last button states
+    last_x_pressed_ = x_pressed;
+    last_a_pressed_ = a_pressed;
+    last_b_pressed_ = b_pressed;
+    last_y_pressed_ = y_pressed;
+    last_lb_pressed_ = lb_pressed;
+    last_rb_pressed_ = rb_pressed;
+    last_back_pressed_ = back_pressed;
+    last_start_pressed_ = start_pressed;
+    last_left_stick_pressed_ = left_stick_pressed;
+    last_right_stick_pressed_ = right_stick_pressed;
+
+    // Process button events
+    if (right_stick_just_pressed) {
+        // Right stick press: toggle control
+        enabled_ = !enabled_;
+        if (enabled_) {
+            RCLCPP_INFO(get_logger(), "🎮 Joystick control ENABLED!");
+        } else {
+            RCLCPP_INFO(get_logger(), "🎮 Joystick control DISABLED!");
+        }
+    }
+
+    if (a_just_pressed && enabled_) {
+        // A button: switch target arm
+        currentTarget_ = (currentTarget_ == 1) ? 2 : 1;
+        inputs_.target = currentTarget_;
+        RCLCPP_INFO(get_logger(), "🎮 Switched target arm to: %s", 
+                    (currentTarget_ == 1) ? "LEFT" : "RIGHT");
+    }
+
+    if (x_just_pressed && enabled_) {
+        // X button: toggle gripper - use separate state management like task3
+        bool& current_gripper_state = (currentTarget_ == 1) ? left_gripper_open_ : right_gripper_open_;
+        current_gripper_state = !current_gripper_state;
+
+        sendGripperCommand(current_gripper_state);
+
+        std::string arm_name = (currentTarget_ == 1) ? "LEFT" : "RIGHT";
+        RCLCPP_INFO(get_logger(), "🎮 %s gripper %s",
+                   arm_name.c_str(), current_gripper_state ? "OPENED" : "CLOSED");
+    }
+}
+
+void JoystickTeleop::processAxes(const sensor_msgs::msg::Joy::SharedPtr msg) {
+    if (msg->axes.size() <= 7) {
+        return;
+    }
+
+    // Left stick controls position (x, y)
+    double left_stick_x = applyDeadzone(msg->axes[0]);
+    double left_stick_y = applyDeadzone(msg->axes[1]);
+
+    // Right stick controls position (z) and rotation (yaw)
+    double right_stick_x = applyDeadzone(msg->axes[3]);
+    double right_stick_y = applyDeadzone(msg->axes[4]);
+
+    // D-pad controls roll and pitch rotation
+    double dpad_x = 0.0;
+    double dpad_y = 0.0;
+    if (msg->axes.size() > 6 && msg->axes.size() > 7) {
+        dpad_x = applyDeadzone(msg->axes[6], 0.5);
+        dpad_y = applyDeadzone(msg->axes[7], 0.5);
+    }
+
+    // Update position (x, y, z)
+    inputs_.x = left_stick_y;   // Left stick Y: forward/backward
+    inputs_.y = left_stick_x;   // Left stick X: left/right
+    inputs_.z = right_stick_y;  // Right stick Y: up/down
+
+    // Update rotation (roll, pitch, yaw)
+    inputs_.roll = dpad_x;         // D-pad X: roll
+    inputs_.pitch = -dpad_y;       // D-pad Y: pitch (inverted)
+    inputs_.yaw = right_stick_x;   // Right stick X: yaw
+}
+
+double JoystickTeleop::applyDeadzone(double value, double deadzone) const {
+    if (std::abs(value) < deadzone) {
+        return 0.0;
+    }
+    return value;
+}
+
+void JoystickTeleop::sendGripperCommand(bool open)
+{
+    auto gripper_msg = arms_ros2_control_msgs::msg::Gripper();
+
+    if (open) {
+        gripper_msg.target = 1;  // 打开夹爪
+        gripper_msg.direction = 1;
+    } else {
+        gripper_msg.target = 0;  // 关闭夹爪
+        gripper_msg.direction = -1;
+    }
+
+    gripper_msg.arm_id = currentTarget_;  // 设置目标手臂
+
+    gripper_publisher_->publish(gripper_msg);
+    RCLCPP_DEBUG(this->get_logger(), "Sent gripper command: target=%d, direction=%d, arm_id=%d",
+                  gripper_msg.target, gripper_msg.direction, gripper_msg.arm_id);
+}
+
+void JoystickTeleop::gripper_command_callback(arms_ros2_control_msgs::msg::Gripper::SharedPtr msg)
+{
+    // Update corresponding arm's local state based on received command
+    if (msg->arm_id == 1) {
+        left_gripper_open_ = (msg->target == 1);
+    } else if (msg->arm_id == 2) {
+        right_gripper_open_ = (msg->target == 1);
+    }
+
+    // Also maintain the old synchronization logic for backward compatibility
+    if (msg->arm_id == currentTarget_) {
+        current_gripper_target_ = msg->target;
+        gripper_command_received_ = true;
+    }
+
+    RCLCPP_DEBUG(this->get_logger(), "Received gripper command for arm %d: target=%d, direction=%d. Updated local states: left=%s, right=%s",
+                msg->arm_id, msg->target, msg->direction,
+                left_gripper_open_ ? "open" : "closed",
+                right_gripper_open_ ? "open" : "closed");
 }
 
 int main(int argc, char *argv[]) {

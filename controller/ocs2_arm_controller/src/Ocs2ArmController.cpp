@@ -111,12 +111,18 @@ namespace ocs2::mobile_manipulator
             // State machine parameters
             home_pos_ = auto_declare<std::vector<double>>("home_pos", home_pos_);
             rest_pos_ = auto_declare<std::vector<double>>("rest_pos", rest_pos_);
+            
+            // Force control parameters
+            ctrl_interfaces_.default_gains_ = auto_declare<std::vector<double>>("default_gains", ctrl_interfaces_.default_gains_);
+            
+            // OCS2 control parameters
+            ctrl_interfaces_.ocs2_gains_ = auto_declare<std::vector<double>>("ocs2_gains", ctrl_interfaces_.ocs2_gains_);
 
             // Create CtrlComponent (auto-initialize interface)
             ctrl_comp_ = std::make_shared<CtrlComponent>(get_node(), ctrl_interfaces_);
 
             // Create states
-            state_list_.home = std::make_shared<StateHome>(ctrl_interfaces_, home_pos_);
+            state_list_.home = std::make_shared<StateHome>(ctrl_interfaces_, home_pos_, ctrl_comp_);
             
             // Configure rest pose if available
             if (!rest_pos_.empty())
@@ -131,7 +137,7 @@ namespace ocs2::mobile_manipulator
             }
             
             state_list_.ocs2 = std::make_shared<StateOCS2>(ctrl_interfaces_, get_node(), ctrl_comp_);
-            state_list_.hold = std::make_shared<StateHold>(ctrl_interfaces_);
+            state_list_.hold = std::make_shared<StateHold>(ctrl_interfaces_, ctrl_comp_);
 
             return CallbackReturn::SUCCESS;
         }
@@ -148,11 +154,7 @@ namespace ocs2::mobile_manipulator
         control_input_subscription_ = get_node()->create_subscription<arms_ros2_control_msgs::msg::Inputs>(
             "/control_input", 10, [this](const arms_ros2_control_msgs::msg::Inputs::SharedPtr msg)
             {
-                ctrl_interfaces_.control_inputs_.command = msg->command;
-                ctrl_interfaces_.control_inputs_.lx = msg->lx;
-                ctrl_interfaces_.control_inputs_.ly = msg->ly;
-                ctrl_interfaces_.control_inputs_.rx = msg->rx;
-                ctrl_interfaces_.control_inputs_.ry = msg->ry;
+                ctrl_interfaces_.control_inputs_ = *msg;
             });
 
         return CallbackReturn::SUCCESS;
@@ -182,6 +184,19 @@ namespace ocs2::mobile_manipulator
         for (auto& interface : state_interfaces_)
         {
             state_interface_map_[interface.get_interface_name()]->push_back(interface);
+        }
+
+        // Auto-detect control mode based on available interfaces
+        ctrl_interfaces_.detectAndSetControlMode();
+        
+        // Log detected control mode
+        if (ctrl_interfaces_.control_mode_ == ControlMode::MIX)
+        {
+            RCLCPP_INFO(get_node()->get_logger(), "Mixed control mode enabled - detected kp, kd, velocity, effort, position interfaces");
+        }
+        else
+        {
+            RCLCPP_INFO(get_node()->get_logger(), "Position control mode enabled - standard position control interfaces detected");
         }
 
         // Initialize FSM

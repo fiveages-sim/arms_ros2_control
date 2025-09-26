@@ -1,0 +1,16 @@
+<library path="adaptive_gripper_controller">
+
+  <class name="adaptive_gripper_controller/AdaptiveGripperController"
+         type="adaptive_gripper_controller::AdaptiveGripperController"
+         base_class_type="controller_interface::ControllerInterface">
+    <description>
+      简单夹爪控制器，实现基本的位置读取和输出功能。
+      该控制器能够：
+      1. 读取夹爪当前位置
+      2. 接收Gripper消息命令
+      3. 输出位置控制命令
+      4. 支持基本的夹爪控制
+    </description>
+  </class>
+
+</library>

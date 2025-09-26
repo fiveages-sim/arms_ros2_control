@@ -23,12 +23,16 @@ The project is organized as follows:
 ```
 arms_ros2_control/
 ├── controller/                    # Controller implementations
-│   └── ocs2_arm_controller/      # OCS2-based arm controller
+│   ├── ocs2_arm_controller/      # OCS2-based arm controller
+│   └── adaptive_gripper_controller/ # Adaptive gripper controller
 ├── hardwares/                    # Hardware interface implementations
 │   ├── gz_ros2_control/         # Gazebo hardware interface
-│   └── topic_based_ros2_control/ # Topic-based hardware interface
+│   ├── topic_based_ros2_control/ # Topic-based hardware interface
+│   └── unitree_ros2_control/    # Unitree robot hardware interface
 ├── command/                      # Command input implementations
 │   ├── arms_ros2_control_msgs/  # Control input message definitions
+│   ├── arms_rviz_control_plugin/ # RViz control plugin
+│   ├── arms_target_manager/     # Target management system
 │   └── arms_teleop/             # Unified teleoperation package
 │       ├── joystick_teleop      # Joystick-based control
 │       └── keyboard_teleop      # Keyboard-based control
@@ -88,16 +92,21 @@ git clone --depth 1 git@github.com:fiveages-sim/arms_ros2_control.git
 # Clone required dependencies (shallow clone - latest commit only)
 git clone --depth 1 git@github.com:fiveages-sim/robot_descriptions.git
 git clone --depth 1 git@github.com:legubiao/ocs2_ros2.git
+
+# Install dependencies using rosdep
+cd ~/ros2_ws
+rosdep install --from-paths src --ignore-src -r -y
 ```
 
 **Note**: 
 - The `--depth 1` flag creates a shallow clone that only downloads the latest commit, significantly reducing clone time and disk usage
 - If you need the full git history later, you can convert shallow clones to full clones using: `git fetch --unshallow`
+- The `rosdep install` command will automatically install all required system dependencies
 
 </details>
 
 <details>
-<summary><strong>🔧 Verify OCS2 Setup (Required for Beginners)</strong></summary>
+<summary><strong>🔧 Verify OCS2 Setup (Optional)</strong></summary>
 
 If you're new to OCS2, please verify that your OCS2 environment is properly configured by running one of the mobile manipulator demos:
 
@@ -126,28 +135,22 @@ If any of these demos run successfully, your OCS2 environment is properly config
 
 ```bash
 cd ~/ros2_ws
-colcon build --packages-up-to ocs2_arm_controller cr5_description arms_teleop --symlink-install
+colcon build --packages-up-to ocs2_arm_controller cr5_description arms_teleop adaptive_gripper_controller --symlink-install
 ```
 
 ### 2. Launch with Mock Hardware
 
-* Terminal 1: OCS2 Arm Controller
+* OCS2 Arm Controller
   ```bash
   source ~/ros2_ws/install/setup.bash
   ros2 launch ocs2_arm_controller demo.launch.py type:=AG2F90-C
   ```
-* Terminal 2: Teleop Node
-  ```bash
-  source ~/ros2_ws/install/setup.bash
-  ros2 run arms_teleop keyboard_teleop
-  ```
 
 > **Interactive Control:**
-> - Press number keys in terminal to switch FSM states (e.g., Press 3 to enter OCS2 state, 2 for HOLD state, 1 for HOME
-    state)
+> - Press the button to switch between OCS2 Controller FSM and toggle gripper.
 > - In RViz, drag the interactive markers to set target positions, then right-click to send trajectory commands
 >
-> ![ocs2_dobot](.images/ocs2%20controller%20dobot.png)
+> ![ocs2_dobot](.images/ocs2%20dobot.png)
 
 ### 3. Launch with Gazebo Simulation
 
@@ -165,30 +168,22 @@ colcon build --packages-up-to ocs2_arm_controller cr5_description arms_teleop --
 #### For ROS2 Jazzy:
 * Install Gazebo Harmonic
     ```bash
-    sudo apt-get install ros-jazzy-gz-ros2-control
+    sudo apt-get install ros-jazzy-ros-gz ros-jazzy-gz-ros2-control
     ```
 
 #### Launch controller (for both distributions):
+Here I used Agibot G1 as an example for other robots.
+* Compile robot descriptions
+  ```bash
+  cd ~/ros2_ws
+  colcon build --packages-up-to agibot_g1_description --symlink-install
+  ```
 * You can use `world` to choose the gazebo worlds
   ```bash
   source ~/ros2_ws/install/setup.bash
-  ros2 launch ocs2_arm_controller demo.launch.py type:=AG2F90-C hardware:=gz world:=warehouse
+  ros2 launch ocs2_arm_controller demo.launch.py robot:=agibot_g1 hardware:=gz world:=warehouse
   ```
-  ![ocs2_dobot_gazebo](.images/ocs2%20gazebo.png)
-
-#### Use other robots
-You can add `robot:=` in the launch command to use other robots. for example, use ARX5 robots:
-* Compile robot description
-  ```bash
-  cd ~/ros2_ws
-  colcon build --packages-up-to arx5_description --symlink-install
-  ```
-* Launch Gazebo Simulation
-  ```bash
-  source ~/ros2_ws/install/setup.bash
-  ros2 launch ocs2_arm_controller demo.launch.py robot:=arx5 type:=r5 hardware:=gz
-  ```
-  ![ocs2_arx_gazebo](.images/arx5%20gazebo.png)
+  ![ocs2_dobot_gazebo](.images/ocs2%20agibot.png)
 
 ### 4. Launch with Isaac Sim Simulation
 
@@ -218,6 +213,17 @@ The `ocs2_arm_controller` provides MPC-based control for robotic arms using the 
 - Real-time optimization
 - Support for various robot configurations
 
+#### Adaptive Gripper Controller
+
+The `adaptive_gripper_controller` provides basic gripper control functionality with position reading and output capabilities.
+
+**Features:**
+
+- Position reading from hardware interface
+- Position command output to hardware interface
+- Basic gripper position control
+- Easy to understand and extend
+
 ### Hardware Interfaces
 
 #### Gazebo Hardware Interface
@@ -239,6 +245,57 @@ The `topic_based_ros2_control` package provides a generic hardware interface tha
 - Generic interface for any hardware
 - Topic-based communication
 - Easy integration with custom hardware
+
+#### Unitree Hardware Interface
+
+The `unitree_ros2_control` package provides hardware interface for Unitree robots based on unitree_sdk2.
+
+**Features:**
+
+- Support for Unitree G1 and other sdk2-compatible robots
+- Mujoco simulation integration
+- Real robot support
+
+### Command Input Systems
+
+#### Arms RViz Control Plugin
+
+The `arms_rviz_control_plugin` provides an intelligent RViz plugin that combines control for both OCS2 Arm Controller and Adaptive Gripper Controller.
+
+**Features:**
+
+- **OCS2 Arm Controller Control:**
+  - Smart FSM state display and switching
+  - Dynamic button control showing only available state transitions
+  - Proper state transition following OCS2 Arm Controller FSM rules
+  - HOLD initial state with proper state flow
+  - Pose switching functionality in HOME state
+- **Gripper Controller Control:**
+  - Left and right gripper control buttons
+  - Real-time gripper state display
+  - Single/dual arm gripper support
+  - Automatic controller detection and UI adaptation
+
+#### Arms Target Manager
+
+The `arms_target_manager` provides 3D interactive markers for setting robotic arm end-effector target poses.
+
+**Features:**
+
+- 3D interactive markers in RViz
+- Single/dual arm support
+- VR Teleop Support
+- Joystick Teleop Support
+
+#### Arms Teleop
+
+The `arms_teleop` package provides unified teleoperation capabilities for robotic arms.
+
+**Features:**
+
+- Joystick-based control
+- Keyboard-based control
+- Unified interface for different input methods
 
 ## Configuration
 

@@ -6,13 +6,14 @@
 #include "ocs2_arm_controller/Ocs2ArmController.h"
 #include <ament_index_cpp/get_package_share_directory.hpp>
 #include <ocs2_mpc/MPC_MRT_Interface.h>
-#include <ocs2_ros_interfaces/synchronized_module/RosReferenceManager.h>
+#include "ocs2_arm_controller/control/PoseBasedReferenceManager.h"
 #include <ocs2_ros_interfaces/common/RosMsgConversions.h>
 #include <ocs2_ddp/GaussNewtonDDP_MPC.h>
 #include <pinocchio/algorithm/frames.hpp>
 #include <pinocchio/algorithm/kinematics.hpp>
+#include <pinocchio/algorithm/rnea.hpp>
 #include <exception>
-#include <filesystem> // Added for modern file operations
+#include <filesystem>
 
 namespace ocs2::mobile_manipulator
 {
@@ -40,7 +41,6 @@ namespace ocs2::mobile_manipulator
 
         // Detect if dual arm mode is enabled
         dual_arm_mode_ = interface_->dual_arm_;
-        RCLCPP_INFO(node_->get_logger(), "Dual arm mode: %s", dual_arm_mode_ ? "enabled" : "disabled");
 
         // Initialize MPC components
         setupMpcComponents();
@@ -51,13 +51,6 @@ namespace ocs2::mobile_manipulator
         // Initialize visualization component
         visualizer_ = std::make_unique<Visualizer>(node_, interface_, robot_name_);
         visualizer_->initialize();
-        RCLCPP_INFO(node_->get_logger(), "Visualization component initialized");
-
-        RCLCPP_INFO(node_->get_logger(), "CtrlComponent initialized for robot: %s", robot_name_.c_str());
-        if (!robot_type_.empty())
-        {
-            RCLCPP_INFO(node_->get_logger(), "Robot type: %s", robot_type_.c_str());
-        }
         RCLCPP_INFO(node_->get_logger(), "Future time offset: %.2f seconds", future_time_offset_);
     }
 
@@ -70,10 +63,6 @@ namespace ocs2::mobile_manipulator
 
         // Setup publishers
         setupPublisher();
-
-        RCLCPP_INFO(node_->get_logger(), "Mobile Manipulator Interface setup completed");
-        RCLCPP_INFO(node_->get_logger(), "Task file: %s", task_file.c_str());
-        RCLCPP_INFO(node_->get_logger(), "URDF file: %s", urdf_file.c_str());
     }
 
     void CtrlComponent::setupPublisher()
@@ -81,17 +70,14 @@ namespace ocs2::mobile_manipulator
         // Initialize MPC observation publisher
         mpc_observation_publisher_ = node_->create_publisher<ocs2_msgs::msg::MpcObservation>(
             robot_name_ + "_mpc_observation", 1);
-
-        RCLCPP_INFO(node_->get_logger(), "MPC observation publisher created for %s_mpc_observation topic",
-                    robot_name_.c_str());
     }
 
     void CtrlComponent::setupMpcComponents()
     {
-        // Create RosReferenceManager and subscribe to ROS topics
-        ros_reference_manager_ = std::make_shared<RosReferenceManager>(
-            robot_name_, interface_->getReferenceManagerPtr());
-        ros_reference_manager_->subscribe(node_);
+        // Create PoseBasedReferenceManager and subscribe to ROS topics
+        pose_reference_manager_ = std::make_shared<PoseBasedReferenceManager>(
+            robot_name_, interface_->getReferenceManagerPtr(), interface_);
+        pose_reference_manager_->subscribe(node_);
 
         // Create MPC solver
         mpc_ = std::make_unique<GaussNewtonDDP_MPC>(
@@ -101,18 +87,15 @@ namespace ocs2::mobile_manipulator
             interface_->getOptimalControlProblem(),
             interface_->getInitializer());
 
-        // Create unified MPC_MRT_Interface using RosReferenceManager
+        // Create unified MPC_MRT_Interface using PoseBasedReferenceManager
         mpc_mrt_interface_ = std::make_unique<MPC_MRT_Interface>(*mpc_);
 
-        // Important: Set RosReferenceManager to MPC solver
-        mpc_->getSolverPtr()->setReferenceManager(ros_reference_manager_);
+        // Important: Set PoseBasedReferenceManager to MPC solver
+        mpc_->getSolverPtr()->setReferenceManager(pose_reference_manager_);
 
         observation_.state = interface_->getInitialState();
         observation_.input = vector_t::Zero(interface_->getManipulatorModelInfo().inputDim);
-        observation_.time = 0.0; // Will be updated to current time in enter() method
-
-        RCLCPP_INFO(node_->get_logger(), "MPC components setup completed");
-        RCLCPP_INFO(node_->get_logger(), "RosReferenceManager subscribed to %s_mpc_target topic", robot_name_.c_str());
+        observation_.time = 0.0;
     }
 
     void CtrlComponent::updateObservation(const rclcpp::Time& time)
@@ -123,11 +106,18 @@ namespace ocs2::mobile_manipulator
         }
         // Update observation state
         observation_.time = time.seconds();
-        for (int i = 0; i < joint_names_.size(); ++i)
+        for (size_t i = 0; i < joint_names_.size(); ++i)
         {
             observation_.state[i] = ctrl_interfaces_.joint_position_state_interface_[i].get().get_value();
         }
         observation_.input = vector_t::Zero(interface_->getManipulatorModelInfo().inputDim);
+
+        // 更新PoseBasedReferenceManager的当前观测
+        if (pose_reference_manager_)
+        {
+            pose_reference_manager_->setCurrentObservation(observation_);
+        }
+
         visualizer_->publishSelfCollisionVisualization(observation_.state);
         visualizer_->publishEndEffectorPose(time, observation_.state);
     }
@@ -150,8 +140,6 @@ namespace ocs2::mobile_manipulator
         // Evaluate MPC policy
         mpc_mrt_interface_->evaluatePolicy(time.seconds(), observation_.state, optimized_state_, optimized_input_,
                                            planned_mode);
-
-
         try
         {
             // Get complete trajectory from MPC policy
@@ -167,10 +155,43 @@ namespace ocs2::mobile_manipulator
                 policy.stateTrajectory_
             );
 
+            vector_t future_input = LinearInterpolation::interpolate(
+                future_time,
+                policy.timeTrajectory_,
+                policy.inputTrajectory_
+            );
+
             // Extract joint positions from state and set as commands
-            for (size_t i = 0; i < joint_names_.size() && i < future_state.size(); ++i)
+            if (ctrl_interfaces_.control_mode_ == ControlMode::POSITION)
             {
-                ctrl_interfaces_.joint_position_command_interface_[i].get().set_value(future_state(i));
+                for (size_t i = 0; i < joint_names_.size() && i < future_state.size(); ++i)
+                {
+                    ctrl_interfaces_.joint_position_command_interface_[i].get().set_value(future_state(i));
+                }
+            }
+            else if (ctrl_interfaces_.control_mode_ == ControlMode::MIX)
+            {
+                // Calculate static torques for force control
+                vector_t static_torques = calculateStaticTorques();
+
+                for (size_t i = 0; i < joint_names_.size() && i < static_torques.size(); ++i)
+                {
+                    ctrl_interfaces_.joint_force_command_interface_[i].get().set_value(static_torques(i));
+                }
+
+                for (size_t i = 0; i < joint_names_.size() && i < future_state.size(); ++i)
+                {
+                    ctrl_interfaces_.joint_position_command_interface_[i].get().set_value(future_state(i));
+                }
+
+                for (size_t i = 0; i < joint_names_.size() && i < future_input.size(); ++i)
+                {
+                    ctrl_interfaces_.joint_velocity_command_interface_[i].get().set_value(future_input(i));
+                }
+            }
+            else
+            {
+                RCLCPP_ERROR(node_->get_logger(), "Unknown control output mode");
             }
         }
         catch (const std::exception& e)
@@ -178,7 +199,7 @@ namespace ocs2::mobile_manipulator
             RCLCPP_WARN(node_->get_logger(), "Failed to get trajectory, falling back to integration: %s", e.what());
             // Fallback to integration method
             vector_t current_positions(joint_names_.size());
-            for (int i = 0; i < joint_names_.size(); ++i)
+            for (size_t i = 0; i < joint_names_.size(); ++i)
             {
                 current_positions(i) = ctrl_interfaces_.joint_position_state_interface_[i].get().get_value();
             }
@@ -203,7 +224,6 @@ namespace ocs2::mobile_manipulator
 
         if (dual_arm_mode_)
         {
-            // Dual arm mode: calculate initial end effector positions for left and right arms
             vector_t left_initial_ee_state = visualizer_->computeEndEffectorPose(observation_.state);
             vector_t right_initial_ee_state = visualizer_->computeRightEndEffectorPose(observation_.state);
 
@@ -273,33 +293,46 @@ namespace ocs2::mobile_manipulator
 
     void CtrlComponent::clearTrajectoryVisualization()
     {
-        if (visualizer_) {
-            visualizer_->clearTrajectoryHistory();
-        }
+        visualizer_->clearTrajectoryHistory();
+        pose_reference_manager_->resetTargetStateCache();
     }
 
-    std::string CtrlComponent::generateUrdfPath(const std::string& robot_name, 
-                                               const std::string& robot_type,
-                                               const std::string& config_path) const
+    std::string CtrlComponent::generateUrdfPath(const std::string& robot_name,
+                                                const std::string& robot_type,
+                                                const std::string& config_path) const
     {
         const std::string urdf_dir = config_path + "/urdf/";
-        
+
         // If robot type is specified, try to use type-specific URDF
-        if (!robot_type.empty()) {
+        if (!robot_type.empty())
+        {
             const std::string type_specific_urdf = urdf_dir + robot_name + "_" + robot_type + ".urdf";
-            
-            if (std::filesystem::exists(type_specific_urdf)) {
+
+            if (std::filesystem::exists(type_specific_urdf))
+            {
                 RCLCPP_INFO(node_->get_logger(), "Using type-specific URDF: %s", type_specific_urdf.c_str());
                 return type_specific_urdf;
-            } else {
-                RCLCPP_WARN(node_->get_logger(), 
-                    "Type-specific URDF not found: %s, falling back to default", type_specific_urdf.c_str());
             }
+            RCLCPP_WARN(node_->get_logger(),
+                        "Type-specific URDF not found: %s, falling back to default", type_specific_urdf.c_str());
         }
-        
+
         // Use default URDF
         const std::string default_urdf = urdf_dir + robot_name + ".urdf";
         RCLCPP_INFO(node_->get_logger(), "Using default URDF: %s", default_urdf.c_str());
         return default_urdf;
+    }
+
+    vector_t CtrlComponent::calculateStaticTorques() const
+    {
+        // Get the Pinocchio model and data from the interface
+        const auto& pinocchio_model = interface_->getPinocchioInterface().getModel();
+        auto pinocchio_data = interface_->getPinocchioInterface().getData();
+
+
+        Eigen::VectorXd q = observation_.state;
+        return pinocchio::rnea(pinocchio_model, pinocchio_data, q,
+                               Eigen::VectorXd::Zero(pinocchio_model.nv),
+                               Eigen::VectorXd::Zero(pinocchio_model.nv));
     }
 } // namespace ocs2::mobile_manipulator

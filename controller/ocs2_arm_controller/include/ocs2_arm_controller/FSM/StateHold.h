@@ -17,7 +17,7 @@ namespace ocs2::mobile_manipulator
     class StateHold : public FSMState
     {
     public:
-        StateHold(CtrlInterfaces& ctrl_interfaces);
+        StateHold(CtrlInterfaces& ctrl_interfaces, const std::shared_ptr<CtrlComponent>& ctrl_comp = nullptr);
 
         void enter() override;
         void run(const rclcpp::Time& time, const rclcpp::Duration& period) override;
@@ -26,6 +26,7 @@ namespace ocs2::mobile_manipulator
 
     private:
         CtrlInterfaces& ctrl_interfaces_;
+        std::shared_ptr<CtrlComponent> ctrl_comp_;  // CtrlComponent reference for torque calculation
         // State variables
         std::vector<double> hold_positions_; // Positions recorded when entering
         bool positions_recorded_{false};
