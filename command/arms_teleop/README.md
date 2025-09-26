@@ -17,24 +17,17 @@ colcon build --packages-up-to arms_teleop --symlink-install
 ```
 
 ## Usage
-
-source ~/XZN/integrate/install/setup.bash
-ros2 launch ocs2_arm_controller demo.launch.py type:=AG2F90-C
-
-source ~/XZN/integrate/install/setup.bash
-ros2 launch ocs2_arm_controller demo.launch.py robot:=agibot_g1
-
 ### Joystick Teleop
 
 Launch joystick teleop:
 ```bash
-source ~/XZN/integrate/install/setup.bash
+source ~/ros2_ws/install/setup.bash
 ros2 launch arms_teleop joystick_teleop.launch.py
 ```
 
 Or with custom joystick device:
 ```bash
-source ~/XZN/integrate/install/setup.bash
+source ~/ros2_ws/install/setup.bash
 ros2 launch arms_teleop joystick_teleop.launch.py joy_dev:=/dev/input/js1
 ```
 
@@ -42,7 +35,7 @@ ros2 launch arms_teleop joystick_teleop.launch.py joy_dev:=/dev/input/js1
 
 Launch keyboard teleop:
 ```bash
-source ~/XZN/integrate/install/setup.bash
+source ~/ros2_ws/install/setup.bash
 ros2 run arms_teleop keyboard_teleop
 ```
 

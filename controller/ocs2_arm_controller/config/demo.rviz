@@ -12,7 +12,7 @@ Panels:
         - /MarkerArray2
         - /DepthCloud1
       Splitter Ratio: 0.5
-    Tree Height: 391
+    Tree Height: 168
   - Class: rviz_common/Selection
     Name: Selection
   - Class: rviz_common/Tool Properties
@@ -33,6 +33,10 @@ Panels:
     SyncSource: ""
   - Class: arms_rviz_control_plugin/OCS2FSMPanel
     Name: OCS2FSMPanel
+  - Class: arms_rviz_control_plugin/GripperControlPanel
+    Name: GripperControlPanel
+    left_gripper_open: false
+    right_gripper_open: false
 Visualization Manager:
   Class: ""
   Displays:
@@ -72,32 +76,11 @@ Visualization Manager:
         Expand Link Details: false
         Expand Tree: false
         Link Tree Style: Links in Alphabetic Order
-        Link1:
+        arm_base:
           Alpha: 1
           Show Axes: false
           Show Trail: false
-          Value: true
-        Link2:
-          Alpha: 1
-          Show Axes: false
-          Show Trail: false
-          Value: true
-        Link3:
-          Alpha: 1
-          Show Axes: false
-          Show Trail: false
-          Value: true
-        Link4:
-          Alpha: 1
-          Show Axes: false
-          Show Trail: false
-          Value: true
-        Link5:
-          Alpha: 1
-          Show Axes: false
-          Show Trail: false
-          Value: true
-        Link6:
+        base:
           Alpha: 1
           Show Axes: false
           Show Trail: false
@@ -106,68 +89,239 @@ Visualization Manager:
           Alpha: 1
           Show Axes: false
           Show Trail: false
-          Value: true
-        flange:
+        body_link1:
           Alpha: 1
           Show Axes: false
           Show Trail: false
           Value: true
-        gripper_base:
+        body_link2:
           Alpha: 1
           Show Axes: false
           Show Trail: false
           Value: true
-        left_1_link:
+        head_link1:
           Alpha: 1
           Show Axes: false
           Show Trail: false
           Value: true
-        left_2_link:
+        head_link2:
           Alpha: 1
           Show Axes: false
           Show Trail: false
           Value: true
-        left_Pad_link:
+        imu:
+          Alpha: 1
+          Show Axes: false
+          Show Trail: false
+        left_base_link:
           Alpha: 1
           Show Axes: false
           Show Trail: false
           Value: true
-        left_in_link:
+        left_camera:
           Alpha: 1
           Show Axes: false
           Show Trail: false
           Value: true
-        left_up_link:
+        left_camera_stand:
           Alpha: 1
           Show Axes: false
           Show Trail: false
           Value: true
-        right_1_link:
+        left_end_link:
           Alpha: 1
           Show Axes: false
           Show Trail: false
           Value: true
-        right_2_link:
+        left_gripper_base:
           Alpha: 1
           Show Axes: false
           Show Trail: false
           Value: true
-        right_Pad_link:
+        left_gripper_center:
+          Alpha: 1
+          Show Axes: false
+          Show Trail: false
+        left_left_1_link:
           Alpha: 1
           Show Axes: false
           Show Trail: false
           Value: true
-        right_in_link:
+        left_left_2_link:
           Alpha: 1
           Show Axes: false
           Show Trail: false
           Value: true
-        right_up_link:
+        left_left_pad_link:
           Alpha: 1
           Show Axes: false
           Show Trail: false
           Value: true
-        world:
+        left_left_support_link:
+          Alpha: 1
+          Show Axes: false
+          Show Trail: false
+          Value: true
+        left_link1:
+          Alpha: 1
+          Show Axes: false
+          Show Trail: false
+          Value: true
+        left_link2:
+          Alpha: 1
+          Show Axes: false
+          Show Trail: false
+          Value: true
+        left_link3:
+          Alpha: 1
+          Show Axes: false
+          Show Trail: false
+          Value: true
+        left_link4:
+          Alpha: 1
+          Show Axes: false
+          Show Trail: false
+          Value: true
+        left_link5:
+          Alpha: 1
+          Show Axes: false
+          Show Trail: false
+          Value: true
+        left_link6:
+          Alpha: 1
+          Show Axes: false
+          Show Trail: false
+          Value: true
+        left_right_1_link:
+          Alpha: 1
+          Show Axes: false
+          Show Trail: false
+          Value: true
+        left_right_2_link:
+          Alpha: 1
+          Show Axes: false
+          Show Trail: false
+          Value: true
+        left_right_pad_link:
+          Alpha: 1
+          Show Axes: false
+          Show Trail: false
+          Value: true
+        left_right_support_link:
+          Alpha: 1
+          Show Axes: false
+          Show Trail: false
+          Value: true
+        left_wheel:
+          Alpha: 1
+          Show Axes: false
+          Show Trail: false
+          Value: true
+        right_base_link:
+          Alpha: 1
+          Show Axes: false
+          Show Trail: false
+          Value: true
+        right_camera:
+          Alpha: 1
+          Show Axes: false
+          Show Trail: false
+          Value: true
+        right_camera_stand:
+          Alpha: 1
+          Show Axes: false
+          Show Trail: false
+          Value: true
+        right_end_link:
+          Alpha: 1
+          Show Axes: false
+          Show Trail: false
+          Value: true
+        right_gripper_base:
+          Alpha: 1
+          Show Axes: false
+          Show Trail: false
+          Value: true
+        right_gripper_center:
+          Alpha: 1
+          Show Axes: false
+          Show Trail: false
+        right_left_1_link:
+          Alpha: 1
+          Show Axes: false
+          Show Trail: false
+          Value: true
+        right_left_2_link:
+          Alpha: 1
+          Show Axes: false
+          Show Trail: false
+          Value: true
+        right_left_pad_link:
+          Alpha: 1
+          Show Axes: false
+          Show Trail: false
+          Value: true
+        right_left_support_link:
+          Alpha: 1
+          Show Axes: false
+          Show Trail: false
+          Value: true
+        right_link1:
+          Alpha: 1
+          Show Axes: false
+          Show Trail: false
+          Value: true
+        right_link2:
+          Alpha: 1
+          Show Axes: false
+          Show Trail: false
+          Value: true
+        right_link3:
+          Alpha: 1
+          Show Axes: false
+          Show Trail: false
+          Value: true
+        right_link4:
+          Alpha: 1
+          Show Axes: false
+          Show Trail: false
+          Value: true
+        right_link5:
+          Alpha: 1
+          Show Axes: false
+          Show Trail: false
+          Value: true
+        right_link6:
+          Alpha: 1
+          Show Axes: false
+          Show Trail: false
+          Value: true
+        right_right_1_link:
+          Alpha: 1
+          Show Axes: false
+          Show Trail: false
+          Value: true
+        right_right_2_link:
+          Alpha: 1
+          Show Axes: false
+          Show Trail: false
+          Value: true
+        right_right_pad_link:
+          Alpha: 1
+          Show Axes: false
+          Show Trail: false
+          Value: true
+        right_right_support_link:
+          Alpha: 1
+          Show Axes: false
+          Show Trail: false
+          Value: true
+        right_wheel:
+          Alpha: 1
+          Show Axes: false
+          Show Trail: false
+          Value: true
+        scan:
           Alpha: 1
           Show Axes: false
           Show Trail: false
@@ -206,37 +360,233 @@ Visualization Manager:
         Expand Link Details: false
         Expand Tree: false
         Link Tree Style: Links in Alphabetic Order
-        Link1:
+        arm_base:
           Alpha: 1
           Show Axes: false
           Show Trail: false
-          Value: true
-        Link2:
-          Alpha: 1
-          Show Axes: false
-          Show Trail: false
-          Value: true
-        Link3:
-          Alpha: 1
-          Show Axes: false
-          Show Trail: false
-          Value: true
-        Link4:
-          Alpha: 1
-          Show Axes: false
-          Show Trail: false
-          Value: true
-        Link5:
-          Alpha: 1
-          Show Axes: false
-          Show Trail: false
-          Value: true
-        Link6:
+        base:
           Alpha: 1
           Show Axes: false
           Show Trail: false
           Value: true
         base_link:
+          Alpha: 1
+          Show Axes: false
+          Show Trail: false
+        body_link1:
+          Alpha: 1
+          Show Axes: false
+          Show Trail: false
+          Value: true
+        body_link2:
+          Alpha: 1
+          Show Axes: false
+          Show Trail: false
+          Value: true
+        head_link1:
+          Alpha: 1
+          Show Axes: false
+          Show Trail: false
+          Value: true
+        head_link2:
+          Alpha: 1
+          Show Axes: false
+          Show Trail: false
+          Value: true
+        left_base_link:
+          Alpha: 1
+          Show Axes: false
+          Show Trail: false
+          Value: true
+        left_camera:
+          Alpha: 1
+          Show Axes: false
+          Show Trail: false
+          Value: true
+        left_camera_stand:
+          Alpha: 1
+          Show Axes: false
+          Show Trail: false
+          Value: true
+        left_end_link:
+          Alpha: 1
+          Show Axes: false
+          Show Trail: false
+          Value: true
+        left_gripper_base:
+          Alpha: 1
+          Show Axes: false
+          Show Trail: false
+          Value: true
+        left_gripper_center:
+          Alpha: 1
+          Show Axes: false
+          Show Trail: false
+        left_left_1_link:
+          Alpha: 1
+          Show Axes: false
+          Show Trail: false
+          Value: true
+        left_left_2_link:
+          Alpha: 1
+          Show Axes: false
+          Show Trail: false
+          Value: true
+        left_left_pad_link:
+          Alpha: 1
+          Show Axes: false
+          Show Trail: false
+          Value: true
+        left_left_support_link:
+          Alpha: 1
+          Show Axes: false
+          Show Trail: false
+          Value: true
+        left_link1:
+          Alpha: 1
+          Show Axes: false
+          Show Trail: false
+          Value: true
+        left_link2:
+          Alpha: 1
+          Show Axes: false
+          Show Trail: false
+          Value: true
+        left_link3:
+          Alpha: 1
+          Show Axes: false
+          Show Trail: false
+          Value: true
+        left_link4:
+          Alpha: 1
+          Show Axes: false
+          Show Trail: false
+          Value: true
+        left_link5:
+          Alpha: 1
+          Show Axes: false
+          Show Trail: false
+          Value: true
+        left_link6:
+          Alpha: 1
+          Show Axes: false
+          Show Trail: false
+          Value: true
+        left_right_1_link:
+          Alpha: 1
+          Show Axes: false
+          Show Trail: false
+          Value: true
+        left_right_2_link:
+          Alpha: 1
+          Show Axes: false
+          Show Trail: false
+          Value: true
+        left_right_pad_link:
+          Alpha: 1
+          Show Axes: false
+          Show Trail: false
+          Value: true
+        left_right_support_link:
+          Alpha: 1
+          Show Axes: false
+          Show Trail: false
+          Value: true
+        right_base_link:
+          Alpha: 1
+          Show Axes: false
+          Show Trail: false
+          Value: true
+        right_camera:
+          Alpha: 1
+          Show Axes: false
+          Show Trail: false
+          Value: true
+        right_camera_stand:
+          Alpha: 1
+          Show Axes: false
+          Show Trail: false
+          Value: true
+        right_end_link:
+          Alpha: 1
+          Show Axes: false
+          Show Trail: false
+          Value: true
+        right_gripper_base:
+          Alpha: 1
+          Show Axes: false
+          Show Trail: false
+          Value: true
+        right_gripper_center:
+          Alpha: 1
+          Show Axes: false
+          Show Trail: false
+        right_left_1_link:
+          Alpha: 1
+          Show Axes: false
+          Show Trail: false
+          Value: true
+        right_left_2_link:
+          Alpha: 1
+          Show Axes: false
+          Show Trail: false
+          Value: true
+        right_left_pad_link:
+          Alpha: 1
+          Show Axes: false
+          Show Trail: false
+          Value: true
+        right_left_support_link:
+          Alpha: 1
+          Show Axes: false
+          Show Trail: false
+          Value: true
+        right_link1:
+          Alpha: 1
+          Show Axes: false
+          Show Trail: false
+          Value: true
+        right_link2:
+          Alpha: 1
+          Show Axes: false
+          Show Trail: false
+          Value: true
+        right_link3:
+          Alpha: 1
+          Show Axes: false
+          Show Trail: false
+          Value: true
+        right_link4:
+          Alpha: 1
+          Show Axes: false
+          Show Trail: false
+          Value: true
+        right_link5:
+          Alpha: 1
+          Show Axes: false
+          Show Trail: false
+          Value: true
+        right_link6:
+          Alpha: 1
+          Show Axes: false
+          Show Trail: false
+          Value: true
+        right_right_1_link:
+          Alpha: 1
+          Show Axes: false
+          Show Trail: false
+          Value: true
+        right_right_2_link:
+          Alpha: 1
+          Show Axes: false
+          Show Trail: false
+          Value: true
+        right_right_pad_link:
+          Alpha: 1
+          Show Axes: false
+          Show Trail: false
+          Value: true
+        right_right_support_link:
           Alpha: 1
           Show Axes: false
           Show Trail: false
@@ -253,11 +603,7 @@ Visualization Manager:
       Enabled: true
       Name: MarkerArray
       Namespaces:
-        1 - 11: true
-        1 - 5: true
-        1 - 8: true
-        4 - 11: true
-        7 - 11: true
+        {}
       Topic:
         Depth: 5
         Durability Policy: Volatile
@@ -269,7 +615,7 @@ Visualization Manager:
       Enabled: true
       Name: MarkerArray
       Namespaces:
-        Left Arm Trajectory: true
+        {}
       Topic:
         Depth: 5
         Durability Policy: Volatile
@@ -362,16 +708,16 @@ Visualization Manager:
   Views:
     Current:
       Class: rviz_default_plugins/Orbit
-      Distance: 1.5267547369003296
+      Distance: 2.1449804306030273
       Enable Stereo Rendering:
         Stereo Eye Separation: 0.05999999865889549
         Stereo Focal Distance: 1
         Swap Stereo Eyes: false
         Value: false
       Focal Point:
-        X: 0.39574092626571655
-        Y: -0.0643007755279541
-        Z: 0.2416752278804779
+        X: 0.17130349576473236
+        Y: 0.03292224183678627
+        Z: 0.6719273924827576
       Focal Shape Fixed Size: true
       Focal Shape Size: 0.05000000074505806
       Invert Z Axis: false
@@ -385,12 +731,14 @@ Visualization Manager:
 Window Geometry:
   Displays:
     collapsed: false
-  Height: 1011
+  GripperControlPanel:
+    collapsed: false
+  Height: 749
   Hide Left Dock: false
   Hide Right Dock: true
   OCS2FSMPanel:
     collapsed: false
-  QMainWindow State: 000000ff00000000fd00000004000000000000017c00000351fc0200000009fb0000001200530065006c0065006300740069006f006e00000001e10000009b0000005d00fffffffb0000001e0054006f006f006c002000500072006f007000650072007400690065007302000001ed000001df00000185000000a3fb000000120056006900650077007300200054006f006f02000001df000002110000018500000122fb000000200054006f006f006c002000500072006f0070006500720074006900650073003203000002880000011d000002210000017afb000000100044006900730070006c006100790073010000003f00000215000000cc00fffffffb0000002000730065006c0065006300740069006f006e00200062007500660066006500720200000138000000aa0000023a00000294fb00000014005700690064006500530074006500720065006f02000000e6000000d2000003ee0000030bfb0000000c004b0069006e0065006300740200000186000001060000030c00000261fb00000018004f00430053003200460053004d00500061006e0065006c010000025a000001360000013600ffffff000000010000010f000002b0fc0200000003fb0000001e0054006f006f006c002000500072006f00700065007200740069006500730100000041000000780000000000000000fb0000000a00560069006500770073000000003d000002b0000000a900fffffffb0000001200530065006c0065006300740069006f006e010000025a000000b200000000000000000000000200000490000000a9fc0100000001fb0000000a00560069006500770073030000004e00000080000002e100000197000000030000073e0000003efc0100000002fb0000000800540069006d006501000000000000073e0000026f00fffffffb0000000800540069006d00650100000000000004500000000000000000000005bc0000035100000004000000040000000800000008fc0000000100000002000000010000000a0054006f006f006c00730100000000ffffffff0000000000000000
+  QMainWindow State: 000000ff00000000fd0000000400000000000001560000024bfc020000000afb0000001200530065006c0065006300740069006f006e00000001e10000009b0000005d00fffffffb0000001e0054006f006f006c002000500072006f007000650072007400690065007302000001ed000001df00000185000000a3fb000000120056006900650077007300200054006f006f02000001df000002110000018500000122fb000000200054006f006f006c002000500072006f0070006500720074006900650073003203000002880000011d000002210000017afb000000100044006900730070006c006100790073010000003f00000136000000cc00fffffffb00000018004f00430053003200460053004d00500061006e0065006c010000017b0000009e0000009e00fffffffb0000002000730065006c0065006300740069006f006e00200062007500660066006500720200000138000000aa0000023a00000294fb00000014005700690064006500530074006500720065006f02000000e6000000d2000003ee0000030bfb0000000c004b0069006e0065006300740200000186000001060000030c00000261fb0000002600470072006900700070006500720043006f006e00740072006f006c00500061006e0065006c010000021f0000006b0000006b00ffffff000000010000010f000002b0fc0200000003fb0000001e0054006f006f006c002000500072006f00700065007200740069006500730100000041000000780000000000000000fb0000000a00560069006500770073000000003d000002b0000000a900fffffffb0000001200530065006c0065006300740069006f006e010000025a000000b200000000000000000000000200000490000000a9fc0100000001fb0000000a00560069006500770073030000004e00000080000002e100000197000000030000056e0000003efc0100000002fb0000000800540069006d006501000000000000056e0000026f00fffffffb0000000800540069006d00650100000000000004500000000000000000000004120000024b00000004000000040000000800000008fc0000000100000002000000010000000a0054006f006f006c00730100000000ffffffff0000000000000000
   Selection:
     collapsed: false
   Time:
@@ -399,6 +747,6 @@ Window Geometry:
     collapsed: false
   Views:
     collapsed: true
-  Width: 1854
-  X: 66
-  Y: 32
+  Width: 1390
+  X: 211
+  Y: 109

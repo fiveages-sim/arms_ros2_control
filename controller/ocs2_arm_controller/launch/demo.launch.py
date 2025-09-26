@@ -84,9 +84,14 @@ def launch_setup(context, *args, **kwargs):
         ],
     )
 
-    # Detect hand controllers using robot_common_launch
-    hand_controllers = detect_controllers(robot_name, robot_type, ['hand', 'gripper'])
-    hand_controller_spawners = create_controller_spawners(hand_controllers, use_sim_time)
+    # Detect hand controllers using robot_common_launch (only if gripper is enabled)
+    enable_gripper = context.launch_configurations.get('enable_gripper', 'true').lower() == 'true'
+    hand_controllers = []
+    hand_controller_spawners = []
+    
+    if enable_gripper:
+        hand_controllers = detect_controllers(robot_name, robot_type, ['hand', 'gripper'])
+        hand_controller_spawners = create_controller_spawners(hand_controllers, use_sim_time)
 
     # Get info file name from controller configuration
     info_file_name = get_info_file_name(robot_name, robot_type)
@@ -123,16 +128,26 @@ def launch_setup(context, *args, **kwargs):
         get_package_share_directory("ocs2_arm_controller"), "config",
     )
     rviz_full_config = os.path.join(rviz_base, "demo.rviz")
+    
+    # Extract hand controller names for GripperControlPanel
+    hand_controller_names = []
+    if enable_gripper and hand_controllers:
+        hand_controller_names = [c['name'] for c in hand_controllers]
+    
+    # Prepare RViz parameters
+    rviz_parameters = [{'use_sim_time': use_sim_time}]
+    
+    # Only add hand_controllers parameter if we have controllers
+    if hand_controller_names:
+        rviz_parameters.append({'hand_controllers': hand_controller_names})
+    
     rviz_node = Node(
         package="rviz2",
         executable="rviz2",
         name="rviz2",
         output="log",
         arguments=["-d", rviz_full_config],
-        parameters=[
-            {'use_sim_time': use_sim_time},
-        ],
-        additional_env={'ROBOT_NAME': robot_name},  # Add to existing environment variables
+        parameters=rviz_parameters,
     )
 
     # 统一的节点列表 - 不管是否使用 Gazebo，控制器都是一样的
@@ -184,11 +199,18 @@ def generate_launch_description():
         description='Enable ArmsTargetManager for interactive pose control'
     )
 
+    enable_gripper_arg = DeclareLaunchArgument(
+        'enable_gripper',
+        default_value='true',
+        description='Enable gripper controllers and gripper control panel'
+    )
+
     return LaunchDescription([
         robot_name_arg,
         robot_type_arg,
         hardware_arg,
         world_arg,
         enable_arms_target_manager_arg,
+        enable_gripper_arg,
         OpaqueFunction(function=launch_setup),
     ])

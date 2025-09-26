@@ -43,10 +43,12 @@ private:
   void updateStatusDisplay();
   void updateButtonVisibility();
   void setCurrentState(const std::string& state);
+  void onControlInputReceived(const arms_ros2_control_msgs::msg::Inputs::SharedPtr msg);
 
   // ROS2
   rclcpp::Node::SharedPtr node_;
   rclcpp::Publisher<arms_ros2_control_msgs::msg::Inputs>::SharedPtr publisher_;
+  rclcpp::Subscription<arms_ros2_control_msgs::msg::Inputs>::SharedPtr subscriber_;
 
   // UI Elements
   QPushButton* home_to_hold_btn_;
@@ -54,7 +56,6 @@ private:
   QPushButton* ocs2_to_hold_btn_;
   QPushButton* hold_to_home_btn_;
   QPushButton* switch_pose_btn_;
-  QLabel* status_label_;
   QLabel* current_state_label_;
 
   // Current state tracking

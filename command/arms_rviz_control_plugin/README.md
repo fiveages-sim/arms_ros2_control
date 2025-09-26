@@ -20,7 +20,6 @@
 ```bash
 cd /home/fiveages/ros2_ws
 colcon build --packages-select arms_rviz_control_plugin
-source install/setup.bash
 ```
 
 ## 使用方法
