@@ -60,10 +60,7 @@ install(
 
 install(
         TARGETS arms_target_manager_node
-        EXPORT export_${PROJECT_NAME}
-        ARCHIVE DESTINATION lib/${PROJECT_NAME}
-        LIBRARY DESTINATION lib/${PROJECT_NAME}
-        RUNTIME DESTINATION bin
+        DESTINATION lib/${PROJECT_NAME}
 )
 
 install(

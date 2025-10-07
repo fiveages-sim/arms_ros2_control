@@ -56,8 +56,8 @@ namespace ocs2::mobile_manipulator
         void resetTargetStateCache();
 
     private:
-        void leftPoseCallback(const geometry_msgs::msg::Pose::SharedPtr msg);
-        void rightPoseCallback(const geometry_msgs::msg::Pose::SharedPtr msg);
+        void leftPoseCallback(geometry_msgs::msg::Pose::SharedPtr msg);
+        void rightPoseCallback(geometry_msgs::msg::Pose::SharedPtr msg);
         void updateTargetTrajectory();
 
         const std::string topic_prefix_;

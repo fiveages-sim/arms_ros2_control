@@ -14,7 +14,7 @@
 ### 1. 编译包
 
 ```bash
-cd /home/fiveages/ros2_ws
+cd ~/ros2_ws
 colcon build --packages-up-to arms_target_manager
 ```
 
