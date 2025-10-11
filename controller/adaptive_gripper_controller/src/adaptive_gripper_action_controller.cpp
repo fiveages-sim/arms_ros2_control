@@ -145,10 +145,55 @@ namespace adaptive_gripper_controller
                         joint_name_.c_str());
         }
 
+        // 查找 reverse_flag 状态接口（可选）
+        auto reverse_flag_state_interface_it = std::find_if(
+            state_interfaces_.begin(), state_interfaces_.end(),
+            [](const hardware_interface::LoanedStateInterface& state_interface)
+            {
+                return state_interface.get_interface_name() == "reverse_flag";
+            });
+
+        if (reverse_flag_state_interface_it != state_interfaces_.end())
+        {
+            if (reverse_flag_state_interface_it->get_prefix_name() == joint_name_)
+            {
+                gripper_interfaces_.reverse_flag_state_interface_ = *reverse_flag_state_interface_it;
+                RCLCPP_INFO(get_node()->get_logger(), "Reverse flag interface found for joint: %s",
+                            joint_name_.c_str());
+            }
+        }
+        else
+        {
+            RCLCPP_INFO(get_node()->get_logger(), "No reverse flag interface available for joint: %s (using default behavior)",
+                        joint_name_.c_str());
+        }
+
         // 保存接口引用
         gripper_interfaces_.position_command_interface_ = *command_interface_it;
         gripper_interfaces_.position_state_interface_ = *position_state_interface_it;
 
+        // 启动时自动设置为关闭状态
+        // 读取 reverse_flag 来确定关闭位置
+        double reverse_flag = 1.0;
+        if (gripper_interfaces_.reverse_flag_state_interface_.has_value())
+        {
+            reverse_flag = gripper_interfaces_.reverse_flag_state_interface_->get().get_value();
+        }
+
+        // reverse_flag = 1: 关闭位置是 0 (lower)
+        // reverse_flag = -1: 关闭位置是 1 (upper)
+        if (reverse_flag < 0)
+        {
+            target_position_ = 1.0;  // 反转时，关闭位置是 upper
+        }
+        else
+        {
+            target_position_ = 0.0;  // 正常时，关闭位置是 lower
+        }
+
+        RCLCPP_INFO(get_node()->get_logger(),
+                    "Initialized to closed position: %.6f (reverse_flag: %.1f)",
+                    target_position_, reverse_flag);
         RCLCPP_INFO(get_node()->get_logger(), "Simple gripper controller activated");
         return controller_interface::CallbackReturn::SUCCESS;
     }
@@ -216,16 +261,29 @@ namespace adaptive_gripper_controller
             return;
         }
 
+        // 读取 reverse_flag，默认值为 1.0（不反转）
+        double reverse_flag = 1.0;
+        if (gripper_interfaces_.reverse_flag_state_interface_.has_value())
+        {
+            reverse_flag = gripper_interfaces_.reverse_flag_state_interface_->get().get_value();
+        }
+
+        // 根据 reverse_flag 决定上下限
+        double upper_limit = (reverse_flag < 0) ? joint_lower_limit_ : joint_upper_limit_;
+        double lower_limit = (reverse_flag < 0) ? joint_upper_limit_ : joint_lower_limit_;
+
         if (gripper_target_ == 1)
         {
             force_threshold_triggered_ = false;
-            target_position_ = joint_upper_limit_;
-            RCLCPP_DEBUG(get_node()->get_logger(), "Opening gripper to position: %f", target_position_);
+            target_position_ = upper_limit;
+            RCLCPP_DEBUG(get_node()->get_logger(), "Opening gripper to position: %f (reverse_flag: %f)",
+                        target_position_, reverse_flag);
         }
         else
         {
-            target_position_ = joint_lower_limit_;
-            RCLCPP_DEBUG(get_node()->get_logger(), "Closing gripper to position: %f", target_position_);
+            target_position_ = lower_limit;
+            RCLCPP_DEBUG(get_node()->get_logger(), "Closing gripper to position: %f (reverse_flag: %f)",
+                        target_position_, reverse_flag);
         }
     }
 
@@ -299,7 +357,8 @@ namespace adaptive_gripper_controller
     {
         std::vector names = {
             joint_name_ + "/" + hardware_interface::HW_IF_POSITION,
-            joint_name_ + "/" + hardware_interface::HW_IF_EFFORT
+            joint_name_ + "/" + hardware_interface::HW_IF_EFFORT,
+            joint_name_ + "/reverse_flag"
         };
         return {controller_interface::interface_configuration_type::INDIVIDUAL, names};
     }

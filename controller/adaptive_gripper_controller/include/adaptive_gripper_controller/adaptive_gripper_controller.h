@@ -113,12 +113,15 @@ namespace adaptive_gripper_controller
             position_state_interface_;
             std::optional<std::reference_wrapper<hardware_interface::LoanedStateInterface>>
             effort_state_interface_;
+            std::optional<std::reference_wrapper<hardware_interface::LoanedStateInterface>>
+            reverse_flag_state_interface_;
 
             void clear()
             {
                 position_command_interface_ = std::nullopt;
                 position_state_interface_ = std::nullopt;
                 effort_state_interface_ = std::nullopt;
+                reverse_flag_state_interface_ = std::nullopt;
             }
         };
 
