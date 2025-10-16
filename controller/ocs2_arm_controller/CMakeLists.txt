@@ -12,7 +12,7 @@ set(CONTROLLER_INCLUDE_DEPENDS
         pluginlib
         rcpputils
         controller_interface
-
+        std_msgs
         ocs2_mobile_manipulator
         ocs2_ros_interfaces
         arms_ros2_control_msgs
