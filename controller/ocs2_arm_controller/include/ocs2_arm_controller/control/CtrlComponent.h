@@ -15,6 +15,7 @@
 #include "ocs2_arm_controller/control/PoseBasedReferenceManager.h"
 #include <ocs2_msgs/msg/mpc_observation.hpp>
 #include "ocs2_arm_controller/control/Visualizer.h"
+#include <std_msgs/msg/float64_multi_array.hpp>
 
 namespace ocs2::mobile_manipulator
 {
@@ -39,6 +40,9 @@ namespace ocs2::mobile_manipulator
 
         // Torque calculation for force control
         vector_t calculateStaticTorques() const;
+
+        //Check if the robot is close enough to the goal
+        double getGoalDistance(const vector_t& goal_state, const vector_t& current_state);
 
         // OCS2 interface (public access)
         std::shared_ptr<MobileManipulatorInterface> interface_;
@@ -68,6 +72,7 @@ namespace ocs2::mobile_manipulator
         CtrlInterfaces& ctrl_interfaces_;
         
         rclcpp::Publisher<ocs2_msgs::msg::MpcObservation>::SharedPtr mpc_observation_publisher_;
+        rclcpp::Publisher<std_msgs::msg::Float64MultiArray>::SharedPtr mpc_performance_publisher_;
 
         // Visualization component
         std::unique_ptr<Visualizer> visualizer_;

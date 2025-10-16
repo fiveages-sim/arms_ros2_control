@@ -144,4 +144,9 @@ namespace ocs2::mobile_manipulator
         RCLCPP_INFO(rclcpp::get_logger("PoseBasedReferenceManager"),
                     "Target state cache reset - cleared all cached target states");
     }
+    
+    vector_t PoseBasedReferenceManager::get_target_state() const
+    {
+        return left_target_state_;
+    }
 } // namespace ocs2::mobile_manipulator

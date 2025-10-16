@@ -54,6 +54,11 @@ namespace ocs2::mobile_manipulator
          * 重置target state缓存（在离开OCS2状态时调用）
          */
         void resetTargetStateCache();
+        
+        /**
+         * 获取当前target_state
+         */
+        vector_t get_target_state() const;
 
     private:
         void leftPoseCallback(geometry_msgs::msg::Pose::SharedPtr msg);

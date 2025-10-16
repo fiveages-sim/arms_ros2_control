@@ -70,6 +70,8 @@ namespace ocs2::mobile_manipulator
         // Initialize MPC observation publisher
         mpc_observation_publisher_ = node_->create_publisher<ocs2_msgs::msg::MpcObservation>(
             robot_name_ + "_mpc_observation", 1);
+        // Initialize MPC performance publisher
+        mpc_performance_publisher_ = node_->create_publisher<std_msgs::msg::Float64MultiArray>( robot_name_ + "_mpc_performance", 10);
     }
 
     void CtrlComponent::setupMpcComponents()
@@ -140,6 +142,29 @@ namespace ocs2::mobile_manipulator
         // Evaluate MPC policy
         mpc_mrt_interface_->evaluatePolicy(time.seconds(), observation_.state, optimized_state_, optimized_input_,
                                            planned_mode);
+        // Check if the robot is close enough to the goal
+        std_msgs::msg::Float64MultiArray msg;
+        msg.data.resize(9);
+        double epsilon_position = 0.03;
+        auto current_state = visualizer_->computeEndEffectorPose(observation_.state);
+        auto target_state = pose_reference_manager_->get_target_state();
+        double position_diff = getGoalDistance(target_state, current_state);
+        
+        ocs2::PerformanceIndex perf = mpc_mrt_interface_->getPerformanceIndices();
+        msg.data[0] = perf.merit;
+        msg.data[1] = perf.cost;
+        msg.data[2] = perf.dualFeasibilitiesSSE;
+        msg.data[3] = perf.dynamicsViolationSSE;
+        msg.data[4] = perf.equalityConstraintsSSE;
+        msg.data[5] = perf.inequalityConstraintsSSE;
+        msg.data[6] = perf.equalityLagrangian;
+        msg.data[7] = perf.inequalityLagrangian;
+        msg.data[8] = position_diff;
+        mpc_performance_publisher_->publish(msg);
+        if (position_diff < epsilon_position) {
+            RCLCPP_INFO(node_->get_logger(), "Goal reached. Stopping MPC updates.");
+            return;  // Stop updating and executing control commands
+        }
         try
         {
             // Get complete trajectory from MPC policy
