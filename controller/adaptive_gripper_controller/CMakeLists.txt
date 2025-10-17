@@ -23,7 +23,7 @@ endforeach ()
 
 
 add_library(${PROJECT_NAME} SHARED
-        src/adaptive_gripper_action_controller.cpp
+        src/adaptive_gripper_controller.cpp
 )
 target_include_directories(${PROJECT_NAME}
         PUBLIC

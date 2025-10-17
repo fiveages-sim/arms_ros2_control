@@ -25,7 +25,7 @@ def launch_setup(context, *args, **kwargs):
     robot_name = context.launch_configurations['robot']
     robot_type = context.launch_configurations.get('type', '')
     hardware = context.launch_configurations.get('hardware', 'mock_components')
-    world = context.launch_configurations.get('world', 'empty')
+    world = context.launch_configurations.get('world', 'dart')
 
     # 基本参数
     use_sim_time = hardware in ['gz', 'isaac']
@@ -190,7 +190,7 @@ def generate_launch_description():
     )
 
     world_arg = DeclareLaunchArgument(
-        'world', default_value='empty', description='Gz sim World (only used when hardware=gz)'
+        'world', default_value='dart', description='Gz sim World (only used when hardware=gz)'
     )
 
     enable_arms_target_manager_arg = DeclareLaunchArgument(

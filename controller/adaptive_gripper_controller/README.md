@@ -12,16 +12,6 @@
 
 ## 安装和编译
 
-### 依赖项
-```bash
-# ROS2 Humble或更新版本
-# 以下ROS2包：
-- controller_interface
-- hardware_interface
-- rclcpp
-- rclcpp_lifecycle
-```
-
 ### 编译
 ```bash
 cd ~/ros2_ws
