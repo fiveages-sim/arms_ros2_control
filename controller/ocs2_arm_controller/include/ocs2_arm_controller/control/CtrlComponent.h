@@ -16,6 +16,7 @@
 #include <ocs2_msgs/msg/mpc_observation.hpp>
 #include "ocs2_arm_controller/control/Visualizer.h"
 #include <std_msgs/msg/float64_multi_array.hpp>
+#include "ocs2_arm_controller/filter/ButterworthFilter.h"
 
 namespace ocs2::mobile_manipulator
 {
@@ -83,6 +84,7 @@ namespace ocs2::mobile_manipulator
         std::vector<std::string> joint_names_;
         bool dual_arm_mode_;
         double future_time_offset_; // Future time offset
+        ButterworthFilter  joint_filter_;
     };
 }
 

@@ -19,7 +19,7 @@ namespace ocs2::mobile_manipulator
 {
     CtrlComponent::CtrlComponent(const std::shared_ptr<rclcpp_lifecycle::LifecycleNode>& node,
                                  CtrlInterfaces& ctrl_interfaces)
-        : node_(node), ctrl_interfaces_(ctrl_interfaces)
+        : node_(node), ctrl_interfaces_(ctrl_interfaces), joint_filter_(6, 3.0, 100.0)
     {
         robot_name_ = node_->get_parameter("robot_name").as_string();
         robot_type_ = node_->get_parameter("robot_type").as_string();
@@ -124,6 +124,11 @@ namespace ocs2::mobile_manipulator
         visualizer_->publishEndEffectorPose(time, observation_.state);
     }
 
+    double CtrlComponent::getGoalDistance(const vector_t& goal_state, const vector_t& current_state)
+    {
+        return (goal_state.head<3>() - current_state.head<3>()).norm();
+    }
+
     void CtrlComponent::evaluatePolicy(const rclcpp::Time& time)
     {
         if (!mpc_mrt_interface_)
@@ -165,6 +170,10 @@ namespace ocs2::mobile_manipulator
             RCLCPP_INFO(node_->get_logger(), "Goal reached. Stopping MPC updates.");
             return;  // Stop updating and executing control commands
         }
+        if (perf.merit > 50.0) {
+            RCLCPP_INFO(node_->get_logger(), "Cost too much, MPC run out of scope");
+            return;  // Stop updating and executing control commands
+        }
         try
         {
             // Get complete trajectory from MPC policy
@@ -189,9 +198,10 @@ namespace ocs2::mobile_manipulator
             // Extract joint positions from state and set as commands
             if (ctrl_interfaces_.control_mode_ == ControlMode::POSITION)
             {
+                auto filter_future_state = joint_filter_.update(future_state);
                 for (size_t i = 0; i < joint_names_.size() && i < future_state.size(); ++i)
                 {
-                    ctrl_interfaces_.joint_position_command_interface_[i].get().set_value(future_state(i));
+                    ctrl_interfaces_.joint_position_command_interface_[i].get().set_value(filter_future_state(i));
                 }
             }
             else if (ctrl_interfaces_.control_mode_ == ControlMode::MIX)
@@ -309,6 +319,7 @@ namespace ocs2::mobile_manipulator
             advanceMpc();
             rclcpp::WallRate(interface_->mpcSettings().mrtDesiredFrequency_).sleep();
         }
+        joint_filter_.reset();
     }
 
     void CtrlComponent::advanceMpc()
