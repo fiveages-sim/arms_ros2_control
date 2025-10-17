@@ -35,6 +35,8 @@ add_library(${PROJECT_NAME} SHARED
         src/FSM/StateHome.cpp
         src/FSM/StateOCS2.cpp
         src/FSM/StateHold.cpp
+
+        src/filter/ButterworthFilter.cpp
 )
 
 target_include_directories(${PROJECT_NAME}
