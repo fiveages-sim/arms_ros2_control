@@ -89,6 +89,16 @@ namespace adaptive_gripper_controller
         double joint_lower_limit_ = 0.0;
         bool limits_initialized_ = false;
 
+        // 配置的初始值（从 robot_description 读取，默认为 0.0）
+        double config_initial_position_ = 0.0;
+        
+        // 夹爪的关闭和打开位置（初始化时计算）
+        double closed_position_ = 0.0;
+        double open_position_ = 0.0;
+
+        // 是否使用力反馈接口
+        bool use_effort_interface_ = true;
+        
         // 力反馈阈值
         double force_threshold_ = 0.1;
 
@@ -97,9 +107,12 @@ namespace adaptive_gripper_controller
 
         // 夹取任务状态跟踪
         bool force_threshold_triggered_ = false;
-
-        // 是否有 effort 接口
+        
+        // 是否有 effort 接口（运行时自动检测）
         bool has_effort_interface_ = false;
+        
+        // 需要的状态接口类型列表（从 hardware 查询）
+        std::vector<std::string> available_state_interface_types_;
 
         // 硬件接口结构体
         struct GripperInterfaces
@@ -113,15 +126,12 @@ namespace adaptive_gripper_controller
             position_state_interface_;
             std::optional<std::reference_wrapper<hardware_interface::LoanedStateInterface>>
             effort_state_interface_;
-            std::optional<std::reference_wrapper<hardware_interface::LoanedStateInterface>>
-            reverse_flag_state_interface_;
 
             void clear()
             {
                 position_command_interface_ = std::nullopt;
                 position_state_interface_ = std::nullopt;
                 effort_state_interface_ = std::nullopt;
-                reverse_flag_state_interface_ = std::nullopt;
             }
         };
 
@@ -139,5 +149,8 @@ namespace adaptive_gripper_controller
 
         // 解析robot description获取关节限制
         void parse_joint_limits(const std::string& robot_description);
+
+        // 解析robot description获取初始值，并计算夹爪位置
+        void parse_initial_value(const std::string& robot_description);
     };
 } // namespace adaptive_gripper_controller
