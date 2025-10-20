@@ -115,7 +115,7 @@ rosdep install --from-paths src --ignore-src -r -y
 ```bash
 # 构建移动机械臂包
 cd ~/ros2_ws
-colcon build --packages-up-to ocs2_mobile_manipulator_ros --symlink-install
+colcon build --packages-up-to ocs2_mobile_manipulator_ros --symlink-install --cmake-args -DCMAKE_EXPORT_COMPILE_COMMANDS=ON
 
 # 尝试可用的演示之一：
 source ~/ros2_ws/install/setup.bash
@@ -137,7 +137,7 @@ ros2 launch ocs2_mobile_manipulator_ros manipulator_mabi_mobile.launch.py
 
 ```bash
 cd ~/ros2_ws
-colcon build --packages-up-to ocs2_arm_controller cr5_description arms_teleop adaptive_gripper_controller --symlink-install
+colcon build --packages-up-to ocs2_arm_controller cr5_description arms_teleop adaptive_gripper_controller --symlink-install --cmake-args -DCMAKE_EXPORT_COMPILE_COMMANDS=ON
 ```
 
 ### 2. 使用模拟硬件启动
@@ -169,7 +169,7 @@ colcon build --packages-up-to ocs2_arm_controller cr5_description arms_teleop ad
 * 编译增强的gz_ros2_control包
     ```bash
     cd ~/ros2_ws
-    colcon build --packages-up-to gz_ros2_control --symlink-install
+    colcon build --packages-up-to gz_ros2_control --symlink-install --cmake-args -DCMAKE_EXPORT_COMPILE_COMMANDS=ON
     ```
 
 #### 对于ROS2 Jazzy：
@@ -183,7 +183,7 @@ colcon build --packages-up-to ocs2_arm_controller cr5_description arms_teleop ad
 * 编译机器人模型包
   ```bash
   cd ~/ros2_ws
-  colcon build --packages-up-to agibot_g1_description --symlink-install
+  colcon build --packages-up-to agibot_g1_description --symlink-install --cmake-args -DCMAKE_EXPORT_COMPILE_COMMANDS=ON
   ```
 * 你可以使用`world`参数来切换gazebo加载的环境模型
   ```bash
@@ -197,7 +197,7 @@ colcon build --packages-up-to ocs2_arm_controller cr5_description arms_teleop ad
 * 编译增强的topic_based_ros2_control包
   ```bash
   cd ~/ros2_ws
-  colcon build --packages-up-to topic_based_ros2_control --symlink-install
+  colcon build --packages-up-to topic_based_ros2_control --symlink-install --cmake-args -DCMAKE_EXPORT_COMPILE_COMMANDS=ON
   ```
 * 启动控制器（在此步骤之前启动Isaac Sim）
   ```bash
