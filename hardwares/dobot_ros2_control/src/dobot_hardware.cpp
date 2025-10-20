@@ -25,19 +25,15 @@ hardware_interface::CallbackReturn DobotHardware::on_init(const hardware_interfa
         return hardware_interface::CallbackReturn::ERROR;
     }
     
-    // 初始化关节数据存储（6个关节）
-    joint_positions_.resize(6, 0.0);
-    joint_velocities_.resize(6, 0.0);
-    joint_efforts_.resize(6, 0.0);
-    joint_position_commands_.resize(6, 0.0);
-    
     // 初始化夹爪数据
     gripper_position_ = 0.0;
     gripper_position_command_ = 0.0;
     has_gripper_ = false;
     gripper_thread_running_ = false;
+    gripper_joint_index_ = -1;
     
-    // 检测是否配置了夹爪关节
+    // 解析 URDF 配置的关节
+    int joint_index = 0;
     for (const auto& joint : info.joints) {
         // 检查关节名称中是否包含 gripper 或 hand
         std::string joint_name_lower = joint.name;
@@ -46,11 +42,29 @@ hardware_interface::CallbackReturn DobotHardware::on_init(const hardware_interfa
         
         if (joint_name_lower.find("gripper") != std::string::npos || 
             joint_name_lower.find("hand") != std::string::npos) {
+            // 这是夹爪关节
             has_gripper_ = true;
             gripper_joint_name_ = joint.name;
-            RCLCPP_INFO(get_node()->get_logger(), "Detected gripper joint: %s", gripper_joint_name_.c_str());
-            break;
+            gripper_joint_index_ = joint_index;
+            RCLCPP_INFO(get_node()->get_logger(), "Detected gripper joint: %s (index %d)", 
+                       gripper_joint_name_.c_str(), gripper_joint_index_);
+        } else {
+            // 这是机械臂关节
+            joint_names_.push_back(joint.name);
         }
+        joint_index++;
+    }
+    
+    // 初始化关节数据存储（根据实际配置的关节数量）
+    int arm_joint_count = static_cast<int>(joint_names_.size());
+    joint_positions_.resize(arm_joint_count, 0.0);
+    joint_velocities_.resize(arm_joint_count, 0.0);
+    joint_efforts_.resize(arm_joint_count, 0.0);
+    joint_position_commands_.resize(arm_joint_count, 0.0);
+    
+    RCLCPP_INFO(get_node()->get_logger(), "Found %d arm joints in configuration", arm_joint_count);
+    if (has_gripper_) {
+        RCLCPP_INFO(get_node()->get_logger(), "Found gripper: %s", gripper_joint_name_.c_str());
     }
     
     // 读取配置参数的辅助函数
@@ -81,7 +95,10 @@ hardware_interface::CallbackReturn DobotHardware::on_init(const hardware_interfa
     RCLCPP_INFO(get_node()->get_logger(), "  Gain: %.1f", gain_);
     RCLCPP_INFO(get_node()->get_logger(), "  Speed Factor: %d%%", speed_factor_);
     RCLCPP_INFO(get_node()->get_logger(), "  Verbose: %s", verbose_ ? "true" : "false");
-    RCLCPP_INFO(get_node()->get_logger(), "  Number of joints: %zu", joint_positions_.size());
+    RCLCPP_INFO(get_node()->get_logger(), "  Arm Joints: %zu", joint_names_.size());
+    if (has_gripper_) {
+        RCLCPP_INFO(get_node()->get_logger(), "  Gripper: Yes (%s)", gripper_joint_name_.c_str());
+    }
     RCLCPP_INFO(get_node()->get_logger(), "==============================================");
     
     return hardware_interface::CallbackReturn::SUCCESS;
@@ -148,20 +165,19 @@ hardware_interface::CallbackReturn DobotHardware::on_activate(const rclcpp_lifec
             RCLCPP_INFO(get_node()->get_logger(), "✅ Gripper control thread started");
         }
         
-        // 读取当前关节位置并初始化命令
+        // 读取当前关节位置并初始化命令（机械臂关节）
         double current_joints[6];
         commander_->getCurrentJointStatus(current_joints);
         
         std::lock_guard<std::mutex> lock(data_mutex_);
-        for (size_t i = 0; i < 6; ++i) {
+        size_t arm_joints = std::min(joint_names_.size(), size_t(6));  // 最多6个关节
+        for (size_t i = 0; i < arm_joints; ++i) {
             joint_positions_[i] = current_joints[i];
             joint_position_commands_[i] = current_joints[i];
         }
         
         RCLCPP_INFO(get_node()->get_logger(), 
-                   "Initial joint positions (rad): [%.3f, %.3f, %.3f, %.3f, %.3f, %.3f]",
-                   joint_positions_[0], joint_positions_[1], joint_positions_[2],
-                   joint_positions_[3], joint_positions_[4], joint_positions_[5]);
+                   "Initial %zu arm joint positions read from robot", arm_joints);
         
         RCLCPP_INFO(get_node()->get_logger(), "✅ DobotHardware activated and ready!");
         
@@ -198,18 +214,16 @@ std::vector<hardware_interface::StateInterface> DobotHardware::export_state_inte
 {
     std::vector<hardware_interface::StateInterface> state_interfaces;
     
-    // 为6个关节导出状态接口：位置、速度、力矩
-    for (size_t i = 0; i < 6; ++i) {
-        std::string joint_name = "joint" + std::to_string(i + 1);
+    // 为机械臂关节导出状态接口：位置、速度、力矩
+    for (size_t i = 0; i < joint_names_.size(); ++i) {
+        state_interfaces.emplace_back(
+            joint_names_[i], hardware_interface::HW_IF_POSITION, &joint_positions_[i]);
         
         state_interfaces.emplace_back(
-            joint_name, hardware_interface::HW_IF_POSITION, &joint_positions_[i]);
+            joint_names_[i], hardware_interface::HW_IF_VELOCITY, &joint_velocities_[i]);
         
         state_interfaces.emplace_back(
-            joint_name, hardware_interface::HW_IF_VELOCITY, &joint_velocities_[i]);
-        
-        state_interfaces.emplace_back(
-            joint_name, hardware_interface::HW_IF_EFFORT, &joint_efforts_[i]);
+            joint_names_[i], hardware_interface::HW_IF_EFFORT, &joint_efforts_[i]);
     }
     
     // 如果配置了夹爪，导出夹爪状态接口（只有位置）
@@ -218,12 +232,12 @@ std::vector<hardware_interface::StateInterface> DobotHardware::export_state_inte
             gripper_joint_name_, hardware_interface::HW_IF_POSITION, &gripper_position_);
         
         RCLCPP_INFO(get_node()->get_logger(), 
-                   "Exported %zu state interfaces (6 arm joints + 1 gripper)", 
-                   state_interfaces.size());
+                   "Exported %zu state interfaces (%zu arm joints + 1 gripper)", 
+                   state_interfaces.size(), joint_names_.size());
     } else {
         RCLCPP_INFO(get_node()->get_logger(), 
-                   "Exported %zu state interfaces for 6 arm joints", 
-                   state_interfaces.size());
+                   "Exported %zu state interfaces for %zu arm joints", 
+                   state_interfaces.size(), joint_names_.size());
     }
     
     return state_interfaces;
@@ -233,12 +247,10 @@ std::vector<hardware_interface::CommandInterface> DobotHardware::export_command_
 {
     std::vector<hardware_interface::CommandInterface> command_interfaces;
     
-    // 为6个关节导出命令接口：位置命令
-    for (size_t i = 0; i < 6; ++i) {
-        std::string joint_name = "joint" + std::to_string(i + 1);
-        
+    // 为机械臂关节导出命令接口：位置命令
+    for (size_t i = 0; i < joint_names_.size(); ++i) {
         command_interfaces.emplace_back(
-            joint_name, hardware_interface::HW_IF_POSITION, &joint_position_commands_[i]);
+            joint_names_[i], hardware_interface::HW_IF_POSITION, &joint_position_commands_[i]);
     }
     
     // 如果配置了夹爪，导出夹爪命令接口
@@ -247,12 +259,12 @@ std::vector<hardware_interface::CommandInterface> DobotHardware::export_command_
             gripper_joint_name_, hardware_interface::HW_IF_POSITION, &gripper_position_command_);
         
         RCLCPP_INFO(get_node()->get_logger(), 
-                   "Exported %zu command interfaces (6 arm joints + 1 gripper)", 
-                   command_interfaces.size());
+                   "Exported %zu command interfaces (%zu arm joints + 1 gripper)", 
+                   command_interfaces.size(), joint_names_.size());
     } else {
         RCLCPP_INFO(get_node()->get_logger(), 
-                   "Exported %zu command interfaces for 6 arm joints", 
-                   command_interfaces.size());
+                   "Exported %zu command interfaces for %zu arm joints", 
+                   command_interfaces.size(), joint_names_.size());
     }
     
     return command_interfaces;
@@ -273,14 +285,15 @@ hardware_interface::return_type DobotHardware::read(
         
         // 更新关节位置
         std::lock_guard<std::mutex> lock(data_mutex_);
-        for (size_t i = 0; i < 6; ++i) {
+        size_t arm_joints = std::min(joint_names_.size(), size_t(6));  // 最多6个关节
+        for (size_t i = 0; i < arm_joints; ++i) {
             joint_positions_[i] = current_joints[i];
         }
         
         // 获取实时数据（包含速度和力矩信息）
         auto real_time_data = commander_->getRealData();
         if (real_time_data) {
-            for (size_t i = 0; i < 6; ++i) {
+            for (size_t i = 0; i < arm_joints; ++i) {
                 joint_velocities_[i] = real_time_data->qd_actual[i] * M_PI / 180.0;  // 转换为弧度/秒
                 joint_efforts_[i] = real_time_data->m_actual[i];  // 力矩
             }
@@ -292,15 +305,17 @@ hardware_interface::return_type DobotHardware::read(
             // gripper_position_ 由 gripperControlLoop 线程更新
         }
         
-        // 定期打印调试信息（每秒一次）
-        RCLCPP_DEBUG_THROTTLE(
-            get_node()->get_logger(),
-            *get_node()->get_clock(),
-            1000,
-            "Joint positions (rad): [%.3f, %.3f, %.3f, %.3f, %.3f, %.3f]",
-            joint_positions_[0], joint_positions_[1], joint_positions_[2],
-            joint_positions_[3], joint_positions_[4], joint_positions_[5]
-        );
+        // 定期打印调试信息（仅 verbose 模式）
+        if (verbose_) {
+            // 只打印前几个关节的位置
+            RCLCPP_DEBUG_THROTTLE(
+                get_node()->get_logger(),
+                *get_node()->get_clock(),
+                1000,
+                "Joint positions updated (%zu joints)", 
+                joint_names_.size()
+            );
+        }
         
     } catch (const std::exception& e) {
         RCLCPP_ERROR_THROTTLE(
@@ -325,15 +340,17 @@ hardware_interface::return_type DobotHardware::write(
     
     try {
         // 获取关节命令（弧度）
-        double joint_cmd[6];
+        double joint_cmd[6] = {0.0, 0.0, 0.0, 0.0, 0.0, 0.0};
         {
             std::lock_guard<std::mutex> lock(data_mutex_);
-            for (size_t i = 0; i < 6; ++i) {
+            size_t arm_joints = std::min(joint_names_.size(), size_t(6));
+            for (size_t i = 0; i < arm_joints; ++i) {
                 joint_cmd[i] = joint_position_commands_[i];
             }
         }
         
         // 通过ServoJ发送关节命令（包含提前量和增益参数）
+        // 注意：ServoJ 始终发送6个关节值，未配置的关节发送0
         bool success = commander_->servoJ(joint_cmd, servo_time_, aheadtime_, gain_);
         
         if (!success) {
@@ -367,15 +384,16 @@ hardware_interface::return_type DobotHardware::write(
             }
         }
         
-        // 定期打印命令值（每秒一次）
-        RCLCPP_DEBUG_THROTTLE(
-            get_node()->get_logger(),
-            *get_node()->get_clock(),
-            1000,
-            "Joint commands (rad): [%.3f, %.3f, %.3f, %.3f, %.3f, %.3f]",
-            joint_cmd[0], joint_cmd[1], joint_cmd[2],
-            joint_cmd[3], joint_cmd[4], joint_cmd[5]
-        );
+        // 定期打印命令值（仅 verbose 模式）
+        if (verbose_) {
+            RCLCPP_DEBUG_THROTTLE(
+                get_node()->get_logger(),
+                *get_node()->get_clock(),
+                1000,
+                "Joint commands sent (%zu joints)", 
+                joint_names_.size()
+            );
+        }
         
     } catch (const std::exception& e) {
         RCLCPP_ERROR_THROTTLE(
