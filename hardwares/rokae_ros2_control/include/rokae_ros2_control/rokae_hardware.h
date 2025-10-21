@@ -18,105 +18,115 @@
 #include <hardware_interface/hardware_info.hpp>
 #include <hardware_interface/types/hardware_interface_return_values.hpp>
 #include <rclcpp/rclcpp.hpp>
-#include <rclcpp/subscription.hpp>
-#include <rclcpp/publisher.hpp>
 #include <rclcpp_lifecycle/state.hpp>
 
 // xCoreSDK includes
 #include "rokae/robot.h"
 #include "rokae/motion_control_rt.h"
 #include <memory>
+#include <string>
+#include <vector>
 #include <thread>
 #include <atomic>
 #include <mutex>
 
 namespace rokae_ros2_control {
-    class RokaeHardware : public hardware_interface::SystemInterface {
-    public:
-        hardware_interface::CallbackReturn on_init(const hardware_interface::HardwareInfo &info) override;
-        hardware_interface::CallbackReturn on_activate(const rclcpp_lifecycle::State & previous_state) override;
-        hardware_interface::CallbackReturn on_deactivate(const rclcpp_lifecycle::State & previous_state) override;
 
-        std::vector<hardware_interface::StateInterface> export_state_interfaces() override;
+/**
+ * @brief Rokae机器人的ROS2 Control硬件接口
+ * 
+ * 该类实现了hardware_interface::SystemInterface，通过xCoreSDK与Rokae机械臂通信
+ * 重构后的设计：一个hardware实例只控制一个机械臂（7自由度）
+ * 参考Dobot的设计思路，简化架构，提高模块化程度
+ */
+class RokaeHardware : public hardware_interface::SystemInterface {
+public:
+    /**
+     * @brief 初始化硬件接口
+     * @param info 从URDF/配置文件中读取的硬件信息
+     * @return 初始化结果
+     */
+    hardware_interface::CallbackReturn on_init(const hardware_interface::HardwareInfo &info) override;
+    
+    /**
+     * @brief 激活硬件接口（连接机器人、上电、初始化实时控制）
+     * @param previous_state 前一个生命周期状态
+     * @return 激活结果
+     */
+    hardware_interface::CallbackReturn on_activate(const rclcpp_lifecycle::State & previous_state) override;
+    
+    /**
+     * @brief 停用硬件接口（停止实时控制、下电、断开连接）
+     * @param previous_state 前一个生命周期状态
+     * @return 停用结果
+     */
+    hardware_interface::CallbackReturn on_deactivate(const rclcpp_lifecycle::State & previous_state) override;
 
-        std::vector<hardware_interface::CommandInterface> export_command_interfaces() override;
+    /**
+     * @brief 导出状态接口（位置、速度、力矩）
+     * @return 状态接口列表
+     */
+    std::vector<hardware_interface::StateInterface> export_state_interfaces() override;
 
-        hardware_interface::return_type read(const rclcpp::Time &time, const rclcpp::Duration &period) override;
+    /**
+     * @brief 导出命令接口（位置命令）
+     * @return 命令接口列表
+     */
+    std::vector<hardware_interface::CommandInterface> export_command_interfaces() override;
 
-        hardware_interface::return_type write(const rclcpp::Time &time, const rclcpp::Duration &period) override;
+    /**
+     * @brief 读取机器人状态
+     * @param time 当前时间
+     * @param period 距离上次读取的时间间隔
+     * @return 读取结果
+     */
+    hardware_interface::return_type read(const rclcpp::Time &time, const rclcpp::Duration &period) override;
 
-    private:
+    /**
+     * @brief 写入控制命令到机器人
+     * @param time 当前时间
+     * @param period 距离上次写入的时间间隔
+     * @return 写入结果
+     */
+    hardware_interface::return_type write(const rclcpp::Time &time, const rclcpp::Duration &period) override;
 
-        // 关节数据存储 - 支持所有关节的所有接口
-        // 底盘关节 (2个关节)
-        std::vector<double> chassis_positions_;
-        std::vector<double> chassis_velocities_;
-        std::vector<double> chassis_efforts_;
-        std::vector<double> chassis_velocity_commands_;
+private:
+    // 关节数据存储（动态大小，根据配置）
+    std::vector<double> joint_positions_;          // 关节位置（弧度）
+    std::vector<double> joint_velocities_;         // 关节速度（弧度/秒）
+    std::vector<double> joint_efforts_;            // 关节力矩（N·m）
+    std::vector<double> joint_position_commands_;  // 关节位置命令（弧度）
+    std::vector<std::string> joint_names_;         // 关节名称列表
 
-        // 身体关节 (4个关节)
-        std::vector<double> body_positions_;
-        std::vector<double> body_velocities_;
-        std::vector<double> body_efforts_;
-        std::vector<double> body_position_commands_;
+    // 配置参数
+    std::string arm_ip_;           // 机械臂IP地址
+    std::string local_ip_;         // 本地IP地址
 
-        // 头部关节 (2个关节)
-        std::vector<double> head_positions_;
-        std::vector<double> head_velocities_;
-        std::vector<double> head_efforts_;
-        std::vector<double> head_position_commands_;
+    // xCoreSDK相关
+    std::unique_ptr<rokae::xMateErProRobot> arm_robot_;
+    std::shared_ptr<rokae::RtMotionControlCobot<7>> rt_controller_;
+    
+    // 实时控制线程
+    std::thread rt_control_thread_;
+    std::atomic<bool> rt_control_running_;
+    std::mutex data_mutex_;
+    
+    // 状态接收相关
+    std::atomic<bool> state_receive_started_;
+    std::thread state_update_thread_;
+    std::atomic<bool> state_update_running_;
 
-        // 左臂关节 (7个关节) - 真实数据
-        std::vector<double> left_arm_positions_;
-        std::vector<double> left_arm_velocities_;
-        std::vector<double> left_arm_efforts_;
-        std::vector<double> left_arm_position_commands_;
+    // xCoreSDK相关方法
+    void initializeXCoreSDK();
+    void startRealtimeControl();
+    void stopRealtimeControl();
+    void controlLoop();
+    
+    // 状态更新相关方法
+    void startStateUpdate();
+    void stopStateUpdate();
+    void stateUpdateLoop();
+};
 
-        // 右臂关节 (7个关节) - 真实数据
-        std::vector<double> right_arm_positions_;
-        std::vector<double> right_arm_velocities_;
-        std::vector<double> right_arm_efforts_;
-        std::vector<double> right_arm_position_commands_;
-
-        // 配置参数
-        double update_rate_;
-
-        // xCoreSDK相关
-        std::unique_ptr<rokae::xMateErProRobot> left_arm_robot_;
-        std::unique_ptr<rokae::xMateErProRobot> right_arm_robot_;
-        std::shared_ptr<rokae::RtMotionControlCobot<7>> left_rt_controller_;
-        std::shared_ptr<rokae::RtMotionControlCobot<7>> right_rt_controller_;
-        
-        // 实时控制线程
-        std::thread left_arm_rt_thread_;
-        std::thread right_arm_rt_thread_;
-        std::atomic<bool> rt_control_running_;
-        std::mutex data_mutex_;
-        
-        // 状态接收相关
-        std::atomic<bool> state_receive_started_;
-        std::thread state_update_thread_;
-        std::atomic<bool> state_update_running_;
-        
-        // xCoreSDK配置参数
-        std::string left_arm_ip_;
-        std::string right_arm_ip_;
-        std::string local_ip_;
-
-
-        // 更新关节状态
-        void updateJointStates();
-        
-        // xCoreSDK相关方法
-        void initializeXCoreSDK();
-        void startRealtimeControl();
-        void stopRealtimeControl();
-        void leftArmControlLoop();
-        void rightArmControlLoop();
-        
-        // 状态更新相关方法
-        void startStateUpdate();
-        void stopStateUpdate();
-        void stateUpdateLoop();
-    };
 } // namespace rokae_ros2_control
+

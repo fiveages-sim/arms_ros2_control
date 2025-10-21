@@ -13,8 +13,6 @@ find_package(ament_cmake REQUIRED)
 find_package(hardware_interface REQUIRED)
 find_package(rclcpp REQUIRED)
 find_package(rclcpp_lifecycle REQUIRED)
-find_package(sensor_msgs REQUIRED)
-find_package(wheeled_robot_msgs REQUIRED)
 find_package(pluginlib REQUIRED)
 find_package(PkgConfig REQUIRED)
 pkg_check_modules(EIGEN3 REQUIRED eigen3)
@@ -36,8 +34,6 @@ ament_target_dependencies(${PROJECT_NAME}
         hardware_interface
         rclcpp
         rclcpp_lifecycle
-        sensor_msgs
-        wheeled_robot_msgs
         pluginlib
 )
 
@@ -79,11 +75,5 @@ endif ()
 
 ament_export_dependencies(${dependencies})
 ament_export_targets(export_${PROJECT_NAME} HAS_LIBRARY_TARGET)
-
-
-install(
-        DIRECTORY launch config
-        DESTINATION share/${PROJECT_NAME}/
-)
 
 ament_package()

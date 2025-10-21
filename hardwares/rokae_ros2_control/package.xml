@@ -13,8 +13,6 @@
   <depend>rclcpp</depend>
   <depend>rclcpp_lifecycle</depend>
   <depend>sensor_msgs</depend>
-  <depend>wheeled_robot_msgs</depend>
-  <depend>fiveages_w1_description</depend>
   <depend>pluginlib</depend>
 
   <test_depend>ament_lint_auto</test_depend>
