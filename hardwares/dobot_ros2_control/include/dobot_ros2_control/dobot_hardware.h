@@ -88,17 +88,19 @@ public:
     hardware_interface::return_type write(const rclcpp::Time &time, const rclcpp::Duration &period) override;
 
 private:
-    // 关节数据存储（6个关节）
+    // 关节数据存储（动态大小，根据配置）
     std::vector<double> joint_positions_;          // 关节位置（弧度）
     std::vector<double> joint_velocities_;         // 关节速度（弧度/秒）
     std::vector<double> joint_efforts_;            // 关节力矩（N·m）
     std::vector<double> joint_position_commands_;  // 关节位置命令（弧度）
+    std::vector<std::string> joint_names_;         // 关节名称列表
     
     // 夹爪数据存储
     double gripper_position_;                      // 夹爪位置（0.0=闭合, 1.0=打开）
     double gripper_position_command_;              // 夹爪位置命令（0.0-1.0）
     bool has_gripper_;                             // 是否配置了夹爪
     std::string gripper_joint_name_;               // 夹爪关节名称
+    int gripper_joint_index_;                      // 夹爪在关节列表中的索引（-1表示无夹爪）
 
     // 配置参数
     std::string robot_ip_;    // 机器人IP地址
