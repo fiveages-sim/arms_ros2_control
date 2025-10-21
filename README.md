@@ -78,7 +78,7 @@ This package has been tested and verified to work with the following ROS2 distri
 ## Quick Start
 
 <details>
-<summary><strong>📥 Git Clone Project & Dependencies (Click to expand)</strong></summary>
+<summary><strong>📥 Git Clone Project & Dependencies</strong></summary>
 
 To get this project and its dependencies, clone the following repositories into your ROS2 workspace:
 
@@ -86,21 +86,16 @@ To get this project and its dependencies, clone the following repositories into 
 # Navigate to your ROS2 workspace
 cd ~/ros2_ws/src
 
-# Clone the main project (shallow clone - latest commit only)
-git clone --depth 1 git@github.com:fiveages-sim/arms_ros2_control.git
-
-# Clone required dependencies (shallow clone - latest commit only)
-git clone --depth 1 git@github.com:fiveages-sim/robot_descriptions.git
-git clone --depth 1 git@github.com:legubiao/ocs2_ros2.git
+git clone https://github.com/fiveages-sim/arms_ros2_control
+git clone https://github.com/fiveages-sim/robot_descriptions
+git clone https://github.com/legubiao/ocs2_ros2
 
 # Install dependencies using rosdep
 cd ~/ros2_ws
 rosdep install --from-paths src --ignore-src -r -y
 ```
 
-**Note**: 
-- The `--depth 1` flag creates a shallow clone that only downloads the latest commit, significantly reducing clone time and disk usage
-- If you need the full git history later, you can convert shallow clones to full clones using: `git fetch --unshallow`
+**Note**:
 - The `rosdep install` command will automatically install all required system dependencies
 
 </details>
