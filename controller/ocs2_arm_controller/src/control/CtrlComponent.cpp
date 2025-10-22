@@ -19,12 +19,23 @@ namespace ocs2::mobile_manipulator
 {
     CtrlComponent::CtrlComponent(const std::shared_ptr<rclcpp_lifecycle::LifecycleNode>& node,
                                  CtrlInterfaces& ctrl_interfaces)
-        : node_(node), ctrl_interfaces_(ctrl_interfaces), joint_filter_(6, 3.0, 100.0)
+        : node_(node), ctrl_interfaces_(ctrl_interfaces), joint_filter_(7, 3.0, 100.0), skin_counter_(10), cur_counter_(0)
     {
         robot_name_ = node_->get_parameter("robot_name").as_string();
         robot_type_ = node_->get_parameter("robot_type").as_string();
         future_time_offset_ = node_->get_parameter("future_time_offset").as_double();
         joint_names_ = node_->get_parameter("joints").as_string_array();
+
+        // Declare parameters with defaults
+        node_->declare_parameter("cached_ob_state", false);
+        node_->declare_parameter("use_early_stop", false);
+        node_->declare_parameter("clip_mpc_cost", false);
+        node_->declare_parameter("max_mpc_cost", 50.0);
+        node_->declare_parameter("hardware_latency", 0.2);
+        node_->declare_parameter("post_proc_bwf", false);
+
+        loadParameters();
+
         const std::string info_file_name = node_->get_parameter("info_file_name").as_string();
 
         // Automatically build file paths and initialize interface
@@ -52,7 +63,22 @@ namespace ocs2::mobile_manipulator
         visualizer_ = std::make_unique<Visualizer>(node_, interface_, robot_name_);
         visualizer_->initialize();
         RCLCPP_INFO(node_->get_logger(), "Future time offset: %.2f seconds", future_time_offset_);
+        
+        // Initialize cached state
+        last_execute_time_ = node_->now();
+        cached_last_action = observation_.state;
     }
+
+    void CtrlComponent::loadParameters()
+    {
+        cached_ob_state_ = node_->get_parameter("cached_ob_state").as_bool();
+        use_early_stop_ = node_->get_parameter("use_early_stop").as_bool();
+        clip_mpc_cost_ = node_->get_parameter("clip_mpc_cost").as_bool();
+        max_mpc_cost_ = node_->get_parameter("max_mpc_cost").as_double();
+        hardware_latency_ = node_->get_parameter("hardware_latency").as_double();
+        use_filter_ = node_->get_parameter("post_proc_bwf").as_bool();
+    }
+
 
     void CtrlComponent::setupInterface(const std::string& task_file,
                                        const std::string& lib_folder,
@@ -137,7 +163,13 @@ namespace ocs2::mobile_manipulator
             return;
         }
         mpc_mrt_interface_->updatePolicy();
-
+        // use cached action as current state if the hardware has some latency to predict next action
+        bool in_latency_period = (time - last_execute_time_).seconds() < hardware_latency_;
+        if (in_latency_period && cached_ob_state_)
+        {
+            observation_.state = cached_last_action;
+        }
+        
         mpc_mrt_interface_->setCurrentObservation(observation_);
 
         const auto observation_msg = ros_msg_conversions::createObservationMsg(observation_);
@@ -149,7 +181,7 @@ namespace ocs2::mobile_manipulator
                                            planned_mode);
         // Check if the robot is close enough to the goal
         std_msgs::msg::Float64MultiArray msg;
-        msg.data.resize(9);
+        msg.data.resize(9); 
         double epsilon_position = 0.03;
         auto current_state = visualizer_->computeEndEffectorPose(observation_.state);
         auto target_state = pose_reference_manager_->get_target_state();
@@ -166,13 +198,19 @@ namespace ocs2::mobile_manipulator
         msg.data[7] = perf.inequalityLagrangian;
         msg.data[8] = position_diff;
         mpc_performance_publisher_->publish(msg);
-        if (position_diff < epsilon_position) {
-            RCLCPP_INFO(node_->get_logger(), "Goal reached. Stopping MPC updates.");
-            return;  // Stop updating and executing control commands
-        }
-        if (perf.merit > 50.0) {
-            RCLCPP_INFO(node_->get_logger(), "Cost too much, MPC run out of scope");
-            return;  // Stop updating and executing control commands
+        if (use_early_stop_)
+        {
+            if (position_diff < epsilon_position) {
+                RCLCPP_INFO(node_->get_logger(), "Goal reached. Stopping MPC updates.");
+                return;  // Stop updating and executing control commands
+            }
+        }   
+        if (clip_mpc_cost_)
+        {
+            if (perf.merit > max_mpc_cost_) {
+                RCLCPP_INFO(node_->get_logger(), "Cost too much, MPC run out of scope");
+                return;  // Stop updating and executing control commands
+            }
         }
         try
         {
@@ -194,15 +232,18 @@ namespace ocs2::mobile_manipulator
                 policy.timeTrajectory_,
                 policy.inputTrajectory_
             );
-
+            
             // Extract joint positions from state and set as commands
             if (ctrl_interfaces_.control_mode_ == ControlMode::POSITION)
             {
                 auto filter_future_state = joint_filter_.update(future_state);
                 for (size_t i = 0; i < joint_names_.size() && i < future_state.size(); ++i)
                 {
-                    ctrl_interfaces_.joint_position_command_interface_[i].get().set_value(filter_future_state(i));
+                    ctrl_interfaces_.joint_position_command_interface_[i].get().set_value(future_state(i));
                 }
+                cached_last_action = future_state;
+                last_execute_time_ = time;
+                // }
             }
             else if (ctrl_interfaces_.control_mode_ == ControlMode::MIX)
             {
@@ -319,7 +360,11 @@ namespace ocs2::mobile_manipulator
             advanceMpc();
             rclcpp::WallRate(interface_->mpcSettings().mrtDesiredFrequency_).sleep();
         }
-        joint_filter_.reset();
+        if (use_filter_)
+        {
+            joint_filter_.reset();
+            cur_counter_ = 0;
+        }
     }
 
     void CtrlComponent::advanceMpc()
