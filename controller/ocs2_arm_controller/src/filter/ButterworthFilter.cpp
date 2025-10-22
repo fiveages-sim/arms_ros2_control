@@ -3,7 +3,7 @@
 namespace ocs2::mobile_manipulator
 {
     ButterworthFilter::ButterworthFilter(size_t dof, scalar_t cutoffHz, scalar_t sampleHz)
-        : dof_(dof), callCounter_(0), skipCount_(20) {
+        : dof_(dof), callCounter_(0), skipCount_(500) {
         computeCoefficients(cutoffHz, sampleHz);
         x1_ = Eigen::VectorXd::Zero(dof_);
         x2_ = Eigen::VectorXd::Zero(dof_);

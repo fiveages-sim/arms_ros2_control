@@ -63,6 +63,7 @@ namespace ocs2::mobile_manipulator
                             const std::string& lib_folder,
                             const std::string& urdf_file);
         void setupPublisher();
+        void loadParameters();
 
         // URDF path generation helper
         std::string generateUrdfPath(const std::string& robot_name, 
@@ -84,7 +85,21 @@ namespace ocs2::mobile_manipulator
         std::vector<std::string> joint_names_;
         bool dual_arm_mode_;
         double future_time_offset_; // Future time offset
+        /// filter
+        bool               use_filter_;
         ButterworthFilter  joint_filter_;
+        uint8_t               skin_counter_;     
+        uint8_t               cur_counter_;
+        /// cached MPC observation state (which is different from real observation on purpose) 
+        bool                  cached_ob_state_;
+        rclcpp::Time          last_execute_time_;
+        vector_t     cached_last_action;
+        double       hardware_latency_;
+        /// safety option
+        bool               use_early_stop_;
+        bool               clip_mpc_cost_;
+        double             max_mpc_cost_;
+
     };
 }
 
