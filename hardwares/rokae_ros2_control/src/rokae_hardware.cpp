@@ -198,6 +198,10 @@ std::vector<hardware_interface::CommandInterface> RokaeHardware::export_command_
     for (size_t i = 0; i < joint_names_.size(); ++i) {
         command_interfaces.emplace_back(
             joint_names_[i], hardware_interface::HW_IF_POSITION, &joint_position_commands_[i]);
+        command_interfaces.emplace_back(
+            joint_names_[i], hardware_interface::HW_IF_VELOCITY, &joint_velocities_commands_[i]);
+        command_interfaces.emplace_back(
+            joint_names_[i], hardware_interface::HW_IF_EFFORT, &joint_efforts_commands_[i]);
     }
     
     RCLCPP_INFO(get_node()->get_logger(), 
@@ -270,11 +274,13 @@ hardware_interface::return_type RokaeHardware::read(
     //         "%s", ss.str().c_str()
     //     );
     // }
-    // if (arm_robot_ && state_receive_started_) {
-    //     for (size_t i = 0; i < joint_names_.size(); ++i) {
-    //         joint_positions_[i] = joint_positions_array_[i];
-    //     }
-    // }
+    if (arm_robot_ && state_receive_started_) {
+        for (size_t i = 0; i < joint_names_.size(); ++i) {
+            joint_positions_[i] = joint_positions_array_[i];
+            joint_velocities_[i] = joint_velocities_array_[i];
+            joint_efforts_[i] = joint_efforts_array_[i];
+        }
+    }
     
     return hardware_interface::return_type::OK;
 }
