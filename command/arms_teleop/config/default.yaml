@@ -1,0 +1,37 @@
+# 手柄按键和摇杆映射配置
+# 适用于 Xbox 控制器 (默认配置)
+
+/**:
+  ros__parameters:
+    # 按键映射 (Button Mapping)
+    # Xbox 控制器按键索引:
+    # 0=A, 1=B, 2=X, 3=Y, 4=LB, 5=RB, 6=Back, 7=Start, 8=Guide, 9=LS, 10=RS
+    button_mapping:
+      a_button: 0          # A 按钮 - 切换目标手臂
+      b_button: 1          # B 按钮 - 发送命令
+      x_button: 2          # X 按钮 - 开关夹爪
+      y_button: 3          # Y 按钮 - 预留
+      lb_button: 4         # 左肩键 - 组合键
+      rb_button: 5         # 右肩键 - 预留
+      back_button: 6       # Back 按钮 - 预留
+      start_button: 7      # Start 按钮 - 特殊命令
+      left_stick_button: 9 # 左摇杆按下 - 预留
+      right_stick_button: 10 # 右摇杆按下 - 启用/禁用控制
+
+    # 摇杆和 D-Pad 映射 (Axes Mapping)
+    # Xbox 控制器轴索引:
+    # 0=LS_X, 1=LS_Y, 2=LT, 3=RS_X, 4=RS_Y, 5=RT, 6=DPad_X, 7=DPad_Y
+    axes_mapping:
+      left_stick_x: 0      # 左摇杆 X 轴 - 控制 Y 方向移动
+      left_stick_y: 1      # 左摇杆 Y 轴 - 控制 X 方向移动
+      right_stick_x: 3     # 右摇杆 X 轴 - 控制 Yaw 旋转
+      right_stick_y: 4     # 右摇杆 Y 轴 - 控制 Z 方向移动
+      dpad_x: 7            # D-Pad X 轴 - 控制 Pitch 旋转
+      dpad_y: 6            # D-Pad Y 轴 - 控制 Roll 旋转
+      deadzone: 0.1        # 摇杆死区
+      dpad_deadzone: 0.5   # D-Pad 死区
+    
+    # 镜像移动配置 (Mirror Movement)
+    # 当启用时，左摇杆的 X 和 Y 方向都会取反（镜像）
+    mirror_movement: true  # 默认开启镜像移动
+

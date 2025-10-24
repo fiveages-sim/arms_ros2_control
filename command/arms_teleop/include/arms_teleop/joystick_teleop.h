@@ -23,6 +23,8 @@ private:
     void sendGripperCommand(bool open);
     void gripper_command_callback(arms_ros2_control_msgs::msg::Gripper::SharedPtr msg);
     double applyDeadzone(double value, double deadzone = 0.1) const;
+    void loadButtonMapping();
+    void printButtonMapping();
 
     arms_ros2_control_msgs::msg::Inputs inputs_;
     rclcpp::Publisher<arms_ros2_control_msgs::msg::Inputs>::SharedPtr publisher_;
@@ -59,6 +61,35 @@ private:
     // Separate gripper states for left and right arms (like task3)
     bool left_gripper_open_;   // Left arm gripper state
     bool right_gripper_open_;  // Right arm gripper state
+    
+    // Button mapping configuration
+    struct ButtonMapping {
+        int x_button;
+        int a_button;
+        int b_button;
+        int y_button;
+        int lb_button;
+        int rb_button;
+        int back_button;
+        int start_button;
+        int left_stick_button;
+        int right_stick_button;
+    } button_map_;
+    
+    // Axes mapping configuration
+    struct AxesMapping {
+        int left_stick_x;
+        int left_stick_y;
+        int right_stick_x;
+        int right_stick_y;
+        int dpad_x;
+        int dpad_y;
+        double deadzone;
+        double dpad_deadzone;
+    } axes_map_;
+    
+    // Mirror movement configuration
+    bool mirror_movement_;
 };
 
 #endif //JOYSTICK_TELEOP_H 
