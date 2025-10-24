@@ -48,7 +48,7 @@ install(TARGETS
         DESTINATION lib/${PROJECT_NAME})
 
 install(
-        DIRECTORY launch
+        DIRECTORY launch config
         DESTINATION share/${PROJECT_NAME}/
 )
 
