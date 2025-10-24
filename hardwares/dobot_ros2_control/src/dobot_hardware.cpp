@@ -19,9 +19,9 @@
 namespace dobot_ros2_control
 {
 
-hardware_interface::CallbackReturn DobotHardware::on_init(const hardware_interface::HardwareInfo& info)
+hardware_interface::CallbackReturn DobotHardware::on_init(const hardware_interface::HardwareComponentInterfaceParams& params)
 {
-    if (SystemInterface::on_init(info) != hardware_interface::CallbackReturn::SUCCESS) {
+    if (SystemInterface::on_init(params) != hardware_interface::CallbackReturn::SUCCESS) {
         return hardware_interface::CallbackReturn::ERROR;
     }
     
@@ -32,9 +32,9 @@ hardware_interface::CallbackReturn DobotHardware::on_init(const hardware_interfa
     gripper_thread_running_ = false;
     gripper_joint_index_ = -1;
     
-    // 解析 URDF 配置的关节
+    // 解析 URDF 配置的关节（使用基类成员变量 info_）
     int joint_index = 0;
-    for (const auto& joint : info.joints) {
+    for (const auto& joint : info_.joints) {
         // 检查关节名称中是否包含 gripper 或 hand
         std::string joint_name_lower = joint.name;
         std::transform(joint_name_lower.begin(), joint_name_lower.end(), 
@@ -67,9 +67,9 @@ hardware_interface::CallbackReturn DobotHardware::on_init(const hardware_interfa
         RCLCPP_INFO(get_node()->get_logger(), "Found gripper: %s", gripper_joint_name_.c_str());
     }
     
-    // 读取配置参数的辅助函数
-    const auto get_hardware_parameter = [&info](const std::string& parameter_name, const std::string& default_value) {
-        if (auto it = info.hardware_parameters.find(parameter_name); it != info.hardware_parameters.end()) {
+    // 读取配置参数的辅助函数（使用基类成员变量 info_）
+    const auto get_hardware_parameter = [this](const std::string& parameter_name, const std::string& default_value) {
+        if (auto it = info_.hardware_parameters.find(parameter_name); it != info_.hardware_parameters.end()) {
             return it->second;
         }
         return default_value;
@@ -169,7 +169,7 @@ hardware_interface::CallbackReturn DobotHardware::on_activate(const rclcpp_lifec
         double current_joints[6];
         commander_->getCurrentJointStatus(current_joints);
         
-        std::lock_guard<std::mutex> lock(data_mutex_);
+        // 无需锁：ros2_control 保证 read/write 顺序执行，无并发访问
         size_t arm_joints = std::min(joint_names_.size(), size_t(6));  // 最多6个关节
         for (size_t i = 0; i < arm_joints; ++i) {
             joint_positions_[i] = current_joints[i];
@@ -210,26 +210,30 @@ hardware_interface::CallbackReturn DobotHardware::on_deactivate(const rclcpp_lif
     return hardware_interface::CallbackReturn::SUCCESS;
 }
 
-std::vector<hardware_interface::StateInterface> DobotHardware::export_state_interfaces()
+std::vector<hardware_interface::StateInterface::ConstSharedPtr> DobotHardware::on_export_state_interfaces()
 {
-    std::vector<hardware_interface::StateInterface> state_interfaces;
+    std::vector<hardware_interface::StateInterface::ConstSharedPtr> state_interfaces;
     
     // 为机械臂关节导出状态接口：位置、速度、力矩
     for (size_t i = 0; i < joint_names_.size(); ++i) {
-        state_interfaces.emplace_back(
-            joint_names_[i], hardware_interface::HW_IF_POSITION, &joint_positions_[i]);
+        state_interfaces.push_back(
+            std::make_shared<hardware_interface::StateInterface>(
+                joint_names_[i], hardware_interface::HW_IF_POSITION, &joint_positions_[i]));
         
-        state_interfaces.emplace_back(
-            joint_names_[i], hardware_interface::HW_IF_VELOCITY, &joint_velocities_[i]);
+        state_interfaces.push_back(
+            std::make_shared<hardware_interface::StateInterface>(
+                joint_names_[i], hardware_interface::HW_IF_VELOCITY, &joint_velocities_[i]));
         
-        state_interfaces.emplace_back(
-            joint_names_[i], hardware_interface::HW_IF_EFFORT, &joint_efforts_[i]);
+        state_interfaces.push_back(
+            std::make_shared<hardware_interface::StateInterface>(
+                joint_names_[i], hardware_interface::HW_IF_EFFORT, &joint_efforts_[i]));
     }
     
     // 如果配置了夹爪，导出夹爪状态接口（只有位置）
     if (has_gripper_) {
-        state_interfaces.emplace_back(
-            gripper_joint_name_, hardware_interface::HW_IF_POSITION, &gripper_position_);
+        state_interfaces.push_back(
+            std::make_shared<hardware_interface::StateInterface>(
+                gripper_joint_name_, hardware_interface::HW_IF_POSITION, &gripper_position_));
         
         RCLCPP_INFO(get_node()->get_logger(), 
                    "Exported %zu state interfaces (%zu arm joints + 1 gripper)", 
@@ -243,20 +247,22 @@ std::vector<hardware_interface::StateInterface> DobotHardware::export_state_inte
     return state_interfaces;
 }
 
-std::vector<hardware_interface::CommandInterface> DobotHardware::export_command_interfaces()
+std::vector<hardware_interface::CommandInterface::SharedPtr> DobotHardware::on_export_command_interfaces()
 {
-    std::vector<hardware_interface::CommandInterface> command_interfaces;
+    std::vector<hardware_interface::CommandInterface::SharedPtr> command_interfaces;
     
     // 为机械臂关节导出命令接口：位置命令
     for (size_t i = 0; i < joint_names_.size(); ++i) {
-        command_interfaces.emplace_back(
-            joint_names_[i], hardware_interface::HW_IF_POSITION, &joint_position_commands_[i]);
+        command_interfaces.push_back(
+            std::make_shared<hardware_interface::CommandInterface>(
+                joint_names_[i], hardware_interface::HW_IF_POSITION, &joint_position_commands_[i]));
     }
     
     // 如果配置了夹爪，导出夹爪命令接口
     if (has_gripper_) {
-        command_interfaces.emplace_back(
-            gripper_joint_name_, hardware_interface::HW_IF_POSITION, &gripper_position_command_);
+        command_interfaces.push_back(
+            std::make_shared<hardware_interface::CommandInterface>(
+                gripper_joint_name_, hardware_interface::HW_IF_POSITION, &gripper_position_command_));
         
         RCLCPP_INFO(get_node()->get_logger(), 
                    "Exported %zu command interfaces (%zu arm joints + 1 gripper)", 
@@ -283,8 +289,7 @@ hardware_interface::return_type DobotHardware::read(
         double current_joints[6];
         commander_->getCurrentJointStatus(current_joints);
         
-        // 更新关节位置
-        std::lock_guard<std::mutex> lock(data_mutex_);
+        // 更新关节位置（无需锁：ros2_control 框架保证顺序执行）
         size_t arm_joints = std::min(joint_names_.size(), size_t(6));  // 最多6个关节
         for (size_t i = 0; i < arm_joints; ++i) {
             joint_positions_[i] = current_joints[i];
@@ -297,12 +302,6 @@ hardware_interface::return_type DobotHardware::read(
                 joint_velocities_[i] = real_time_data->qd_actual[i] * M_PI / 180.0;  // 转换为弧度/秒
                 joint_efforts_[i] = real_time_data->m_actual[i];  // 力矩
             }
-        }
-        
-        // 夹爪状态由独立线程更新，这里只需读取
-        if (has_gripper_) {
-            std::lock_guard<std::mutex> lock(gripper_mutex_);
-            // gripper_position_ 由 gripperControlLoop 线程更新
         }
         
         // 定期打印调试信息（仅 verbose 模式）
@@ -339,14 +338,11 @@ hardware_interface::return_type DobotHardware::write(
     }
     
     try {
-        // 获取关节命令（弧度）
+        // 获取关节命令（弧度）（无需锁：ros2_control 框架保证顺序执行）
         double joint_cmd[6] = {0.0, 0.0, 0.0, 0.0, 0.0, 0.0};
-        {
-            std::lock_guard<std::mutex> lock(data_mutex_);
-            size_t arm_joints = std::min(joint_names_.size(), size_t(6));
-            for (size_t i = 0; i < arm_joints; ++i) {
-                joint_cmd[i] = joint_position_commands_[i];
-            }
+        size_t arm_joints = std::min(joint_names_.size(), size_t(6));
+        for (size_t i = 0; i < arm_joints; ++i) {
+            joint_cmd[i] = joint_position_commands_[i];
         }
         
         // 通过ServoJ发送关节命令（包含提前量和增益参数）
@@ -544,7 +540,7 @@ void DobotHardware::gripperControlLoop()
             if (current_time - last_read_time >= read_interval) {
                 double gripper_pos;
                 if (readGripperState(gripper_pos)) {
-                    std::lock_guard<std::mutex> lock(gripper_mutex_);
+                    // 无需锁：数据单向流动，只有此线程写入 gripper_position_
                     gripper_position_ = gripper_pos;
                 }
                 last_read_time = current_time;

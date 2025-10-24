@@ -7,8 +7,6 @@
 Tested environment:
 * Ubuntu 24.04
    * ROS2 Jazzy
-* Ubuntu 22.04
-   * ROS2 Humble
 
 Build Command:
 ```bash
@@ -188,33 +186,12 @@ ros2 control list_controllers
 
 ## 依赖项
 
-- ROS2 Humble 或更高版本
+- ROS2 Jazzy 或更高版本
 - ros2_control
 - ros2_controllers
 - sensor_msgs
-- dobot_msgs_v4 (Dobot 底层驱动包)
 
 ## 技术细节
-
-### 数据流
-
-1. **状态读取**：
-   - `CRCommanderRos2` 通过TCP连接（端口30004）接收实时数据
-   - 独立线程持续接收和解析 `RealTimeData` 结构体（1440字节）
-   - `read()` 函数调用 `getCurrentJointStatus()` 获取最新关节位置
-   - 角度自动转换为弧度
-   - 同时读取速度和力矩数据
-
-2. **命令发送**（待实现）：
-   - ros2_control 调用 `write()` 函数
-   - `write()` 通过TCP连接（端口29999）发送控制命令
-   - 支持ServoJ等实时控制指令
-
-### 线程安全
-
-- 使用 `std::mutex` 保护共享数据
-- 回调函数和 `read()` 函数可能在不同线程执行
-- 所有数据访问都有互斥锁保护
 
 ### 生命周期管理
 
@@ -238,12 +215,4 @@ ros2 control list_controllers
 - [ros2_control 文档](https://control.ros.org/)
 - [hardware_interface API](https://control.ros.org/master/doc/api/hardware_interface/html/)
 - Dobot CR 系列编程手册
-
-## 许可证
-
-Apache-2.0
-
-## 贡献
-
-欢迎提交 Issue 和 Pull Request！
 
