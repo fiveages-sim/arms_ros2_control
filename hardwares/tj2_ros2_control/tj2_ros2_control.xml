@@ -1,0 +1,10 @@
+<?xml version="1.0"?>
+<library path="tj2_ros2_control">
+    <class name="tj2_ros2_control/TJ2Hardware"
+           type="tj2_ros2_control::TJ2Hardware"
+           base_class_type="hardware_interface::SystemInterface">
+        <description>
+            TJ2 ROS2 Control Hardware Interface for single-arm control (7 DOF)
+        </description>
+    </class>
+</library>
