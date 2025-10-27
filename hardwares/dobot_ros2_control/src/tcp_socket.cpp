@@ -1,5 +1,7 @@
 #include "dobot_ros2_control/tcp_socket.h"
 
+#include <arpa/inet.h>
+
 TcpClient::TcpClient(std::string ip, uint16_t port) : fd_(-1), port_(port), ip_(std::move(ip)), is_connected_(false)
 {
 }
@@ -23,7 +25,7 @@ void TcpClient::connect()
 {
     if (fd_ < 0)
     {
-        fd_ = ::socket(AF_INET, SOCK_STREAM, 0);
+        fd_ = socket(AF_INET, SOCK_STREAM, 0);
         if (fd_ < 0)
             throw TcpClientException(toString() + std::string(" socket : ") + strerror(errno));
     }
@@ -35,7 +37,7 @@ void TcpClient::connect()
     addr.sin_family = AF_INET;
     addr.sin_port = htons(port_);
 
-    if (::connect(fd_, (sockaddr *)&addr, sizeof(addr)) < 0)
+    if (::connect(fd_, reinterpret_cast<sockaddr*>(&addr), sizeof(addr)) < 0)
         throw TcpClientException(toString() + std::string(" connect : ") + strerror(errno));
     is_connected_ = true;
 
@@ -80,7 +82,7 @@ void TcpClient::tcpSend(const void *buf, uint32_t len)
 
 bool TcpClient::tcpRecv(void *buf, uint32_t len, uint32_t &has_read, uint32_t timeout)
 {
-    uint8_t *tmp = (uint8_t *)buf; // NOLINT(modernize-use-auto)
+    uint8_t *tmp = static_cast<uint8_t*>(buf); // NOLINT(modernize-use-auto)
     fd_set read_fds;
     timeval tv = {0, 0};
 
@@ -98,24 +100,24 @@ bool TcpClient::tcpRecv(void *buf, uint32_t len, uint32_t &has_read, uint32_t ti
             disConnect();
             throw TcpClientException(toString() + std::string(" select() : ") + strerror(errno));
         }
-        else if (err == 0)
+        if (err == 0)
         {
             return false;
         }
 
-        err = (int)::read(fd_, tmp, len);
+        err = static_cast<int>(read(fd_, tmp, len));
         if (err < 0)
         {
             disConnect();
             throw TcpClientException(toString() + std::string(" ::read() ") + strerror(errno));
         }
-        else if (err == 0)
+        if (err == 0)
         {
             disConnect();
             throw TcpClientException(toString() + std::string(" tcp server has disconnected"));
         }
         len -= err;
-        tmp += (err - 1);
+        tmp += err - 1;
 
         if (tmp[0] == ';')
         {
@@ -125,7 +127,6 @@ bool TcpClient::tcpRecv(void *buf, uint32_t len, uint32_t &has_read, uint32_t ti
 
         tmp++;
         has_read += err;
-        //std::cout << "sbfeed:" << has_read << std::endl;
     }
     return true;
 }

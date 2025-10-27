@@ -7,19 +7,15 @@
  *
  ***********************************************************************************************************************
  */
+#pragma once
 
-#ifndef DOBOT_ROS2_CONTROL_COMMANDER_H
-#define DOBOT_ROS2_CONTROL_COMMANDER_H
 
 #include <vector>
 #include <string>
 #include <memory>
 #include <thread>
 #include <mutex>
-#include <algorithm>
 #include <regex>
-#include <assert.h>
-#include <cstring>
 #include "dobot_ros2_control/tcp_socket.h"
 
 #pragma pack(push, 1)
@@ -170,16 +166,13 @@ private:
                          std::vector<std::string> &result);
     static void doTcpCmd_f(std::shared_ptr<TcpClient> &tcp, const char *cmd, int32_t &err_id,std::string &mode_id,
                          std::vector<std::string> &result);
-    static inline double rad2Deg(double rad)
+    static double rad2Deg(double rad)
     {
         return rad * 180.0 / PI;
     }
 
-    static inline double deg2Rad(double deg)
+    static double deg2Rad(double deg)
     {
         return deg * PI / 180.0;
     }
 };
-
-#endif // DOBOT_ROS2_CONTROL_COMMANDER_H
-
