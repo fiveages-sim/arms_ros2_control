@@ -147,11 +147,11 @@ public:
     uint16_t getRobotMode() const;
     std::shared_ptr<RealTimeData> getRealData() const;
     
-    // ServoJ控制函数
+    // ServoJ控制函数（实时控制，异步发送）
     bool servoJ(const double joint_positions[6], double servo_time = 0.03, 
                 double aheadtime = 0.0, double gain = 0.0);
     
-    // 设置全局速度
+    // 设置全局速度（低频命令，同步等待确认）
     bool setSpeedFactor(int ratio);
     
     // Modbus 控制函数
@@ -166,6 +166,9 @@ private:
                          std::vector<std::string> &result);
     static void doTcpCmd_f(std::shared_ptr<TcpClient> &tcp, const char *cmd, int32_t &err_id,std::string &mode_id,
                          std::vector<std::string> &result);
+    
+    // 异步发送命令（不等待响应）
+    bool callRosService_async(const std::string &cmd);
     static double rad2Deg(double rad)
     {
         return rad * 180.0 / PI;

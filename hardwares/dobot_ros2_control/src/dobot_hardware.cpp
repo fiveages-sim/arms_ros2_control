@@ -345,7 +345,7 @@ hardware_interface::return_type DobotHardware::write(
             joint_cmd[i] = joint_position_commands_[i];
         }
         
-        // 通过ServoJ发送关节命令（包含提前量和增益参数）
+        // 通过ServoJ发送关节命令（异步发送，不等待响应）
         // 注意：ServoJ 始终发送6个关节值，未配置的关节发送0
         bool success = commander_->servoJ(joint_cmd, servo_time_, aheadtime_, gain_);
         
@@ -441,7 +441,7 @@ bool DobotHardware::controlGripper(double position)
     // 计算 Modbus 值：9000(闭合) - 90(打开)
     int modbus_value = static_cast<int>(9000 - degree * 9000.0 / 100.0);
     
-    // 发送三个Modbus寄存器写入命令
+    // 发送三个Modbus寄存器写入命令（异步发送，不等待响应）
     // 寄存器258: 控制模式 = 0
     if (!commander_->setHoldRegs(0, 258, 1, "{0}", "U16")) {
         return false;

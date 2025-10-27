@@ -276,6 +276,33 @@ bool CRCommanderRos2::callRosService(const std::string cmd, int32_t &err_id)
     }
 }
 
+bool CRCommanderRos2::callRosService_async(const std::string &cmd)
+{
+    try
+    {
+        if (!dash_board_tcp_ || !dash_board_tcp_->isConnect())
+        {
+            return false;
+        }
+        
+        // 异步发送：只发送命令，不等待响应
+        dash_board_tcp_->tcpSend(cmd.c_str(), cmd.length());
+        return true;
+    }
+    catch (const TcpClientException &err)
+    {
+        // 发送失败时才记录错误（限流，避免刷屏）
+        static auto last_error_time = std::chrono::steady_clock::now();
+        auto now = std::chrono::steady_clock::now();
+        if (std::chrono::duration_cast<std::chrono::milliseconds>(now - last_error_time).count() > 1000)
+        {
+            std::cout << "[callRosService_async] Send failed: " << err.what() << std::endl;
+            last_error_time = now;
+        }
+        return false;
+    }
+}
+
 bool CRCommanderRos2::callRosService_f(const std::string cmd, int32_t &err_id,std::string &mode_id)
 {
     try
@@ -345,16 +372,8 @@ bool CRCommanderRos2::servoJ(const double joint_positions[6], double servo_time,
              joint_deg[3], joint_deg[4], joint_deg[5],
              servo_time, aheadtime, gain);
     
-    // 通过TCP发送命令
-    int32_t err_id = 0;
-    bool success = callRosService(std::string(cmd), err_id);
-    
-    // 只在失败时输出错误（callRosService内部已经会输出详细错误）
-    if (!success || err_id != 0) {
-        return false;
-    }
-    
-    return true;
+    // 异步发送命令，不等待响应
+    return callRosService_async(std::string(cmd));
 }
 
 bool CRCommanderRos2::setSpeedFactor(int ratio)
@@ -428,15 +447,8 @@ bool CRCommanderRos2::setHoldRegs(int index, int addr, int count,
     snprintf(cmd, sizeof(cmd), "SetHoldRegs(%d,%d,%d,%s,%s)", 
              index, addr, count, val_tab.c_str(), val_type.c_str());
     
-    // 通过TCP发送命令
-    int32_t err_id = 0;
-    bool success = callRosService(std::string(cmd), err_id);
-    
-    if (!success || err_id != 0) {
-        return false;
-    }
-    
-    return true;
+    // 异步发送命令，不等待响应
+    return callRosService_async(std::string(cmd));
 }
 
 bool CRCommanderRos2::getHoldRegs(int index, int addr, int count, 
