@@ -356,27 +356,56 @@ namespace adaptive_gripper_controller
     {
         try
         {
-            // 查找 ros2_control 标签的起始位置
-            size_t ros2_control_start = robot_description.find("<ros2_control");
+            // 遍历所有 ros2_control 标签，直到找到包含目标关节的那个
+            size_t search_start = 0;
+            size_t ros2_control_start = std::string::npos;
+            size_t ros2_control_end = std::string::npos;
+            size_t joint_pos = std::string::npos;
+            
+            while (true)
+            {
+                // 查找下一个 ros2_control 标签的起始位置
+                ros2_control_start = robot_description.find("<ros2_control", search_start);
+                if (ros2_control_start == std::string::npos)
+                {
+                    break; // 没有更多的 ros2_control 标签了
+                }
+
+                // 查找该 ros2_control 标签的结束位置
+                ros2_control_end = robot_description.find("</ros2_control>", ros2_control_start);
+                if (ros2_control_end == std::string::npos)
+                {
+                    ros2_control_end = robot_description.size();
+                }
+
+                // 在当前 ros2_control 范围内查找关节定义
+                joint_pos = robot_description.find("<joint name=\"" + joint_name_ + "\"", ros2_control_start);
+                if (joint_pos != std::string::npos && joint_pos < ros2_control_end)
+                {
+                    // 找到了目标关节，跳出循环
+                    RCLCPP_DEBUG(get_node()->get_logger(),
+                                "Found joint %s in ros2_control section at position %zu", 
+                                joint_name_.c_str(), joint_pos);
+                    break;
+                }
+
+                // 在当前 ros2_control 中没找到，继续搜索下一个
+                search_start = ros2_control_end + 1;
+                joint_pos = std::string::npos;
+            }
+
+            // 检查是否找到了 ros2_control 标签
             if (ros2_control_start == std::string::npos)
             {
                 RCLCPP_WARN(get_node()->get_logger(), "No ros2_control tag found in robot description");
                 return;
             }
 
-            // 查找 ros2_control 标签的结束位置
-            size_t ros2_control_end = robot_description.find("</ros2_control>", ros2_control_start);
-            if (ros2_control_end == std::string::npos)
-            {
-                ros2_control_end = robot_description.size();
-            }
-
-            // 在 ros2_control 范围内查找关节定义
-            size_t joint_pos = robot_description.find("<joint name=\"" + joint_name_ + "\"", ros2_control_start);
+            // 检查是否找到了关节定义
             if (joint_pos == std::string::npos || joint_pos > ros2_control_end)
             {
                 RCLCPP_WARN(get_node()->get_logger(),
-                            "Joint %s not found in ros2_control section", joint_name_.c_str());
+                            "Joint %s not found in any ros2_control section", joint_name_.c_str());
                 return;
             }
 

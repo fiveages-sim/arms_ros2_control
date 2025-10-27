@@ -16,7 +16,7 @@
 #include <thread>
 #include <mutex>
 #include <regex>
-#include "dobot_ros2_control/tcp_socket.h"
+#include "tcp_socket.h"
 
 #pragma pack(push, 1)
 // 数据 按照 8 字节 以及  48 字节对齐的模式,

@@ -148,43 +148,86 @@ void CRCommanderRos2::doTcpCmd(std::shared_ptr<TcpClient> &tcp, const char *cmd,
     try
     {
         uint32_t has_read;
-        char buf[1024];
-        memset(buf, 0, sizeof(buf));
+        std::string response;  // 使用动态字符串，无固定大小限制
+        char recv_buf[1024];   // 临时接收缓冲区
         
         // 发送命令（静默模式，不输出）
         tcp->tcpSend(cmd, strlen(cmd));
-        char *recv_ptr = buf;
+        
         while (true)
         {
-            bool err = tcp->tcpRecv(recv_ptr, 1024, has_read, 0);
+            memset(recv_buf, 0, sizeof(recv_buf));
+            bool err = tcp->tcpRecv(recv_buf, sizeof(recv_buf) - 1, has_read, 0);
             if (!err)
             {
                 sleep(0.01);
                 continue;
             }
-            if (*(recv_ptr + strlen(recv_ptr) - 1) == ';')
+            
+            // 追加到响应字符串
+            response.append(recv_buf);
+            
+            // 检查是否接收到结束符
+            if (!response.empty() && response.back() == ';')
                 break;
-
-            recv_ptr = recv_ptr + strlen(recv_ptr);
+            
+            // 防止无限增长（最大10MB）
+            if (response.size() > 10 * 1024 * 1024) {
+                std::cout << "[TCP Error] Response too large (>10MB)" << std::endl;
+                err_id = -1;
+                return;
+            }
         }
         
-        // 解析错误码
-        for (int i = 0; i < 2000;i++)
-        {
-            if (recv_ptr[i] == '{')
-            {
-                std::string str(recv_ptr);
-                std::string result = str.substr(0, i-1);
-                int num = stringToInt(result);
-                err_id = num;
+        // 解析最后一个命令的响应
+        std::string target_cmd(cmd);
+        size_t cmd_pos = response.rfind(target_cmd);
+        
+        if (cmd_pos != std::string::npos) {
+            // 找到命令，提取其响应部分
+            size_t start_pos = response.rfind(';', cmd_pos);
+            if (start_pos == std::string::npos) {
+                start_pos = 0;
+            } else {
+                start_pos++;
+            }
+            
+            size_t end_pos = response.find(';', cmd_pos);
+            if (end_pos != std::string::npos) {
+                std::string cmd_response = response.substr(start_pos, end_pos - start_pos);
                 
-                // 只在出错时输出
-                if (err_id != 0) {
-                    std::cout << "[TCP Error] Command: " << cmd << std::endl;
-                    std::cout << "[TCP Error] ErrorID: " << err_id << std::endl;
-                    std::cout << "[TCP Error] Response: " << recv_ptr << std::endl;
+                // 解析错误码: "ErrorID,{...},Command"
+                size_t first_comma = cmd_response.find(',');
+                if (first_comma != std::string::npos) {
+                    std::string err_str = cmd_response.substr(0, first_comma);
+                    err_id = stringToInt(err_str);
+                    
+                    // 只在出错时输出
+                    if (err_id != 0) {
+                        std::cout << "[TCP Error] Command: " << cmd << std::endl;
+                        std::cout << "[TCP Error] ErrorID: " << err_id << std::endl;
+                        std::cout << "[TCP Error] Response segment: " << cmd_response << std::endl;
+                    }
                 }
-                break;
+            }
+        } else {
+            // 没找到命令，尝试解析最后一个响应
+            size_t last_semicolon = response.rfind(';');
+            size_t second_last_semicolon = response.rfind(';', last_semicolon - 1);
+            
+            if (second_last_semicolon != std::string::npos) {
+                std::string last_response = response.substr(second_last_semicolon + 1, 
+                                                            last_semicolon - second_last_semicolon - 1);
+                
+                size_t first_comma = last_response.find(',');
+                if (first_comma != std::string::npos) {
+                    std::string err_str = last_response.substr(0, first_comma);
+                    err_id = stringToInt(err_str);
+                }
+            }
+            
+            if (err_id != 0) {
+                std::cout << "[TCP Warning] Command not found in response" << std::endl;
             }
         }
     }
@@ -202,55 +245,104 @@ void CRCommanderRos2::doTcpCmd_f(std::shared_ptr<TcpClient> &tcp, const char *cm
     try
     {
         uint32_t has_read;
-        char buf[1024];
-        memset(buf, 0, sizeof(buf));
+        std::string response;  // 使用动态字符串，无固定大小限制
+        char recv_buf[1024];   // 临时接收缓冲区
         
         // 发送命令（静默模式，不输出）
         tcp->tcpSend(cmd, strlen(cmd));
-        char *recv_ptr = buf;
+        
         while (true)
         {
-            bool err = tcp->tcpRecv(recv_ptr, 1024, has_read, 0);
+            memset(recv_buf, 0, sizeof(recv_buf));
+            bool err = tcp->tcpRecv(recv_buf, sizeof(recv_buf) - 1, has_read, 0);
             if (!err)
             {
                 sleep(0.01);
                 continue;
             }
-            if (*(recv_ptr + strlen(recv_ptr) - 1) == ';')
+            
+            // 追加到响应字符串
+            response.append(recv_buf);
+            
+            // 检查是否接收到结束符
+            if (!response.empty() && response.back() == ';')
                 break;
-
-            recv_ptr = recv_ptr + strlen(recv_ptr);
+            
+            // 防止无限增长（最大10MB）
+            if (response.size() > 10 * 1024 * 1024) {
+                std::cout << "[TCP Error] Response too large (>10MB)" << std::endl;
+                err_id = -1;
+                return;
+            }
         }
         
-        // 解析错误码和返回值
-        int pose1 = 0;
-        for (int i = 0; i < 2000;i++)
-        {
-            if (recv_ptr[i] == '{')
-            {
-                std::string str(recv_ptr);
-                std::string result = str.substr(0, i-1);
-                int num = stringToInt(result);
-                err_id = num;
-                pose1 = i;
+        // 解析最后一个命令的响应（从后往前找，因为我们的命令通常在最后）
+        // 格式: ErrorID,{data},Command;
+        std::string target_cmd(cmd);
+        size_t cmd_pos = response.rfind(target_cmd);  // 从后往前找命令
+        
+        if (cmd_pos != std::string::npos) {
+            // 找到命令，提取其响应部分
+            // 向前找这个命令之前的分号或开头
+            size_t start_pos = response.rfind(';', cmd_pos);
+            if (start_pos == std::string::npos) {
+                start_pos = 0;
+            } else {
+                start_pos++;  // 跳过分号
+            }
+            
+            // 向后找命令之后的分号
+            size_t end_pos = response.find(';', cmd_pos);
+            if (end_pos != std::string::npos) {
+                std::string cmd_response = response.substr(start_pos, end_pos - start_pos);
                 
-                // 只在出错时输出
-                if (err_id != 0) {
-                    std::cout << "[TCP Error] Command: " << cmd << std::endl;
-                    std::cout << "[TCP Error] ErrorID: " << err_id << std::endl;
+                // 解析错误码和数据: "ErrorID,{data},Command"
+                size_t first_comma = cmd_response.find(',');
+                if (first_comma != std::string::npos) {
+                    std::string err_str = cmd_response.substr(0, first_comma);
+                    err_id = stringToInt(err_str);
+                    
+                    // 提取 {data} 部分
+                    size_t brace_start = cmd_response.find('{', first_comma);
+                    size_t brace_end = cmd_response.find('}', brace_start);
+                    
+                    if (brace_start != std::string::npos && brace_end != std::string::npos) {
+                        mode_id = cmd_response.substr(brace_start, brace_end - brace_start + 1);
+                    }
+                    
+                    // 只在出错时输出
+                    if (err_id != 0) {
+                        std::cout << "[TCP Error] Command: " << cmd << std::endl;
+                        std::cout << "[TCP Error] ErrorID: " << err_id << std::endl;
+                        std::cout << "[TCP Error] Response segment: " << cmd_response << std::endl;
+                    }
                 }
             }
-            if (recv_ptr[i] == '}')
-            {
-                std::string str(recv_ptr);
-                std::string result = str.substr(pose1, i-pose1+1);
-                mode_id = result;
+        } else {
+            // 没找到命令，尝试解析最后一个响应
+            size_t last_semicolon = response.rfind(';');
+            size_t second_last_semicolon = response.rfind(';', last_semicolon - 1);
+            
+            if (second_last_semicolon != std::string::npos) {
+                std::string last_response = response.substr(second_last_semicolon + 1, 
+                                                            last_semicolon - second_last_semicolon - 1);
                 
-                // 只在出错时输出完整响应
-                if (err_id != 0) {
-                    std::cout << "[TCP Error] Response: " << recv_ptr << std::endl;
+                size_t first_comma = last_response.find(',');
+                if (first_comma != std::string::npos) {
+                    std::string err_str = last_response.substr(0, first_comma);
+                    err_id = stringToInt(err_str);
+                    
+                    size_t brace_start = last_response.find('{', first_comma);
+                    size_t brace_end = last_response.find('}', brace_start);
+                    
+                    if (brace_start != std::string::npos && brace_end != std::string::npos) {
+                        mode_id = last_response.substr(brace_start, brace_end - brace_start + 1);
+                    }
                 }
-                break;
+            }
+            
+            if (err_id != 0) {
+                std::cout << "[TCP Warning] Command not found in response, parsed last segment" << std::endl;
             }
         }
     }
