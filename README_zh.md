@@ -115,8 +115,7 @@ rosdep install --from-paths src --ignore-src -r -y
 ```bash
 # 构建移动机械臂包
 cd ~/ros2_ws
-colcon build --packages-up-to ocs2_mobile_manipulator_ros --symlink-install
-
+colcon build --packages-up-to ocs2_mobile_manipulator_ros --symlink-install 
 # 尝试可用的演示之一：
 source ~/ros2_ws/install/setup.bash
 

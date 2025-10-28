@@ -1,0 +1,10 @@
+<?xml version="1.0"?>
+<library path="rokae_ros2_control">
+    <class name="rokae_ros2_control/RokaeHardware"
+           type="rokae_ros2_control::RokaeHardware"
+           base_class_type="hardware_interface::SystemInterface">
+        <description>
+            Rokae ROS2 Control Hardware Interface for single-arm control (7 DOF)
+        </description>
+    </class>
+</library>

@@ -20,6 +20,7 @@
 
 #include "arms_ros2_control_msgs/msg/gripper.hpp"
 #include "std_msgs/msg/string.hpp"
+#include "std_msgs/msg/float64.hpp"
 #include "controller_interface/controller_interface.hpp"
 #include "hardware_interface/loaned_command_interface.hpp"
 #include "hardware_interface/loaned_state_interface.hpp"
@@ -111,6 +112,9 @@ namespace adaptive_gripper_controller
         // 是否有 effort 接口（运行时自动检测）
         bool has_effort_interface_ = false;
         
+        // 控制模式：true=直接位置控制（无力反馈），false=开关控制（有力反馈）
+        bool direct_position_mode_ = false;
+        
         // 需要的状态接口类型列表（从 hardware 查询）
         std::vector<std::string> available_state_interface_types_;
 
@@ -143,6 +147,7 @@ namespace adaptive_gripper_controller
         // ROS订阅器
         rclcpp::Subscription<arms_ros2_control_msgs::msg::Gripper>::SharedPtr gripper_subscription_;
         rclcpp::Subscription<std_msgs::msg::String>::SharedPtr robot_description_subscription_;
+        rclcpp::Subscription<std_msgs::msg::Float64>::SharedPtr direct_position_subscription_;
 
                  // 处理夹爪命令
          void process_gripper_command();
