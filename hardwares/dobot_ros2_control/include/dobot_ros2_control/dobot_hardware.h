@@ -15,7 +15,6 @@
 #pragma once
 
 #include <hardware_interface/system_interface.hpp>
-#include <hardware_interface/hardware_info.hpp>
 #include <hardware_interface/types/hardware_interface_return_values.hpp>
 #include <rclcpp/rclcpp.hpp>
 #include <rclcpp_lifecycle/state.hpp>
@@ -25,7 +24,6 @@
 #include <memory>
 #include <string>
 #include <vector>
-#include <mutex>
 #include <atomic>
 
 namespace dobot_ros2_control {
@@ -40,10 +38,10 @@ class DobotHardware : public hardware_interface::SystemInterface {
 public:
     /**
      * @brief 初始化硬件接口
-     * @param info 从URDF/配置文件中读取的硬件信息
+     * @param params 硬件组件接口参数（包含硬件信息、日志记录器等）
      * @return 初始化结果
      */
-    hardware_interface::CallbackReturn on_init(const hardware_interface::HardwareInfo &info) override;
+    hardware_interface::CallbackReturn on_init(const hardware_interface::HardwareComponentInterfaceParams &params) override;
     
     /**
      * @brief 激活硬件接口（建立TCP连接、设置全局速度、初始化关节位置）
@@ -61,15 +59,15 @@ public:
 
     /**
      * @brief 导出状态接口（位置、速度、力矩）
-     * @return 状态接口列表
+     * @return 状态接口列表（智能指针）
      */
-    std::vector<hardware_interface::StateInterface> export_state_interfaces() override;
+    std::vector<hardware_interface::StateInterface::ConstSharedPtr> on_export_state_interfaces() override;
 
     /**
      * @brief 导出命令接口（位置命令）
-     * @return 命令接口列表
+     * @return 命令接口列表（智能指针）
      */
-    std::vector<hardware_interface::CommandInterface> export_command_interfaces() override;
+    std::vector<hardware_interface::CommandInterface::SharedPtr> on_export_command_interfaces() override;
 
     /**
      * @brief 读取机器人状态（从TCP实时数据流）
@@ -98,6 +96,8 @@ private:
     // 夹爪数据存储
     double gripper_position_;                      // 夹爪位置（0.0=闭合, 1.0=打开）
     double gripper_position_command_;              // 夹爪位置命令（0.0-1.0）
+    double last_gripper_command_;                  // 上次发送的夹爪命令（用于检测变化）
+    int gripper_read_counter_;                     // 夹爪读取计数器（用于降低读取频率）
     bool has_gripper_;                             // 是否配置了夹爪
     std::string gripper_joint_name_;               // 夹爪关节名称
     int gripper_joint_index_;                      // 夹爪在关节列表中的索引（-1表示无夹爪）
@@ -113,23 +113,14 @@ private:
     // Dobot底层通信接口
     std::shared_ptr<CRCommanderRos2> commander_;
     
-    // 数据同步
-    std::mutex data_mutex_;
-    std::mutex gripper_mutex_;
-    
     // 控制频率统计
     int write_count_;
     std::chrono::steady_clock::time_point last_write_stat_time_;
-    
-    // 夹爪控制线程
-    std::thread gripper_control_thread_;
-    std::atomic<bool> gripper_thread_running_;
     
     // 夹爪控制辅助函数
     bool initializeModbus();
     bool controlGripper(double position);  // position: 0.0(闭合) - 1.0(打开)
     bool readGripperState(double &position);
-    void gripperControlLoop();  // 夹爪控制线程函数
 };
 
 } // namespace dobot_ros2_control
