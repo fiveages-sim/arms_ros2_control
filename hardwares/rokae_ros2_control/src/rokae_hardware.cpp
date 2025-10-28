@@ -95,7 +95,7 @@ hardware_interface::CallbackReturn RokaeHardware::on_activate(const rclcpp_lifec
         // 从当前机器人位置初始化命令位置，避免突然跳跃
         auto current_pos = arm_robot_->jointPos(ec);
         if (!ec) {
-            std::lock_guard<std::mutex> lock(data_mutex_);
+            // std::lock_guard<std::mutex> lock(data_mutex_);
             for (size_t i = 0; i < joint_names_.size(); ++i) {
                 joint_positions_[i] = current_pos[i];
                 joint_position_commands_[i] = current_pos[i];
@@ -198,6 +198,10 @@ std::vector<hardware_interface::CommandInterface> RokaeHardware::export_command_
     for (size_t i = 0; i < joint_names_.size(); ++i) {
         command_interfaces.emplace_back(
             joint_names_[i], hardware_interface::HW_IF_POSITION, &joint_position_commands_[i]);
+        // command_interfaces.emplace_back(
+        //     joint_names_[i], hardware_interface::HW_IF_VELOCITY, &joint_velocities_commands_[i]);
+        // command_interfaces.emplace_back(
+        //     joint_names_[i], hardware_interface::HW_IF_EFFORT, &joint_efforts_commands_[i]);
     }
     
     RCLCPP_INFO(get_node()->get_logger(), 
@@ -213,61 +217,11 @@ hardware_interface::return_type RokaeHardware::read(
 {
     // 从缓存的状态数据获取关节信息
     if (arm_robot_ && state_receive_started_) {
-        // 获取关节位置
-        std::array<double, 7> positions{};
-        int pos_result = arm_robot_->getStateData(rokae::RtSupportedFields::jointPos_m, positions);
-        if (pos_result == 0) {
-            std::lock_guard<std::mutex> lock(data_mutex_);
-            for (size_t i = 0; i < joint_names_.size(); ++i) {
-                joint_positions_[i] = positions[i];
-            }
-            
-            // 计算位置误差
-            double max_error = 0.0;
-            for (size_t i = 0; i < joint_names_.size(); ++i) {
-                double error = std::abs(joint_position_commands_[i] - positions[i]);
-                max_error = std::max(max_error, error);
-            }
-            RCLCPP_DEBUG_THROTTLE(
-                get_node()->get_logger(),
-                *get_node()->get_clock(),
-                1000,
-                "Max position error: %.4f rad", max_error
-            );
-        }
-        
-        // 获取关节速度
-        std::array<double, 7> velocities{};
-        if (arm_robot_->getStateData(rokae::RtSupportedFields::jointVel_m, velocities) == 0) {
-            std::lock_guard<std::mutex> lock(data_mutex_);
-            for (size_t i = 0; i < joint_names_.size(); ++i) {
-                joint_velocities_[i] = velocities[i];
-            }
-        }
-        
-        // 获取关节力矩
-        std::array<double, 7> efforts{};
-        if (arm_robot_->getStateData(rokae::RtSupportedFields::tau_m, efforts) == 0) {
-            std::lock_guard<std::mutex> lock(data_mutex_);
-            for (size_t i = 0; i < joint_names_.size(); ++i) {
-                joint_efforts_[i] = efforts[i];
-            }
-        }
-        
-        // 定期打印调试信息（动态格式化）
-        std::stringstream ss;
-        ss << "Joint positions (rad): [";
         for (size_t i = 0; i < joint_names_.size(); ++i) {
-            ss << std::fixed << std::setprecision(3) << joint_positions_[i];
-            if (i < joint_names_.size() - 1) ss << ", ";
+            joint_positions_[i] = joint_positions_array_[i];
+            // joint_velocities_[i] = joint_velocities_array_[i];
+            // joint_efforts_[i] = joint_efforts_array_[i];
         }
-        ss << "]";
-        RCLCPP_DEBUG_THROTTLE(
-            get_node()->get_logger(),
-            *get_node()->get_clock(),
-            1000,
-            "%s", ss.str().c_str()
-        );
     }
     
     return hardware_interface::return_type::OK;
@@ -281,21 +235,6 @@ hardware_interface::return_type RokaeHardware::write(
     if (arm_robot_ && !rt_control_running_) {
         startRealtimeControl();
     }
-    
-    // 定期打印命令值
-    std::stringstream ss;
-    ss << "Joint commands (rad): [";
-    for (size_t i = 0; i < joint_names_.size(); ++i) {
-        ss << std::fixed << std::setprecision(3) << joint_position_commands_[i];
-        if (i < joint_names_.size() - 1) ss << ", ";
-    }
-    ss << "]";
-    RCLCPP_DEBUG_THROTTLE(
-        get_node()->get_logger(),
-        *get_node()->get_clock(),
-        1000,
-        "%s", ss.str().c_str()
-    );
     
     return hardware_interface::return_type::OK;
 }
@@ -411,8 +350,12 @@ void RokaeHardware::controlLoop()
         // 设置控制回调
         std::function<rokae::JointPosition()> callback = [this]() {
             std::vector<double> joint_positions(joint_names_.size());
-            {
-                std::lock_guard<std::mutex> lock(data_mutex_);
+            {           
+                // std::lock_guard<std::mutex> lock(data_mutex_);
+                arm_robot_->updateRobotState(std::chrono::milliseconds(1));
+                arm_robot_->getStateData(rokae::RtSupportedFields::jointPos_m, joint_positions_array_);
+                // arm_robot_->getStateData(rokae::RtSupportedFields::jointVel_m, joint_velocities_array_);
+                // arm_robot_->getStateData(rokae::RtSupportedFields::tau_m, joint_efforts_array_);
                 for (size_t i = 0; i < joint_names_.size(); ++i) {
                     joint_positions[i] = joint_position_commands_[i];
                 }
@@ -437,7 +380,6 @@ void RokaeHardware::startStateUpdate()
     
     try {
         state_update_running_ = true;
-        state_update_thread_ = std::thread(&RokaeHardware::stateUpdateLoop, this);
         RCLCPP_INFO(get_node()->get_logger(), "State update thread started");
     } catch (const std::exception& e) {
         RCLCPP_ERROR(get_node()->get_logger(), "Failed to start state update thread: %s", e.what());

@@ -58,6 +58,7 @@ namespace ocs2::mobile_manipulator
                             const std::string& lib_folder,
                             const std::string& urdf_file);
         void setupPublisher();
+        void loadParameters();
 
         // URDF path generation helper
         std::string generateUrdfPath(const std::string& robot_name, 
@@ -78,6 +79,15 @@ namespace ocs2::mobile_manipulator
         std::vector<std::string> joint_names_;
         bool dual_arm_mode_;
         double future_time_offset_; // Future time offset
+        /// cached MPC observation state (which is different from real observation on purpose) 
+        bool                  cached_ob_state_;
+        double                joint_speed_threshold_;
+        rclcpp::Time          last_execute_time_;
+        vector_t     cached_last_action_;
+        double       hardware_latency_;
+        rclcpp::node_interfaces::OnSetParametersCallbackHandle::SharedPtr parameter_callback_handle_;
+        rcl_interfaces::msg::SetParametersResult on_parameter_change(
+        const std::vector<rclcpp::Parameter> &parameters);
     };
 }
 
