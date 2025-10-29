@@ -102,6 +102,13 @@ private:
   // false: use initial_value from config (may cause sudden movement)
   bool initialize_commands_from_state_ = true;
 
+  // Prefix to strip from hardware joint names when matching with topic joint names
+  // e.g., if hardware has "left_joint1" and topic has "joint1", set this to "left_"
+  std::string joint_name_prefix_;
+
+  // Helper function to strip prefix from hardware joint name for matching with topic names
+  std::string stripJointPrefix(const std::string& hardware_name) const;
+
   template <typename HandleType>
   bool getInterface(const std::string& name, const std::string& interface_name, const size_t vector_index,
                     std::vector<std::vector<double>>& values, std::vector<HandleType>& interfaces);
