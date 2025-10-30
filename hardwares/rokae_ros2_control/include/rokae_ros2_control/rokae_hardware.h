@@ -93,9 +93,14 @@ public:
 private:
     // 关节数据存储（动态大小，根据配置）
     std::vector<double> joint_positions_;          // 关节位置（弧度）
+    std::array<double, 7> joint_positions_array_;          // 关节位置（弧度）
     std::vector<double> joint_velocities_;         // 关节速度（弧度/秒）
+    std::array<double, 7> joint_velocities_array_;          // 关节速度（弧度）
     std::vector<double> joint_efforts_;            // 关节力矩（N·m）
+    std::array<double, 7> joint_efforts_array_;          // 关节力矩（弧度）
     std::vector<double> joint_position_commands_;  // 关节位置命令（弧度）
+    std::vector<double> joint_velocities_commands_;  // 关节速度命令（弧度）
+    std::vector<double> joint_efforts_commands_;  // 关节力矩命令（牛顿）
     std::vector<std::string> joint_names_;         // 关节名称列表
 
     // 配置参数

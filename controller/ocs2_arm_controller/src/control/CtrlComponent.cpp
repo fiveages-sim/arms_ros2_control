@@ -25,6 +25,16 @@ namespace ocs2::mobile_manipulator
         robot_type_ = node_->get_parameter("robot_type").as_string();
         future_time_offset_ = node_->get_parameter("future_time_offset").as_double();
         joint_names_ = node_->get_parameter("joints").as_string_array();
+        // Declare parameters with defaults
+        node_->declare_parameter("cached_ob_state", true);
+        node_->declare_parameter("joint_speed_threshold", 0.1);
+        node_->declare_parameter("hardware_latency", 0.2);
+        
+        loadParameters();
+        // cached_ob_state_ = true;
+        // joint_speed_threshold_ = 0.1;
+        // hardware_latency_ = 0.2;
+
         const std::string info_file_name = node_->get_parameter("info_file_name").as_string();
 
         // Automatically build file paths and initialize interface
@@ -52,6 +62,39 @@ namespace ocs2::mobile_manipulator
         visualizer_ = std::make_unique<Visualizer>(node_, interface_, robot_name_);
         visualizer_->initialize();
         RCLCPP_INFO(node_->get_logger(), "Future time offset: %.2f seconds", future_time_offset_);
+        // Initialize cached state
+        last_execute_time_ = node_->now();
+        cached_last_action_ = observation_.state;
+    //     parameter_callback_handle_ = node_->add_on_set_parameters_callback(
+    // std::bind(&CtrlComponent::on_parameter_change, this, std::placeholders::_1));
+
+    }
+
+    rcl_interfaces::msg::SetParametersResult CtrlComponent::on_parameter_change(
+        const std::vector<rclcpp::Parameter> &parameters)
+    {
+        rcl_interfaces::msg::SetParametersResult result;
+        result.successful = true;
+
+        // Check if the 'speed' parameter was changed
+        for (const auto &param : parameters)
+        {
+            if (param.get_name() == "hardware_latency")
+            {
+                hardware_latency_ = param.as_double();  // Update the speed variable
+                RCLCPP_INFO(node_->get_logger(), "Updated hardware_latency to: %f", hardware_latency_);
+            }
+        }
+
+        return result;
+    }
+
+
+    void CtrlComponent::loadParameters()
+    {
+        joint_speed_threshold_ = node_->get_parameter("joint_speed_threshold").as_double();
+        cached_ob_state_ = node_->get_parameter("cached_ob_state").as_bool();
+        hardware_latency_ = node_->get_parameter("hardware_latency").as_double();
     }
 
     void CtrlComponent::setupInterface(const std::string& task_file,
@@ -130,7 +173,13 @@ namespace ocs2::mobile_manipulator
             return;
         }
         mpc_mrt_interface_->updatePolicy();
-
+        // use cached action as current state if the hardware has some latency to predict next action
+        bool trigger_cached_state = (time - last_execute_time_).seconds() < hardware_latency_;
+        if (trigger_cached_state && cached_ob_state_)
+        {
+            observation_.state = cached_last_action_;
+        }
+        
         mpc_mrt_interface_->setCurrentObservation(observation_);
 
         const auto observation_msg = ros_msg_conversions::createObservationMsg(observation_);
@@ -160,7 +209,7 @@ namespace ocs2::mobile_manipulator
                 policy.timeTrajectory_,
                 policy.inputTrajectory_
             );
-
+            
             // Extract joint positions from state and set as commands
             if (ctrl_interfaces_.control_mode_ == ControlMode::POSITION)
             {
@@ -168,6 +217,8 @@ namespace ocs2::mobile_manipulator
                 {
                     ctrl_interfaces_.joint_position_command_interface_[i].get().set_value(future_state(i));
                 }
+                cached_last_action_ = future_state;
+                last_execute_time_ = time;
             }
             else if (ctrl_interfaces_.control_mode_ == ControlMode::MIX)
             {

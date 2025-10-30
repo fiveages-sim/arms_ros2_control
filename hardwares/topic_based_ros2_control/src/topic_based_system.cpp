@@ -178,7 +178,35 @@ CallbackReturn TopicBasedSystem::on_init(const hardware_interface::HardwareInfo&
     sum_wrapped_joint_states_ = true;
   }
 
+  // Read the joint name prefix parameter
+  // This prefix will be stripped from hardware joint names when matching with topic joint names
+  // e.g., if hardware has "left_joint1" and topic has "joint1", set "joint_name_prefix" to "left_"
+  joint_name_prefix_ = get_hardware_parameter("joint_name_prefix", "");
+  if (!joint_name_prefix_.empty())
+  {
+    RCLCPP_INFO(node_->get_logger(), "TopicBasedSystem: joint_name_prefix = '%s'",
+                joint_name_prefix_.c_str());
+  }
+
   return CallbackReturn::SUCCESS;
+}
+
+std::string TopicBasedSystem::stripJointPrefix(const std::string& hardware_name) const
+{
+  if (joint_name_prefix_.empty())
+  {
+    return hardware_name;
+  }
+  
+  // Check if the hardware name starts with the prefix
+  if (hardware_name.find(joint_name_prefix_) == 0)
+  {
+    // Remove the prefix
+    return hardware_name.substr(joint_name_prefix_.length());
+  }
+  
+  // If prefix doesn't match, return the original name
+  return hardware_name;
 }
 
 std::vector<hardware_interface::StateInterface> TopicBasedSystem::export_state_interfaces()
@@ -236,10 +264,12 @@ hardware_interface::return_type TopicBasedSystem::read(const rclcpp::Time& /*tim
     for (std::size_t i = 0; i < latest_joint_state_.name.size(); ++i)
     {
       const auto& joints = info_.joints;
+      const std::string& topic_joint_name = latest_joint_state_.name[i];
       auto it = std::find_if(joints.begin(), joints.end(),
-                             [&joint_name = std::as_const(latest_joint_state_.name[i])](
+                             [this, &topic_joint_name](
                              const hardware_interface::ComponentInfo& info) {
-                               return joint_name == info.name;
+                               // Strip prefix from hardware name before comparing with topic name
+                               return topic_joint_name == stripJointPrefix(info.name);
                              });
       if (it != joints.end())
       {
@@ -247,8 +277,8 @@ hardware_interface::return_type TopicBasedSystem::read(const rclcpp::Time& /*tim
         if (!latest_joint_state_.position.empty())
         {
           joint_commands_[POSITION_INTERFACE_INDEX][j] = latest_joint_state_.position[i];
-          RCLCPP_INFO(node_->get_logger(), "Initialized command for joint %s to position %.3f",
-                      latest_joint_state_.name[i].c_str(), latest_joint_state_.position[i]);
+          RCLCPP_INFO(node_->get_logger(), "Initialized command for joint %s (hardware: %s) to position %.3f",
+                      topic_joint_name.c_str(), it->name.c_str(), latest_joint_state_.position[i]);
         }
         if (!latest_joint_state_.velocity.empty())
         {
@@ -267,10 +297,12 @@ hardware_interface::return_type TopicBasedSystem::read(const rclcpp::Time& /*tim
   for (std::size_t i = 0; i < latest_joint_state_.name.size(); ++i)
   {
     const auto& joints = info_.joints;
+    const std::string& topic_joint_name = latest_joint_state_.name[i];
     auto it = std::find_if(joints.begin(), joints.end(),
-                           [&joint_name = std::as_const(latest_joint_state_.name[i])](
+                           [this, &topic_joint_name](
                            const hardware_interface::ComponentInfo& info) {
-                             return joint_name == info.name;
+                             // Strip prefix from hardware name before comparing with topic name
+                             return topic_joint_name == stripJointPrefix(info.name);
                            });
     if (it != joints.end())
     {
@@ -344,7 +376,8 @@ hardware_interface::return_type TopicBasedSystem::write(const rclcpp::Time& /*ti
   sensor_msgs::msg::JointState joint_state;
   for (std::size_t i = 0; i < info_.joints.size(); ++i)
   {
-    joint_state.name.push_back(info_.joints[i].name);
+    // When publishing, use the stripped name (without prefix) to match topic format
+    joint_state.name.push_back(stripJointPrefix(info_.joints[i].name));
     joint_state.header.stamp = node_->now();
     // only send commands to the interfaces that are defined for this joint
     for (const auto& interface : info_.joints[i].command_interfaces)
