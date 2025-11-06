@@ -225,7 +225,17 @@ namespace arms_ros2_control::command
 
             // 组合旋转（ZYX顺序）
             Eigen::Quaterniond rotationIncrement = yawAngle * pitchAngle * rollAngle;
-            current_quat = current_quat * rotationIncrement;
+            
+            // 方案 A：右乘 - 旋转相对于 marker 自身的局部坐标系
+            // 特点：旋转绕 marker 当前的红/绿/蓝箭头方向
+            // 适用场景：末端执行器视角控制，类似第一人称
+            // current_quat = current_quat * rotationIncrement;
+            
+            // 方案 B：左乘 - 旋转相对于全局坐标系（世界坐标系）
+            // 特点：旋转始终绕世界的 X/Y/Z 轴，与 marker 朝向无关
+            // 适用场景：固定视角控制，与位置控制一致
+            current_quat = rotationIncrement * current_quat;
+            
             current_quat.normalize();
 
             // 转换回geometry_msgs
