@@ -128,6 +128,18 @@ namespace arms_ros2_control::command
         void rightThumbstickAxesCallback(const geometry_msgs::msg::Point::SharedPtr msg);
 
         /**
+         * 左握把按钮回调函数
+         * @param msg 握把按钮状态消息
+         */
+        void leftGripCallback(const std_msgs::msg::Bool::SharedPtr msg);
+
+        /**
+         * 右握把按钮回调函数
+         * @param msg 握把按钮状态消息
+         */
+        void rightGripCallback(const std_msgs::msg::Bool::SharedPtr msg);
+
+        /**
          * 更新marker位置
          * @param armType 手臂类型 ("left" 或 "right")
          * @param position 位置
@@ -198,6 +210,8 @@ namespace arms_ros2_control::command
         rclcpp::Subscription<std_msgs::msg::Bool>::SharedPtr sub_left_thumbstick_;
         rclcpp::Subscription<geometry_msgs::msg::Point>::SharedPtr sub_left_thumbstick_axes_;
         rclcpp::Subscription<geometry_msgs::msg::Point>::SharedPtr sub_right_thumbstick_axes_;
+        rclcpp::Subscription<std_msgs::msg::Bool>::SharedPtr sub_left_grip_;
+        rclcpp::Subscription<std_msgs::msg::Bool>::SharedPtr sub_right_grip_;
         rclcpp::Subscription<geometry_msgs::msg::PoseStamped>::SharedPtr sub_robot_left_pose_;
         rclcpp::Subscription<geometry_msgs::msg::PoseStamped>::SharedPtr sub_robot_right_pose_;
 
@@ -229,6 +243,10 @@ namespace arms_ros2_control::command
         std::atomic<bool> last_thumbstick_state_;
         std::atomic<bool> mirror_mode_;  // true = 镜像模式, false = 正常模式
         std::atomic<bool> last_left_thumbstick_state_;
+        std::atomic<bool> last_left_grip_state_;   // 左握把按钮上次状态
+        std::atomic<bool> last_right_grip_state_;  // 右握把按钮上次状态
+        std::atomic<bool> left_grip_mode_;   // 左摇杆控制模式：false=XY平移, true=Z轴+Yaw
+        std::atomic<bool> right_grip_mode_;  // 右摇杆控制模式：false=XY平移, true=Z轴+Yaw
         std::mutex state_mutex_;
 
         // 时间控制
@@ -264,6 +282,10 @@ namespace arms_ros2_control::command
         // 摇杆累积偏移量（米）
         Eigen::Vector3d left_thumbstick_offset_ = Eigen::Vector3d::Zero();
         Eigen::Vector3d right_thumbstick_offset_ = Eigen::Vector3d::Zero();
+
+        // 摇杆累积Yaw旋转（弧度）
+        double left_thumbstick_yaw_offset_ = 0.0;
+        double right_thumbstick_yaw_offset_ = 0.0;
 
         // 常量
         static const std::string XR_NODE_NAME;
