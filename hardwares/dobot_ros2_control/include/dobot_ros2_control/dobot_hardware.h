@@ -118,11 +118,6 @@ private:
     int write_count_;
     std::chrono::steady_clock::time_point last_write_stat_time_;
     
-    // 六维力传感器低通滤波器
-    bool enable_wrench_filter_;              // 是否启用滤波器
-    double wrench_filter_cutoff_freq_;      // 截止频率（Hz）
-    double wrench_filter_alpha_;            // 滤波器系数（根据采样频率和截止频率计算）
-    
     // 六维力传感器自动归零
     bool enable_wrench_auto_zero_;          // 是否启用自动归零
     bool wrench_zero_initialized_;           // 是否已初始化偏移量
@@ -134,14 +129,6 @@ private:
     double ft_sensor_offset_torque_z_;       // 力矩 Z 偏移量 (N·m)
     int wrench_zero_samples_;                // 归零采样次数（用于平均）
     int wrench_zero_sample_count_;           // 当前采样计数
-    
-    // 滤波器状态变量（用于维护滤波器内部状态）
-    double ft_sensor_filtered_force_x_;      // 滤波后的力 X（未归零）
-    double ft_sensor_filtered_force_y_;      // 滤波后的力 Y（未归零）
-    double ft_sensor_filtered_force_z_;      // 滤波后的力 Z（未归零）
-    double ft_sensor_filtered_torque_x_;     // 滤波后的力矩 X（未归零）
-    double ft_sensor_filtered_torque_y_;     // 滤波后的力矩 Y（未归零）
-    double ft_sensor_filtered_torque_z_;     // 滤波后的力矩 Z（未归零）
     
     // 六维力传感器数据（用于 hardware interface 导出）
     double ft_sensor_force_x_;   // 力 X (N)
@@ -158,9 +145,6 @@ private:
     
     // 传感器辅助函数
     bool findSensorByName(const std::string& sensor_name, hardware_interface::ComponentInfo& sensor_info);
-    
-    // 低通滤波器辅助函数（直接对 double 值进行滤波）
-    double applyLowPassFilter(double input, double& previous_output, double alpha);
 };
 
 } // namespace dobot_ros2_control

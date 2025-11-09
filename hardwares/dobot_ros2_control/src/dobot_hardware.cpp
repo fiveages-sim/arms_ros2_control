@@ -87,18 +87,6 @@ hardware_interface::CallbackReturn DobotHardware::on_init(const hardware_interfa
     verbose_ = get_hardware_parameter("verbose", "false") == "true";
     wrench_frame_id_ = get_hardware_parameter("wrench_frame_id", "Link6");
     
-    // 六维力传感器滤波器参数
-    enable_wrench_filter_ = get_hardware_parameter("enable_wrench_filter", "true") == "true";
-    wrench_filter_cutoff_freq_ = std::stod(get_hardware_parameter("wrench_filter_cutoff_freq", "10.0"));
-    
-    // 计算滤波器系数（假设采样频率为100Hz，一阶低通滤波器）
-    // α = dt / (dt + τ)，其中 τ = 1/(2π*fc)，dt = 1/sample_rate
-    // 对于100Hz采样频率：α = 1/100 / (1/100 + 1/(2π*fc))
-    double sample_rate = 100.0;  // 假设控制频率为100Hz
-    double dt = 1.0 / sample_rate;
-    double tau = 1.0 / (2.0 * M_PI * wrench_filter_cutoff_freq_);
-    wrench_filter_alpha_ = dt / (dt + tau);
-    
     // 六维力传感器自动归零参数
     enable_wrench_auto_zero_ = get_hardware_parameter("enable_wrench_auto_zero", "true") == "true";
     wrench_zero_samples_ = std::stoi(get_hardware_parameter("wrench_zero_samples", "100"));  // 默认采样100次取平均
@@ -115,14 +103,6 @@ hardware_interface::CallbackReturn DobotHardware::on_init(const hardware_interfa
     ft_sensor_offset_torque_x_ = 0.0;
     ft_sensor_offset_torque_y_ = 0.0;
     ft_sensor_offset_torque_z_ = 0.0;
-    
-    // 初始化滤波器状态变量
-    ft_sensor_filtered_force_x_ = 0.0;
-    ft_sensor_filtered_force_y_ = 0.0;
-    ft_sensor_filtered_force_z_ = 0.0;
-    ft_sensor_filtered_torque_x_ = 0.0;
-    ft_sensor_filtered_torque_y_ = 0.0;
-    ft_sensor_filtered_torque_z_ = 0.0;
     
     // 初始化力传感器数据（用于 hardware interface）
     ft_sensor_force_x_ = 0.0;
@@ -145,9 +125,6 @@ hardware_interface::CallbackReturn DobotHardware::on_init(const hardware_interfa
     RCLCPP_INFO(get_node()->get_logger(), "  Speed Factor: %d%%", speed_factor_);
     RCLCPP_INFO(get_node()->get_logger(), "  Verbose: %s", verbose_ ? "true" : "false");
     RCLCPP_INFO(get_node()->get_logger(), "  Wrench Frame ID: %s", wrench_frame_id_.c_str());
-    RCLCPP_INFO(get_node()->get_logger(), "  Wrench Filter: %s (cutoff: %.1f Hz, alpha: %.4f)", 
-                enable_wrench_filter_ ? "enabled" : "disabled", 
-                wrench_filter_cutoff_freq_, wrench_filter_alpha_);
     RCLCPP_INFO(get_node()->get_logger(), "  Wrench Auto-Zero: %s (samples: %d)", 
                 enable_wrench_auto_zero_ ? "enabled" : "disabled", wrench_zero_samples_);
     RCLCPP_INFO(get_node()->get_logger(), "  Arm Joints: %zu", joint_names_.size());
@@ -339,12 +316,12 @@ std::vector<hardware_interface::StateInterface::ConstSharedPtr> DobotHardware::o
     if (has_ft_sensor) {
         // 创建接口名称到值的映射
         std::map<std::string, double*> interface_map = {
-            {"force_x", &ft_sensor_force_x_},
-            {"force_y", &ft_sensor_force_y_},
-            {"force_z", &ft_sensor_force_z_},
-            {"torque_x", &ft_sensor_torque_x_},
-            {"torque_y", &ft_sensor_torque_y_},
-            {"torque_z", &ft_sensor_torque_z_}
+            {"force.x", &ft_sensor_force_x_},
+            {"force.y", &ft_sensor_force_y_},
+            {"force.z", &ft_sensor_force_z_},
+            {"torque.x", &ft_sensor_torque_x_},
+            {"torque.y", &ft_sensor_torque_y_},
+            {"torque.z", &ft_sensor_torque_z_}
         };
         
         // 按照配置中定义的顺序导出接口
@@ -443,41 +420,22 @@ hardware_interface::return_type DobotHardware::read(
             double raw_torque_y = real_time_data->SixForceValue[4];
             double raw_torque_z = real_time_data->SixForceValue[5];
             
-            // 应用低通滤波器（如果启用）
-            // 使用独立的滤波器状态变量，避免归零影响滤波器状态
-            if (enable_wrench_filter_) {
-                ft_sensor_filtered_force_x_ = applyLowPassFilter(raw_force_x, ft_sensor_filtered_force_x_, wrench_filter_alpha_);
-                ft_sensor_filtered_force_y_ = applyLowPassFilter(raw_force_y, ft_sensor_filtered_force_y_, wrench_filter_alpha_);
-                ft_sensor_filtered_force_z_ = applyLowPassFilter(raw_force_z, ft_sensor_filtered_force_z_, wrench_filter_alpha_);
-                ft_sensor_filtered_torque_x_ = applyLowPassFilter(raw_torque_x, ft_sensor_filtered_torque_x_, wrench_filter_alpha_);
-                ft_sensor_filtered_torque_y_ = applyLowPassFilter(raw_torque_y, ft_sensor_filtered_torque_y_, wrench_filter_alpha_);
-                ft_sensor_filtered_torque_z_ = applyLowPassFilter(raw_torque_z, ft_sensor_filtered_torque_z_, wrench_filter_alpha_);
-            } else {
-                // 不使用滤波器，直接使用原始值
-                ft_sensor_filtered_force_x_ = raw_force_x;
-                ft_sensor_filtered_force_y_ = raw_force_y;
-                ft_sensor_filtered_force_z_ = raw_force_z;
-                ft_sensor_filtered_torque_x_ = raw_torque_x;
-                ft_sensor_filtered_torque_y_ = raw_torque_y;
-                ft_sensor_filtered_torque_z_ = raw_torque_z;
-            }
-            
             // 应用自动归零偏移量（如果已初始化）
             if (enable_wrench_auto_zero_ && wrench_zero_initialized_) {
-                ft_sensor_force_x_ = ft_sensor_filtered_force_x_ - ft_sensor_offset_force_x_;
-                ft_sensor_force_y_ = ft_sensor_filtered_force_y_ - ft_sensor_offset_force_y_;
-                ft_sensor_force_z_ = ft_sensor_filtered_force_z_ - ft_sensor_offset_force_z_;
-                ft_sensor_torque_x_ = ft_sensor_filtered_torque_x_ - ft_sensor_offset_torque_x_;
-                ft_sensor_torque_y_ = ft_sensor_filtered_torque_y_ - ft_sensor_offset_torque_y_;
-                ft_sensor_torque_z_ = ft_sensor_filtered_torque_z_ - ft_sensor_offset_torque_z_;
+                ft_sensor_force_x_ = raw_force_x - ft_sensor_offset_force_x_;
+                ft_sensor_force_y_ = raw_force_y - ft_sensor_offset_force_y_;
+                ft_sensor_force_z_ = raw_force_z - ft_sensor_offset_force_z_;
+                ft_sensor_torque_x_ = raw_torque_x - ft_sensor_offset_torque_x_;
+                ft_sensor_torque_y_ = raw_torque_y - ft_sensor_offset_torque_y_;
+                ft_sensor_torque_z_ = raw_torque_z - ft_sensor_offset_torque_z_;
             } else {
-                // 不使用归零，直接使用滤波后的值（或原始值）
-                ft_sensor_force_x_ = ft_sensor_filtered_force_x_;
-                ft_sensor_force_y_ = ft_sensor_filtered_force_y_;
-                ft_sensor_force_z_ = ft_sensor_filtered_force_z_;
-                ft_sensor_torque_x_ = ft_sensor_filtered_torque_x_;
-                ft_sensor_torque_y_ = ft_sensor_filtered_torque_y_;
-                ft_sensor_torque_z_ = ft_sensor_filtered_torque_z_;
+                // 不使用归零，直接使用原始值
+                ft_sensor_force_x_ = raw_force_x;
+                ft_sensor_force_y_ = raw_force_y;
+                ft_sensor_force_z_ = raw_force_z;
+                ft_sensor_torque_x_ = raw_torque_x;
+                ft_sensor_torque_y_ = raw_torque_y;
+                ft_sensor_torque_z_ = raw_torque_z;
             }
         }
         
@@ -741,13 +699,6 @@ bool DobotHardware::findSensorByName(const std::string& sensor_name, hardware_in
         }
     }
     return false;
-}
-
-double DobotHardware::applyLowPassFilter(double input, double& previous_output, double alpha)
-{
-    // 一阶低通滤波器：y[n] = α * x[n] + (1 - α) * y[n-1]
-    previous_output = alpha * input + (1.0 - alpha) * previous_output;
-    return previous_output;
 }
 
 } // namespace dobot_ros2_control
