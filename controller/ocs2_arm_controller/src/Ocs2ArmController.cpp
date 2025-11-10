@@ -117,6 +117,9 @@ namespace ocs2::mobile_manipulator
             
             // OCS2 control parameters
             ctrl_interfaces_.ocs2_gains_ = auto_declare<std::vector<double>>("ocs2_gains", ctrl_interfaces_.ocs2_gains_);
+            
+            // MPC frequency parameter - default value 0 if not set
+            auto_declare<int>("mpc_frequency", 0);
 
             // Create CtrlComponent (auto-initialize interface)
             ctrl_comp_ = std::make_shared<CtrlComponent>(get_node(), ctrl_interfaces_);

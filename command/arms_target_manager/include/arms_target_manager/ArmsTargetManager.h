@@ -20,6 +20,10 @@
 #include <interactive_markers/interactive_marker_server.hpp>
 #include <interactive_markers/menu_handler.hpp>
 #include <arms_ros2_control_msgs/msg/inputs.hpp>
+#include <tf2_ros/transform_listener.h>
+#include <tf2_ros/buffer.h>
+#include <tf2_geometry_msgs/tf2_geometry_msgs.hpp>
+#include <tf2/exceptions.h>
 
 namespace arms_ros2_control::command
 {
@@ -51,7 +55,7 @@ namespace arms_ros2_control::command
          * @param node ROS节点指针
          * @param topicPrefix 主题前缀
          * @param dualArmMode 是否为双臂模式
-         * @param frameId 坐标系ID，默认为"world"
+         * @param frameId 坐标系ID，默认为"world"（目标frame，marker会转换到这个frame下发布）
          * @param publishRate 连续发布频率，默认为20Hz
          * @param disableAutoUpdateStates 禁用自动更新的状态值数组，默认为{3}（OCS2状态）
          * @param markerUpdateInterval 最小marker更新间隔（秒），默认为0.05秒（20Hz）
@@ -225,6 +229,16 @@ namespace arms_ros2_control::command
          */
         void rightEndEffectorPoseCallback(geometry_msgs::msg::PoseStamped::ConstSharedPtr msg);
 
+        /**
+         * 将pose从源frame_id转换到目标frame_id（配置的frame_id_）
+         * @param pose 要转换的pose（在源frame_id下）
+         * @param sourceFrameId 源frame_id（从feedback中读取，即RViz的fixed frame）
+         * @return 转换后的pose（在frame_id_下），如果转换失败或frame相同则返回原始pose
+         */
+        geometry_msgs::msg::Pose transformPose(
+            const geometry_msgs::msg::Pose& pose,
+            const std::string& sourceFrameId) const;
+
 
         // 核心成员
         rclcpp::Node::SharedPtr node_;
@@ -252,8 +266,12 @@ namespace arms_ros2_control::command
         // 配置
         std::string topic_prefix_;
         bool dual_arm_mode_;
-        std::string frame_id_;
+        std::string frame_id_;  // 目标frame，marker会转换到这个frame下发布
         double publish_rate_;
+        
+        // TF2相关
+        std::shared_ptr<tf2_ros::Buffer> tf_buffer_;
+        std::shared_ptr<tf2_ros::TransformListener> tf_listener_;
         
         // 状态管理
         MarkerState current_mode_;

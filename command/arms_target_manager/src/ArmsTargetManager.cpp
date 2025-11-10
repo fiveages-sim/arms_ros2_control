@@ -56,6 +56,10 @@ namespace arms_ros2_control::command
             right_pose_publisher_ = node_->create_publisher<geometry_msgs::msg::Pose>(
                 "right_target", 1);
         }
+
+        // 初始化TF2 buffer和listener
+        tf_buffer_ = std::make_shared<tf2_ros::Buffer>(node_->get_clock());
+        tf_listener_ = std::make_shared<tf2_ros::TransformListener>(*tf_buffer_);
     }
 
     void ArmsTargetManager::initialize()
@@ -107,13 +111,16 @@ namespace arms_ros2_control::command
         server_->applyChanges();
 
         RCLCPP_INFO(node_->get_logger(), 
-                   "ArmsTargetManager initialized. Mode: %s, Frame: %s, Publish Rate: %.1f Hz", 
+                   "ArmsTargetManager initialized. Mode: %s, Target Frame: %s, Publish Rate: %.1f Hz", 
                    dual_arm_mode_ ? "dual_arm" : "single_arm", 
                    frame_id_.c_str(),
                    publish_rate_);
         
         RCLCPP_INFO(node_->get_logger(), 
-                   "📍 All markers will be created in frame: %s", 
+                   "📍 Markers will be created in frame: %s", 
+                   frame_id_.c_str());
+        RCLCPP_INFO(node_->get_logger(), 
+                   "🔄 Poses will be automatically transformed from RViz fixed frame to target frame: %s", 
                    frame_id_.c_str());
     }
 
@@ -404,11 +411,17 @@ namespace arms_ros2_control::command
         const visualization_msgs::msg::InteractiveMarkerFeedback::ConstSharedPtr& feedback)
     {
         std::lock_guard lock(state_update_mutex_);
-        left_pose_ = feedback->pose;
+        
+        // 从feedback中读取frame_id（RViz的fixed frame）
+        std::string source_frame_id = feedback->header.frame_id;
+        
+        // 转换pose到目标frame（配置的frame_id_）
+        geometry_msgs::msg::Pose transformed_pose = transformPose(feedback->pose, source_frame_id);
+        left_pose_ = transformed_pose;
 
         if (current_mode_ == MarkerState::CONTINUOUS)
         {
-            left_pose_publisher_->publish(feedback->pose);
+            left_pose_publisher_->publish(transformed_pose);
         }
     }
 
@@ -416,11 +429,17 @@ namespace arms_ros2_control::command
         const visualization_msgs::msg::InteractiveMarkerFeedback::ConstSharedPtr& feedback)
     {
         std::lock_guard lock(state_update_mutex_);
-        right_pose_ = feedback->pose;
+        
+        // 从feedback中读取frame_id（RViz的fixed frame）
+        std::string source_frame_id = feedback->header.frame_id;
+        
+        // 转换pose到目标frame（配置的frame_id_）
+        geometry_msgs::msg::Pose transformed_pose = transformPose(feedback->pose, source_frame_id);
+        right_pose_ = transformed_pose;
 
         if (current_mode_ == MarkerState::CONTINUOUS)
         {
-            right_pose_publisher_->publish(feedback->pose);
+            right_pose_publisher_->publish(transformed_pose);
         }
     }
 
@@ -669,6 +688,39 @@ namespace arms_ros2_control::command
             return true;
         }
         return false;
+    }
+
+    geometry_msgs::msg::Pose ArmsTargetManager::transformPose(
+        const geometry_msgs::msg::Pose& pose,
+        const std::string& sourceFrameId) const
+    {
+        // 如果源frame和目标frame相同，不需要转换
+        if (sourceFrameId == frame_id_)
+        {
+            return pose;
+        }
+
+        try
+        {
+            // 创建PoseStamped用于转换
+            geometry_msgs::msg::PoseStamped pose_stamped;
+            pose_stamped.header.frame_id = sourceFrameId;
+            pose_stamped.header.stamp = node_->now();
+            pose_stamped.pose = pose;
+
+            // 转换到目标frame
+            geometry_msgs::msg::PoseStamped transformed_pose_stamped;
+            transformed_pose_stamped = tf_buffer_->transform(pose_stamped, frame_id_);
+
+            return transformed_pose_stamped.pose;
+        }
+        catch (const tf2::TransformException& ex)
+        {
+            RCLCPP_WARN(node_->get_logger(), 
+                       "无法将pose从 %s 转换到 %s: %s，使用原始pose",
+                       sourceFrameId.c_str(), frame_id_.c_str(), ex.what());
+            return pose;
+        }
     }
 
 } // namespace arms_ros2_control::command
