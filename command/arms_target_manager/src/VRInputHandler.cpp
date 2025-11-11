@@ -6,6 +6,7 @@
 #include "arms_target_manager/ArmsTargetManager.h"
 #include <rclcpp/rclcpp.hpp>
 #include <geometry_msgs/msg/pose_stamped.hpp>
+#include <geometry_msgs/msg/point.hpp>
 #include <std_msgs/msg/bool.hpp>
 #include <Eigen/Core>
 #include <Eigen/Geometry>
@@ -17,6 +18,8 @@ namespace arms_ros2_control::command
     const std::string VRInputHandler::XR_NODE_NAME = "/xr_target_node";
     const double VRInputHandler::POSITION_THRESHOLD = 0.01;  // 1cm threshold for position changes
     const double VRInputHandler::ORIENTATION_THRESHOLD = 0.005; // threshold for orientation changes (quaternion angle)
+    const double VRInputHandler::LINEAR_SCALE = 0.005;  // 与joystick的linear_scale一致
+    const double VRInputHandler::ANGULAR_SCALE = 0.05;  // 与joystick的angular_scale一致
 
     VRInputHandler::VRInputHandler(
         rclcpp::Node::SharedPtr node,
@@ -27,6 +30,12 @@ namespace arms_ros2_control::command
         , enabled_(false)
         , is_update_mode_(false)
         , last_thumbstick_state_(false)
+        , mirror_mode_(false)
+        , last_left_thumbstick_state_(false)
+        , last_left_grip_state_(false)
+        , last_right_grip_state_(false)
+        , left_grip_mode_(false)
+        , right_grip_mode_(false)
         , last_update_time_(node_->now())
         , update_rate_(updateRate)
         , current_position_(0.0, 0.0, 1.0)
@@ -55,6 +64,14 @@ namespace arms_ros2_control::command
         sub_right_thumbstick_ = node_->create_subscription<std_msgs::msg::Bool>(
             "xr_right_thumbstick", 10, thumbstickCallback);
 
+        // 创建左摇杆订阅器
+        auto leftThumbstickCallback = [this](const std_msgs::msg::Bool::SharedPtr msg)
+        {
+            this->leftThumbstickCallback(msg);
+        };
+        sub_left_thumbstick_ = node_->create_subscription<std_msgs::msg::Bool>(
+            "xr_left_thumbstick", 10, leftThumbstickCallback);
+
         // 创建机器人pose订阅器
         auto robotLeftCallback = [this](const geometry_msgs::msg::PoseStamped::SharedPtr msg)
         {
@@ -70,11 +87,44 @@ namespace arms_ros2_control::command
         sub_robot_right_pose_ = node_->create_subscription<geometry_msgs::msg::PoseStamped>(
             "right_current_pose", 10, robotRightCallback);
 
+        // 创建摇杆轴值订阅器
+        auto leftThumbstickAxesCallback = [this](const geometry_msgs::msg::Point::SharedPtr msg)
+        {
+            this->leftThumbstickAxesCallback(msg);
+        };
+        sub_left_thumbstick_axes_ = node_->create_subscription<geometry_msgs::msg::Point>(
+            "xr_left_thumbstick_axes", 10, leftThumbstickAxesCallback);
+
+        auto rightThumbstickAxesCallback = [this](const geometry_msgs::msg::Point::SharedPtr msg)
+        {
+            this->rightThumbstickAxesCallback(msg);
+        };
+        sub_right_thumbstick_axes_ = node_->create_subscription<geometry_msgs::msg::Point>(
+            "xr_right_thumbstick_axes", 10, rightThumbstickAxesCallback);
+
+        // 创建握把按钮订阅器
+        auto leftGripCallback = [this](const std_msgs::msg::Bool::SharedPtr msg)
+        {
+            this->leftGripCallback(msg);
+        };
+        sub_left_grip_ = node_->create_subscription<std_msgs::msg::Bool>(
+            "xr_left_grip", 10, leftGripCallback);
+
+        auto rightGripCallback = [this](const std_msgs::msg::Bool::SharedPtr msg)
+        {
+            this->rightGripCallback(msg);
+        };
+        sub_right_grip_ = node_->create_subscription<std_msgs::msg::Bool>(
+            "xr_right_grip", 10, rightGripCallback);
+
         RCLCPP_INFO(node_->get_logger(), "🕹️🕶️🕹️ VRInputHandler created");
+        RCLCPP_INFO(node_->get_logger(), "🕹️🕶️🕹️ Thumbstick scaling: linear=%.3f, angular=%.3f", LINEAR_SCALE, ANGULAR_SCALE);
+        RCLCPP_INFO(node_->get_logger(), "🕹️🕶️🕹️ Grip button toggles thumbstick mode: XY-translation ↔ Z-height + Yaw-rotation");
         RCLCPP_INFO(node_->get_logger(), "🕹️🕶️🕹️ VR control is DISABLED by default.");
         RCLCPP_INFO(node_->get_logger(), "🕹️🕶️🕹️ Right thumbstick toggles between STORAGE and UPDATE modes.");
         RCLCPP_INFO(node_->get_logger(), "🕹️🕶️🕹️ STORAGE mode: Store VR and robot base poses (no marker update)");
         RCLCPP_INFO(node_->get_logger(), "🕹️🕶️🕹️ UPDATE mode: Calculate pose differences and update markers");
+        RCLCPP_INFO(node_->get_logger(), "🕹️🕶️🕹️ Left thumbstick toggles MIRROR mode (face-to-face control).");
     }
 
     bool VRInputHandler::checkNodeExists(const std::shared_ptr<rclcpp::Node>& node, const std::string& targetNodeName)
@@ -130,6 +180,12 @@ namespace arms_ros2_control::command
                 robot_base_right_position_ = robot_current_right_position_;
                 robot_base_right_orientation_ = robot_current_right_orientation_;
                 
+                // 重置摇杆累积偏移
+                left_thumbstick_offset_ = Eigen::Vector3d::Zero();
+                right_thumbstick_offset_ = Eigen::Vector3d::Zero();
+                left_thumbstick_yaw_offset_ = 0.0;
+                right_thumbstick_yaw_offset_ = 0.0;
+                
                 is_update_mode_.store(true);
                 RCLCPP_INFO(node_->get_logger(), "🕹️🕶️🕹️ Switched to UPDATE mode - Base poses stored!");
                 RCLCPP_INFO(node_->get_logger(), "🕹️🕶️🕹️ VR Base Positions: Left [%.3f, %.3f, %.3f], Right [%.3f, %.3f, %.3f]", 
@@ -138,6 +194,7 @@ namespace arms_ros2_control::command
                 RCLCPP_INFO(node_->get_logger(), "🕹️🕶️🕹️ Robot Base Positions: Left [%.3f, %.3f, %.3f], Right [%.3f, %.3f, %.3f]", 
                             robot_base_left_position_.x(), robot_base_left_position_.y(), robot_base_left_position_.z(), 
                             robot_base_right_position_.x(), robot_base_right_position_.y(), robot_base_right_position_.z());
+                RCLCPP_INFO(node_->get_logger(), "🕹️🕶️🕹️ Thumbstick offsets reset!");
             }
             else
             {
@@ -148,6 +205,43 @@ namespace arms_ros2_control::command
         }
         
         last_thumbstick_state_.store(currentThumbstickState);
+    }
+
+    void VRInputHandler::leftThumbstickCallback(const std_msgs::msg::Bool::SharedPtr msg)
+    {
+        bool currentThumbstickState = msg->data;
+        bool lastState = last_left_thumbstick_state_.load();
+        
+        // 检测上升沿（按钮按下）
+        if (currentThumbstickState && !lastState)
+        {
+            // 切换镜像模式
+            mirror_mode_.store(!mirror_mode_.load());
+            
+            if (mirror_mode_.load())
+            {
+                RCLCPP_INFO(node_->get_logger(), "🕹️🕶️🕹️ MIRROR mode ENABLED - Left controller controls right arm, right controller controls left arm");
+            }
+            else
+            {
+                RCLCPP_INFO(node_->get_logger(), "🕹️🕶️🕹️ MIRROR mode DISABLED - Normal control restored");
+            }
+            
+            // 切换镜像模式后，自动切换到STORAGE模式，避免跳变
+            if (is_update_mode_.load())
+            {
+                is_update_mode_.store(false);
+                // 重置摇杆累积偏移
+                left_thumbstick_offset_ = Eigen::Vector3d::Zero();
+                right_thumbstick_offset_ = Eigen::Vector3d::Zero();
+                left_thumbstick_yaw_offset_ = 0.0;
+                right_thumbstick_yaw_offset_ = 0.0;
+                RCLCPP_WARN(node_->get_logger(), "🕹️🕶️🕹️ Automatically switched to STORAGE mode - Please re-enter UPDATE mode to apply mirror changes");
+                RCLCPP_INFO(node_->get_logger(), "🕹️🕶️🕹️ Thumbstick offsets reset!");
+            }
+        }
+        
+        last_left_thumbstick_state_.store(currentThumbstickState);
     }
 
     void VRInputHandler::robotLeftPoseCallback(const geometry_msgs::msg::PoseStamped::SharedPtr msg)
@@ -199,7 +293,19 @@ namespace arms_ros2_control::command
                 Eigen::Vector3d calculatedPos;
                 Eigen::Quaterniond calculatedOri;
                 
-                calculatePoseFromDifference(left_position_, left_orientation_,
+                // 应用摇杆累积偏移到VR当前位置
+                Eigen::Vector3d left_position_with_offset = left_position_ + left_thumbstick_offset_;
+                
+                // 应用摇杆累积Yaw旋转到VR当前姿态
+                Eigen::Quaterniond left_orientation_with_yaw = left_orientation_;
+                if (std::abs(left_thumbstick_yaw_offset_) > 0.001)
+                {
+                    Eigen::AngleAxisd yawRotation(left_thumbstick_yaw_offset_, Eigen::Vector3d::UnitZ());
+                    left_orientation_with_yaw = Eigen::Quaterniond(yawRotation) * left_orientation_;
+                    left_orientation_with_yaw.normalize();
+                }
+                
+                calculatePoseFromDifference(left_position_with_offset, left_orientation_with_yaw,
                                           vr_base_left_position_, vr_base_left_orientation_,
                                           robot_base_left_position_, robot_base_left_orientation_,
                                           calculatedPos, calculatedOri);
@@ -212,11 +318,13 @@ namespace arms_ros2_control::command
                                 vr_base_left_position_.x(), vr_base_left_position_.y(), vr_base_left_position_.z());
                     RCLCPP_DEBUG(node_->get_logger(), "🕹️🕶️🕹️ Left VR Current: [%.3f, %.3f, %.3f]", 
                                 left_position_.x(), left_position_.y(), left_position_.z());
+                    RCLCPP_DEBUG(node_->get_logger(), "🕹️🕶️🕹️ Left Thumbstick Offset: [%.3f, %.3f, %.3f]", 
+                                left_thumbstick_offset_.x(), left_thumbstick_offset_.y(), left_thumbstick_offset_.z());
                     RCLCPP_DEBUG(node_->get_logger(), "🕹️🕶️🕹️ Left Robot Base: [%.3f, %.3f, %.3f]", 
                                 robot_base_left_position_.x(), robot_base_left_position_.y(), robot_base_left_position_.z());
                     RCLCPP_DEBUG(node_->get_logger(), "🕹️🕶️🕹️ Left Calculated: [%.3f, %.3f, %.3f]", 
                                 calculatedPos.x(), calculatedPos.y(), calculatedPos.z());
-                    
+
                     // 使用计算的pose更新左臂
                     updateMarkerPose("left", calculatedPos, calculatedOri);
                     
@@ -248,7 +356,19 @@ namespace arms_ros2_control::command
                 Eigen::Vector3d calculatedPos;
                 Eigen::Quaterniond calculatedOri;
                 
-                calculatePoseFromDifference(right_position_, right_orientation_,
+                // 应用摇杆累积偏移到VR当前位置
+                Eigen::Vector3d right_position_with_offset = right_position_ + right_thumbstick_offset_;
+                
+                // 应用摇杆累积Yaw旋转到VR当前姿态
+                Eigen::Quaterniond right_orientation_with_yaw = right_orientation_;
+                if (std::abs(right_thumbstick_yaw_offset_) > 0.001)
+                {
+                    Eigen::AngleAxisd yawRotation(right_thumbstick_yaw_offset_, Eigen::Vector3d::UnitZ());
+                    right_orientation_with_yaw = Eigen::Quaterniond(yawRotation) * right_orientation_;
+                    right_orientation_with_yaw.normalize();
+                }
+                
+                calculatePoseFromDifference(right_position_with_offset, right_orientation_with_yaw,
                                           vr_base_right_position_, vr_base_right_orientation_,
                                           robot_base_right_position_, robot_base_right_orientation_,
                                           calculatedPos, calculatedOri);
@@ -262,6 +382,8 @@ namespace arms_ros2_control::command
                                 vr_base_right_position_.x(), vr_base_right_position_.y(), vr_base_right_position_.z());
                     RCLCPP_DEBUG(node_->get_logger(), "🕹️🕶️🕹️ Right VR Current: [%.3f, %.3f, %.3f]", 
                                 right_position_.x(), right_position_.y(), right_position_.z());
+                    RCLCPP_DEBUG(node_->get_logger(), "🕹️🕶️🕹️ Right Thumbstick Offset: [%.3f, %.3f, %.3f]", 
+                                right_thumbstick_offset_.x(), right_thumbstick_offset_.y(), right_thumbstick_offset_.z());
                     RCLCPP_DEBUG(node_->get_logger(), "🕹️🕶️🕹️ Right Robot Base: [%.3f, %.3f, %.3f]", 
                                 robot_base_right_position_.x(), robot_base_right_position_.y(), robot_base_right_position_.z());
                     RCLCPP_DEBUG(node_->get_logger(), "🕹️🕶️🕹️ Right Calculated: [%.3f, %.3f, %.3f]", 
@@ -375,12 +497,162 @@ namespace arms_ros2_control::command
         Eigen::Vector3d vrPosDiff = vrCurrentPos - vrBasePos;
         Eigen::Quaterniond vrOriDiff = vrBaseOri.inverse() * vrCurrentOri;
         
+        // 镜像模式：翻转x和y轴（面对面控制）
+        if (mirror_mode_.load())
+        {
+            // 位置翻转
+            vrPosDiff.x() = -vrPosDiff.x();  // 左右翻转
+            vrPosDiff.y() = -vrPosDiff.y();  // 前后翻转
+            // vrPosDiff.z() 保持不变（上下不翻转）
+            
+            // 旋转翻转（面对面镜像）
+            // 方法：对四元数的Y和Z分量取反，实现绕Z轴的镜像
+            // 这相当于对旋转进行XY平面的镜像变换
+            vrOriDiff.y() = -vrOriDiff.y();  // 翻转Y分量
+            // vrOriDiff.z() = -vrOriDiff.z();  // 翻转Z分量
+            vrOriDiff.x() = -vrOriDiff.x();  // 翻转X分量
+            vrOriDiff.normalize();  // 重新归一化
+        }
+        
         // 将相同的变换应用到机器人base pose
         resultPos = robotBasePos + vrPosDiff;
-        resultOri = robotBaseOri * vrOriDiff;
+        // resultOri = robotBaseOri * vrOriDiff;
+        resultOri = vrOriDiff * robotBaseOri;
         
         // 归一化四元数以避免漂移
         resultOri.normalize();
+    }
+
+    void VRInputHandler::leftGripCallback(const std_msgs::msg::Bool::SharedPtr msg)
+    {
+        bool currentGripState = msg->data;
+        bool lastState = last_left_grip_state_.load();
+        
+        // 检测上升沿（按钮按下）
+        if (currentGripState && !lastState)
+        {
+            // 切换控制模式
+            left_grip_mode_.store(!left_grip_mode_.load());
+            
+            if (left_grip_mode_.load())
+            {
+                RCLCPP_INFO(node_->get_logger(), "🟢 Left grip mode: Z-height + Yaw rotation (Y→Z, X→Yaw)");
+            }
+            else
+            {
+                RCLCPP_INFO(node_->get_logger(), "🟢 Left grip mode: XY translation (Y→X, X→Y)");
+            }
+        }
+        
+        last_left_grip_state_.store(currentGripState);
+    }
+
+    void VRInputHandler::rightGripCallback(const std_msgs::msg::Bool::SharedPtr msg)
+    {
+        bool currentGripState = msg->data;
+        bool lastState = last_right_grip_state_.load();
+        
+        // 检测上升沿（按钮按下）
+        if (currentGripState && !lastState)
+        {
+            // 切换控制模式
+            right_grip_mode_.store(!right_grip_mode_.load());
+            
+            if (right_grip_mode_.load())
+            {
+                RCLCPP_INFO(node_->get_logger(), "🟢 Right grip mode: Z-height + Yaw rotation (Y→Z, X→Yaw)");
+            }
+            else
+            {
+                RCLCPP_INFO(node_->get_logger(), "🟢 Right grip mode: XY translation (Y→X, X→Y)");
+            }
+        }
+        
+        last_right_grip_state_.store(currentGripState);
+    }
+
+    void VRInputHandler::leftThumbstickAxesCallback(const geometry_msgs::msg::Point::SharedPtr msg)
+    {
+        // 存储左摇杆轴值
+        left_thumbstick_axes_.x() = msg->x;
+        left_thumbstick_axes_.y() = msg->y;
+        
+        // 在UPDATE模式下累积摇杆输入
+        if (enabled_.load() && is_update_mode_.load())
+        {
+            // 根据握把模式选择不同的控制方式
+            if (left_grip_mode_.load())
+            {
+                // 高度旋转模式：Y轴→Z高度，X轴→Yaw旋转
+                double delta_z = left_thumbstick_axes_.y() * LINEAR_SCALE;  // Z轴上下
+                double delta_yaw = left_thumbstick_axes_.x() * ANGULAR_SCALE;  // Yaw旋转
+                
+                // 累积Z轴偏移和Yaw旋转
+                left_thumbstick_offset_.z() -= delta_z;
+                left_thumbstick_yaw_offset_ -= delta_yaw;
+                
+                RCLCPP_DEBUG(node_->get_logger(), "🕹️ Left thumbstick (Z+Yaw): Y=%.3f→ΔZ=%.4f, X=%.3f→ΔYaw=%.4f (累积Yaw=%.4f)",
+                            left_thumbstick_axes_.y(), delta_z,
+                            left_thumbstick_axes_.x(), delta_yaw,
+                            left_thumbstick_yaw_offset_);
+            }
+            else
+            {
+                // XY平移模式：Y轴→前后(X)，X轴→左右(Y)
+                double delta_x = left_thumbstick_axes_.y() * LINEAR_SCALE;  // 前后
+                double delta_y = left_thumbstick_axes_.x() * LINEAR_SCALE;  // 左右
+                
+                // 累积XY偏移
+                left_thumbstick_offset_.x() -= delta_x;
+                left_thumbstick_offset_.y() -= delta_y;
+                
+                RCLCPP_DEBUG(node_->get_logger(), "🕹️ Left thumbstick (XY): Y=%.3f→ΔX=%.4f, X=%.3f→ΔY=%.4f",
+                            left_thumbstick_axes_.y(), delta_x,
+                            left_thumbstick_axes_.x(), delta_y);
+            }
+        }
+    }
+
+    void VRInputHandler::rightThumbstickAxesCallback(const geometry_msgs::msg::Point::SharedPtr msg)
+    {
+        // 存储右摇杆轴值
+        right_thumbstick_axes_.x() = msg->x;
+        right_thumbstick_axes_.y() = msg->y;
+        
+        // 在UPDATE模式下累积摇杆输入
+        if (enabled_.load() && is_update_mode_.load())
+        {
+            // 根据握把模式选择不同的控制方式
+            if (right_grip_mode_.load())
+            {
+                // 高度旋转模式：Y轴→Z高度，X轴→Yaw旋转
+                double delta_z = right_thumbstick_axes_.y() * LINEAR_SCALE;  // Z轴上下
+                double delta_yaw = right_thumbstick_axes_.x() * ANGULAR_SCALE;  // Yaw旋转
+                
+                // 累积Z轴偏移和Yaw旋转
+                right_thumbstick_offset_.z() -= delta_z;
+                right_thumbstick_yaw_offset_ -= delta_yaw;
+                
+                RCLCPP_DEBUG(node_->get_logger(), "🕹️ Right thumbstick (Z+Yaw): Y=%.3f→ΔZ=%.4f, X=%.3f→ΔYaw=%.4f (累积Yaw=%.4f)",
+                            right_thumbstick_axes_.y(), delta_z,
+                            right_thumbstick_axes_.x(), delta_yaw,
+                            right_thumbstick_yaw_offset_);
+            }
+            else
+            {
+                // XY平移模式：Y轴→前后(X)，X轴→左右(Y)
+                double delta_x = right_thumbstick_axes_.y() * LINEAR_SCALE;  // 前后
+                double delta_y = right_thumbstick_axes_.x() * LINEAR_SCALE;  // 左右
+                
+                // 累积XY偏移
+                right_thumbstick_offset_.x() -= delta_x;
+                right_thumbstick_offset_.y() -= delta_y;
+                
+                RCLCPP_DEBUG(node_->get_logger(), "🕹️ Right thumbstick (XY): Y=%.3f→ΔX=%.4f, X=%.3f→ΔY=%.4f",
+                            right_thumbstick_axes_.y(), delta_x,
+                            right_thumbstick_axes_.x(), delta_y);
+            }
+        }
     }
 
 } // namespace arms_ros2_control::command

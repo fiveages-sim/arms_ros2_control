@@ -117,7 +117,10 @@ namespace ocs2::mobile_manipulator
             
             // OCS2 control parameters
             ctrl_interfaces_.ocs2_gains_ = auto_declare<std::vector<double>>("ocs2_gains", ctrl_interfaces_.ocs2_gains_);
-            
+
+            // MPC frequency parameter - default value 0 if not set
+            auto_declare<int>("mpc_frequency", 0);
+
             // Hold state parameters
             auto_declare<double>("hold_position_threshold", 0.1);  // Default: 0.1 rad (~5.7 degrees)
 

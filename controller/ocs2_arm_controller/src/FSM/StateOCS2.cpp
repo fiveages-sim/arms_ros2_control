@@ -19,13 +19,14 @@ namespace ocs2::mobile_manipulator
         joint_names_ = node_->get_parameter("joints").as_string_array();
 
         // Get MPC update frequency
-        double mpc_frequency = 0.0;
         const double controller_frequency = ctrl_interfaces_.frequency_;
 
-        // Try to get MPC frequency from parameters
-        if (node_->has_parameter("mpc_frequency"))
+        // Get MPC frequency from parameters (already declared in controller's on_init with default 0)
+        // Parameter is int type, convert to double for calculations
+        double mpc_frequency = static_cast<double>(node_->get_parameter("mpc_frequency").as_int());
+        
+        if (mpc_frequency > 0.0)
         {
-            mpc_frequency = node_->get_parameter("mpc_frequency").as_int();
             RCLCPP_INFO(node_->get_logger(), "MPC frequency from parameter: %.1f Hz", mpc_frequency);
         }
 

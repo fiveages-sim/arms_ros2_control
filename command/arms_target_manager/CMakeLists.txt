@@ -14,6 +14,8 @@ set(TARGET_MANAGER_INCLUDE_DEPENDS
         visualization_msgs
         interactive_markers
         arms_ros2_control_msgs
+        tf2_ros
+        tf2_geometry_msgs
         Eigen3
 )
 

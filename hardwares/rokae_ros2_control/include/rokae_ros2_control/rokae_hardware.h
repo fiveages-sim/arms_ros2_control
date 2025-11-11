@@ -43,10 +43,10 @@ class RokaeHardware : public hardware_interface::SystemInterface {
 public:
     /**
      * @brief 初始化硬件接口
-     * @param info 从URDF/配置文件中读取的硬件信息
+     * @param params 硬件组件接口参数（包含硬件信息、日志记录器等）
      * @return 初始化结果
      */
-    hardware_interface::CallbackReturn on_init(const hardware_interface::HardwareInfo &info) override;
+    hardware_interface::CallbackReturn on_init(const hardware_interface::HardwareComponentInterfaceParams &params) override;
     
     /**
      * @brief 激活硬件接口（连接机器人、上电、初始化实时控制）

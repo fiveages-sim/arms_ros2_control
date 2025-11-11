@@ -16,6 +16,7 @@ find_package(rclcpp_lifecycle REQUIRED)
 find_package(pluginlib REQUIRED)
 find_package(PkgConfig REQUIRED)
 pkg_check_modules(EIGEN3 REQUIRED eigen3)
+pkg_check_modules(OROCOS_KDL REQUIRED orocos-kdl)
 
 # Create library
 add_library(${PROJECT_NAME} SHARED
@@ -26,8 +27,9 @@ target_include_directories(${PROJECT_NAME} PUBLIC
         "$<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>"
         "$<INSTALL_INTERFACE:include/${PROJECT_NAME}>"
         PRIVATE src
-        PRIVATE external/xCoreSDK/include
+        PRIVATE external/librokae/include
         PRIVATE ${EIGEN3_INCLUDE_DIRS}
+        PRIVATE ${OROCOS_KDL_INCLUDE_DIRS}
 )
 
 ament_target_dependencies(${PROJECT_NAME}
@@ -39,16 +41,17 @@ ament_target_dependencies(${PROJECT_NAME}
 
 # Detect architecture and set library path
 if(CMAKE_SYSTEM_PROCESSOR MATCHES "aarch64|arm64")
-    set(XCORE_LIB_DIR "aarch64")
+    set(ROKAE_LIB_DIR "aarch64")
 else()
-    set(XCORE_LIB_DIR "x86_64")
+    set(ROKAE_LIB_DIR "x86_64")
 endif()
 
-# Link xCoreSDK libraries
+# Link librokae libraries (v0.5.1)
 target_link_libraries(${PROJECT_NAME}
-        ${CMAKE_CURRENT_SOURCE_DIR}/external/xCoreSDK/lib/Linux/${XCORE_LIB_DIR}/libxCoreSDK.a
-        ${CMAKE_CURRENT_SOURCE_DIR}/external/xCoreSDK/lib/Linux/${XCORE_LIB_DIR}/libxMateModel.a
+        ${CMAKE_CURRENT_SOURCE_DIR}/external/librokae/lib/Linux/${ROKAE_LIB_DIR}/libxCoreSDK.a
+        ${CMAKE_CURRENT_SOURCE_DIR}/external/librokae/lib/Linux/${ROKAE_LIB_DIR}/libxMateModel.a
         ${EIGEN3_LIBRARIES}
+        ${OROCOS_KDL_LIBRARIES}
         pthread
         rt
 )

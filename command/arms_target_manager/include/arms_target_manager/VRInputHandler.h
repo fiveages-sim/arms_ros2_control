@@ -11,6 +11,7 @@
 #include <atomic>
 #include <rclcpp/rclcpp.hpp>
 #include <geometry_msgs/msg/pose_stamped.hpp>
+#include <geometry_msgs/msg/point.hpp>
 #include <std_msgs/msg/bool.hpp>
 #include <Eigen/Core>
 #include <Eigen/Geometry>
@@ -64,6 +65,12 @@ namespace arms_ros2_control::command
         bool isEnabled() const { return enabled_.load(); }
 
         /**
+         * 检查是否处于镜像模式
+         * @return true如果启用镜像模式，false否则
+         */
+        bool isMirrorMode() const { return mirror_mode_.load(); }
+
+        /**
          * 检查节点是否存在
          * @param node ROS节点指针
          * @param targetNodeName 目标节点名称
@@ -91,6 +98,12 @@ namespace arms_ros2_control::command
         void rightThumbstickCallback(const std_msgs::msg::Bool::SharedPtr msg);
 
         /**
+         * 左摇杆回调函数
+         * @param msg 布尔消息，表示摇杆按下状态
+         */
+        void leftThumbstickCallback(const std_msgs::msg::Bool::SharedPtr msg);
+
+        /**
          * 机器人左臂当前pose回调函数
          * @param msg 机器人pose消息
          */
@@ -101,6 +114,30 @@ namespace arms_ros2_control::command
          * @param msg 机器人pose消息
          */
         void robotRightPoseCallback(const geometry_msgs::msg::PoseStamped::SharedPtr msg);
+
+        /**
+         * 左摇杆轴值回调函数
+         * @param msg 摇杆轴值消息 (x, y, z)
+         */
+        void leftThumbstickAxesCallback(const geometry_msgs::msg::Point::SharedPtr msg);
+
+        /**
+         * 右摇杆轴值回调函数
+         * @param msg 摇杆轴值消息 (x, y, z)
+         */
+        void rightThumbstickAxesCallback(const geometry_msgs::msg::Point::SharedPtr msg);
+
+        /**
+         * 左握把按钮回调函数
+         * @param msg 握把按钮状态消息
+         */
+        void leftGripCallback(const std_msgs::msg::Bool::SharedPtr msg);
+
+        /**
+         * 右握把按钮回调函数
+         * @param msg 握把按钮状态消息
+         */
+        void rightGripCallback(const std_msgs::msg::Bool::SharedPtr msg);
 
         /**
          * 更新marker位置
@@ -170,6 +207,11 @@ namespace arms_ros2_control::command
         rclcpp::Subscription<geometry_msgs::msg::PoseStamped>::SharedPtr sub_left_;
         rclcpp::Subscription<geometry_msgs::msg::PoseStamped>::SharedPtr sub_right_;
         rclcpp::Subscription<std_msgs::msg::Bool>::SharedPtr sub_right_thumbstick_;
+        rclcpp::Subscription<std_msgs::msg::Bool>::SharedPtr sub_left_thumbstick_;
+        rclcpp::Subscription<geometry_msgs::msg::Point>::SharedPtr sub_left_thumbstick_axes_;
+        rclcpp::Subscription<geometry_msgs::msg::Point>::SharedPtr sub_right_thumbstick_axes_;
+        rclcpp::Subscription<std_msgs::msg::Bool>::SharedPtr sub_left_grip_;
+        rclcpp::Subscription<std_msgs::msg::Bool>::SharedPtr sub_right_grip_;
         rclcpp::Subscription<geometry_msgs::msg::PoseStamped>::SharedPtr sub_robot_left_pose_;
         rclcpp::Subscription<geometry_msgs::msg::PoseStamped>::SharedPtr sub_robot_right_pose_;
 
@@ -199,6 +241,12 @@ namespace arms_ros2_control::command
         std::atomic<bool> enabled_;
         std::atomic<bool> is_update_mode_;  // true = 更新模式, false = 存储模式
         std::atomic<bool> last_thumbstick_state_;
+        std::atomic<bool> mirror_mode_;  // true = 镜像模式, false = 正常模式
+        std::atomic<bool> last_left_thumbstick_state_;
+        std::atomic<bool> last_left_grip_state_;   // 左握把按钮上次状态
+        std::atomic<bool> last_right_grip_state_;  // 右握把按钮上次状态
+        std::atomic<bool> left_grip_mode_;   // 左摇杆控制模式：false=XY平移, true=Z轴+Yaw
+        std::atomic<bool> right_grip_mode_;  // 右摇杆控制模式：false=XY平移, true=Z轴+Yaw
         std::mutex state_mutex_;
 
         // 时间控制
@@ -227,10 +275,24 @@ namespace arms_ros2_control::command
         Eigen::Vector3d robot_current_right_position_ = Eigen::Vector3d::Zero();
         Eigen::Quaterniond robot_current_right_orientation_ = Eigen::Quaterniond::Identity();
 
+        // 摇杆轴值（归一化 -1.0 ~ 1.0）
+        Eigen::Vector2d left_thumbstick_axes_ = Eigen::Vector2d::Zero();
+        Eigen::Vector2d right_thumbstick_axes_ = Eigen::Vector2d::Zero();
+
+        // 摇杆累积偏移量（米）
+        Eigen::Vector3d left_thumbstick_offset_ = Eigen::Vector3d::Zero();
+        Eigen::Vector3d right_thumbstick_offset_ = Eigen::Vector3d::Zero();
+
+        // 摇杆累积Yaw旋转（弧度）
+        double left_thumbstick_yaw_offset_ = 0.0;
+        double right_thumbstick_yaw_offset_ = 0.0;
+
         // 常量
         static const std::string XR_NODE_NAME;
         static const double POSITION_THRESHOLD;
         static const double ORIENTATION_THRESHOLD;
+        static const double LINEAR_SCALE;   // 摇杆位置缩放因子
+        static const double ANGULAR_SCALE;  // 摇杆旋转缩放因子
     };
 
 } // namespace arms_ros2_control::command
