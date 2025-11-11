@@ -103,6 +103,18 @@ private:
     std::vector<double> joint_efforts_commands_;  // 关节力矩命令（牛顿）
     std::vector<std::string> joint_names_;         // 关节名称列表
 
+    // 夹爪参数
+    bool                                  has_gripper_;
+    std::string                    gripper_joint_name_;
+    size_t                        gripper_joint_index_;
+    double                            gripper_position_; 
+    double                            gripper_velocity_;
+    double                            gripper_effort_;
+    double                            gripper_position_command_;
+    double                          last_gripper_command_;
+    bool                             gripper_stopped_ ;
+    bool                             gripper_initilized_;
+   
     // 配置参数
     std::string arm_ip_;           // 机械臂IP地址
     std::string local_ip_;         // 本地IP地址
@@ -131,6 +143,9 @@ private:
     void startStateUpdate();
     void stopStateUpdate();
     void stateUpdateLoop();
+
+    // 
+    void contains_gripper();
 };
 
 } // namespace rokae_ros2_control
