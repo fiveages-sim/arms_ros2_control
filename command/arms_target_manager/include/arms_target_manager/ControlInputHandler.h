@@ -1,9 +1,8 @@
 //
 // Created for Arms ROS2 Control - ControlInputHandler
 //
+#pragma once
 
-#ifndef CONTROL_INPUT_HANDLER_H
-#define CONTROL_INPUT_HANDLER_H
 
 #include <memory>
 #include <rclcpp/rclcpp.hpp>
@@ -57,5 +56,3 @@ namespace arms_ros2_control::command
     };
 
 } // namespace arms_ros2_control::command
-
-#endif // CONTROL_INPUT_HANDLER_H

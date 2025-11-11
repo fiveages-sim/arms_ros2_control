@@ -1,9 +1,8 @@
 //
 // Created for Arms ROS2 Control - ArmsTargetManager
 //
+#pragma once
 
-#ifndef ARMS_TARGET_MANAGER_H
-#define ARMS_TARGET_MANAGER_H
 
 #include <memory>
 #include <string>
@@ -22,8 +21,6 @@
 #include <arms_ros2_control_msgs/msg/inputs.hpp>
 #include <tf2_ros/transform_listener.h>
 #include <tf2_ros/buffer.h>
-#include <tf2_geometry_msgs/tf2_geometry_msgs.hpp>
-#include <tf2/exceptions.h>
 
 namespace arms_ros2_control::command
 {
@@ -230,14 +227,16 @@ namespace arms_ros2_control::command
         void rightEndEffectorPoseCallback(geometry_msgs::msg::PoseStamped::ConstSharedPtr msg);
 
         /**
-         * 将pose从源frame_id转换到目标frame_id（配置的frame_id_）
+         * 将pose从源frame_id转换到指定的目标frame_id
          * @param pose 要转换的pose（在源frame_id下）
-         * @param sourceFrameId 源frame_id（从feedback中读取，即RViz的fixed frame）
-         * @return 转换后的pose（在frame_id_下），如果转换失败或frame相同则返回原始pose
+         * @param sourceFrameId 源frame_id
+         * @param targetFrameId 目标frame_id
+         * @return 转换后的pose（在targetFrameId下），如果转换失败或frame相同则返回原始pose
          */
         geometry_msgs::msg::Pose transformPose(
             const geometry_msgs::msg::Pose& pose,
-            const std::string& sourceFrameId) const;
+            const std::string& sourceFrameId,
+            const std::string& targetFrameId) const;
 
 
         // 核心成员
@@ -293,5 +292,3 @@ namespace arms_ros2_control::command
     };
 
 } // namespace arms_ros2_control::command
-
-#endif // ARMS_TARGET_MANAGER_H
