@@ -1,9 +1,7 @@
 //
 // Created for Arms ROS2 Control - VRInputHandler
 //
-
-#ifndef VR_INPUT_HANDLER_H
-#define VR_INPUT_HANDLER_H
+#pragma once
 
 #include <memory>
 #include <string>
@@ -83,61 +81,61 @@ namespace arms_ros2_control::command
          * VR左臂pose回调函数
          * @param msg VR pose消息
          */
-        void vrLeftCallback(const geometry_msgs::msg::PoseStamped::SharedPtr msg);
+        void vrLeftCallback(geometry_msgs::msg::PoseStamped::SharedPtr msg);
 
         /**
          * VR右臂pose回调函数
          * @param msg VR pose消息
          */
-        void vrRightCallback(const geometry_msgs::msg::PoseStamped::SharedPtr msg);
+        void vrRightCallback(geometry_msgs::msg::PoseStamped::SharedPtr msg);
 
         /**
          * 右摇杆回调函数
          * @param msg 布尔消息，表示摇杆按下状态
          */
-        void rightThumbstickCallback(const std_msgs::msg::Bool::SharedPtr msg);
+        void rightThumbstickCallback(std_msgs::msg::Bool::SharedPtr msg);
 
         /**
          * 左摇杆回调函数
          * @param msg 布尔消息，表示摇杆按下状态
          */
-        void leftThumbstickCallback(const std_msgs::msg::Bool::SharedPtr msg);
+        void leftThumbstickCallback(std_msgs::msg::Bool::SharedPtr msg);
 
         /**
          * 机器人左臂当前pose回调函数
          * @param msg 机器人pose消息
          */
-        void robotLeftPoseCallback(const geometry_msgs::msg::PoseStamped::SharedPtr msg);
+        void robotLeftPoseCallback(geometry_msgs::msg::PoseStamped::SharedPtr msg);
 
         /**
          * 机器人右臂当前pose回调函数
          * @param msg 机器人pose消息
          */
-        void robotRightPoseCallback(const geometry_msgs::msg::PoseStamped::SharedPtr msg);
+        void robotRightPoseCallback(geometry_msgs::msg::PoseStamped::SharedPtr msg);
 
         /**
          * 左摇杆轴值回调函数
          * @param msg 摇杆轴值消息 (x, y, z)
          */
-        void leftThumbstickAxesCallback(const geometry_msgs::msg::Point::SharedPtr msg);
+        void leftThumbstickAxesCallback(geometry_msgs::msg::Point::SharedPtr msg);
 
         /**
          * 右摇杆轴值回调函数
          * @param msg 摇杆轴值消息 (x, y, z)
          */
-        void rightThumbstickAxesCallback(const geometry_msgs::msg::Point::SharedPtr msg);
+        void rightThumbstickAxesCallback(geometry_msgs::msg::Point::SharedPtr msg);
 
         /**
          * 左握把按钮回调函数
          * @param msg 握把按钮状态消息
          */
-        void leftGripCallback(const std_msgs::msg::Bool::SharedPtr msg);
+        void leftGripCallback(std_msgs::msg::Bool::SharedPtr msg);
 
         /**
          * 右握把按钮回调函数
          * @param msg 握把按钮状态消息
          */
-        void rightGripCallback(const std_msgs::msg::Bool::SharedPtr msg);
+        void rightGripCallback(std_msgs::msg::Bool::SharedPtr msg);
 
         /**
          * 更新marker位置
@@ -154,7 +152,7 @@ namespace arms_ros2_control::command
          * @param msg PoseStamped消息
          * @return 4x4变换矩阵
          */
-        Eigen::Matrix4d poseMsgToMatrix(const geometry_msgs::msg::PoseStamped::SharedPtr msg);
+        Eigen::Matrix4d poseMsgToMatrix(geometry_msgs::msg::PoseStamped::SharedPtr msg);
 
         /**
          * 从4x4矩阵提取位置和方向
@@ -296,5 +294,3 @@ namespace arms_ros2_control::command
     };
 
 } // namespace arms_ros2_control::command
-
-#endif // VR_INPUT_HANDLER_H
