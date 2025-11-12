@@ -1,0 +1,3 @@
+# 忽略预编译的库文件（如果使用git管理）
+# external/libeyou/lib/
+
