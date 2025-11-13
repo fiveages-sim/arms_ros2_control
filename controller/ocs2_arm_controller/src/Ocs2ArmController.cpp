@@ -124,11 +124,14 @@ namespace ocs2::mobile_manipulator
             // Hold state parameters
             auto_declare<double>("hold_position_threshold", 0.1);  // Default: 0.1 rad (~5.7 degrees)
 
+            // Home state parameters
+            double home_duration = auto_declare<double>("home_duration", 3.0);  // Default: 3.0 seconds
+
             // Create CtrlComponent (auto-initialize interface)
             ctrl_comp_ = std::make_shared<CtrlComponent>(get_node(), ctrl_interfaces_);
 
             // Create states
-            state_list_.home = std::make_shared<StateHome>(ctrl_interfaces_, home_pos_, ctrl_comp_);
+            state_list_.home = std::make_shared<StateHome>(ctrl_interfaces_, home_pos_, ctrl_comp_, home_duration);
             
             // Configure rest pose if available
             if (!rest_pos_.empty())
