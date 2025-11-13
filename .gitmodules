@@ -1,0 +1,16 @@
+[submodule "hardwares/unitree_ros2_control"]
+	path = hardwares/unitree_ros2_control
+	url = git@github.com:fiveages-sim/unitree-ros2-control.git
+	branch = main
+[submodule "hardwares/dobot_ros2_control"]
+	path = hardwares/dobot_ros2_control
+	url = git@github.com:fiveages-sim/dobot-cr-ros2-control.git
+	branch = main
+[submodule "hardwares/rokae_ros2_control"]
+	path = hardwares/rokae_ros2_control
+	url = git@github.com:fiveages-sim/rokae-ros2-control.git
+	branch = main
+[submodule "hardwares/eyou_ros2_control"]
+	path = hardwares/eyou_ros2_control
+	url = git@github.com:fiveages-sim/eyou-ros2-control.git
+	branch = main
