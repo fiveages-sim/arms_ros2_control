@@ -13,10 +13,15 @@
 #include "rclcpp_lifecycle/node_interfaces/lifecycle_node_interface.hpp"
 #include "rclcpp_lifecycle/state.hpp"
 #include "MarvinSDK.h"
+#include <cmath>
 
-namespace tj2_hardware
+namespace tj2_ros2_control
 {
-
+    enum class RobotArmConfig {
+      LEFT_ARM = 0,
+      RIGHT_ARM = 1,
+      DUAL_ARM = 2
+    };
 class TJ2Hardware : public hardware_interface::SystemInterface
 {
 public:
@@ -47,18 +52,20 @@ private:
   int  robot_arm_left_right_;
   int  previous_message_frame_;
   DCSS frame_data_;
+  std::shared_ptr<rclcpp::Logger> logger_;
+  std::shared_ptr<rclcpp::Clock> clock_;
   // Joint data storage
-  std::array<double, 7> hw_position_commands_;
-  std::array<double, 7> hw_velocity_commands_;
-  std::array<double, 7> hw_position_states_;
-  std::array<double, 7> hw_velocity_states_;
-  std::array<double, 7> hw_effort_states_;
+  std::vector<double> hw_position_commands_;
+  std::vector<double> hw_velocity_commands_;
+  std::vector<double> hw_position_states_;
+  std::vector<double> hw_velocity_states_;
+  std::vector<double> hw_effort_states_;
 
   // Joint limits from URDF
-  std::array<double, 7> position_lower_limits_;
-  std::array<double, 7> position_upper_limits_;
-  std::array<double, 7> velocity_limits_;
-  std::array<double, 7> effort_limits_;
+  std::vector<double> position_lower_limits_;
+  std::vector<double> position_upper_limits_;
+  std::vector<double> velocity_limits_;
+  std::vector<double> effort_limits_;
 
   // Connection status
   bool hardware_connected_;
@@ -71,11 +78,21 @@ private:
   bool connectToHardware();
   void disconnectFromHardware();
   bool readFromHardware(int robot_arm_left_right_, bool initial_frame);
-  bool writeToHardware(int robot_arm_left_right_);
+  bool writeToHardware(int robot_arm_left_right_, std::vector<double> & hw_commands);
   void simulateHardware(const rclcpp::Duration & period);
   void enforceJointLimits();
   bool initializeJointLimits();
   void logJointStates();
+  
+  double degreeToRad(double degree) {
+      return degree * M_PI / 180.0;
+  };
+
+  double radToDegree(double rad) {
+    return rad * 180.0 / M_PI;
+  };
+  
+
 
   void splitIPToCharArrays(const char* ipStr, char octet1[4], char octet2[4], char octet3[4], char octet4[4]) {
         sscanf(ipStr, "%3[^.].%3[^.].%3[^.].%3[^.]", octet1, octet2, octet3, octet4);

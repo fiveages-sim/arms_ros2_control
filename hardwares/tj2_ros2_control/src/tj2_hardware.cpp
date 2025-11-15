@@ -5,11 +5,12 @@
 #include <limits>
 #include <thread>
 #include <random>
-
+#include "pluginlib/class_list_macros.hpp"
 #include "hardware_interface/types/hardware_interface_type_values.hpp"
 #include "rclcpp/rclcpp.hpp"
+#include <string>
 
-namespace tj2_hardware
+namespace tj2_ros2_control
 {
 
 hardware_interface::CallbackReturn TJ2Hardware::on_init(
@@ -17,34 +18,63 @@ hardware_interface::CallbackReturn TJ2Hardware::on_init(
 {
   RCLCPP_INFO(rclcpp::get_logger("TJ2Hardware"), "Initializing TJ2 Hardware Interface...");
 
+  logger_ = std::make_shared<rclcpp::Logger>(rclcpp::get_logger("TJ2Hardware"));
+  clock_ = std::make_shared<rclcpp::Clock>();
   if (hardware_interface::SystemInterface::on_init(info) != hardware_interface::CallbackReturn::SUCCESS) {
     return hardware_interface::CallbackReturn::ERROR;
   }
+    
+    // Get the number of joints from the hardware info
+    size_t num_joints = info.joints.size();
+    robot_arm_left_right_ = static_cast<int>(RobotArmConfig::LEFT_ARM);
+    if (info_.hardware_parameters.find("left_right_arm") != info_.hardware_parameters.end()) {
+      robot_arm_left_right_ = std::stoi(info_.hardware_parameters.at("left_right_arm"));
+      RCLCPP_INFO(get_logger(), "Found left_right_arm parameter: %d", robot_arm_left_right_);
+    } else {
+      RCLCPP_WARN(get_logger(), "No left_right_arm parameter found, using default: %d", robot_arm_left_right_);
+    }
+   
+    RCLCPP_INFO(get_logger(), "Initializing %zu joints", num_joints);
 
-  // Initialize joint data vectors
-  // hw_position_commands_.resize(info_.joints.size(), 0.0);
-  // hw_velocity_commands_.resize(info_.joints.size(), 0.0);
-  // hw_position_states_.resize(info_.joints.size(), 0.0);
-  // hw_velocity_states_.resize(info_.joints.size(), 0.0);
-  // hw_effort_states_.resize(info_.joints.size(), 0.0);
+    // Resize all arrays based on the number of joints
+    hw_position_commands_.resize(num_joints, 0.0);
+    hw_velocity_commands_.resize(num_joints, 0.0);
+    hw_position_states_.resize(num_joints, 0.0);
+    hw_velocity_states_.resize(num_joints, 0.0);
+    hw_effort_states_.resize(num_joints, 0.0);
+
+    // Initialize joint limits arrays
+    // position_lower_limits_.resize(num_joints);
+    // position_upper_limits_.resize(num_joints);
+    // velocity_limits_.resize(num_joints);
+    // effort_limits_.resize(num_joints);
+
+    // Populate joint limits from URDF
+    // for (size_t i = 0; i < num_joints; i++) {
+    //   const auto& joint = info.joints[i];
+      
+    //   // Set position limits (if available)
+    //   position_lower_limits_[i] = joint.limits.min_position;
+    //   position_upper_limits_[i] = joint.limits.max_position;
+      
+    //   // Set velocity limits (if available)
+    //   velocity_limits_[i] = joint.limits.max_velocity;
+      
+    //   // Set effort limits (if available)
+    //   effort_limits_[i] = joint.limits.max_effort;
+
+    //   RCLCPP_DEBUG(get_logger(), "Joint %s: pos=[%.3f, %.3f], vel=%.3f, effort=%.3f",
+    //               joint.name.c_str(),
+    //               position_lower_limits_[i], position_upper_limits_[i],
+    //               velocity_limits_[i], effort_limits_[i]);
+    // }
+  
+  
 
   // Initialize hardware connection status
   hardware_connected_ = false;
   simulation_active_ = false;
-
-  // read ip address and connect robot 
-    // 读取配置参数的辅助函数
-const auto get_hardware_parameter = [&info](const std::string& parameter_name, const std::string& default_value) {
-    if (auto it = info.hardware_parameters.find(parameter_name); it != info.hardware_parameters.end()) {
-        return it->second;
-    }
-    return default_value;
-    };
-
-    std::string arm_ip = get_hardware_parameter("arm_ip", "192.168.2.160");
-    robot_arm_left_right_ = std::stoi(get_hardware_parameter("arm_arm_left_right", "0")); // 0 is left, 1 is right
-    RCLCPP_INFO(rclcpp::get_logger("TJ2Hardware"), "TJ2 Hardware Interface initialized with %zu joints", info_.joints.size());
-    return hardware_interface::CallbackReturn::SUCCESS;
+  return hardware_interface::CallbackReturn::SUCCESS;
 }
 
 hardware_interface::CallbackReturn TJ2Hardware::on_configure(
@@ -72,7 +102,7 @@ hardware_interface::CallbackReturn TJ2Hardware::on_activate(
   const rclcpp_lifecycle::State & /*previous_state*/)
 {
   RCLCPP_INFO(rclcpp::get_logger("TJ2Hardware"), "Activating TJ2 Hardware Interface...");
-
+  simulation_mode_ = false;
   if (simulation_mode_) {
     RCLCPP_INFO(rclcpp::get_logger("TJ2Hardware"), "Running in simulation mode");
     simulation_active_ = true;
@@ -87,9 +117,10 @@ hardware_interface::CallbackReturn TJ2Hardware::on_activate(
     }
     
   } else {
+    RCLCPP_INFO(rclcpp::get_logger("TJ2Hardware"), "Running in real hardware mode");
     // Connect to real hardware
     if (!connectToHardware()) {
-      RCLCPP_ERROR(rclcpp::get_logger("TJ2Hardware"), "Failed to connect to Dobot CR5 hardware");
+      RCLCPP_ERROR(rclcpp::get_logger("TJ2Hardware"), "Failed to connect to TJ2 hardware");
       return hardware_interface::CallbackReturn::ERROR;
     }
 
@@ -102,9 +133,61 @@ hardware_interface::CallbackReturn TJ2Hardware::on_activate(
     // Initialize commands with current positions
     for (size_t i = 0; i < hw_position_commands_.size(); i++) {
       hw_position_commands_[i] = hw_position_states_[i];
+      hw_velocity_commands_[i] = hw_velocity_states_[i];
+      // RCLCPP_ERROR(rclcpp::get_logger("TJ2Hardware"), "initia position ...  %f", hw_velocity_commands_[i]);
     }
   }
+  OnClearSet();
+  if (robot_arm_left_right_ == static_cast<int>(RobotArmConfig::LEFT_ARM))
+  {
+    // OnSetTargetState_A(1);
+    // OnSetJointLmt_A(50, 50);
+    double K[7] = {500,500,500,10,10,10,0}; //预设为参数最大上限，供参考。
+    double D[7] = {0.1,0.1,0.1,0.3,0.3,1};//预设为参数最大上限，供参考。
+    int type = 2; //type = 1 关节阻抗;type = 2 坐标阻抗;type = 3 力控
 
+    OnClearSet();
+    OnSetCartKD_A(K, D,type) ;
+    OnSetSend();
+    usleep(100000);
+
+    OnClearSet();
+    OnSetJointLmt_A(10, 10) ;
+    OnSetSend();
+    usleep(100000);
+
+
+    OnClearSet();
+    OnSetTargetState_A(3) ; //3:torque mode; 1:position mode; 
+    OnSetImpType_A(2) ;//type = 1 关节阻抗;type = 2 坐标阻抗;type = 3 力控
+    OnSetSend();
+    usleep(100000);
+    RCLCPP_ERROR(rclcpp::get_logger("TJ2Hardware"), "cartesian impedance control ..........");
+  }
+  else if (robot_arm_left_right_ == static_cast<int>(RobotArmConfig::RIGHT_ARM))
+  {
+    
+    OnSetTargetState_B(1);
+    OnSetJointLmt_B(10, 10);
+  }
+  else if(robot_arm_left_right_ == static_cast<int>(RobotArmConfig::DUAL_ARM))
+  {
+    
+    OnSetTargetState_A(1);
+    OnSetJointLmt_A(50, 50);
+    OnSetTargetState_B(1);
+    OnSetJointLmt_B(50, 50);
+  }
+  
+
+  OnSetSend();
+  usleep(100000);
+
+  OnGetBuf(&frame_data_);
+  RCLCPP_INFO(rclcpp::get_logger("TJ2Hardware"), "current state of A arm:%d\n",frame_data_.m_State[0].m_CurState);
+  RCLCPP_INFO(rclcpp::get_logger("TJ2Hardware"), "cmd state of A arm:%d\n",frame_data_.m_State[0].m_CmdState);
+  RCLCPP_INFO(rclcpp::get_logger("TJ2Hardware"), "error code of A arms:%d\n",frame_data_.m_State[0].m_ERRCode);
+  RCLCPP_INFO(rclcpp::get_logger("TJ2Hardware"), "cmd of vel and acc:%d %d\n",frame_data_.m_In[0].m_Joint_Vel_Ratio,frame_data_.m_In[0].m_Joint_Acc_Ratio);
   RCLCPP_INFO(rclcpp::get_logger("TJ2Hardware"), "TJ2 Hardware Interface activated successfully");
   return hardware_interface::CallbackReturn::SUCCESS;
 }
@@ -114,22 +197,28 @@ hardware_interface::CallbackReturn TJ2Hardware::on_deactivate(
 {
   RCLCPP_INFO(rclcpp::get_logger("TJ2Hardware"), "Deactivating TJ2 Hardware Interface...");
 
-  if (hardware_connected_) {
-    disconnectFromHardware();
-  }
   simulation_active_ = false;
   OnClearSet();
-  if (robot_arm_left_right_ == 0)
+  if (robot_arm_left_right_ == static_cast<int>(RobotArmConfig::LEFT_ARM))
   {
-    OnSetTargetState_A(1);
+    OnSetTargetState_A(0);
   }
-  else
+  else if (robot_arm_left_right_ == static_cast<int>(RobotArmConfig::RIGHT_ARM))
   {
-    OnSetTargetState_B(1);
+    OnSetTargetState_B(0);
+  }
+  else if(robot_arm_left_right_ == static_cast<int>(RobotArmConfig::DUAL_ARM))
+  {
+    OnSetTargetState_A(0);
+    OnSetTargetState_B(0);
   }
   
   OnSetSend();
   usleep(100000);
+
+  if (hardware_connected_) {
+    disconnectFromHardware();
+  }
   return hardware_interface::CallbackReturn::SUCCESS;
 }
 
@@ -213,10 +302,10 @@ std::vector<hardware_interface::CommandInterface> TJ2Hardware::export_command_in
 hardware_interface::return_type TJ2Hardware::read(
   const rclcpp::Time & /*time*/, const rclcpp::Duration & period)
 {
-  if (simulation_active_) {
-    simulateHardware(period);
-    return hardware_interface::return_type::OK;
-  }
+  // if (simulation_active_) {
+  //   simulateHardware(period);
+  //   return hardware_interface::return_type::OK;
+  // }
 
   if (!hardware_connected_) {
     RCLCPP_ERROR_THROTTLE(
@@ -234,38 +323,34 @@ hardware_interface::return_type TJ2Hardware::read(
     return hardware_interface::return_type::ERROR;
   }
 
-  // Log joint states periodically for debugging
-  OnGetBuf(&frame_data_); //订阅数据
-  
-
-  static auto last_log_time = std::chrono::steady_clock::now();
-  auto now = std::chrono::steady_clock::now();
-  if (std::chrono::duration_cast<std::chrono::seconds>(now - last_log_time).count() >= 5) {
-    logJointStates();
-    last_log_time = now;
-  }
-
   return hardware_interface::return_type::OK;
 }
 
 hardware_interface::return_type TJ2Hardware::write(
   const rclcpp::Time & /*time*/, const rclcpp::Duration & /*period*/)
 {
-  if (simulation_active_) {
-    // In simulation, commands are handled in the read method
-    return hardware_interface::return_type::OK;
-  }
+  // if (simulation_active_) {
+  //   // In simulation, commands are handled in the read method
+  //   return hardware_interface::return_type::OK;
+  // }
 
   if (!hardware_connected_) {
     return hardware_interface::return_type::ERROR;
   }
-
+  /// convert rad to degree
+  // RCLCPP_ERROR(rclcpp::get_logger("TJ2Hardware"), "write command ...  %f", hw_position_commands_[2]);
+  std::vector<double> hw_commands;
+  for(int i =0; i < hw_position_commands_.size(); i++)
+  {
+    hw_commands.push_back(radToDegree(hw_position_commands_[i]));
+  }
+  // RCLCPP_ERROR(rclcpp::get_logger("TJ2Hardware"), "write command deg ...  %f", hw_position_commands_[2]);
   // Enforce joint limits before sending commands
-  enforceJointLimits();
-  if (!writeToHardware(robot_arm_left_right_)) {
+  // enforceJointLimits();    
+  if (!writeToHardware(robot_arm_left_right_, hw_commands)) {
     RCLCPP_ERROR_THROTTLE(
       rclcpp::get_logger("TJ2Hardware"), 
-      *std::make_shared<rclcpp::Clock>(), 5000, 
+      *clock_, 5000, 
       "Failed to write to hardware");
     return hardware_interface::return_type::ERROR;
   }
@@ -274,7 +359,8 @@ hardware_interface::return_type TJ2Hardware::write(
 
 bool TJ2Hardware::connectToHardware()
 {
-  RCLCPP_INFO(rclcpp::get_logger("TJ2Hardware"), "Connecting to Dobot CR5 at %s:%d", device_ip_.c_str(), device_port_);
+  device_ip_ = "192.168.1.190";
+  RCLCPP_INFO(rclcpp::get_logger("TJ2Hardware"), "Connecting to TJ2 at %s:%d", device_ip_.c_str(), device_port_);
   
   // TODO: Implement actual Dobot connection using Dobot SDK
   // Example:
@@ -283,14 +369,28 @@ bool TJ2Hardware::connectToHardware()
   unsigned char octet3;
   unsigned char octet4;
   
-  hardware_connected_ = OnLinkTo(octet1,octet2,octet3,octet4) == false;
-    
+  // hardware_connected_ = OnLinkTo(octet1,octet2,octet3,octet4) == true;
+  hardware_connected_ = OnLinkTo(192,168,1,190);
+      
   
   // Simulate connection for demonstration
   std::this_thread::sleep_for(std::chrono::milliseconds(500));
-  hardware_connected_ = true;
+  // hardware_connected_ = true;
+  if (hardware_connected_)
+  {
+    RCLCPP_INFO(rclcpp::get_logger("TJ2Hardware"), "Successfully connected to TJ2 hardware");
+    usleep(100000);
+    OnClearSet();
+    OnClearErr_A();
+    OnClearErr_B();
+    OnSetSend();
+    usleep(100000);
+  }
+  else
+  {
+    RCLCPP_INFO(rclcpp::get_logger("TJ2Hardware"), "Failed to connect to TJ2 hardware");
+  }
   
-  RCLCPP_INFO(rclcpp::get_logger("TJ2Hardware"), "Successfully connected to Dobot CR5 hardware");
   return hardware_connected_;
 }
 
@@ -305,43 +405,72 @@ void TJ2Hardware::disconnectFromHardware()
   RCLCPP_INFO(rclcpp::get_logger("TJ2Hardware"), "Disconnected from Dobot CR5 hardware");
 }
 
-bool TJ2Hardware::readFromHardware(int robot_arm_left_right, bool initial_frame)
+bool TJ2Hardware::readFromHardware(int robot_arm_left_right_, bool initial_frame)
 {
+  
   OnGetBuf(&frame_data_);
+  // RCLCPP_INFO(rclcpp::get_logger("TJ2Hardware"), "Reading from hardware interface ... %d", frame_data_.m_Out[robot_arm_left_right_].m_OutFrameSerial);
   if (initial_frame)
   {
-    previous_message_frame_ = frame_data_.m_Out[robot_arm_left_right].m_OutFrameSerial;
+    previous_message_frame_ = frame_data_.m_Out[robot_arm_left_right_].m_OutFrameSerial;
   }
 
-  if (previous_message_frame_ - frame_data_.m_Out[robot_arm_left_right].m_OutFrameSerial < 2)
+  if (previous_message_frame_ - frame_data_.m_Out[robot_arm_left_right_].m_OutFrameSerial < 2)
   {
-    for (size_t i = 0; i < 7; i++) {
-        hw_position_states_[i] = frame_data_.m_Out[robot_arm_left_right].m_FB_Joint_Pos[i];
-        hw_velocity_states_[i] = frame_data_.m_Out[robot_arm_left_right].m_FB_Joint_Vel[i];
-        hw_effort_states_[i] = frame_data_.m_Out[robot_arm_left_right].m_FB_Joint_SToq[i];
+    if (robot_arm_left_right_ == static_cast<int>(RobotArmConfig::LEFT_ARM)|| robot_arm_left_right_ == static_cast<int>(RobotArmConfig::RIGHT_ARM))
+    {
+      for (size_t i = 0; i < 7; i++) {
+        hw_position_states_[i] = degreeToRad(frame_data_.m_Out[robot_arm_left_right_].m_FB_Joint_Pos[i]);
+        hw_velocity_states_[i] = frame_data_.m_Out[robot_arm_left_right_].m_FB_Joint_Vel[i];
+        hw_effort_states_[i] = frame_data_.m_Out[robot_arm_left_right_].m_FB_Joint_SToq[i];
+      }
     }
+    else if(robot_arm_left_right_ == static_cast<int>(RobotArmConfig::DUAL_ARM))
+    {
+      for (size_t i = 0; i < 7; i++) {
+        hw_position_states_[i] = degreeToRad(frame_data_.m_Out[static_cast<int>(RobotArmConfig::LEFT_ARM)].m_FB_Joint_Pos[i]);
+        hw_velocity_states_[i] = frame_data_.m_Out[static_cast<int>(RobotArmConfig::LEFT_ARM)].m_FB_Joint_Vel[i];
+        hw_effort_states_[i] = frame_data_.m_Out[static_cast<int>(RobotArmConfig::LEFT_ARM)].m_FB_Joint_SToq[i];
+      }
+
+      for (size_t i = 0; i < 7; i++) {
+        hw_position_states_[i + 7] = degreeToRad(frame_data_.m_Out[static_cast<int>(RobotArmConfig::RIGHT_ARM)].m_FB_Joint_Pos[i]);
+        hw_velocity_states_[i + 7] = frame_data_.m_Out[static_cast<int>(RobotArmConfig::RIGHT_ARM)].m_FB_Joint_Vel[i];
+        hw_effort_states_[i + 7] = frame_data_.m_Out[static_cast<int>(RobotArmConfig::RIGHT_ARM)].m_FB_Joint_SToq[i];
+      }
+    }
+    
     return true;
   }
    else
    {
+        RCLCPP_INFO(rclcpp::get_logger("TJ2Hardware"), "Missing more than 2 frames");
         return false;
    }
 }
 
-bool TJ2Hardware::writeToHardware(int robot_arm_left_right)
+bool TJ2Hardware::writeToHardware(int robot_arm_left_right, std::vector<double> & hw_commands)
 {
   // TODO: Implement actual joint command sending to Dobot
-  if (robot_arm_left_right ==0)
+  bool result = true;
+  OnClearSet(); 
+  if (robot_arm_left_right == static_cast<int>(RobotArmConfig::LEFT_ARM))
   {
-    OnSetJointCmdPos_A(hw_position_states_.data());
-
+    result = OnSetJointCmdPos_A(hw_commands.data());
   }
-  else
+  else if (robot_arm_left_right == static_cast<int>(RobotArmConfig::RIGHT_ARM))
   {
-    OnSetJointCmdPos_B(hw_position_states_.data());
+    result = OnSetJointCmdPos_B(hw_commands.data());
   }
-  
-  return true;
+  else if (robot_arm_left_right == static_cast<int>(RobotArmConfig::DUAL_ARM))
+  {
+    result = OnSetJointCmdPos_A(hw_commands.data());
+    // RCLCPP_INFO(rclcpp::get_logger("TJ2Hardware"), "write to left arm %d", result);
+    result = result && OnSetJointCmdPos_B(hw_commands.data() + 7);
+    // RCLCPP_INFO(rclcpp::get_logger("TJ2Hardware"), "write to right arm %d", result);
+  }
+  OnSetSend();
+  return result;
 }
 
 void TJ2Hardware::simulateHardware(const rclcpp::Duration & period)
@@ -373,26 +502,32 @@ void TJ2Hardware::simulateHardware(const rclcpp::Duration & period)
 
 void TJ2Hardware::enforceJointLimits()
 {
+  if (hw_position_commands_.size() != position_lower_limits_.size() || 
+      hw_position_commands_.size() != position_upper_limits_.size()) {
+    RCLCPP_ERROR(*logger_, "Array size mismatch in enforceJointLimits!");
+    return;
+  }
+
   for (size_t i = 0; i < hw_position_commands_.size(); i++) {
-    // Enforce position limits
     if (hw_position_commands_[i] < position_lower_limits_[i]) {
       hw_position_commands_[i] = position_lower_limits_[i];
       RCLCPP_WARN_THROTTLE(
-        rclcpp::get_logger("TJ2Hardware"), 
-        *std::make_shared<rclcpp::Clock>(), 10000, 
+        *logger_, 
+        *clock_, 10000,  // Use the class member clock
         "Joint %s position command (%.3f) below lower limit (%.3f)", 
         info_.joints[i].name.c_str(), hw_position_commands_[i], position_lower_limits_[i]);
     } else if (hw_position_commands_[i] > position_upper_limits_[i]) {
       hw_position_commands_[i] = position_upper_limits_[i];
       RCLCPP_WARN_THROTTLE(
-        rclcpp::get_logger("TJ2Hardware"), 
-        *std::make_shared<rclcpp::Clock>(), 10000, 
+        *logger_, 
+        *clock_, 10000,
         "Joint %s position command (%.3f) above upper limit (%.3f)", 
         info_.joints[i].name.c_str(), hw_position_commands_[i], position_upper_limits_[i]);
     }
     
-    // Enforce velocity limits
-    if (std::abs(hw_velocity_commands_[i]) > velocity_limits_[i]) {
+    // Add safety check for velocity arrays too
+    if (i < hw_velocity_commands_.size() && i < velocity_limits_.size() && 
+        std::abs(hw_velocity_commands_[i]) > velocity_limits_[i]) {
       hw_velocity_commands_[i] = std::copysign(velocity_limits_[i], hw_velocity_commands_[i]);
     }
   }
@@ -451,9 +586,6 @@ void TJ2Hardware::logJointStates()
 
 }  // namespace tj2_hardware
 
-#include "pluginlib/class_list_macros.hpp"
 
-PLUGINLIB_EXPORT_CLASS(
-  tj2_hardware::TJ2Hardware,
-  hardware_interface::SystemInterface)
+PLUGINLIB_EXPORT_CLASS(tj2_ros2_control::TJ2Hardware, hardware_interface::SystemInterface)
 

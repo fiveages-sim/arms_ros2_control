@@ -33,12 +33,20 @@ add_library(${PROJECT_NAME} SHARED
         src/tj2_hardware.cpp
 )
 
+set_target_properties(${PROJECT_NAME} PROPERTIES
+    BUILD_RPATH "${LIB_KINE_DIR};${LIB_CONTROL_DIR}"
+    INSTALL_RPATH "$ORIGIN"
+    INSTALL_RPATH_USE_LINK_PATH TRUE
+)
+
 target_include_directories(${PROJECT_NAME} PUBLIC
         "$<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>"
-        "$<BUILD_INTERFACE:${HEADER_KINE_DIR}>"
-        "$<BUILD_INTERFACE:${HEADER_CONTROL_DIR}>"
+        # "$<BUILD_INTERFACE:${HEADER_KINE_DIR}>"
+        # "$<BUILD_INTERFACE:${HEADER_CONTROL_DIR}>"
         "$<INSTALL_INTERFACE:include/${PROJECT_NAME}>"
         PRIVATE src
+        PRIVATE ${HEADER_KINE_DIR}
+        PRIVATE ${HEADER_CONTROL_DIR}
         PRIVATE ${EIGEN3_INCLUDE_DIRS}
 )
 
@@ -57,13 +65,12 @@ ament_target_dependencies(${PROJECT_NAME}
 # endif()
 
 # # Link xCoreSDK libraries
-# target_link_libraries(${PROJECT_NAME}
-#         #${CMAKE_CURRENT_SOURCE_DIR}/external/xCoreSDK/lib/Linux/${XCORE_LIB_DIR}/libxCoreSDK.a
-#         #${CMAKE_CURRENT_SOURCE_DIR}/external/xCoreSDK/lib/Linux/${XCORE_LIB_DIR}/libxMateModel.a
-#         ${EIGEN3_LIBRARIES}
-#         pthread
-#         rt
-# )
+target_link_libraries(${PROJECT_NAME}
+        ${EXTERNAL_KINEMATICSO}
+        ${EXTERNAL_CONTROLSO}
+        pthread
+        rt
+)
 
 pluginlib_export_plugin_description_file(hardware_interface tj2_ros2_control.xml)
 
@@ -72,20 +79,26 @@ install(
         DESTINATION include/${PROJECT_NAME}
 )
 
+install(FILES
+    ${LIB_KINE_DIR}/libKine.so
+    ${LIB_CONTROL_DIR}/libMarvinSDK.so
+    DESTINATION lib
+)
+
 install(
         TARGETS ${PROJECT_NAME}
         EXPORT export_${PROJECT_NAME}
-        ARCHIVE DESTINATION ib
+        ARCHIVE DESTINATION lib
         LIBRARY DESTINATION lib
         RUNTIME DESTINATION bin
 )
 
-# if (BUILD_TESTING)
-#     find_package(ament_lint_auto REQUIRED)
-#     ament_lint_auto_find_test_dependencies()
-# endif ()
+if (BUILD_TESTING)
+    find_package(ament_lint_auto REQUIRED)
+    ament_lint_auto_find_test_dependencies()
+endif ()
 
-# ament_export_dependencies(${dependencies})
-# ament_export_targets(export_${PROJECT_NAME} HAS_LIBRARY_TARGET)
+ament_export_dependencies(${dependencies})
+ament_export_targets(export_${PROJECT_NAME} HAS_LIBRARY_TARGET)
 
-# ament_package()
+ament_package()

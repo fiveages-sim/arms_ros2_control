@@ -23,6 +23,7 @@
 
   <export>
     <build_type>ament_cmake</build_type>
+    <hardware_interface plugin="${prefix}/dobot_ros2_control.xml"/>
     <pluginlib_export_plugin_file>tj2_ros2_control_plugin_description.xml</pluginlib_export_plugin_file>
   </export>
 </package>
