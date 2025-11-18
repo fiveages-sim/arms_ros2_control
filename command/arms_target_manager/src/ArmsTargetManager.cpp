@@ -12,6 +12,8 @@
 #include <tf2/LinearMath/Transform.h>
 #include <tf2/LinearMath/Vector3.h>
 #include <tf2/LinearMath/Quaternion.h>
+#include <std_msgs/msg/float64_multi_array.hpp>
+#include <cmath>
 
 namespace arms_ros2_control::command
 {
@@ -23,7 +25,11 @@ namespace arms_ros2_control::command
         const std::string& markerFixedFrame,
         double publishRate,
         const std::vector<int32_t>& disableAutoUpdateStates,
-        double markerUpdateInterval)
+        double markerUpdateInterval,
+        bool enableHeadControl,
+        const std::string& headMarkerFrame,
+        const std::string& headControllerName,
+        const std::array<double, 3>& headMarkerPosition)
         : node_(std::move(node))
           , topic_prefix_(topicPrefix)
           , dual_arm_mode_(dualArmMode)
@@ -36,6 +42,10 @@ namespace arms_ros2_control::command
           , disable_auto_update_states_(disableAutoUpdateStates)
           , last_marker_update_time_(node_->now())
           , marker_update_interval_(markerUpdateInterval)
+          , enable_head_control_(enableHeadControl)
+          , head_marker_frame_(headMarkerFrame)
+          , head_controller_name_(headControllerName)
+          , head_marker_position_(headMarkerPosition)
     {
         left_pose_.position.x = 0.0;
         left_pose_.position.y = 0.5;
@@ -67,6 +77,15 @@ namespace arms_ros2_control::command
         // 初始化TF2 buffer和listener
         tf_buffer_ = std::make_shared<tf2_ros::Buffer>(node_->get_clock());
         tf_listener_ = std::make_shared<tf2_ros::TransformListener>(*tf_buffer_);
+
+        // 初始化头部pose
+        head_pose_.position.x = head_marker_position_[0];
+        head_pose_.position.y = head_marker_position_[1];
+        head_pose_.position.z = head_marker_position_[2];
+        head_pose_.orientation.w = 1.0;
+        head_pose_.orientation.x = 0.0;
+        head_pose_.orientation.y = 0.0;
+        head_pose_.orientation.z = 0.0;
     }
 
     void ArmsTargetManager::initialize()
@@ -97,6 +116,28 @@ namespace arms_ros2_control::command
             server_->setCallback(rightMarker.name, rightCallback);
 
             right_menu_handler_->apply(*server_, rightMarker.name);
+        }
+
+        // 如果启用头部控制，初始化头部marker
+        if (enable_head_control_)
+        {
+            setupHeadMenu();
+            
+            // 创建头部发布器
+            std::string head_topic = "/" + head_controller_name_ + "/target_joint_position";
+            head_joint_publisher_ = node_->create_publisher<std_msgs::msg::Float64MultiArray>(
+                head_topic, 1);
+
+            auto headMarker = createHeadMarker();
+            server_->insert(headMarker);
+
+            auto headCallback = [this](const visualization_msgs::msg::InteractiveMarkerFeedback::ConstSharedPtr& feedback)
+            {
+                headMarkerCallback(feedback);
+            };
+            server_->setCallback(headMarker.name, headCallback);
+
+            head_menu_handler_->apply(*server_, headMarker.name);
         }
 
         updateMenuVisibility();
@@ -766,5 +807,156 @@ namespace arms_ros2_control::command
                         sourceFrameId.c_str(), targetFrameId.c_str(), ex.what());
             return pose;
         }
+    }
+
+    std::vector<double> ArmsTargetManager::quaternionToHeadJointAngles(
+        const geometry_msgs::msg::Quaternion& quaternion) const
+    {
+        // 使用 tf2 的 getRPY 从 quaternion 提取欧拉角
+        tf2::Quaternion tf_quat;
+        tf2::fromMsg(quaternion, tf_quat);
+        
+        double roll, pitch, yaw;
+        tf2::Matrix3x3(tf_quat).getRPY(roll, pitch, yaw);
+        
+        // yaw (Z轴旋转) -> head_joint1
+        // pitch (Y轴旋转) -> head_joint2
+        // 注意：pitch 取反，使得向上转动 marker 时头部向上看
+        // 忽略 roll (X轴旋转)
+        return {yaw, -pitch};
+    }
+
+    visualization_msgs::msg::Marker ArmsTargetManager::createArrowMarker(const std::string& color) const
+    {
+        visualization_msgs::msg::Marker marker;
+        marker.type = visualization_msgs::msg::Marker::ARROW;
+        marker.scale.x = 0.15;  // 箭头长度
+        marker.scale.y = 0.03;  // 箭头宽度
+        marker.scale.z = 0.03;  // 箭头高度
+
+        if (color == "green")
+        {
+            marker.color.r = 0.0;
+            marker.color.g = 1.0;
+            marker.color.b = 0.0;
+        }
+        else if (color == "blue")
+        {
+            marker.color.r = 0.0;
+            marker.color.g = 0.0;
+            marker.color.b = 1.0;
+        }
+        else if (color == "red")
+        {
+            marker.color.r = 1.0;
+            marker.color.g = 0.0;
+            marker.color.b = 0.0;
+        }
+        else
+        {
+            marker.color.r = 0.5;
+            marker.color.g = 0.5;
+            marker.color.b = 0.5;
+        }
+        marker.color.a = 0.7;
+
+        return marker;
+    }
+
+    visualization_msgs::msg::InteractiveMarker ArmsTargetManager::createHeadMarker() const
+    {
+        visualization_msgs::msg::InteractiveMarker interactiveMarker;
+        interactiveMarker.header.frame_id = head_marker_frame_;
+        interactiveMarker.header.stamp = node_->now();
+        interactiveMarker.name = "head_target";
+        interactiveMarker.scale = 0.2;
+        interactiveMarker.description = "Head Target";
+
+        // 使用配置的固定位置
+        interactiveMarker.pose.position.x = head_pose_.position.x;
+        interactiveMarker.pose.position.y = head_pose_.position.y;
+        interactiveMarker.pose.position.z = head_pose_.position.z;
+        interactiveMarker.pose.orientation = head_pose_.orientation;
+
+        // 创建箭头marker表示头部朝向
+        visualization_msgs::msg::Marker arrowMarker = createArrowMarker("red");
+
+        // 箭头marker只用于显示，不用于交互
+        visualization_msgs::msg::InteractiveMarkerControl arrowControl;
+        arrowControl.always_visible = true;
+        arrowControl.markers.push_back(arrowMarker);
+        arrowControl.interaction_mode = visualization_msgs::msg::InteractiveMarkerControl::NONE;
+        interactiveMarker.controls.push_back(arrowControl);
+
+        // 只添加左右旋转（yaw）和上下旋转（pitch）控制，不添加roll旋转
+        // 左右旋转（绕Z轴 - yaw）
+        visualization_msgs::msg::InteractiveMarkerControl control;
+        control.orientation.w = 1;
+        control.orientation.x = 0;
+        control.orientation.y = 0;
+        control.orientation.z = 1;
+        control.name = "rotate_z";
+        control.interaction_mode = visualization_msgs::msg::InteractiveMarkerControl::ROTATE_AXIS;
+        interactiveMarker.controls.push_back(control);
+
+        // 上下旋转（绕Y轴 - pitch）
+        control.orientation.w = 1;
+        control.orientation.x = 0;
+        control.orientation.y = 1;
+        control.orientation.z = 0;
+        control.name = "rotate_y";
+        control.interaction_mode = visualization_msgs::msg::InteractiveMarkerControl::ROTATE_AXIS;
+        interactiveMarker.controls.push_back(control);
+
+        return interactiveMarker;
+    }
+
+    void ArmsTargetManager::headMarkerCallback(
+        const visualization_msgs::msg::InteractiveMarkerFeedback::ConstSharedPtr& feedback)
+    {
+        std::string source_frame_id = feedback->header.frame_id;
+
+        // 转换pose到目标frame（配置的head_marker_frame_）
+        geometry_msgs::msg::Pose transformed_pose = transformPose(feedback->pose, source_frame_id, head_marker_frame_);
+
+        head_pose_ = transformed_pose;
+
+        // 头部控制只支持单次发布模式，不在这里发布
+        // 发布通过右键菜单触发
+    }
+
+    void ArmsTargetManager::setupHeadMenu()
+    {
+        head_menu_handler_ = std::make_shared<interactive_markers::MenuHandler>();
+
+        auto headSendCallback = [this](
+            const visualization_msgs::msg::InteractiveMarkerFeedback::ConstSharedPtr& /*feedback*/)
+        {
+            sendHeadTargetJointPosition();
+        };
+
+        head_send_handle_ = head_menu_handler_->insert("Send Head Target", headSendCallback);
+    }
+
+    void ArmsTargetManager::sendHeadTargetJointPosition()
+    {
+        if (!head_joint_publisher_)
+        {
+            RCLCPP_WARN(node_->get_logger(), "Head joint publisher not initialized");
+            return;
+        }
+
+        // 从头部pose的orientation提取关节角度
+        std::vector<double> joint_angles = quaternionToHeadJointAngles(head_pose_.orientation);
+
+        // 创建并发布消息
+        std_msgs::msg::Float64MultiArray msg;
+        msg.data = joint_angles;
+
+        head_joint_publisher_->publish(msg);
+
+        RCLCPP_INFO(node_->get_logger(), 
+                   "Published head target joint angles: [%.3f, %.3f] (head_joint1, head_joint2)",
+                   joint_angles[0], joint_angles[1]);
     }
 } // namespace arms_ros2_control::command

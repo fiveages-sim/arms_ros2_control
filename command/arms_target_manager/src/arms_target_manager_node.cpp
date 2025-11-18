@@ -28,6 +28,12 @@ int main(int argc, char** argv)
     double vr_update_rate = node->declare_parameter("vr_update_rate", 500.0);
     bool enable_vr = node->declare_parameter("enable_vr", true);
 
+    // 头部控制参数
+    bool enable_head_control = node->declare_parameter("enable_head_control", true);
+    std::string head_marker_frame = node->declare_parameter("head_marker_frame", "base_footprint");
+    std::string head_controller_name = node->declare_parameter("head_controller_name", "head_joint_controller");
+    std::vector<double> head_marker_position = node->declare_parameter("head_marker_position", std::vector<double>{1.0, 0.0, 1.5});
+
     RCLCPP_INFO(node->get_logger(), 
                "Starting ArmsTargetManager with topic_prefix: %s, dual_arm_mode: %s, control_base_frame: %s, marker_fixed_frame: %s",
                topic_prefix.c_str(), 
@@ -45,8 +51,19 @@ int main(int argc, char** argv)
     try
     {
         // 创建ArmsTargetManager
+        std::array<double, 3> head_position_array = {head_marker_position[0], head_marker_position[1], head_marker_position[2]};
         auto target_manager = std::make_unique<ArmsTargetManager>(
-            node, topic_prefix, dual_arm_mode, control_base_frame, marker_fixed_frame);
+            node, topic_prefix, dual_arm_mode, control_base_frame, marker_fixed_frame,
+            20.0, std::vector<int32_t>{3}, 0.05,
+            enable_head_control, head_marker_frame, head_controller_name, head_position_array);
+
+        if (enable_head_control)
+        {
+            RCLCPP_INFO(node->get_logger(), 
+                       "Head control enabled: frame=%s, controller=%s, position=[%.2f, %.2f, %.2f]",
+                       head_marker_frame.c_str(), head_controller_name.c_str(),
+                       head_marker_position[0], head_marker_position[1], head_marker_position[2]);
+        }
 
         // 初始化
         target_manager->initialize();

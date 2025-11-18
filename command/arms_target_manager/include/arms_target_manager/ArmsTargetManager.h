@@ -21,6 +21,7 @@
 #include <arms_ros2_control_msgs/msg/inputs.hpp>
 #include <tf2_ros/transform_listener.h>
 #include <tf2_ros/buffer.h>
+#include <std_msgs/msg/float64_multi_array.hpp>
 
 namespace arms_ros2_control::command
 {
@@ -57,6 +58,10 @@ namespace arms_ros2_control::command
          * @param publishRate 连续发布频率，默认为20Hz
          * @param disableAutoUpdateStates 禁用自动更新的状态值数组，默认为{3}（OCS2状态）
          * @param markerUpdateInterval 最小marker更新间隔（秒），默认为0.05秒（20Hz）
+         * @param enableHeadControl 是否启用头部控制，默认为false
+         * @param headMarkerFrame 头部marker的坐标系，默认为"base_footprint"
+         * @param headControllerName 头部控制器名称，默认为"head_joint_controller"
+         * @param headMarkerPosition 头部marker在base_footprint中的固定位置，默认为[1.0, 0.0, 1.5]
          */
         ArmsTargetManager(
             rclcpp::Node::SharedPtr node,
@@ -66,7 +71,11 @@ namespace arms_ros2_control::command
             const std::string& markerFixedFrame = "base_link",
             double publishRate = 20.0,
             const std::vector<int32_t>& disableAutoUpdateStates = {3},
-            double markerUpdateInterval = 0.05);
+            double markerUpdateInterval = 0.05,
+            bool enableHeadControl = true,
+            const std::string& headMarkerFrame = "base_footprint",
+            const std::string& headControllerName = "head_joint_controller",
+            const std::array<double, 3>& headMarkerPosition = {1.0, 0.0, 1.5});
 
         ~ArmsTargetManager() = default;
 
@@ -153,6 +162,11 @@ namespace arms_ros2_control::command
          */
         void controlInputCallback(arms_ros2_control_msgs::msg::Inputs::ConstSharedPtr msg);
 
+        /**
+         * 发送头部目标关节位置（单次发布模式）
+         */
+        void sendHeadTargetJointPosition();
+
     private:
         /**
          * 创建interactive marker
@@ -190,6 +204,39 @@ namespace arms_ros2_control::command
          */
         void rightMarkerCallback(
             const visualization_msgs::msg::InteractiveMarkerFeedback::ConstSharedPtr& feedback);
+
+        /**
+         * 头部marker反馈回调
+         * @param feedback 反馈消息
+         */
+        void headMarkerCallback(
+            const visualization_msgs::msg::InteractiveMarkerFeedback::ConstSharedPtr& feedback);
+
+        /**
+         * 创建头部interactive marker
+         * @return interactive marker消息
+         */
+        visualization_msgs::msg::InteractiveMarker createHeadMarker() const;
+
+        /**
+         * 创建箭头marker（用于头部）
+         * @param color 颜色
+         * @return marker消息
+         */
+        visualization_msgs::msg::Marker createArrowMarker(const std::string& color = "green") const;
+
+        /**
+         * 设置头部菜单系统
+         */
+        void setupHeadMenu();
+
+        /**
+         * 从quaternion提取头部关节角度（yaw和pitch）
+         * @param quaternion 四元数
+         * @return [head_joint1_angle, head_joint2_angle] 关节角度（弧度）
+         */
+        std::vector<double> quaternionToHeadJointAngles(
+            const geometry_msgs::msg::Quaternion& quaternion) const;
 
 
         /**
@@ -249,6 +296,7 @@ namespace arms_ros2_control::command
         // 发布器
         rclcpp::Publisher<geometry_msgs::msg::Pose>::SharedPtr left_pose_publisher_;
         rclcpp::Publisher<geometry_msgs::msg::Pose>::SharedPtr right_pose_publisher_;
+        rclcpp::Publisher<std_msgs::msg::Float64MultiArray>::SharedPtr head_joint_publisher_;
         
         // 订阅器
         rclcpp::Subscription<arms_ros2_control_msgs::msg::Inputs>::SharedPtr control_input_subscription_;
@@ -258,12 +306,14 @@ namespace arms_ros2_control::command
         // 菜单系统
         std::shared_ptr<interactive_markers::MenuHandler> left_menu_handler_;
         std::shared_ptr<interactive_markers::MenuHandler> right_menu_handler_;
+        std::shared_ptr<interactive_markers::MenuHandler> head_menu_handler_;
         
         // 菜单句柄
         interactive_markers::MenuHandler::EntryHandle left_send_handle_;
         interactive_markers::MenuHandler::EntryHandle left_toggle_handle_;
         interactive_markers::MenuHandler::EntryHandle right_send_handle_;
         interactive_markers::MenuHandler::EntryHandle right_toggle_handle_;
+        interactive_markers::MenuHandler::EntryHandle head_send_handle_;
         
         // 配置
         std::string topic_prefix_;
@@ -282,6 +332,7 @@ namespace arms_ros2_control::command
         // 当前pose状态
         geometry_msgs::msg::Pose left_pose_;
         geometry_msgs::msg::Pose right_pose_;
+        geometry_msgs::msg::Pose head_pose_;
         
         // 状态管理
         mutable std::mutex state_update_mutex_;
@@ -292,6 +343,12 @@ namespace arms_ros2_control::command
         // 更新节流
         rclcpp::Time last_marker_update_time_;
         double marker_update_interval_;  // 最小更新间隔（秒）
+        
+        // 头部控制相关
+        bool enable_head_control_;  // 是否启用头部控制
+        std::string head_marker_frame_;  // 头部marker的坐标系
+        std::string head_controller_name_;  // 头部控制器名称
+        std::array<double, 3> head_marker_position_;  // marker在base_footprint中的固定位置
         
     };
 
