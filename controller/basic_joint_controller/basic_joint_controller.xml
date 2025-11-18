@@ -1,0 +1,9 @@
+<?xml version="1.0"?>
+<library path="basic_joint_controller">
+  <class name="basic_joint_controller/BasicJointController" type="basic_joint_controller::BasicJointController" base_class_type="controller_interface::ControllerInterface">
+    <description>
+      A basic joint controller with Home, Hold, and Move states
+    </description>
+  </class>
+</library>
+

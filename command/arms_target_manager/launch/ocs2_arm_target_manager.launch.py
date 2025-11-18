@@ -9,13 +9,13 @@ from launch_ros.actions import Node
 from launch.conditions import IfCondition
 
 def parse_task_info(task_file_path):
-    """解析task.info文件，提取dual_arm_mode和frame_id信息"""
+    """解析task.info文件，提取dual_arm_mode和control_base_frame信息"""
     dual_arm_mode = False
-    frame_id = "world"
+    control_base_frame = "world"
     
     if not os.path.exists(task_file_path):
         print(f"[WARN] Task file not found: {task_file_path}")
-        return dual_arm_mode, frame_id
+        return dual_arm_mode, control_base_frame
     
     try:
         with open(task_file_path, 'r') as file:
@@ -36,15 +36,15 @@ def parse_task_info(task_file_path):
         # 提取baseFrame
         base_frame_match = re.search(r'baseFrame\s+"([^"]+)"', content)
         if base_frame_match:
-            frame_id = base_frame_match.group(1)
-            print(f"[INFO] Detected base frame: {frame_id}")
+            control_base_frame = base_frame_match.group(1)
+            print(f"[INFO] Detected base frame: {control_base_frame}")
         
-        print(f"[INFO] Parsed task file - dual_arm_mode: {dual_arm_mode}, frame_id: {frame_id}")
+        print(f"[INFO] Parsed task file - dual_arm_mode: {dual_arm_mode}, control_base_frame: {control_base_frame}")
         
     except Exception as e:
         print(f"[ERROR] Failed to parse task file {task_file_path}: {e}")
     
-    return dual_arm_mode, frame_id
+    return dual_arm_mode, control_base_frame
 
 def launch_setup(context, *args, **kwargs):
     """Launch setup function using OpaqueFunction"""
@@ -56,7 +56,9 @@ def launch_setup(context, *args, **kwargs):
         print(f"[ERROR] No task_file provided for robot '{robot_name}'")
         return []
 
-    dual_arm_mode, frame_id = parse_task_info(task_file_path)
+    dual_arm_mode, control_base_frame = parse_task_info(task_file_path)
+    # marker_fixed_frame 默认为 "base_link"，可以通过 launch 参数覆盖
+    marker_fixed_frame = context.launch_configurations.get('marker_fixed_frame', 'base_link')
     arms_target_manager_node = Node(
         package='arms_target_manager',
         executable='arms_target_manager_node',
@@ -65,7 +67,8 @@ def launch_setup(context, *args, **kwargs):
         parameters=[
             {'topic_prefix': robot_name},
             {'dual_arm_mode': dual_arm_mode},
-            {'frame_id': frame_id},
+            {'control_base_frame': control_base_frame},
+            {'marker_fixed_frame': marker_fixed_frame},
         ],
     )
     
@@ -84,9 +87,16 @@ def generate_launch_description():
         default_value='',
         description='Path to task.info file'
     )
+    
+    marker_fixed_frame_arg = DeclareLaunchArgument(
+        'marker_fixed_frame',
+        default_value='base_link',
+        description='Frame ID where markers are actually created (received current_pose will be transformed to this frame)'
+    )
 
     return LaunchDescription([
         robot_name_arg,
         task_file_arg,
+        marker_fixed_frame_arg,
         OpaqueFunction(function=launch_setup),
     ])

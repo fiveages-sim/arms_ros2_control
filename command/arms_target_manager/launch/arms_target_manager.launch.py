@@ -19,10 +19,16 @@ def generate_launch_description():
         description='Enable dual arm mode'
     )
     
-    frame_id_arg = DeclareLaunchArgument(
-        'frame_id',
+    control_base_frame_arg = DeclareLaunchArgument(
+        'control_base_frame',
         default_value='world',
-        description='Frame ID for the interactive markers'
+        description='Target frame ID for pose publishing (marker will transform to this frame)'
+    )
+    
+    marker_fixed_frame_arg = DeclareLaunchArgument(
+        'marker_fixed_frame',
+        default_value='base_link',
+        description='Frame ID where markers are actually created (received current_pose will be transformed to this frame)'
     )
 
     # ArmsTargetManager节点
@@ -34,13 +40,15 @@ def generate_launch_description():
         parameters=[{
             'topic_prefix': LaunchConfiguration('topic_prefix'),
             'dual_arm_mode': LaunchConfiguration('dual_arm_mode'),
-            'frame_id': LaunchConfiguration('frame_id'),
+            'control_base_frame': LaunchConfiguration('control_base_frame'),
+            'marker_fixed_frame': LaunchConfiguration('marker_fixed_frame'),
         }]
     )
 
     return LaunchDescription([
         topic_prefix_arg,
         dual_arm_mode_arg,
-        frame_id_arg,
+        control_base_frame_arg,
+        marker_fixed_frame_arg,
         arms_target_manager_node,
     ])
