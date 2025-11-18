@@ -59,21 +59,12 @@ ros2_ws/
 └── log/
 ```
 
-## Supported Robots
-
-The following robots are supported through the `robot_descriptions` package:
-
-- Dobot CR5
-- ARX robots
-
 ## Tested Environments
 
 This package has been tested and verified to work with the following ROS2 distributions:
 
 - **ROS2 Humble** (Ubuntu 22.04)
 - **ROS2 Jazzy** (Ubuntu 24.04)
-
-
 
 ## Quick Start
 
@@ -89,6 +80,10 @@ cd ~/ros2_ws/src
 git clone https://github.com/fiveages-sim/arms_ros2_control
 git clone https://github.com/fiveages-sim/robot_descriptions
 git clone https://github.com/legubiao/ocs2_ros2
+
+# Initialize required submodules in robot_descriptions
+cd robot_descriptions
+git submodule update --init common manipulator/Dobot
 
 # Install dependencies using rosdep
 cd ~/ros2_ws
@@ -106,6 +101,10 @@ rosdep install --from-paths src --ignore-src -r -y
 If you're new to OCS2, please verify that your OCS2 environment is properly configured by running one of the mobile manipulator demos:
 
 ```bash
+# Initialize ocs2 robotic assets submodule
+cd ~/ros2_ws/src/ocs2_ros2
+git submodule update --init submodules/ocs2_robotic_assets
+
 # Build the mobile manipulator package
 cd ~/ros2_ws
 colcon build --packages-up-to ocs2_mobile_manipulator_ros --symlink-install
