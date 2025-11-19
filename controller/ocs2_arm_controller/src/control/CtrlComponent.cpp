@@ -65,8 +65,6 @@ namespace ocs2::mobile_manipulator
         // Initialize cached state
         last_execute_time_ = node_->now();
         cached_last_action_ = observation_.state;
-    //     parameter_callback_handle_ = node_->add_on_set_parameters_callback(
-    // std::bind(&CtrlComponent::on_parameter_change, this, std::placeholders::_1));
 
     }
 

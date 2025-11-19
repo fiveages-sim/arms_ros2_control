@@ -40,6 +40,9 @@ namespace ocs2::mobile_manipulator
         // Torque calculation for force control
         vector_t calculateStaticTorques() const;
 
+        // Get node reference
+        std::shared_ptr<rclcpp_lifecycle::LifecycleNode> getNode() const { return node_; }
+
         // OCS2 interface (public access)
         std::shared_ptr<MobileManipulatorInterface> interface_;
 

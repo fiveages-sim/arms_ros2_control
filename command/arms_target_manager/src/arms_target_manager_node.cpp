@@ -20,7 +20,8 @@ int main(int argc, char** argv)
     // 获取参数
     std::string topic_prefix = node->declare_parameter("topic_prefix", "arm_controller");
     bool dual_arm_mode = node->declare_parameter("dual_arm_mode", false);
-    std::string frame_id = node->declare_parameter("frame_id", "world");
+    std::string control_base_frame = node->declare_parameter("control_base_frame", "world");
+    std::string marker_fixed_frame = node->declare_parameter("marker_fixed_frame", "base_link");
     double linear_scale = node->declare_parameter("linear_scale", 0.005);
     double angular_scale = node->declare_parameter("angular_scale", 0.05);
 
@@ -28,10 +29,11 @@ int main(int argc, char** argv)
     bool enable_vr = node->declare_parameter("enable_vr", true);
 
     RCLCPP_INFO(node->get_logger(), 
-               "Starting ArmsTargetManager with topic_prefix: %s, dual_arm_mode: %s, frame_id: %s",
+               "Starting ArmsTargetManager with topic_prefix: %s, dual_arm_mode: %s, control_base_frame: %s, marker_fixed_frame: %s",
                topic_prefix.c_str(), 
                dual_arm_mode ? "true" : "false",
-               frame_id.c_str());
+               control_base_frame.c_str(),
+               marker_fixed_frame.c_str());
     RCLCPP_INFO(node->get_logger(), 
                "Control scales: linear=%.3f, angular=%.3f (deadzone handled at input source)",
                linear_scale, angular_scale);
@@ -44,7 +46,7 @@ int main(int argc, char** argv)
     {
         // 创建ArmsTargetManager
         auto target_manager = std::make_unique<ArmsTargetManager>(
-            node, topic_prefix, dual_arm_mode, frame_id);
+            node, topic_prefix, dual_arm_mode, control_base_frame, marker_fixed_frame);
 
         // 初始化
         target_manager->initialize();

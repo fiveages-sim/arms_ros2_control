@@ -9,12 +9,12 @@
 namespace ocs2::mobile_manipulator
 {
     StateHome::StateHome(CtrlInterfaces& ctrl_interfaces, const std::vector<double>& target_pos,
-                         const std::shared_ptr<CtrlComponent>& ctrl_comp)
+                         const std::shared_ptr<CtrlComponent>& ctrl_comp, double duration)
         : FSMState(FSMStateName::HOME, "home"),
           ctrl_interfaces_(ctrl_interfaces),
           ctrl_comp_(ctrl_comp),
           target_pos_(target_pos),
-          duration_(3.0), // Default interpolation duration: 3 seconds
+          duration_(duration), // Interpolation duration in seconds
           percent_(0.0), // Start from 0%
           has_rest_pose_(false),
           is_rest_pose_(false)

@@ -15,7 +15,8 @@ namespace ocs2::mobile_manipulator
     {
     public:
         explicit StateHome(CtrlInterfaces& ctrl_interfaces, const std::vector<double>& target_pos, 
-                          const std::shared_ptr<CtrlComponent>& ctrl_comp = nullptr);
+                          const std::shared_ptr<CtrlComponent>& ctrl_comp = nullptr,
+                          double duration = 3.0);
 
         void enter() override;
         void run(const rclcpp::Time& time, const rclcpp::Duration& period) override;

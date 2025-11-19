@@ -6,29 +6,36 @@
 #include <rclcpp/rclcpp.hpp>
 #include <Eigen/Core>
 #include <Eigen/Geometry>
+#include <tf2_geometry_msgs/tf2_geometry_msgs.hpp>
+#include <tf2/exceptions.h>
+#include <tf2/transform_datatypes.h>
+#include <tf2/LinearMath/Transform.h>
+#include <tf2/LinearMath/Vector3.h>
+#include <tf2/LinearMath/Quaternion.h>
 
 namespace arms_ros2_control::command
 {
-
     ArmsTargetManager::ArmsTargetManager(
         rclcpp::Node::SharedPtr node,
         const std::string& topicPrefix,
         bool dualArmMode,
         const std::string& frameId,
+        const std::string& markerFixedFrame,
         double publishRate,
         const std::vector<int32_t>& disableAutoUpdateStates,
         double markerUpdateInterval)
         : node_(std::move(node))
-        , topic_prefix_(topicPrefix)
-        , dual_arm_mode_(dualArmMode)
-        , frame_id_(frameId)
-        , publish_rate_(publishRate)
-        , current_mode_(MarkerState::SINGLE_SHOT)
-        , current_controller_state_(2)
-        , auto_update_enabled_(true)
-        , disable_auto_update_states_(disableAutoUpdateStates)
-        , last_marker_update_time_(node_->now())
-        , marker_update_interval_(markerUpdateInterval)
+          , topic_prefix_(topicPrefix)
+          , dual_arm_mode_(dualArmMode)
+          , control_base_frame_(frameId)
+          , marker_fixed_frame_(markerFixedFrame)
+          , publish_rate_(publishRate)
+          , current_mode_(MarkerState::SINGLE_SHOT)
+          , current_controller_state_(2)
+          , auto_update_enabled_(true)
+          , disable_auto_update_states_(disableAutoUpdateStates)
+          , last_marker_update_time_(node_->now())
+          , marker_update_interval_(markerUpdateInterval)
     {
         left_pose_.position.x = 0.0;
         left_pose_.position.y = 0.5;
@@ -37,7 +44,7 @@ namespace arms_ros2_control::command
         left_pose_.orientation.x = 0.0;
         left_pose_.orientation.y = 0.0;
         left_pose_.orientation.z = 0.0;
-        
+
         right_pose_.position.x = 0.0;
         right_pose_.position.y = -0.5;
         right_pose_.position.z = 1.0;
@@ -65,29 +72,30 @@ namespace arms_ros2_control::command
     void ArmsTargetManager::initialize()
     {
         setupMenu();
-        
+
         auto leftMarker = createMarker("left_arm_target", "left");
         server_->insert(leftMarker);
-        
+
         auto leftCallback = [this](const visualization_msgs::msg::InteractiveMarkerFeedback::ConstSharedPtr& feedback)
         {
             leftMarkerCallback(feedback);
         };
         server_->setCallback(leftMarker.name, leftCallback);
-        
+
         left_menu_handler_->apply(*server_, leftMarker.name);
 
         if (dual_arm_mode_)
         {
             auto rightMarker = createMarker("right_arm_target", "right");
             server_->insert(rightMarker);
-            
-            auto rightCallback = [this](const visualization_msgs::msg::InteractiveMarkerFeedback::ConstSharedPtr& feedback)
+
+            auto rightCallback = [this](
+                const visualization_msgs::msg::InteractiveMarkerFeedback::ConstSharedPtr& feedback)
             {
                 rightMarkerCallback(feedback);
             };
             server_->setCallback(rightMarker.name, rightCallback);
-            
+
             right_menu_handler_->apply(*server_, rightMarker.name);
         }
 
@@ -110,18 +118,22 @@ namespace arms_ros2_control::command
 
         server_->applyChanges();
 
-        RCLCPP_INFO(node_->get_logger(), 
-                   "ArmsTargetManager initialized. Mode: %s, Target Frame: %s, Publish Rate: %.1f Hz", 
-                   dual_arm_mode_ ? "dual_arm" : "single_arm", 
-                   frame_id_.c_str(),
-                   publish_rate_);
-        
-        RCLCPP_INFO(node_->get_logger(), 
-                   "📍 Markers will be created in frame: %s", 
-                   frame_id_.c_str());
-        RCLCPP_INFO(node_->get_logger(), 
-                   "🔄 Poses will be automatically transformed from RViz fixed frame to target frame: %s", 
-                   frame_id_.c_str());
+        RCLCPP_INFO(node_->get_logger(),
+                    "ArmsTargetManager initialized. Mode: %s, Control Base Frame: %s, Marker Fixed Frame: %s, Publish Rate: %.1f Hz",
+                    dual_arm_mode_ ? "dual_arm" : "single_arm",
+                    control_base_frame_.c_str(),
+                    marker_fixed_frame_.c_str(),
+                    publish_rate_);
+
+        RCLCPP_INFO(node_->get_logger(),
+                    "📍 Markers will be created in frame: %s",
+                    marker_fixed_frame_.c_str());
+        RCLCPP_INFO(node_->get_logger(),
+                    "🔄 Received current_pose will be transformed to marker frame: %s",
+                    marker_fixed_frame_.c_str());
+        RCLCPP_INFO(node_->get_logger(),
+                    "📤 Published target poses will be transformed to control base frame: %s",
+                    control_base_frame_.c_str());
     }
 
     void ArmsTargetManager::setMarkerPose(
@@ -129,7 +141,6 @@ namespace arms_ros2_control::command
         const geometry_msgs::msg::Point& position,
         const geometry_msgs::msg::Quaternion& orientation)
     {
-
         geometry_msgs::msg::Pose* current_pose = nullptr;
         std::string marker_name;
 
@@ -162,16 +173,17 @@ namespace arms_ros2_control::command
             }
         }
 
-        // 在连续发布模式下，发送target pose
+        // 在连续发布模式下，发送target pose（需要转换到control_base_frame_）
         if (current_mode_ == MarkerState::CONTINUOUS)
         {
+            geometry_msgs::msg::Pose transformed_pose = transformPose(*current_pose, marker_fixed_frame_, control_base_frame_);
             if (armType == "left" && left_pose_publisher_)
             {
-                left_pose_publisher_->publish(*current_pose);
+                left_pose_publisher_->publish(transformed_pose);
             }
             else if (armType == "right" && dual_arm_mode_ && right_pose_publisher_)
             {
-                right_pose_publisher_->publish(*current_pose);
+                right_pose_publisher_->publish(transformed_pose);
             }
         }
     }
@@ -181,19 +193,17 @@ namespace arms_ros2_control::command
         const std::array<double, 3>& positionDelta,
         const std::array<double, 3>& rpyDelta)
     {
-        std::lock_guard<std::mutex> lock(state_update_mutex_);
-        
         // 检查是否在禁用状态，只有在禁用状态下才允许增量更新
         if (!isStateDisabled(current_controller_state_))
         {
-            RCLCPP_DEBUG(node_->get_logger(), "🎮 Incremental update blocked - controller state %d is not disabled", 
+            RCLCPP_DEBUG(node_->get_logger(), "🎮 Incremental update blocked - controller state %d is not disabled",
                          current_controller_state_);
             return;
         }
 
         geometry_msgs::msg::Pose* current_pose = nullptr;
         std::string marker_name;
-        
+
         if (armType == "left")
         {
             current_pose = &left_pose_;
@@ -232,17 +242,17 @@ namespace arms_ros2_control::command
 
             // 组合旋转（ZYX顺序）
             Eigen::Quaterniond rotationIncrement = yawAngle * pitchAngle * rollAngle;
-            
+
             // 方案 A：右乘 - 旋转相对于 marker 自身的局部坐标系
             // 特点：旋转绕 marker 当前的红/绿/蓝箭头方向
             // 适用场景：末端执行器视角控制，类似第一人称
             // current_quat = current_quat * rotationIncrement;
-            
+
             // 方案 B：左乘 - 旋转相对于全局坐标系（世界坐标系）
             // 特点：旋转始终绕世界的 X/Y/Z 轴，与 marker 朝向无关
             // 适用场景：固定视角控制，与位置控制一致
             current_quat = rotationIncrement * current_quat;
-            
+
             current_quat.normalize();
 
             // 转换回geometry_msgs
@@ -262,16 +272,17 @@ namespace arms_ros2_control::command
             }
         }
 
-        // 在连续发布模式下，发送target pose
+        // 在连续发布模式下，发送target pose（需要转换到control_base_frame_）
         if (current_mode_ == MarkerState::CONTINUOUS)
         {
+            geometry_msgs::msg::Pose transformed_pose = transformPose(*current_pose, marker_fixed_frame_, control_base_frame_);
             if (armType == "left" && left_pose_publisher_)
             {
-                left_pose_publisher_->publish(*current_pose);
+                left_pose_publisher_->publish(transformed_pose);
             }
             else if (armType == "right" && dual_arm_mode_ && right_pose_publisher_)
             {
-                right_pose_publisher_->publish(*current_pose);
+                right_pose_publisher_->publish(transformed_pose);
             }
         }
     }
@@ -304,19 +315,20 @@ namespace arms_ros2_control::command
         const std::string& armType) const
     {
         visualization_msgs::msg::InteractiveMarker interactiveMarker;
-        interactiveMarker.header.frame_id = frame_id_;
+        interactiveMarker.header.frame_id = marker_fixed_frame_;
         interactiveMarker.header.stamp = node_->now();
         interactiveMarker.name = name;
         interactiveMarker.scale = 0.2;
         interactiveMarker.description = armType == "left" ? "Left Arm Target" : "Right Arm Target";
 
+        // pose统一存储在marker_fixed_frame_下，直接使用
         const auto& pose = armType == "left" ? left_pose_ : right_pose_;
         interactiveMarker.pose = pose;
 
         visualization_msgs::msg::Marker marker;
-        
+
         MarkerState current_mode = current_mode_;
-        
+
         if (current_mode == MarkerState::CONTINUOUS)
         {
             marker = createSphereMarker(armType == "left" ? "blue" : "red");
@@ -329,11 +341,25 @@ namespace arms_ros2_control::command
         visualization_msgs::msg::InteractiveMarkerControl boxControl;
         boxControl.always_visible = true;
         boxControl.markers.push_back(marker);
-        boxControl.interaction_mode = visualization_msgs::msg::InteractiveMarkerControl::MOVE_ROTATE_3D;
+        
+        // 如果当前state启用自动更新（不在禁用列表中），则禁用交互功能
+        bool is_auto_update_enabled = auto_update_enabled_ && !isStateDisabled(current_controller_state_);
+        if (is_auto_update_enabled)
+        {
+            boxControl.interaction_mode = visualization_msgs::msg::InteractiveMarkerControl::NONE;
+        }
+        else
+        {
+            boxControl.interaction_mode = visualization_msgs::msg::InteractiveMarkerControl::MOVE_ROTATE_3D;
+        }
 
         interactiveMarker.controls.push_back(boxControl);
 
-        addMovementControls(interactiveMarker);
+        // 只有在非自动更新模式下才添加移动控制
+        if (!is_auto_update_enabled)
+        {
+            addMovementControls(interactiveMarker);
+        }
 
         return interactiveMarker;
     }
@@ -410,17 +436,17 @@ namespace arms_ros2_control::command
     void ArmsTargetManager::leftMarkerCallback(
         const visualization_msgs::msg::InteractiveMarkerFeedback::ConstSharedPtr& feedback)
     {
-        std::lock_guard lock(state_update_mutex_);
-        
-        // 从feedback中读取frame_id（RViz的fixed frame）
         std::string source_frame_id = feedback->header.frame_id;
-        
-        // 转换pose到目标frame（配置的frame_id_）
-        geometry_msgs::msg::Pose transformed_pose = transformPose(feedback->pose, source_frame_id);
+
+        // 转换pose到目标frame（配置的marker_fixed_frame_）
+        geometry_msgs::msg::Pose transformed_pose = transformPose(feedback->pose, source_frame_id, marker_fixed_frame_);
+
         left_pose_ = transformed_pose;
 
         if (current_mode_ == MarkerState::CONTINUOUS)
         {
+            // 发布时需要转换到control_base_frame_
+            geometry_msgs::msg::Pose transformed_pose = transformPose(left_pose_, marker_fixed_frame_, control_base_frame_);
             left_pose_publisher_->publish(transformed_pose);
         }
     }
@@ -428,17 +454,17 @@ namespace arms_ros2_control::command
     void ArmsTargetManager::rightMarkerCallback(
         const visualization_msgs::msg::InteractiveMarkerFeedback::ConstSharedPtr& feedback)
     {
-        std::lock_guard lock(state_update_mutex_);
-        
-        // 从feedback中读取frame_id（RViz的fixed frame）
         std::string source_frame_id = feedback->header.frame_id;
-        
-        // 转换pose到目标frame（配置的frame_id_）
-        geometry_msgs::msg::Pose transformed_pose = transformPose(feedback->pose, source_frame_id);
+
+        // 转换pose到目标frame（配置的marker_fixed_frame_）
+        geometry_msgs::msg::Pose transformed_pose = transformPose(feedback->pose, source_frame_id, marker_fixed_frame_);
+
         right_pose_ = transformed_pose;
 
         if (current_mode_ == MarkerState::CONTINUOUS)
         {
+            // 发布时需要转换到control_base_frame_
+            geometry_msgs::msg::Pose transformed_pose = transformPose(right_pose_, marker_fixed_frame_, control_base_frame_);
             right_pose_publisher_->publish(transformed_pose);
         }
     }
@@ -454,10 +480,10 @@ namespace arms_ros2_control::command
         {
             current_mode_ = MarkerState::SINGLE_SHOT;
         }
-        
+
         updateMarkerShape();
         updateMenuVisibility();
-        
+
         server_->applyChanges();
     }
 
@@ -468,11 +494,14 @@ namespace arms_ros2_control::command
 
     void ArmsTargetManager::sendTargetPose()
     {
-        left_pose_publisher_->publish(left_pose_);
-        
+        // 将pose从marker_fixed_frame_转换到control_base_frame_后发布
+        geometry_msgs::msg::Pose transformed_left_pose = transformPose(left_pose_, marker_fixed_frame_, control_base_frame_);
+        left_pose_publisher_->publish(transformed_left_pose);
+
         if (dual_arm_mode_)
         {
-            right_pose_publisher_->publish(right_pose_);
+            geometry_msgs::msg::Pose transformed_right_pose = transformPose(right_pose_, marker_fixed_frame_, control_base_frame_);
+            right_pose_publisher_->publish(transformed_right_pose);
         }
     }
 
@@ -480,40 +509,44 @@ namespace arms_ros2_control::command
     void ArmsTargetManager::setupMenu()
     {
         left_menu_handler_ = std::make_shared<interactive_markers::MenuHandler>();
-        
-        auto leftSendCallback = [this](const visualization_msgs::msg::InteractiveMarkerFeedback::ConstSharedPtr& /*feedback*/)
+
+        auto leftSendCallback = [this](
+            const visualization_msgs::msg::InteractiveMarkerFeedback::ConstSharedPtr& /*feedback*/)
         {
             sendTargetPose();
         };
-        
-        
-        auto leftToggleCallback = [this](const visualization_msgs::msg::InteractiveMarkerFeedback::ConstSharedPtr& /*feedback*/)
+
+
+        auto leftToggleCallback = [this](
+            const visualization_msgs::msg::InteractiveMarkerFeedback::ConstSharedPtr& /*feedback*/)
         {
             togglePublishMode();
         };
-        
+
         left_send_handle_ = left_menu_handler_->insert("发送目标", leftSendCallback);
-        
+
         std::string leftToggleText = (current_mode_ == MarkerState::CONTINUOUS) ? "切换到单次发布" : "切换到连续发布";
         left_toggle_handle_ = left_menu_handler_->insert(leftToggleText, leftToggleCallback);
-        
+
         if (dual_arm_mode_)
         {
             right_menu_handler_ = std::make_shared<interactive_markers::MenuHandler>();
-            
-            auto rightSendCallback = [this](const visualization_msgs::msg::InteractiveMarkerFeedback::ConstSharedPtr& /*feedback*/)
+
+            auto rightSendCallback = [this](
+                const visualization_msgs::msg::InteractiveMarkerFeedback::ConstSharedPtr& /*feedback*/)
             {
                 sendTargetPose();
             };
-            
-            
-            auto rightToggleCallback = [this](const visualization_msgs::msg::InteractiveMarkerFeedback::ConstSharedPtr& /*feedback*/)
+
+
+            auto rightToggleCallback = [this](
+                const visualization_msgs::msg::InteractiveMarkerFeedback::ConstSharedPtr& /*feedback*/)
             {
                 togglePublishMode();
             };
-            
+
             right_send_handle_ = right_menu_handler_->insert("发送目标", rightSendCallback);
-            
+
             std::string rightToggleText = (current_mode_ == MarkerState::CONTINUOUS) ? "切换到单次发布" : "切换到连续发布";
             right_toggle_handle_ = right_menu_handler_->insert(rightToggleText, rightToggleCallback);
         }
@@ -523,39 +556,39 @@ namespace arms_ros2_control::command
     {
         auto leftMarker = createMarker("left_arm_target", "left");
         server_->insert(leftMarker);
-        
+
         auto leftCallback = [this](const visualization_msgs::msg::InteractiveMarkerFeedback::ConstSharedPtr& feedback)
         {
             leftMarkerCallback(feedback);
         };
         server_->setCallback(leftMarker.name, leftCallback);
         left_menu_handler_->apply(*server_, leftMarker.name);
-        
+
         if (dual_arm_mode_)
         {
             auto rightMarker = createMarker("right_arm_target", "right");
             server_->insert(rightMarker);
-            
-            auto rightCallback = [this](const visualization_msgs::msg::InteractiveMarkerFeedback::ConstSharedPtr& feedback)
+
+            auto rightCallback = [this](
+                const visualization_msgs::msg::InteractiveMarkerFeedback::ConstSharedPtr& feedback)
             {
                 rightMarkerCallback(feedback);
             };
             server_->setCallback(rightMarker.name, rightCallback);
             right_menu_handler_->apply(*server_, rightMarker.name);
         }
-        
     }
 
     void ArmsTargetManager::updateMenuVisibility()
     {
         setupMenu();
-        
+
         left_menu_handler_->apply(*server_, "left_arm_target");
         if (dual_arm_mode_)
         {
             right_menu_handler_->apply(*server_, "right_arm_target");
         }
-        
+
         if (current_mode_ == MarkerState::CONTINUOUS)
         {
             left_menu_handler_->setVisible(left_send_handle_, false);
@@ -572,13 +605,12 @@ namespace arms_ros2_control::command
                 right_menu_handler_->setVisible(right_send_handle_, true);
             }
         }
-        
+
         left_menu_handler_->reApply(*server_);
         if (dual_arm_mode_)
         {
             right_menu_handler_->reApply(*server_);
         }
-        
     }
 
 
@@ -627,27 +659,33 @@ namespace arms_ros2_control::command
     void ArmsTargetManager::controlInputCallback(const arms_ros2_control_msgs::msg::Inputs::ConstSharedPtr msg)
     {
         int32_t new_state = msg->command;
-        
+
         if (new_state == 0)
         {
             return;
         }
-        
+
         if (new_state != current_controller_state_)
         {
             current_controller_state_ = new_state;
+            
+            // 状态变化时重新创建marker
+            updateMarkerShape();
+            server_->applyChanges();
         }
     }
 
     void ArmsTargetManager::leftEndEffectorPoseCallback(const geometry_msgs::msg::PoseStamped::ConstSharedPtr msg)
     {
-        std::lock_guard<std::mutex> lock(state_update_mutex_);
         if (auto_update_enabled_ && !isStateDisabled(current_controller_state_))
         {
-            geometry_msgs::msg::Pose new_pose = msg->pose;
-            server_->setPose("left_arm_target", new_pose);
-            left_pose_ = new_pose;
-            
+            // 将接收到的pose转换到marker_fixed_frame_下，使用最新的可用变换
+            std::string source_frame_id = msg->header.frame_id;
+            geometry_msgs::msg::Pose transformed_pose = transformPose(
+                msg->pose, source_frame_id, marker_fixed_frame_);
+            left_pose_ = transformed_pose;
+            server_->setPose("left_arm_target", left_pose_);
+
             if (shouldUpdateMarker())
             {
                 server_->applyChanges();
@@ -657,13 +695,15 @@ namespace arms_ros2_control::command
 
     void ArmsTargetManager::rightEndEffectorPoseCallback(const geometry_msgs::msg::PoseStamped::ConstSharedPtr msg)
     {
-        std::lock_guard<std::mutex> lock(state_update_mutex_);
         if (auto_update_enabled_ && !isStateDisabled(current_controller_state_))
         {
-            geometry_msgs::msg::Pose new_pose = msg->pose;
-            server_->setPose("right_arm_target", new_pose);
-            right_pose_ = new_pose;
-            
+            // 将接收到的pose转换到marker_fixed_frame_下，使用最新的可用变换
+            std::string source_frame_id = msg->header.frame_id;
+            geometry_msgs::msg::Pose transformed_pose = transformPose(
+                msg->pose, source_frame_id, marker_fixed_frame_);
+            right_pose_ = transformed_pose;
+            server_->setPose("right_arm_target", right_pose_);
+
             if (shouldUpdateMarker())
             {
                 server_->applyChanges();
@@ -674,14 +714,15 @@ namespace arms_ros2_control::command
 
     bool ArmsTargetManager::isStateDisabled(int32_t state) const
     {
-        return std::find(disable_auto_update_states_.begin(), disable_auto_update_states_.end(), state) != disable_auto_update_states_.end();
+        return std::find(disable_auto_update_states_.begin(), disable_auto_update_states_.end(), state) !=
+            disable_auto_update_states_.end();
     }
 
     bool ArmsTargetManager::shouldUpdateMarker()
     {
         auto now = node_->now();
         auto time_since_last_update = (now - last_marker_update_time_).seconds();
-        
+
         if (time_since_last_update >= marker_update_interval_)
         {
             last_marker_update_time_ = now;
@@ -692,10 +733,11 @@ namespace arms_ros2_control::command
 
     geometry_msgs::msg::Pose ArmsTargetManager::transformPose(
         const geometry_msgs::msg::Pose& pose,
-        const std::string& sourceFrameId) const
+        const std::string& sourceFrameId,
+        const std::string& targetFrameId) const
     {
         // 如果源frame和目标frame相同，不需要转换
-        if (sourceFrameId == frame_id_)
+        if (sourceFrameId == targetFrameId)
         {
             return pose;
         }
@@ -705,22 +747,24 @@ namespace arms_ros2_control::command
             // 创建PoseStamped用于转换
             geometry_msgs::msg::PoseStamped pose_stamped;
             pose_stamped.header.frame_id = sourceFrameId;
-            pose_stamped.header.stamp = node_->now();
+            pose_stamped.header.stamp = rclcpp::Time(0);  // 使用Time(0)表示使用最新变换
             pose_stamped.pose = pose;
 
-            // 转换到目标frame
-            geometry_msgs::msg::PoseStamped transformed_pose_stamped;
-            transformed_pose_stamped = tf_buffer_->transform(pose_stamped, frame_id_);
-
-            return transformed_pose_stamped.pose;
+            // 获取最新的变换并使用doTransform进行转换
+            geometry_msgs::msg::TransformStamped transform = tf_buffer_->lookupTransform(
+                targetFrameId, sourceFrameId, tf2::TimePointZero);
+            
+            // 使用doTransform进行转换
+            geometry_msgs::msg::PoseStamped result_stamped;
+            tf2::doTransform(pose_stamped, result_stamped, transform);
+            return result_stamped.pose;
         }
         catch (const tf2::TransformException& ex)
         {
-            RCLCPP_WARN(node_->get_logger(), 
-                       "无法将pose从 %s 转换到 %s: %s，使用原始pose",
-                       sourceFrameId.c_str(), frame_id_.c_str(), ex.what());
+            RCLCPP_WARN(node_->get_logger(),
+                        "无法将pose从 %s 转换到 %s: %s，使用原始pose",
+                        sourceFrameId.c_str(), targetFrameId.c_str(), ex.what());
             return pose;
         }
     }
-
 } // namespace arms_ros2_control::command

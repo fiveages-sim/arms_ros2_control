@@ -1,9 +1,8 @@
 //
 // Created for Arms ROS2 Control - ArmsTargetManager
 //
+#pragma once
 
-#ifndef ARMS_TARGET_MANAGER_H
-#define ARMS_TARGET_MANAGER_H
 
 #include <memory>
 #include <string>
@@ -22,8 +21,6 @@
 #include <arms_ros2_control_msgs/msg/inputs.hpp>
 #include <tf2_ros/transform_listener.h>
 #include <tf2_ros/buffer.h>
-#include <tf2_geometry_msgs/tf2_geometry_msgs.hpp>
-#include <tf2/exceptions.h>
 
 namespace arms_ros2_control::command
 {
@@ -56,6 +53,7 @@ namespace arms_ros2_control::command
          * @param topicPrefix 主题前缀
          * @param dualArmMode 是否为双臂模式
          * @param frameId 坐标系ID，默认为"world"（目标frame，marker会转换到这个frame下发布）
+         * @param markerFixedFrame marker实际创建的frame，默认为"world"（接收到的current_pose会转换到这个frame下）
          * @param publishRate 连续发布频率，默认为20Hz
          * @param disableAutoUpdateStates 禁用自动更新的状态值数组，默认为{3}（OCS2状态）
          * @param markerUpdateInterval 最小marker更新间隔（秒），默认为0.05秒（20Hz）
@@ -65,6 +63,7 @@ namespace arms_ros2_control::command
             const std::string& topicPrefix,
             bool dualArmMode = false,
             const std::string& frameId = "world",
+            const std::string& markerFixedFrame = "base_link",
             double publishRate = 20.0,
             const std::vector<int32_t>& disableAutoUpdateStates = {3},
             double markerUpdateInterval = 0.05);
@@ -230,14 +229,17 @@ namespace arms_ros2_control::command
         void rightEndEffectorPoseCallback(geometry_msgs::msg::PoseStamped::ConstSharedPtr msg);
 
         /**
-         * 将pose从源frame_id转换到目标frame_id（配置的frame_id_）
+         * 将pose从源frame_id转换到指定的目标frame_id
+         * 默认使用最新的可用变换（tf2::TimePointZero）
          * @param pose 要转换的pose（在源frame_id下）
-         * @param sourceFrameId 源frame_id（从feedback中读取，即RViz的fixed frame）
-         * @return 转换后的pose（在frame_id_下），如果转换失败或frame相同则返回原始pose
+         * @param sourceFrameId 源frame_id
+         * @param targetFrameId 目标frame_id
+         * @return 转换后的pose（在targetFrameId下），如果转换失败或frame相同则返回原始pose
          */
         geometry_msgs::msg::Pose transformPose(
             const geometry_msgs::msg::Pose& pose,
-            const std::string& sourceFrameId) const;
+            const std::string& sourceFrameId,
+            const std::string& targetFrameId) const;
 
 
         // 核心成员
@@ -266,7 +268,8 @@ namespace arms_ros2_control::command
         // 配置
         std::string topic_prefix_;
         bool dual_arm_mode_;
-        std::string frame_id_;  // 目标frame，marker会转换到这个frame下发布
+        std::string control_base_frame_;  // 目标frame，marker会转换到这个frame下发布
+        std::string marker_fixed_frame_;  // marker实际创建的frame，接收到的current_pose会转换到这个frame下
         double publish_rate_;
         
         // TF2相关
@@ -293,5 +296,3 @@ namespace arms_ros2_control::command
     };
 
 } // namespace arms_ros2_control::command
-
-#endif // ARMS_TARGET_MANAGER_H

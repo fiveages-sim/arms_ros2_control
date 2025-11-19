@@ -6,7 +6,6 @@
 
 - [项目结构](#项目结构)
 - [依赖项](#依赖项)
-- [支持的机器人](#支持的机器人)
 - [测试环境](#测试环境)
 - [快速开始](#快速开始)
 - [组件](#组件)
@@ -57,17 +56,6 @@ ros2_ws/
 └── log/
 ```
 
-## 支持的机器人
-
-通过`robot_descriptions`包支持以下机器人：
-
-- Dobot CR5
-- ARX机器人
-- Galaxea机器人
-- LeRobot机械臂
-- Airbots机器人
-- Ragtime-Lab机器人
-
 ## 测试环境
 
 本包已在以下ROS2发行版中测试并验证可用：
@@ -88,12 +76,13 @@ ros2_ws/
 # 导航到ROS2工作空间
 cd ~/ros2_ws/src
 
-# 克隆主项目（浅克隆 - 仅最新提交）
-git clone --depth 1 git@github.com:fiveages-sim/arms_ros2_control.git
+git clone https://github.com/fiveages-sim/arms_ros2_control
+git clone https://github.com/fiveages-sim/robot_descriptions
+git clone https://github.com/legubiao/ocs2_ros2
 
-# 克隆必需的依赖项（浅克隆 - 仅最新提交）
-git clone --depth 1 git@github.com:fiveages-sim/robot_descriptions.git
-git clone --depth 1 git@github.com:legubiao/ocs2_ros2.git
+# 初始化robot_descriptions中必需的子模块
+cd robot_descriptions
+git submodule update --init common manipulator/Dobot
 
 # 使用rosdep安装依赖项
 cd ~/ros2_ws
@@ -101,8 +90,6 @@ rosdep install --from-paths src --ignore-src -r -y
 ```
 
 **注意**：
-- `--depth 1` 标志创建浅克隆，仅下载最新提交，显著减少克隆时间和磁盘使用量
-- 如果以后需要完整的git历史记录，可以使用 `git fetch --unshallow` 将浅克隆转换为完整克隆
 - `rosdep install` 命令将自动安装所有必需的系统依赖项
 
 </details>
@@ -113,9 +100,14 @@ rosdep install --from-paths src --ignore-src -r -y
 如果您是第一次接触OCS2，请先验证OCS2环境是否正确配置。通过运行移动机械臂演示之一来验证：
 
 ```bash
+# 初始化ocs2 robotic assets子模块
+cd ~/ros2_ws/src/ocs2_ros2
+git submodule update --init submodules/ocs2_robotic_assets
+
 # 构建移动机械臂包
 cd ~/ros2_ws
-colcon build --packages-up-to ocs2_mobile_manipulator_ros --symlink-install 
+colcon build --packages-up-to ocs2_mobile_manipulator_ros --symlink-install
+
 # 尝试可用的演示之一：
 source ~/ros2_ws/install/setup.bash
 
@@ -141,19 +133,14 @@ colcon build --packages-up-to ocs2_arm_controller cr5_description arms_teleop ad
 
 ### 2. 使用模拟硬件启动
 
-* 终端1：OCS2机械臂控制器
+* OCS2机械臂控制器
   ```bash
   source ~/ros2_ws/install/setup.bash
   ros2 launch ocs2_arm_controller demo.launch.py type:=AG2F90-C
   ```
-* 终端2：遥操作节点
-  ```bash
-  source ~/ros2_ws/install/setup.bash
-  ros2 run arms_teleop keyboard_teleop
-  ```
 
 > **交互式控制：**
-> - 在终端中按数字键切换FSM状态（例如，按3进入OCS2状态，按2进入HOLD状态，按1进入HOME状态）
+> - 按按钮在OCS2控制器FSM之间切换并切换夹爪。
 > - 在RViz中，拖拽交互式标记设置目标位置，然后右键单击发送轨迹命令
 >
 > ![ocs2_dobot](.images/ocs2%20dobot.png)
@@ -174,17 +161,17 @@ colcon build --packages-up-to ocs2_arm_controller cr5_description arms_teleop ad
 #### 对于ROS2 Jazzy：
 * 安装Gazebo Harmonic
     ```bash
-    sudo apt-get install ros-jazzy-gz-ros2-control
+    sudo apt-get install ros-jazzy-ros-gz ros-jazzy-gz-ros2-control
     ```
 
 #### 启动控制器（适用于两个发行版）：
-这里使用了智元精灵G1机器人作为例子
-* 编译机器人模型包
+这里使用了Agibot G1作为其他机器人的示例。
+* 编译机器人描述
   ```bash
   cd ~/ros2_ws
   colcon build --packages-up-to agibot_g1_description --symlink-install
   ```
-* 你可以使用`world`参数来切换gazebo加载的环境模型
+* 你可以使用`world`来选择gazebo世界
   ```bash
   source ~/ros2_ws/install/setup.bash
   ros2 launch ocs2_arm_controller demo.launch.py robot:=agibot_g1 hardware:=gz world:=warehouse

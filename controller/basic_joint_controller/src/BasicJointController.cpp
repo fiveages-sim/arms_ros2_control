@@ -1,19 +1,20 @@
 //
-// Created for OCS2 Arm Controller
+// Created for Basic Joint Controller
 //
 
-#include "ocs2_arm_controller/Ocs2ArmController.h"
-#include "ocs2_arm_controller/FSM/StateHome.h"
-#include "ocs2_arm_controller/FSM/StateOCS2.h"
-#include "ocs2_arm_controller/FSM/StateHold.h"
+#include "basic_joint_controller/BasicJointController.h"
+#include "basic_joint_controller/FSM/StateHome.h"
+#include "basic_joint_controller/FSM/StateHold.h"
+#include "basic_joint_controller/FSM/StateMove.h"
 
-#include <rclcpp/rclcpp.hpp>
+#include <std_msgs/msg/float64_multi_array.hpp>
+#include <string>
 
-namespace ocs2::mobile_manipulator
+namespace basic_joint_controller
 {
     using config_type = controller_interface::interface_configuration_type;
 
-    controller_interface::InterfaceConfiguration Ocs2ArmController::command_interface_configuration() const
+    controller_interface::InterfaceConfiguration BasicJointController::command_interface_configuration() const
     {
         controller_interface::InterfaceConfiguration conf = {config_type::INDIVIDUAL, {}};
 
@@ -36,7 +37,7 @@ namespace ocs2::mobile_manipulator
         return conf;
     }
 
-    controller_interface::InterfaceConfiguration Ocs2ArmController::state_interface_configuration() const
+    controller_interface::InterfaceConfiguration BasicJointController::state_interface_configuration() const
     {
         controller_interface::InterfaceConfiguration conf = {config_type::INDIVIDUAL, {}};
 
@@ -52,12 +53,9 @@ namespace ocs2::mobile_manipulator
         return conf;
     }
 
-    controller_interface::return_type Ocs2ArmController::update(const rclcpp::Time& time,
-                                                                const rclcpp::Duration& period)
+    controller_interface::return_type BasicJointController::update(const rclcpp::Time& time,
+                                                                   const rclcpp::Duration& period)
     {
-        // Publish end effector pose (regardless of current state)
-        ctrl_comp_->updateObservation(time);
-
         if (mode_ == FSMMode::NORMAL)
         {
             current_state_->run(time, period);
@@ -81,7 +79,7 @@ namespace ocs2::mobile_manipulator
         return controller_interface::return_type::OK;
     }
 
-    controller_interface::CallbackReturn Ocs2ArmController::on_init()
+    controller_interface::CallbackReturn BasicJointController::on_init()
     {
         try
         {
@@ -97,56 +95,28 @@ namespace ocs2::mobile_manipulator
             state_interface_types_ =
                 auto_declare<std::vector<std::string>>("state_interfaces", state_interface_types_);
 
-            // Robot parameters - use robot_name to auto-generate package names
-            auto_declare<std::string>("robot_name", "cr5");
-            auto_declare<std::string>("robot_type", "");  // Optional robot type/variant
-            auto_declare<double>("future_time_offset", 1.0);
-            auto_declare<std::string>("info_file_name", "task");
-
-            // Control input parameters
-            control_input_name_ = auto_declare<std::string>("control_input_name", control_input_name_);
-            control_input_interface_types_ =
-                auto_declare<std::vector<std::string>>("control_input_interfaces", control_input_interface_types_);
-
             // State machine parameters
-            home_pos_ = auto_declare<std::vector<double>>("home_pos", home_pos_);
-            rest_pos_ = auto_declare<std::vector<double>>("rest_pos", rest_pos_);
-            
-            // Force control parameters
-            ctrl_interfaces_.default_gains_ = auto_declare<std::vector<double>>("default_gains", ctrl_interfaces_.default_gains_);
-            
-            // OCS2 control parameters
-            ctrl_interfaces_.ocs2_gains_ = auto_declare<std::vector<double>>("ocs2_gains", ctrl_interfaces_.ocs2_gains_);
+            home_duration_ = auto_declare<double>("home_duration", 3.0);
+            move_duration_ = auto_declare<double>("move_duration", 3.0);
+            hold_position_threshold_ = auto_declare<double>("hold_position_threshold", 0.1);
+            long switch_command_base = auto_declare<long>("switch_command_base", 100);
 
-            // MPC frequency parameter - default value 0 if not set
-            auto_declare<int>("mpc_frequency", 0);
-
-            // Hold state parameters
-            auto_declare<double>("hold_position_threshold", 0.1);  // Default: 0.1 rad (~5.7 degrees)
-
-            // Home state parameters
-            double home_duration = auto_declare<double>("home_duration", 3.0);  // Default: 3.0 seconds
-
-            // Create CtrlComponent (auto-initialize interface)
-            ctrl_comp_ = std::make_shared<CtrlComponent>(get_node(), ctrl_interfaces_);
+            // Get logger for FSM states
+            rclcpp::Logger logger = get_node()->get_logger();
 
             // Create states
-            state_list_.home = std::make_shared<StateHome>(ctrl_interfaces_, home_pos_, ctrl_comp_, home_duration);
-            
-            // Configure rest pose if available
-            if (!rest_pos_.empty())
+            // StateHome will load configurations via init() method using auto_declare
+            state_list_.home = std::make_shared<StateHome>(ctrl_interfaces_, logger, home_duration_,
+                                                           switch_command_base);
+
+            // Initialize StateHome with configurations from parameters (home_1, home_2, home_3, etc.)
+            // Pass auto_declare as a lambda to allow StateHome to use it
+            state_list_.home->init([this](const std::string& name, const std::vector<double>& default_value)
             {
-                state_list_.home->setRestPose(rest_pos_);
-                RCLCPP_INFO(get_node()->get_logger(), 
-                            "Rest pose configured with %zu joints", rest_pos_.size());
-            }
-            else
-            {
-                RCLCPP_INFO(get_node()->get_logger(), "No rest pose configured, using home pose only");
-            }
-            
-            state_list_.ocs2 = std::make_shared<StateOCS2>(ctrl_interfaces_, get_node(), ctrl_comp_);
-            state_list_.hold = std::make_shared<StateHold>(ctrl_interfaces_, ctrl_comp_);
+                return this->auto_declare<std::vector<double>>(name, default_value);
+            });
+            state_list_.hold = std::make_shared<StateHold>(ctrl_interfaces_, logger, hold_position_threshold_);
+            state_list_.move = std::make_shared<StateMove>(ctrl_interfaces_, logger, move_duration_);
 
             return CallbackReturn::SUCCESS;
         }
@@ -157,19 +127,37 @@ namespace ocs2::mobile_manipulator
         }
     }
 
-    controller_interface::CallbackReturn Ocs2ArmController::on_configure(
+    controller_interface::CallbackReturn BasicJointController::on_configure(
         const rclcpp_lifecycle::State& /*previous_state*/)
     {
+        // Subscribe to control input
         control_input_subscription_ = get_node()->create_subscription<arms_ros2_control_msgs::msg::Inputs>(
             "/control_input", 10, [this](const arms_ros2_control_msgs::msg::Inputs::SharedPtr msg)
             {
                 ctrl_interfaces_.control_inputs_ = *msg;
             });
 
+        // Subscribe to target position for Move state
+        target_position_subscription_ = get_node()->create_subscription<std_msgs::msg::Float64MultiArray>(
+            get_node()->get_name() + std::string("/target_joint_position"), 10,
+            [this](const std_msgs::msg::Float64MultiArray::SharedPtr msg)
+            {
+                // Convert Float64MultiArray message to vector of joint positions
+                std::vector<double> target_pos;
+                for (const auto& val : msg->data)
+                {
+                    target_pos.push_back(val);
+                }
+                if (state_list_.move && !target_pos.empty())
+                {
+                    state_list_.move->setTargetPosition(target_pos);
+                }
+            });
+
         return CallbackReturn::SUCCESS;
     }
 
-    controller_interface::CallbackReturn Ocs2ArmController::on_activate(
+    controller_interface::CallbackReturn BasicJointController::on_activate(
         const rclcpp_lifecycle::State& /*previous_state*/)
     {
         // clear out vectors in case of restart
@@ -195,19 +183,6 @@ namespace ocs2::mobile_manipulator
             state_interface_map_[interface.get_interface_name()]->push_back(interface);
         }
 
-        // Auto-detect control mode based on available interfaces
-        ctrl_interfaces_.detectAndSetControlMode();
-        
-        // Log detected control mode
-        if (ctrl_interfaces_.control_mode_ == ControlMode::MIX)
-        {
-            RCLCPP_INFO(get_node()->get_logger(), "Mixed control mode enabled - detected kp, kd, velocity, effort, position interfaces");
-        }
-        else
-        {
-            RCLCPP_INFO(get_node()->get_logger(), "Position control mode enabled - standard position control interfaces detected");
-        }
-
         // Initialize FSM
         current_state_ = state_list_.hold;
         current_state_->enter();
@@ -218,31 +193,32 @@ namespace ocs2::mobile_manipulator
         return CallbackReturn::SUCCESS;
     }
 
-    controller_interface::CallbackReturn Ocs2ArmController::on_deactivate(
+    controller_interface::CallbackReturn BasicJointController::on_deactivate(
         const rclcpp_lifecycle::State& /*previous_state*/)
     {
         release_interfaces();
         return CallbackReturn::SUCCESS;
     }
 
-    controller_interface::CallbackReturn Ocs2ArmController::on_cleanup(
+    controller_interface::CallbackReturn BasicJointController::on_cleanup(
         const rclcpp_lifecycle::State& /*previous_state*/)
     {
         return CallbackReturn::SUCCESS;
     }
 
-    controller_interface::CallbackReturn Ocs2ArmController::on_error(const rclcpp_lifecycle::State& /*previous_state*/)
-    {
-        return CallbackReturn::SUCCESS;
-    }
-
-    controller_interface::CallbackReturn Ocs2ArmController::on_shutdown(
+    controller_interface::CallbackReturn BasicJointController::on_error(
         const rclcpp_lifecycle::State& /*previous_state*/)
     {
         return CallbackReturn::SUCCESS;
     }
 
-    std::shared_ptr<FSMState> Ocs2ArmController::getNextState(FSMStateName stateName) const
+    controller_interface::CallbackReturn BasicJointController::on_shutdown(
+        const rclcpp_lifecycle::State& /*previous_state*/)
+    {
+        return CallbackReturn::SUCCESS;
+    }
+
+    std::shared_ptr<FSMState> BasicJointController::getNextState(FSMStateName stateName) const
     {
         switch (stateName)
         {
@@ -250,15 +226,15 @@ namespace ocs2::mobile_manipulator
             return state_list_.invalid;
         case FSMStateName::HOME:
             return state_list_.home;
-        case FSMStateName::OCS2:
-            return state_list_.ocs2;
         case FSMStateName::HOLD:
             return state_list_.hold;
+        case FSMStateName::MOVE:
+            return state_list_.move;
         default:
             return state_list_.invalid;
         }
     }
-} // namespace mobile_manipulator
+} // namespace basic_joint_controller
 
 #include "pluginlib/class_list_macros.hpp"
-PLUGINLIB_EXPORT_CLASS(ocs2::mobile_manipulator::Ocs2ArmController, controller_interface::ControllerInterface);
+PLUGINLIB_EXPORT_CLASS(basic_joint_controller::BasicJointController, controller_interface::ControllerInterface);
