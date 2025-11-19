@@ -22,6 +22,7 @@
 #include <tf2_ros/transform_listener.h>
 #include <tf2_ros/buffer.h>
 #include <std_msgs/msg/float64_multi_array.hpp>
+#include <sensor_msgs/msg/joint_state.hpp>
 
 namespace arms_ros2_control::command
 {
@@ -61,7 +62,7 @@ namespace arms_ros2_control::command
          * @param enableHeadControl 是否启用头部控制，默认为false
          * @param headMarkerFrame 头部marker的坐标系，默认为"base_footprint"
          * @param headControllerName 头部控制器名称，默认为"head_joint_controller"
-         * @param headMarkerPosition 头部marker在base_footprint中的固定位置，默认为[1.0, 0.0, 1.5]
+         * @param headMarkerPosition 头部marker在base_footprint中的固定位置，默认为[1.0, 0.0, 1.5]（仅在TF获取失败时使用）
          */
         ArmsTargetManager(
             rclcpp::Node::SharedPtr node,
@@ -238,6 +239,20 @@ namespace arms_ros2_control::command
         std::vector<double> quaternionToHeadJointAngles(
             const geometry_msgs::msg::Quaternion& quaternion) const;
 
+        /**
+         * 从头部关节角度转换为quaternion（yaw和pitch）
+         * @param joint_angles [head_joint1_angle, head_joint2_angle] 关节角度（弧度）
+         * @return 四元数
+         */
+        geometry_msgs::msg::Quaternion headJointAnglesToQuaternion(
+            const std::vector<double>& joint_angles) const;
+
+        /**
+         * 头部关节状态回调函数
+         * @param msg 关节状态消息
+         */
+        void headJointStateCallback(sensor_msgs::msg::JointState::ConstSharedPtr msg);
+
 
         /**
          * 设置菜单系统
@@ -248,6 +263,11 @@ namespace arms_ros2_control::command
          * 更新marker形状
          */
         void updateMarkerShape();
+
+        /**
+         * 更新头部marker形状（根据控制器状态启用/禁用交互）
+         */
+        void updateHeadMarkerShape();
 
         /**
          * 更新菜单可见性
@@ -302,6 +322,7 @@ namespace arms_ros2_control::command
         rclcpp::Subscription<arms_ros2_control_msgs::msg::Inputs>::SharedPtr control_input_subscription_;
         rclcpp::Subscription<geometry_msgs::msg::PoseStamped>::SharedPtr left_end_effector_pose_subscription_;
         rclcpp::Subscription<geometry_msgs::msg::PoseStamped>::SharedPtr right_end_effector_pose_subscription_;
+        rclcpp::Subscription<sensor_msgs::msg::JointState>::SharedPtr head_joint_state_subscription_;
         
         // 菜单系统
         std::shared_ptr<interactive_markers::MenuHandler> left_menu_handler_;
@@ -314,6 +335,7 @@ namespace arms_ros2_control::command
         interactive_markers::MenuHandler::EntryHandle right_send_handle_;
         interactive_markers::MenuHandler::EntryHandle right_toggle_handle_;
         interactive_markers::MenuHandler::EntryHandle head_send_handle_;
+        interactive_markers::MenuHandler::EntryHandle head_toggle_handle_;
         
         // 配置
         std::string topic_prefix_;
@@ -348,7 +370,9 @@ namespace arms_ros2_control::command
         bool enable_head_control_;  // 是否启用头部控制
         std::string head_marker_frame_;  // 头部marker的坐标系
         std::string head_controller_name_;  // 头部控制器名称
-        std::array<double, 3> head_marker_position_;  // marker在base_footprint中的固定位置
+        std::array<double, 3> head_marker_position_;  // marker在base_footprint中的固定位置（仅在TF获取失败时使用）
+        std::vector<double> last_head_joint_angles_;  // 缓存最新的头部关节角度
+        static constexpr const char* HEAD_LINK_NAME = "head_link2";  // 默认头部link名称，用于从TF获取实际位置
         
     };
 

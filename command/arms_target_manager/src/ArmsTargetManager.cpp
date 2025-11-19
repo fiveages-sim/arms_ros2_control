@@ -128,6 +128,32 @@ namespace arms_ros2_control::command
             head_joint_publisher_ = node_->create_publisher<std_msgs::msg::Float64MultiArray>(
                 head_topic, 1);
 
+            // 从 TF 获取 head_link2 的初始位置
+            try
+            {
+                // 获取 head_link2 在 head_marker_frame_ 中的初始位置
+                geometry_msgs::msg::TransformStamped transform = tf_buffer_->lookupTransform(
+                    head_marker_frame_, HEAD_LINK_NAME, tf2::TimePointZero);
+                
+                head_pose_.position.x = transform.transform.translation.x;
+                head_pose_.position.y = transform.transform.translation.y;
+                head_pose_.position.z = transform.transform.translation.z;
+                
+                RCLCPP_INFO(node_->get_logger(),
+                           "Initialized head marker position from TF: [%.3f, %.3f, %.3f] (link: %s)",
+                           head_pose_.position.x, head_pose_.position.y, head_pose_.position.z,
+                           HEAD_LINK_NAME);
+            }
+            catch (const tf2::TransformException& ex)
+            {
+                // 如果 TF 转换失败，使用配置的固定位置
+                RCLCPP_WARN(node_->get_logger(),
+                           "无法从 TF 获取头部 link %s 的初始位置: %s，使用配置的固定位置 [%.3f, %.3f, %.3f]",
+                           HEAD_LINK_NAME, ex.what(),
+                           head_marker_position_[0], head_marker_position_[1], head_marker_position_[2]);
+                // head_pose_.position 已经在构造函数中从 head_marker_position_ 初始化
+            }
+
             auto headMarker = createHeadMarker();
             server_->insert(headMarker);
 
@@ -154,6 +180,16 @@ namespace arms_ros2_control::command
                 "right_current_pose", 10, [this](const geometry_msgs::msg::PoseStamped::ConstSharedPtr msg)
                 {
                     rightEndEffectorPoseCallback(msg);
+                });
+        }
+
+        // 如果启用头部控制，订阅关节状态以自动更新头部 marker
+        if (enable_head_control_)
+        {
+            head_joint_state_subscription_ = node_->create_subscription<sensor_msgs::msg::JointState>(
+                "/joint_states", 10, [this](const sensor_msgs::msg::JointState::ConstSharedPtr msg)
+                {
+                    headJointStateCallback(msg);
                 });
         }
 
@@ -618,6 +654,12 @@ namespace arms_ros2_control::command
             server_->setCallback(rightMarker.name, rightCallback);
             right_menu_handler_->apply(*server_, rightMarker.name);
         }
+
+        // 如果启用头部控制，也更新头部 marker
+        if (enable_head_control_)
+        {
+            updateHeadMarkerShape();
+        }
     }
 
     void ArmsTargetManager::updateMenuVisibility()
@@ -637,6 +679,11 @@ namespace arms_ros2_control::command
             {
                 right_menu_handler_->setVisible(right_send_handle_, false);
             }
+            // 更新头部菜单可见性
+            if (enable_head_control_)
+            {
+                head_menu_handler_->setVisible(head_send_handle_, false);
+            }
         }
         else
         {
@@ -645,12 +692,22 @@ namespace arms_ros2_control::command
             {
                 right_menu_handler_->setVisible(right_send_handle_, true);
             }
+            // 更新头部菜单可见性
+            if (enable_head_control_)
+            {
+                head_menu_handler_->setVisible(head_send_handle_, true);
+            }
         }
 
         left_menu_handler_->reApply(*server_);
         if (dual_arm_mode_)
         {
             right_menu_handler_->reApply(*server_);
+        }
+        // 更新头部菜单
+        if (enable_head_control_)
+        {
+            head_menu_handler_->reApply(*server_);
         }
     }
 
@@ -710,10 +767,54 @@ namespace arms_ros2_control::command
         {
             current_controller_state_ = new_state;
             
+            // 如果切换到 MOVE 状态（command = 3）且启用了头部控制
+            // 将当前头部位置作为目标位置发布，确保头部保持当前位置
+            if (new_state == 3 && enable_head_control_ && head_joint_publisher_)
+            {
+                // 如果有缓存的关节角度，使用缓存的；否则从 head_pose_ 提取
+                if (last_head_joint_angles_.size() == 2)
+                {
+                    std_msgs::msg::Float64MultiArray msg;
+                    msg.data = last_head_joint_angles_;
+                    head_joint_publisher_->publish(msg);
+                    RCLCPP_INFO(node_->get_logger(),
+                               "Entered MOVE state, published current head position as target: [%.3f, %.3f]",
+                               last_head_joint_angles_[0], last_head_joint_angles_[1]);
+                }
+                else
+                {
+                    // 如果没有缓存，从 head_pose_ 提取（可能不是最新的，但总比没有好）
+                    sendHeadTargetJointPosition();
+                    RCLCPP_INFO(node_->get_logger(),
+                               "Entered MOVE state, published head position from marker as target");
+                }
+            }
+            
             // 状态变化时重新创建marker
             updateMarkerShape();
             server_->applyChanges();
         }
+    }
+
+    void ArmsTargetManager::updateHeadMarkerShape()
+    {
+        if (!enable_head_control_)
+        {
+            return;
+        }
+
+        // 更新菜单以确保切换文本正确
+        setupHeadMenu();
+
+        auto headMarker = createHeadMarker();
+        server_->insert(headMarker);
+
+        auto headCallback = [this](const visualization_msgs::msg::InteractiveMarkerFeedback::ConstSharedPtr& feedback)
+        {
+            headMarkerCallback(feedback);
+        };
+        server_->setCallback(headMarker.name, headCallback);
+        head_menu_handler_->apply(*server_, headMarker.name);
     }
 
     void ArmsTargetManager::leftEndEffectorPoseCallback(const geometry_msgs::msg::PoseStamped::ConstSharedPtr msg)
@@ -826,6 +927,121 @@ namespace arms_ros2_control::command
         return {yaw, -pitch};
     }
 
+    geometry_msgs::msg::Quaternion ArmsTargetManager::headJointAnglesToQuaternion(
+        const std::vector<double>& joint_angles) const
+    {
+        if (joint_angles.size() < 2)
+        {
+            RCLCPP_WARN(node_->get_logger(), "Invalid joint angles size, expected 2, got %zu", joint_angles.size());
+            geometry_msgs::msg::Quaternion quat;
+            quat.w = 1.0;
+            quat.x = 0.0;
+            quat.y = 0.0;
+            quat.z = 0.0;
+            return quat;
+        }
+
+        // head_joint1 -> yaw (Z轴旋转)
+        // head_joint2 -> pitch (Y轴旋转，需要取反)
+        double yaw = joint_angles[0];
+        double pitch = -joint_angles[1];  // 取反，与 quaternionToHeadJointAngles 对应
+        double roll = 0.0;  // 忽略 roll
+
+        // 使用 tf2 从 RPY 创建四元数
+        tf2::Quaternion tf_quat;
+        tf_quat.setRPY(roll, pitch, yaw);
+        tf_quat.normalize();
+
+        geometry_msgs::msg::Quaternion quat;
+        quat.w = tf_quat.w();
+        quat.x = tf_quat.x();
+        quat.y = tf_quat.y();
+        quat.z = tf_quat.z();
+        return quat;
+    }
+
+    void ArmsTargetManager::headJointStateCallback(sensor_msgs::msg::JointState::ConstSharedPtr msg)
+    {
+        if (!enable_head_control_)
+        {
+            return;
+        }
+
+        // 检查是否启用自动更新且当前状态不在禁用列表中
+        if (!auto_update_enabled_ || isStateDisabled(current_controller_state_))
+        {
+            return;
+        }
+
+        // 从 joint_states 中查找 head_joint1 和 head_joint2
+        double head_joint1_angle = 0.0;
+        double head_joint2_angle = 0.0;
+        bool found_joint1 = false;
+        bool found_joint2 = false;
+
+        for (size_t i = 0; i < msg->name.size() && i < msg->position.size(); ++i)
+        {
+            if (msg->name[i] == "head_joint1")
+            {
+                head_joint1_angle = msg->position[i];
+                found_joint1 = true;
+            }
+            else if (msg->name[i] == "head_joint2")
+            {
+                head_joint2_angle = msg->position[i];
+                found_joint2 = true;
+            }
+
+            if (found_joint1 && found_joint2)
+            {
+                break;
+            }
+        }
+
+        // 如果找到了两个关节，更新头部 marker 的 orientation 和 position
+        if (found_joint1 && found_joint2)
+        {
+            // 将关节角度转换为四元数（确保顺序：head_joint1, head_joint2）
+            std::vector<double> head_joint_angles = {head_joint1_angle, head_joint2_angle};
+            
+            // 缓存最新的关节角度，用于状态切换时发布
+            last_head_joint_angles_ = head_joint_angles;
+            
+            geometry_msgs::msg::Quaternion quat = headJointAnglesToQuaternion(head_joint_angles);
+
+            // 更新头部 pose 的 orientation
+            head_pose_.orientation = quat;
+
+            // 从 TF 获取 head_link2 的实际位置并更新
+            try
+            {
+                // 获取 head_link2 在 head_marker_frame_ 中的位置
+                geometry_msgs::msg::TransformStamped transform = tf_buffer_->lookupTransform(
+                    head_marker_frame_, HEAD_LINK_NAME, tf2::TimePointZero);
+                
+                // 更新 marker 位置为 head_link2 的实际位置
+                head_pose_.position.x = transform.transform.translation.x;
+                head_pose_.position.y = transform.transform.translation.y;
+                head_pose_.position.z = transform.transform.translation.z;
+            }
+            catch (const tf2::TransformException& ex)
+            {
+                // 如果 TF 转换失败，保持当前位置不变（使用固定位置或上次的位置）
+                RCLCPP_DEBUG(node_->get_logger(),
+                            "无法从 TF 获取头部 link %s 的位置: %s，保持当前位置",
+                            HEAD_LINK_NAME, ex.what());
+            }
+
+            // 更新 marker
+            server_->setPose("head_target", head_pose_);
+
+            if (shouldUpdateMarker())
+            {
+                server_->applyChanges();
+            }
+        }
+    }
+
     visualization_msgs::msg::Marker ArmsTargetManager::createArrowMarker(const std::string& color) const
     {
         visualization_msgs::msg::Marker marker;
@@ -869,7 +1085,7 @@ namespace arms_ros2_control::command
         interactiveMarker.header.frame_id = head_marker_frame_;
         interactiveMarker.header.stamp = node_->now();
         interactiveMarker.name = "head_target";
-        interactiveMarker.scale = 0.2;
+        interactiveMarker.scale = 0.25;
         interactiveMarker.description = "Head Target";
 
         // 使用配置的固定位置
@@ -888,25 +1104,33 @@ namespace arms_ros2_control::command
         arrowControl.interaction_mode = visualization_msgs::msg::InteractiveMarkerControl::NONE;
         interactiveMarker.controls.push_back(arrowControl);
 
-        // 只添加左右旋转（yaw）和上下旋转（pitch）控制，不添加roll旋转
-        // 左右旋转（绕Z轴 - yaw）
-        visualization_msgs::msg::InteractiveMarkerControl control;
-        control.orientation.w = 1;
-        control.orientation.x = 0;
-        control.orientation.y = 0;
-        control.orientation.z = 1;
-        control.name = "rotate_z";
-        control.interaction_mode = visualization_msgs::msg::InteractiveMarkerControl::ROTATE_AXIS;
-        interactiveMarker.controls.push_back(control);
+        // 只有在 MOVE 状态（command = 3）时才启用交互功能
+        // HOME (1) 和 HOLD (2) 状态时禁用交互
+        bool is_head_control_enabled = (current_controller_state_ == 3);
 
-        // 上下旋转（绕Y轴 - pitch）
-        control.orientation.w = 1;
-        control.orientation.x = 0;
-        control.orientation.y = 1;
-        control.orientation.z = 0;
-        control.name = "rotate_y";
-        control.interaction_mode = visualization_msgs::msg::InteractiveMarkerControl::ROTATE_AXIS;
-        interactiveMarker.controls.push_back(control);
+        if (is_head_control_enabled)
+        {
+            // 只添加左右旋转（yaw）和上下旋转（pitch）控制，不添加roll旋转
+            // 左右旋转（绕Z轴 - yaw）
+            visualization_msgs::msg::InteractiveMarkerControl control;
+            control.orientation.w = 1;
+            control.orientation.x = 0;
+            control.orientation.y = 0;
+            control.orientation.z = 1;
+            control.name = "rotate_z";
+            control.interaction_mode = visualization_msgs::msg::InteractiveMarkerControl::ROTATE_AXIS;
+            interactiveMarker.controls.push_back(control);
+
+            // 上下旋转（绕Y轴 - pitch）
+            control.orientation.w = 1;
+            control.orientation.x = 0;
+            control.orientation.y = 1;
+            control.orientation.z = 0;
+            control.name = "rotate_y";
+            control.interaction_mode = visualization_msgs::msg::InteractiveMarkerControl::ROTATE_AXIS;
+            interactiveMarker.controls.push_back(control);
+        }
+        // 如果不在 MOVE 状态，不添加交互控制，marker 将不可交互
 
         return interactiveMarker;
     }
@@ -921,8 +1145,11 @@ namespace arms_ros2_control::command
 
         head_pose_ = transformed_pose;
 
-        // 头部控制只支持单次发布模式，不在这里发布
-        // 发布通过右键菜单触发
+        // 在连续发布模式下，发送头部目标关节位置
+        if (current_mode_ == MarkerState::CONTINUOUS)
+        {
+            sendHeadTargetJointPosition();
+        }
     }
 
     void ArmsTargetManager::setupHeadMenu()
@@ -935,7 +1162,16 @@ namespace arms_ros2_control::command
             sendHeadTargetJointPosition();
         };
 
-        head_send_handle_ = head_menu_handler_->insert("Send Head Target", headSendCallback);
+        auto headToggleCallback = [this](
+            const visualization_msgs::msg::InteractiveMarkerFeedback::ConstSharedPtr& /*feedback*/)
+        {
+            togglePublishMode();
+        };
+
+        head_send_handle_ = head_menu_handler_->insert("发送目标", headSendCallback);
+
+        std::string headToggleText = (current_mode_ == MarkerState::CONTINUOUS) ? "切换到单次发布" : "切换到连续发布";
+        head_toggle_handle_ = head_menu_handler_->insert(headToggleText, headToggleCallback);
     }
 
     void ArmsTargetManager::sendHeadTargetJointPosition()

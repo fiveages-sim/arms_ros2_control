@@ -29,7 +29,7 @@ int main(int argc, char** argv)
     bool enable_vr = node->declare_parameter("enable_vr", true);
 
     // 头部控制参数
-    bool enable_head_control = node->declare_parameter("enable_head_control", true);
+    bool enable_head_control = node->declare_parameter("enable_head_control", false);
     std::string head_marker_frame = node->declare_parameter("head_marker_frame", "base_footprint");
     std::string head_controller_name = node->declare_parameter("head_controller_name", "head_joint_controller");
     std::vector<double> head_marker_position = node->declare_parameter("head_marker_position", std::vector<double>{1.0, 0.0, 1.5});
@@ -60,7 +60,7 @@ int main(int argc, char** argv)
         if (enable_head_control)
         {
             RCLCPP_INFO(node->get_logger(), 
-                       "Head control enabled: frame=%s, controller=%s, position=[%.2f, %.2f, %.2f]",
+                       "Head control enabled: frame=%s, controller=%s, link=head_link2 (position from TF, fallback=[%.2f, %.2f, %.2f])",
                        head_marker_frame.c_str(), head_controller_name.c_str(),
                        head_marker_position[0], head_marker_position[1], head_marker_position[2]);
         }
