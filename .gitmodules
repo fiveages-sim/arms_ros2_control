@@ -1,0 +1,3 @@
+[submodule "hardwares/tj2_ros2_control"]
+	path = hardwares/tj2_ros2_control
+	url = https://github.com/fiveages-sim/tj2_ros2_control.git
