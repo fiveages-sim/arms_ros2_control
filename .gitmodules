@@ -1,3 +1,6 @@
+[submodule "hardwares/tj2_ros2_control"]
+	path = hardwares/tj2_ros2_control
+	url = https://github.com/fiveages-sim/tj2_ros2_control.git
 [submodule "hardwares/unitree_ros2_control"]
 	path = hardwares/unitree_ros2_control
 	url = git@github.com:fiveages-sim/unitree-ros2-control.git
