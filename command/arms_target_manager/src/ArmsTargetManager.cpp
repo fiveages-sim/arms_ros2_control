@@ -27,7 +27,6 @@ namespace arms_ros2_control::command
         const std::vector<int32_t>& disableAutoUpdateStates,
         double markerUpdateInterval,
         bool enableHeadControl,
-        const std::string& headMarkerFrame,
         const std::string& headControllerName,
         const std::array<double, 3>& headMarkerPosition)
         : node_(std::move(node))
@@ -43,7 +42,6 @@ namespace arms_ros2_control::command
           , last_marker_update_time_(node_->now())
           , marker_update_interval_(markerUpdateInterval)
           , enable_head_control_(enableHeadControl)
-          , head_marker_frame_(headMarkerFrame)
           , head_controller_name_(headControllerName)
           , head_marker_position_(headMarkerPosition)
     {
@@ -92,7 +90,7 @@ namespace arms_ros2_control::command
     {
         setupMenu();
 
-        auto leftMarker = createMarker("left_arm_target", "left");
+        auto leftMarker = createMarker("left_arm_target", "left_arm");
         server_->insert(leftMarker);
 
         auto leftCallback = [this](const visualization_msgs::msg::InteractiveMarkerFeedback::ConstSharedPtr& feedback)
@@ -105,7 +103,7 @@ namespace arms_ros2_control::command
 
         if (dual_arm_mode_)
         {
-            auto rightMarker = createMarker("right_arm_target", "right");
+            auto rightMarker = createMarker("right_arm_target", "right_arm");
             server_->insert(rightMarker);
 
             auto rightCallback = [this](
@@ -131,18 +129,18 @@ namespace arms_ros2_control::command
             // 从 TF 获取 head_link2 的初始位置
             try
             {
-                // 获取 head_link2 在 head_marker_frame_ 中的初始位置
+                // 获取 head_link2 在 marker_fixed_frame_ 中的初始位置（统一使用 marker_fixed_frame_）
                 geometry_msgs::msg::TransformStamped transform = tf_buffer_->lookupTransform(
-                    head_marker_frame_, HEAD_LINK_NAME, tf2::TimePointZero);
+                    marker_fixed_frame_, HEAD_LINK_NAME, tf2::TimePointZero);
                 
                 head_pose_.position.x = transform.transform.translation.x;
                 head_pose_.position.y = transform.transform.translation.y;
                 head_pose_.position.z = transform.transform.translation.z;
                 
                 RCLCPP_INFO(node_->get_logger(),
-                           "Initialized head marker position from TF: [%.3f, %.3f, %.3f] (link: %s)",
+                           "Initialized head marker position from TF: [%.3f, %.3f, %.3f] (link: %s, frame: %s)",
                            head_pose_.position.x, head_pose_.position.y, head_pose_.position.z,
-                           HEAD_LINK_NAME);
+                           HEAD_LINK_NAME, marker_fixed_frame_.c_str());
             }
             catch (const tf2::TransformException& ex)
             {
@@ -154,7 +152,8 @@ namespace arms_ros2_control::command
                 // head_pose_.position 已经在构造函数中从 head_marker_position_ 初始化
             }
 
-            auto headMarker = createHeadMarker();
+            // 统一使用 createMarker 创建头部 marker
+            auto headMarker = createMarker("head_target", "head");
             server_->insert(headMarker);
 
             auto headCallback = [this](const visualization_msgs::msg::InteractiveMarkerFeedback::ConstSharedPtr& feedback)
@@ -389,56 +388,180 @@ namespace arms_ros2_control::command
 
     visualization_msgs::msg::InteractiveMarker ArmsTargetManager::createMarker(
         const std::string& name,
-        const std::string& armType) const
+        const std::string& markerType) const
     {
-        visualization_msgs::msg::InteractiveMarker interactiveMarker;
-        interactiveMarker.header.frame_id = marker_fixed_frame_;
-        interactiveMarker.header.stamp = node_->now();
-        interactiveMarker.name = name;
-        interactiveMarker.scale = 0.2;
-        interactiveMarker.description = armType == "left" ? "Left Arm Target" : "Right Arm Target";
-
-        // pose统一存储在marker_fixed_frame_下，直接使用
-        const auto& pose = armType == "left" ? left_pose_ : right_pose_;
-        interactiveMarker.pose = pose;
-
-        visualization_msgs::msg::Marker marker;
-
-        MarkerState current_mode = current_mode_;
-
-        if (current_mode == MarkerState::CONTINUOUS)
+        // 头部 marker 逻辑
+        if (markerType == "head")
         {
-            marker = createSphereMarker(armType == "left" ? "blue" : "red");
+            visualization_msgs::msg::InteractiveMarker interactiveMarker;
+            interactiveMarker.header.frame_id = marker_fixed_frame_;  // 统一使用 marker_fixed_frame_
+            interactiveMarker.header.stamp = node_->now();
+            interactiveMarker.name = name;
+            interactiveMarker.scale = 0.25;
+            interactiveMarker.description = "Head Target";
+
+            // 使用配置的固定位置
+            interactiveMarker.pose.position.x = head_pose_.position.x;
+            interactiveMarker.pose.position.y = head_pose_.position.y;
+            interactiveMarker.pose.position.z = head_pose_.position.z;
+            interactiveMarker.pose.orientation = head_pose_.orientation;
+
+            // 创建箭头marker表示头部朝向
+            visualization_msgs::msg::Marker arrowMarker = createArrowMarker("red");
+
+            // 箭头marker只用于显示，不用于交互
+            visualization_msgs::msg::InteractiveMarkerControl arrowControl;
+            arrowControl.always_visible = true;
+            arrowControl.markers.push_back(arrowMarker);
+            arrowControl.interaction_mode = visualization_msgs::msg::InteractiveMarkerControl::NONE;
+            interactiveMarker.controls.push_back(arrowControl);
+
+            // 只有在 MOVE 状态（command = 3）时才启用交互功能
+            // HOME (1) 和 HOLD (2) 状态时禁用交互
+            bool is_head_control_enabled = (current_controller_state_ == 3);
+
+            if (is_head_control_enabled)
+            {
+                // 只添加左右旋转（yaw）和上下旋转（pitch）控制，不添加roll旋转
+                // 左右旋转（绕Z轴 - yaw）
+                visualization_msgs::msg::InteractiveMarkerControl control;
+                control.orientation.w = 1;
+                control.orientation.x = 0;
+                control.orientation.y = 0;
+                control.orientation.z = 1;
+                control.name = "rotate_z";
+                control.interaction_mode = visualization_msgs::msg::InteractiveMarkerControl::ROTATE_AXIS;
+                interactiveMarker.controls.push_back(control);
+
+                // 上下旋转（绕Y轴 - pitch）
+                control.orientation.w = 1;
+                control.orientation.x = 0;
+                control.orientation.y = 1;
+                control.orientation.z = 0;
+                control.name = "rotate_y";
+                control.interaction_mode = visualization_msgs::msg::InteractiveMarkerControl::ROTATE_AXIS;
+                interactiveMarker.controls.push_back(control);
+            }
+            // 如果不在 MOVE 状态，不添加交互控制，marker 将不可交互
+
+            return interactiveMarker;
         }
+        // 左臂 marker 逻辑
+        else if (markerType == "left_arm")
+        {
+            visualization_msgs::msg::InteractiveMarker interactiveMarker;
+            interactiveMarker.header.frame_id = marker_fixed_frame_;
+            interactiveMarker.header.stamp = node_->now();
+            interactiveMarker.name = name;
+            interactiveMarker.scale = 0.2;
+            interactiveMarker.description = "Left Arm Target";
+
+            // pose统一存储在marker_fixed_frame_下，直接使用
+            interactiveMarker.pose = left_pose_;
+
+            visualization_msgs::msg::Marker marker;
+
+            MarkerState current_mode = current_mode_;
+
+            if (current_mode == MarkerState::CONTINUOUS)
+            {
+                marker = createSphereMarker("blue");
+            }
+            else
+            {
+                marker = createBoxMarker("blue");
+            }
+
+            visualization_msgs::msg::InteractiveMarkerControl boxControl;
+            boxControl.always_visible = true;
+            boxControl.markers.push_back(marker);
+            
+            // 如果当前state启用自动更新（不在禁用列表中），则禁用交互功能
+            bool is_auto_update_enabled = auto_update_enabled_ && !isStateDisabled(current_controller_state_);
+            if (is_auto_update_enabled)
+            {
+                boxControl.interaction_mode = visualization_msgs::msg::InteractiveMarkerControl::NONE;
+            }
+            else
+            {
+                boxControl.interaction_mode = visualization_msgs::msg::InteractiveMarkerControl::MOVE_ROTATE_3D;
+            }
+
+            interactiveMarker.controls.push_back(boxControl);
+
+            // 只有在非自动更新模式下才添加移动控制
+            if (!is_auto_update_enabled)
+            {
+                addMovementControls(interactiveMarker);
+            }
+
+            return interactiveMarker;
+        }
+        // 右臂 marker 逻辑
+        else if (markerType == "right_arm")
+        {
+            visualization_msgs::msg::InteractiveMarker interactiveMarker;
+            interactiveMarker.header.frame_id = marker_fixed_frame_;
+            interactiveMarker.header.stamp = node_->now();
+            interactiveMarker.name = name;
+            interactiveMarker.scale = 0.2;
+            interactiveMarker.description = "Right Arm Target";
+
+            // pose统一存储在marker_fixed_frame_下，直接使用
+            interactiveMarker.pose = right_pose_;
+
+            visualization_msgs::msg::Marker marker;
+
+            MarkerState current_mode = current_mode_;
+
+            if (current_mode == MarkerState::CONTINUOUS)
+            {
+                marker = createSphereMarker("red");
+            }
+            else
+            {
+                marker = createBoxMarker("red");
+            }
+
+            visualization_msgs::msg::InteractiveMarkerControl boxControl;
+            boxControl.always_visible = true;
+            boxControl.markers.push_back(marker);
+            
+            // 如果当前state启用自动更新（不在禁用列表中），则禁用交互功能
+            bool is_auto_update_enabled = auto_update_enabled_ && !isStateDisabled(current_controller_state_);
+            if (is_auto_update_enabled)
+            {
+                boxControl.interaction_mode = visualization_msgs::msg::InteractiveMarkerControl::NONE;
+            }
+            else
+            {
+                boxControl.interaction_mode = visualization_msgs::msg::InteractiveMarkerControl::MOVE_ROTATE_3D;
+            }
+
+            interactiveMarker.controls.push_back(boxControl);
+
+            // 只有在非自动更新模式下才添加移动控制
+            if (!is_auto_update_enabled)
+            {
+                addMovementControls(interactiveMarker);
+            }
+
+            return interactiveMarker;
+        }
+        // 未知的 marker 类型，返回空的 InteractiveMarker 并记录警告
         else
         {
-            marker = createBoxMarker(armType == "left" ? "blue" : "red");
+            RCLCPP_WARN(node_->get_logger(),
+                       "Unknown marker type: '%s'. Returning empty InteractiveMarker.",
+                       markerType.c_str());
+            visualization_msgs::msg::InteractiveMarker interactiveMarker;
+            interactiveMarker.header.frame_id = marker_fixed_frame_;
+            interactiveMarker.header.stamp = node_->now();
+            interactiveMarker.name = name;
+            interactiveMarker.scale = 0.1;
+            interactiveMarker.description = "Unknown Marker Type: " + markerType;
+            return interactiveMarker;
         }
-
-        visualization_msgs::msg::InteractiveMarkerControl boxControl;
-        boxControl.always_visible = true;
-        boxControl.markers.push_back(marker);
-        
-        // 如果当前state启用自动更新（不在禁用列表中），则禁用交互功能
-        bool is_auto_update_enabled = auto_update_enabled_ && !isStateDisabled(current_controller_state_);
-        if (is_auto_update_enabled)
-        {
-            boxControl.interaction_mode = visualization_msgs::msg::InteractiveMarkerControl::NONE;
-        }
-        else
-        {
-            boxControl.interaction_mode = visualization_msgs::msg::InteractiveMarkerControl::MOVE_ROTATE_3D;
-        }
-
-        interactiveMarker.controls.push_back(boxControl);
-
-        // 只有在非自动更新模式下才添加移动控制
-        if (!is_auto_update_enabled)
-        {
-            addMovementControls(interactiveMarker);
-        }
-
-        return interactiveMarker;
     }
 
     visualization_msgs::msg::Marker ArmsTargetManager::createBoxMarker(const std::string& color) const
@@ -631,7 +754,7 @@ namespace arms_ros2_control::command
 
     void ArmsTargetManager::updateMarkerShape()
     {
-        auto leftMarker = createMarker("left_arm_target", "left");
+        auto leftMarker = createMarker("left_arm_target", "left_arm");
         server_->insert(leftMarker);
 
         auto leftCallback = [this](const visualization_msgs::msg::InteractiveMarkerFeedback::ConstSharedPtr& feedback)
@@ -643,7 +766,7 @@ namespace arms_ros2_control::command
 
         if (dual_arm_mode_)
         {
-            auto rightMarker = createMarker("right_arm_target", "right");
+            auto rightMarker = createMarker("right_arm_target", "right_arm");
             server_->insert(rightMarker);
 
             auto rightCallback = [this](
@@ -806,7 +929,8 @@ namespace arms_ros2_control::command
         // 更新菜单以确保切换文本正确
         setupHeadMenu();
 
-        auto headMarker = createHeadMarker();
+        // 统一使用 createMarker 创建头部 marker
+        auto headMarker = createMarker("head_target", "head");
         server_->insert(headMarker);
 
         auto headCallback = [this](const visualization_msgs::msg::InteractiveMarkerFeedback::ConstSharedPtr& feedback)
@@ -1015,9 +1139,9 @@ namespace arms_ros2_control::command
             // 从 TF 获取 head_link2 的实际位置并更新
             try
             {
-                // 获取 head_link2 在 head_marker_frame_ 中的位置
+                // 获取 head_link2 在 marker_fixed_frame_ 中的位置（统一使用 marker_fixed_frame_）
                 geometry_msgs::msg::TransformStamped transform = tf_buffer_->lookupTransform(
-                    head_marker_frame_, HEAD_LINK_NAME, tf2::TimePointZero);
+                    marker_fixed_frame_, HEAD_LINK_NAME, tf2::TimePointZero);
                 
                 // 更新 marker 位置为 head_link2 的实际位置
                 head_pose_.position.x = transform.transform.translation.x;
@@ -1079,69 +1203,14 @@ namespace arms_ros2_control::command
         return marker;
     }
 
-    visualization_msgs::msg::InteractiveMarker ArmsTargetManager::createHeadMarker() const
-    {
-        visualization_msgs::msg::InteractiveMarker interactiveMarker;
-        interactiveMarker.header.frame_id = head_marker_frame_;
-        interactiveMarker.header.stamp = node_->now();
-        interactiveMarker.name = "head_target";
-        interactiveMarker.scale = 0.25;
-        interactiveMarker.description = "Head Target";
-
-        // 使用配置的固定位置
-        interactiveMarker.pose.position.x = head_pose_.position.x;
-        interactiveMarker.pose.position.y = head_pose_.position.y;
-        interactiveMarker.pose.position.z = head_pose_.position.z;
-        interactiveMarker.pose.orientation = head_pose_.orientation;
-
-        // 创建箭头marker表示头部朝向
-        visualization_msgs::msg::Marker arrowMarker = createArrowMarker("red");
-
-        // 箭头marker只用于显示，不用于交互
-        visualization_msgs::msg::InteractiveMarkerControl arrowControl;
-        arrowControl.always_visible = true;
-        arrowControl.markers.push_back(arrowMarker);
-        arrowControl.interaction_mode = visualization_msgs::msg::InteractiveMarkerControl::NONE;
-        interactiveMarker.controls.push_back(arrowControl);
-
-        // 只有在 MOVE 状态（command = 3）时才启用交互功能
-        // HOME (1) 和 HOLD (2) 状态时禁用交互
-        bool is_head_control_enabled = (current_controller_state_ == 3);
-
-        if (is_head_control_enabled)
-        {
-            // 只添加左右旋转（yaw）和上下旋转（pitch）控制，不添加roll旋转
-            // 左右旋转（绕Z轴 - yaw）
-            visualization_msgs::msg::InteractiveMarkerControl control;
-            control.orientation.w = 1;
-            control.orientation.x = 0;
-            control.orientation.y = 0;
-            control.orientation.z = 1;
-            control.name = "rotate_z";
-            control.interaction_mode = visualization_msgs::msg::InteractiveMarkerControl::ROTATE_AXIS;
-            interactiveMarker.controls.push_back(control);
-
-            // 上下旋转（绕Y轴 - pitch）
-            control.orientation.w = 1;
-            control.orientation.x = 0;
-            control.orientation.y = 1;
-            control.orientation.z = 0;
-            control.name = "rotate_y";
-            control.interaction_mode = visualization_msgs::msg::InteractiveMarkerControl::ROTATE_AXIS;
-            interactiveMarker.controls.push_back(control);
-        }
-        // 如果不在 MOVE 状态，不添加交互控制，marker 将不可交互
-
-        return interactiveMarker;
-    }
 
     void ArmsTargetManager::headMarkerCallback(
         const visualization_msgs::msg::InteractiveMarkerFeedback::ConstSharedPtr& feedback)
     {
         std::string source_frame_id = feedback->header.frame_id;
 
-        // 转换pose到目标frame（配置的head_marker_frame_）
-        geometry_msgs::msg::Pose transformed_pose = transformPose(feedback->pose, source_frame_id, head_marker_frame_);
+        // 转换pose到目标frame（配置的marker_fixed_frame_，统一使用 marker_fixed_frame_）
+        geometry_msgs::msg::Pose transformed_pose = transformPose(feedback->pose, source_frame_id, marker_fixed_frame_);
 
         head_pose_ = transformed_pose;
 

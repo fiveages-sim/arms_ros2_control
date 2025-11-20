@@ -60,7 +60,6 @@ namespace arms_ros2_control::command
          * @param disableAutoUpdateStates 禁用自动更新的状态值数组，默认为{3}（OCS2状态）
          * @param markerUpdateInterval 最小marker更新间隔（秒），默认为0.05秒（20Hz）
          * @param enableHeadControl 是否启用头部控制，默认为false
-         * @param headMarkerFrame 头部marker的坐标系，默认为"base_footprint"
          * @param headControllerName 头部控制器名称，默认为"head_joint_controller"
          * @param headMarkerPosition 头部marker在base_footprint中的固定位置，默认为[1.0, 0.0, 1.5]（仅在TF获取失败时使用）
          */
@@ -69,12 +68,11 @@ namespace arms_ros2_control::command
             const std::string& topicPrefix,
             bool dualArmMode = false,
             const std::string& frameId = "world",
-            const std::string& markerFixedFrame = "base_link",
+            const std::string& markerFixedFrame = "base_footprint",
             double publishRate = 20.0,
             const std::vector<int32_t>& disableAutoUpdateStates = {3},
             double markerUpdateInterval = 0.05,
             bool enableHeadControl = true,
-            const std::string& headMarkerFrame = "base_footprint",
             const std::string& headControllerName = "head_joint_controller",
             const std::array<double, 3>& headMarkerPosition = {1.0, 0.0, 1.5});
 
@@ -172,12 +170,12 @@ namespace arms_ros2_control::command
         /**
          * 创建interactive marker
          * @param name marker名称
-         * @param armType 手臂类型
+         * @param markerType marker类型 ("left_arm", "right_arm", "head", 或其他自定义类型)
          * @return interactive marker消息
          */
         visualization_msgs::msg::InteractiveMarker createMarker(
             const std::string& name,
-            const std::string& armType) const;
+            const std::string& markerType) const;
 
         /**
          * 创建box marker
@@ -213,11 +211,6 @@ namespace arms_ros2_control::command
         void headMarkerCallback(
             const visualization_msgs::msg::InteractiveMarkerFeedback::ConstSharedPtr& feedback);
 
-        /**
-         * 创建头部interactive marker
-         * @return interactive marker消息
-         */
-        visualization_msgs::msg::InteractiveMarker createHeadMarker() const;
 
         /**
          * 创建箭头marker（用于头部）
@@ -368,7 +361,6 @@ namespace arms_ros2_control::command
         
         // 头部控制相关
         bool enable_head_control_;  // 是否启用头部控制
-        std::string head_marker_frame_;  // 头部marker的坐标系
         std::string head_controller_name_;  // 头部控制器名称
         std::array<double, 3> head_marker_position_;  // marker在base_footprint中的固定位置（仅在TF获取失败时使用）
         std::vector<double> last_head_joint_angles_;  // 缓存最新的头部关节角度
