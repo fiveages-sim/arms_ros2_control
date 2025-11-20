@@ -201,7 +201,6 @@ void JoystickTeleop::processButtons(const sensor_msgs::msg::Joy::SharedPtr msg) 
     // Detect button press events (rising edge)
     bool right_stick_just_pressed = right_stick_pressed && !last_right_stick_pressed_;
     bool a_just_pressed = a_pressed && !last_a_pressed_;
-    bool b_just_pressed = b_pressed && !last_b_pressed_;
     bool x_just_pressed = x_pressed && !last_x_pressed_;
 
     // Update last button states
