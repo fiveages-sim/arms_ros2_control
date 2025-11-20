@@ -191,24 +191,11 @@ namespace arms_ros2_control::command
         void addMovementControls(visualization_msgs::msg::InteractiveMarker& interactiveMarker) const;
 
         /**
-         * 左臂marker反馈回调
+         * 统一的marker反馈回调处理函数
+         * 根据marker名称自动分发到对应的处理逻辑
          * @param feedback 反馈消息
          */
-        void leftMarkerCallback(
-            const visualization_msgs::msg::InteractiveMarkerFeedback::ConstSharedPtr& feedback);
-
-        /**
-         * 右臂marker反馈回调
-         * @param feedback 反馈消息
-         */
-        void rightMarkerCallback(
-            const visualization_msgs::msg::InteractiveMarkerFeedback::ConstSharedPtr& feedback);
-
-        /**
-         * 头部marker反馈回调
-         * @param feedback 反馈消息
-         */
-        void headMarkerCallback(
+        void handleMarkerFeedback(
             const visualization_msgs::msg::InteractiveMarkerFeedback::ConstSharedPtr& feedback);
 
 

@@ -72,6 +72,14 @@ namespace arms_ros2_control::command
                 "right_target", 1);
         }
 
+        // 如果启用头部控制，创建头部发布器
+        if (enable_head_control_)
+        {
+            std::string head_topic = "/" + head_controller_name_ + "/target_joint_position";
+            head_joint_publisher_ = node_->create_publisher<std_msgs::msg::Float64MultiArray>(
+                head_topic, 1);
+        }
+
         // 初始化TF2 buffer和listener
         tf_buffer_ = std::make_shared<tf2_ros::Buffer>(node_->get_clock());
         tf_listener_ = std::make_shared<tf2_ros::TransformListener>(*tf_buffer_);
@@ -93,11 +101,12 @@ namespace arms_ros2_control::command
         auto leftMarker = createMarker("left_arm_target", "left_arm");
         server_->insert(leftMarker);
 
-        auto leftCallback = [this](const visualization_msgs::msg::InteractiveMarkerFeedback::ConstSharedPtr& feedback)
+        // 统一使用 handleMarkerFeedback 处理所有 marker 的反馈
+        auto markerCallback = [this](const visualization_msgs::msg::InteractiveMarkerFeedback::ConstSharedPtr& feedback)
         {
-            leftMarkerCallback(feedback);
+            handleMarkerFeedback(feedback);
         };
-        server_->setCallback(leftMarker.name, leftCallback);
+        server_->setCallback(leftMarker.name, markerCallback);
 
         left_menu_handler_->apply(*server_, leftMarker.name);
 
@@ -106,12 +115,7 @@ namespace arms_ros2_control::command
             auto rightMarker = createMarker("right_arm_target", "right_arm");
             server_->insert(rightMarker);
 
-            auto rightCallback = [this](
-                const visualization_msgs::msg::InteractiveMarkerFeedback::ConstSharedPtr& feedback)
-            {
-                rightMarkerCallback(feedback);
-            };
-            server_->setCallback(rightMarker.name, rightCallback);
+            server_->setCallback(rightMarker.name, markerCallback);
 
             right_menu_handler_->apply(*server_, rightMarker.name);
         }
@@ -121,11 +125,6 @@ namespace arms_ros2_control::command
         {
             setupHeadMenu();
             
-            // 创建头部发布器
-            std::string head_topic = "/" + head_controller_name_ + "/target_joint_position";
-            head_joint_publisher_ = node_->create_publisher<std_msgs::msg::Float64MultiArray>(
-                head_topic, 1);
-
             // 从 TF 获取 head_link2 的初始位置
             try
             {
@@ -156,11 +155,7 @@ namespace arms_ros2_control::command
             auto headMarker = createMarker("head_target", "head");
             server_->insert(headMarker);
 
-            auto headCallback = [this](const visualization_msgs::msg::InteractiveMarkerFeedback::ConstSharedPtr& feedback)
-            {
-                headMarkerCallback(feedback);
-            };
-            server_->setCallback(headMarker.name, headCallback);
+            server_->setCallback(headMarker.name, markerCallback);
 
             head_menu_handler_->apply(*server_, headMarker.name);
         }
@@ -633,41 +628,62 @@ namespace arms_ros2_control::command
         interactiveMarker.controls.push_back(control);
     }
 
-    void ArmsTargetManager::leftMarkerCallback(
+    void ArmsTargetManager::handleMarkerFeedback(
         const visualization_msgs::msg::InteractiveMarkerFeedback::ConstSharedPtr& feedback)
     {
         std::string source_frame_id = feedback->header.frame_id;
+        std::string marker_name = feedback->marker_name;
 
         // 转换pose到目标frame（配置的marker_fixed_frame_）
-        geometry_msgs::msg::Pose transformed_pose = transformPose(feedback->pose, source_frame_id, marker_fixed_frame_);
+        geometry_msgs::msg::Pose transformed_pose = transformPose(
+            feedback->pose, source_frame_id, marker_fixed_frame_);
 
-        left_pose_ = transformed_pose;
-
-        if (current_mode_ == MarkerState::CONTINUOUS)
+        // 根据 marker 名称分发处理
+        if (marker_name == "left_arm_target")
         {
-            // 发布时需要转换到control_base_frame_
-            geometry_msgs::msg::Pose transformed_pose = transformPose(left_pose_, marker_fixed_frame_, control_base_frame_);
-            left_pose_publisher_->publish(transformed_pose);
+            // 左臂 marker 处理
+            left_pose_ = transformed_pose;
+
+            if (current_mode_ == MarkerState::CONTINUOUS)
+            {
+                // 发布时需要转换到control_base_frame_
+                geometry_msgs::msg::Pose publish_pose = transformPose(
+                    left_pose_, marker_fixed_frame_, control_base_frame_);
+                left_pose_publisher_->publish(publish_pose);
+            }
+        }
+        else if (marker_name == "right_arm_target")
+        {
+            // 右臂 marker 处理
+            right_pose_ = transformed_pose;
+
+            if (current_mode_ == MarkerState::CONTINUOUS)
+            {
+                // 发布时需要转换到control_base_frame_
+                geometry_msgs::msg::Pose publish_pose = transformPose(
+                    right_pose_, marker_fixed_frame_, control_base_frame_);
+                right_pose_publisher_->publish(publish_pose);
+            }
+        }
+        else if (marker_name == "head_target")
+        {
+            // 头部 marker 处理
+            head_pose_ = transformed_pose;
+
+            if (current_mode_ == MarkerState::CONTINUOUS)
+            {
+                // 在连续发布模式下，发送头部目标关节位置
+                sendHeadTargetJointPosition();
+            }
+        }
+        else
+        {
+            RCLCPP_WARN(node_->get_logger(),
+                       "Unknown marker name in feedback: '%s'",
+                       marker_name.c_str());
         }
     }
 
-    void ArmsTargetManager::rightMarkerCallback(
-        const visualization_msgs::msg::InteractiveMarkerFeedback::ConstSharedPtr& feedback)
-    {
-        std::string source_frame_id = feedback->header.frame_id;
-
-        // 转换pose到目标frame（配置的marker_fixed_frame_）
-        geometry_msgs::msg::Pose transformed_pose = transformPose(feedback->pose, source_frame_id, marker_fixed_frame_);
-
-        right_pose_ = transformed_pose;
-
-        if (current_mode_ == MarkerState::CONTINUOUS)
-        {
-            // 发布时需要转换到control_base_frame_
-            geometry_msgs::msg::Pose transformed_pose = transformPose(right_pose_, marker_fixed_frame_, control_base_frame_);
-            right_pose_publisher_->publish(transformed_pose);
-        }
-    }
 
 
     void ArmsTargetManager::togglePublishMode()
@@ -757,11 +773,12 @@ namespace arms_ros2_control::command
         auto leftMarker = createMarker("left_arm_target", "left_arm");
         server_->insert(leftMarker);
 
-        auto leftCallback = [this](const visualization_msgs::msg::InteractiveMarkerFeedback::ConstSharedPtr& feedback)
+        // 统一使用 handleMarkerFeedback 处理所有 marker 的反馈
+        auto markerCallback = [this](const visualization_msgs::msg::InteractiveMarkerFeedback::ConstSharedPtr& feedback)
         {
-            leftMarkerCallback(feedback);
+            handleMarkerFeedback(feedback);
         };
-        server_->setCallback(leftMarker.name, leftCallback);
+        server_->setCallback(leftMarker.name, markerCallback);
         left_menu_handler_->apply(*server_, leftMarker.name);
 
         if (dual_arm_mode_)
@@ -769,12 +786,7 @@ namespace arms_ros2_control::command
             auto rightMarker = createMarker("right_arm_target", "right_arm");
             server_->insert(rightMarker);
 
-            auto rightCallback = [this](
-                const visualization_msgs::msg::InteractiveMarkerFeedback::ConstSharedPtr& feedback)
-            {
-                rightMarkerCallback(feedback);
-            };
-            server_->setCallback(rightMarker.name, rightCallback);
+            server_->setCallback(rightMarker.name, markerCallback);
             right_menu_handler_->apply(*server_, rightMarker.name);
         }
 
@@ -933,11 +945,12 @@ namespace arms_ros2_control::command
         auto headMarker = createMarker("head_target", "head");
         server_->insert(headMarker);
 
-        auto headCallback = [this](const visualization_msgs::msg::InteractiveMarkerFeedback::ConstSharedPtr& feedback)
+        // 统一使用 handleMarkerFeedback 处理所有 marker 的反馈
+        auto markerCallback = [this](const visualization_msgs::msg::InteractiveMarkerFeedback::ConstSharedPtr& feedback)
         {
-            headMarkerCallback(feedback);
+            handleMarkerFeedback(feedback);
         };
-        server_->setCallback(headMarker.name, headCallback);
+        server_->setCallback(headMarker.name, markerCallback);
         head_menu_handler_->apply(*server_, headMarker.name);
     }
 
@@ -1091,78 +1104,96 @@ namespace arms_ros2_control::command
             return;
         }
 
-        // 检查是否启用自动更新且当前状态不在禁用列表中
-        if (!auto_update_enabled_ || isStateDisabled(current_controller_state_))
+        // 头部 marker 在所有状态下都自动跟踪 head_link2 的 xyz 位置
+        // 但在 MOVE 状态下不更新 orientation（orientation 由用户拖拽控制）
+        
+        // 检查是否应该更新 orientation
+        // HOME (1) 和 HOLD (2) 状态：更新 position 和 orientation（自动跟踪）
+        // MOVE (3) 状态：只更新 position，不更新 orientation（position 自动跟踪，orientation 用户控制）
+        bool should_update_orientation = true;
+        
+        // 如果当前状态在禁用列表中（通常是 MOVE 状态），则不更新 orientation
+        if (isStateDisabled(current_controller_state_))
         {
-            return;
+            should_update_orientation = false;
+        }
+        
+        // 如果自动更新被禁用，也不更新 orientation
+        if (!auto_update_enabled_)
+        {
+            should_update_orientation = false;
         }
 
-        // 从 joint_states 中查找 head_joint1 和 head_joint2
-        double head_joint1_angle = 0.0;
-        double head_joint2_angle = 0.0;
-        bool found_joint1 = false;
-        bool found_joint2 = false;
-
-        for (size_t i = 0; i < msg->name.size() && i < msg->position.size(); ++i)
+        // 从 TF 获取 head_link2 的实际位置并更新（所有状态下都更新位置）
+        try
         {
-            if (msg->name[i] == "head_joint1")
+            // 获取 head_link2 在 marker_fixed_frame_ 中的位置（统一使用 marker_fixed_frame_）
+            geometry_msgs::msg::TransformStamped transform = tf_buffer_->lookupTransform(
+                marker_fixed_frame_, HEAD_LINK_NAME, tf2::TimePointZero);
+            
+            // 更新 marker 位置为 head_link2 的实际位置（所有状态下都更新）
+            head_pose_.position.x = transform.transform.translation.x;
+            head_pose_.position.y = transform.transform.translation.y;
+            head_pose_.position.z = transform.transform.translation.z;
+        }
+        catch (const tf2::TransformException& ex)
+        {
+            // 如果 TF 转换失败，保持当前位置不变（使用固定位置或上次的位置）
+            RCLCPP_DEBUG(node_->get_logger(),
+                        "无法从 TF 获取头部 link %s 的位置: %s，保持当前位置",
+                        HEAD_LINK_NAME, ex.what());
+        }
+
+        // 只有在需要更新 orientation 时才从 joint_states 获取并更新
+        if (should_update_orientation)
+        {
+            // 从 joint_states 中查找 head_joint1 和 head_joint2
+            double head_joint1_angle = 0.0;
+            double head_joint2_angle = 0.0;
+            bool found_joint1 = false;
+            bool found_joint2 = false;
+
+            for (size_t i = 0; i < msg->name.size() && i < msg->position.size(); ++i)
             {
-                head_joint1_angle = msg->position[i];
-                found_joint1 = true;
-            }
-            else if (msg->name[i] == "head_joint2")
-            {
-                head_joint2_angle = msg->position[i];
-                found_joint2 = true;
+                if (msg->name[i] == "head_joint1")
+                {
+                    head_joint1_angle = msg->position[i];
+                    found_joint1 = true;
+                }
+                else if (msg->name[i] == "head_joint2")
+                {
+                    head_joint2_angle = msg->position[i];
+                    found_joint2 = true;
+                }
+
+                if (found_joint1 && found_joint2)
+                {
+                    break;
+                }
             }
 
+            // 如果找到了两个关节，更新头部 marker 的 orientation
             if (found_joint1 && found_joint2)
             {
-                break;
+                // 将关节角度转换为四元数（确保顺序：head_joint1, head_joint2）
+                std::vector<double> head_joint_angles = {head_joint1_angle, head_joint2_angle};
+                
+                // 缓存最新的关节角度，用于状态切换时发布
+                last_head_joint_angles_ = head_joint_angles;
+                
+                geometry_msgs::msg::Quaternion quat = headJointAnglesToQuaternion(head_joint_angles);
+
+                // 更新头部 pose 的 orientation（只在非 MOVE 状态下更新）
+                head_pose_.orientation = quat;
             }
         }
 
-        // 如果找到了两个关节，更新头部 marker 的 orientation 和 position
-        if (found_joint1 && found_joint2)
+        // 更新 marker（position 已更新，orientation 根据状态决定是否更新）
+        server_->setPose("head_target", head_pose_);
+
+        if (shouldUpdateMarker())
         {
-            // 将关节角度转换为四元数（确保顺序：head_joint1, head_joint2）
-            std::vector<double> head_joint_angles = {head_joint1_angle, head_joint2_angle};
-            
-            // 缓存最新的关节角度，用于状态切换时发布
-            last_head_joint_angles_ = head_joint_angles;
-            
-            geometry_msgs::msg::Quaternion quat = headJointAnglesToQuaternion(head_joint_angles);
-
-            // 更新头部 pose 的 orientation
-            head_pose_.orientation = quat;
-
-            // 从 TF 获取 head_link2 的实际位置并更新
-            try
-            {
-                // 获取 head_link2 在 marker_fixed_frame_ 中的位置（统一使用 marker_fixed_frame_）
-                geometry_msgs::msg::TransformStamped transform = tf_buffer_->lookupTransform(
-                    marker_fixed_frame_, HEAD_LINK_NAME, tf2::TimePointZero);
-                
-                // 更新 marker 位置为 head_link2 的实际位置
-                head_pose_.position.x = transform.transform.translation.x;
-                head_pose_.position.y = transform.transform.translation.y;
-                head_pose_.position.z = transform.transform.translation.z;
-            }
-            catch (const tf2::TransformException& ex)
-            {
-                // 如果 TF 转换失败，保持当前位置不变（使用固定位置或上次的位置）
-                RCLCPP_DEBUG(node_->get_logger(),
-                            "无法从 TF 获取头部 link %s 的位置: %s，保持当前位置",
-                            HEAD_LINK_NAME, ex.what());
-            }
-
-            // 更新 marker
-            server_->setPose("head_target", head_pose_);
-
-            if (shouldUpdateMarker())
-            {
-                server_->applyChanges();
-            }
+            server_->applyChanges();
         }
     }
 
@@ -1204,22 +1235,6 @@ namespace arms_ros2_control::command
     }
 
 
-    void ArmsTargetManager::headMarkerCallback(
-        const visualization_msgs::msg::InteractiveMarkerFeedback::ConstSharedPtr& feedback)
-    {
-        std::string source_frame_id = feedback->header.frame_id;
-
-        // 转换pose到目标frame（配置的marker_fixed_frame_，统一使用 marker_fixed_frame_）
-        geometry_msgs::msg::Pose transformed_pose = transformPose(feedback->pose, source_frame_id, marker_fixed_frame_);
-
-        head_pose_ = transformed_pose;
-
-        // 在连续发布模式下，发送头部目标关节位置
-        if (current_mode_ == MarkerState::CONTINUOUS)
-        {
-            sendHeadTargetJointPosition();
-        }
-    }
 
     void ArmsTargetManager::setupHeadMenu()
     {
