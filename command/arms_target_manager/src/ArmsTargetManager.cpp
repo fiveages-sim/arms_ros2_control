@@ -123,8 +123,6 @@ namespace arms_ros2_control::command
         // 如果启用头部控制，初始化头部marker
         if (enable_head_control_)
         {
-            setupHeadMenu();
-            
             // 从 TF 获取 head_link2 的初始位置
             try
             {
@@ -722,49 +720,61 @@ namespace arms_ros2_control::command
     }
 
 
-    void ArmsTargetManager::setupMenu()
+    void ArmsTargetManager::setupMarkerMenu(
+        std::shared_ptr<interactive_markers::MenuHandler>& menu_handler,
+        interactive_markers::MenuHandler::EntryHandle& send_handle,
+        interactive_markers::MenuHandler::EntryHandle& toggle_handle,
+        std::function<void()> sendCallback)
     {
-        left_menu_handler_ = std::make_shared<interactive_markers::MenuHandler>();
+        menu_handler = std::make_shared<interactive_markers::MenuHandler>();
 
-        auto leftSendCallback = [this](
+        auto menuSendCallback = [sendCallback](
             const visualization_msgs::msg::InteractiveMarkerFeedback::ConstSharedPtr& /*feedback*/)
         {
-            sendTargetPose();
+            sendCallback();
         };
 
-
-        auto leftToggleCallback = [this](
+        auto menuToggleCallback = [this](
             const visualization_msgs::msg::InteractiveMarkerFeedback::ConstSharedPtr& /*feedback*/)
         {
             togglePublishMode();
         };
 
-        left_send_handle_ = left_menu_handler_->insert("发送目标", leftSendCallback);
+        send_handle = menu_handler->insert("发送目标", menuSendCallback);
 
-        std::string leftToggleText = (current_mode_ == MarkerState::CONTINUOUS) ? "切换到单次发布" : "切换到连续发布";
-        left_toggle_handle_ = left_menu_handler_->insert(leftToggleText, leftToggleCallback);
+        std::string toggleText = (current_mode_ == MarkerState::CONTINUOUS) 
+            ? "切换到单次发布" 
+            : "切换到连续发布";
+        toggle_handle = menu_handler->insert(toggleText, menuToggleCallback);
+    }
 
+    void ArmsTargetManager::setupMenu()
+    {
+        // 为左臂设置菜单
+        setupMarkerMenu(
+            left_menu_handler_,
+            left_send_handle_,
+            left_toggle_handle_,
+            [this]() { sendTargetPose(); });
+
+        // 为右臂设置菜单（如果是双臂模式）
         if (dual_arm_mode_)
         {
-            right_menu_handler_ = std::make_shared<interactive_markers::MenuHandler>();
+            setupMarkerMenu(
+                right_menu_handler_,
+                right_send_handle_,
+                right_toggle_handle_,
+                [this]() { sendTargetPose(); });
+        }
 
-            auto rightSendCallback = [this](
-                const visualization_msgs::msg::InteractiveMarkerFeedback::ConstSharedPtr& /*feedback*/)
-            {
-                sendTargetPose();
-            };
-
-
-            auto rightToggleCallback = [this](
-                const visualization_msgs::msg::InteractiveMarkerFeedback::ConstSharedPtr& /*feedback*/)
-            {
-                togglePublishMode();
-            };
-
-            right_send_handle_ = right_menu_handler_->insert("发送目标", rightSendCallback);
-
-            std::string rightToggleText = (current_mode_ == MarkerState::CONTINUOUS) ? "切换到单次发布" : "切换到连续发布";
-            right_toggle_handle_ = right_menu_handler_->insert(rightToggleText, rightToggleCallback);
+        // 为头部设置菜单（如果启用头部控制）
+        if (enable_head_control_)
+        {
+            setupMarkerMenu(
+                head_menu_handler_,
+                head_send_handle_,
+                head_toggle_handle_,
+                [this]() { sendHeadTargetJointPosition(); });
         }
     }
 
@@ -937,9 +947,6 @@ namespace arms_ros2_control::command
         {
             return;
         }
-
-        // 更新菜单以确保切换文本正确
-        setupHeadMenu();
 
         // 统一使用 createMarker 创建头部 marker
         auto headMarker = createMarker("head_target", "head");
@@ -1236,27 +1243,6 @@ namespace arms_ros2_control::command
 
 
 
-    void ArmsTargetManager::setupHeadMenu()
-    {
-        head_menu_handler_ = std::make_shared<interactive_markers::MenuHandler>();
-
-        auto headSendCallback = [this](
-            const visualization_msgs::msg::InteractiveMarkerFeedback::ConstSharedPtr& /*feedback*/)
-        {
-            sendHeadTargetJointPosition();
-        };
-
-        auto headToggleCallback = [this](
-            const visualization_msgs::msg::InteractiveMarkerFeedback::ConstSharedPtr& /*feedback*/)
-        {
-            togglePublishMode();
-        };
-
-        head_send_handle_ = head_menu_handler_->insert("发送目标", headSendCallback);
-
-        std::string headToggleText = (current_mode_ == MarkerState::CONTINUOUS) ? "切换到单次发布" : "切换到连续发布";
-        head_toggle_handle_ = head_menu_handler_->insert(headToggleText, headToggleCallback);
-    }
 
     void ArmsTargetManager::sendHeadTargetJointPosition()
     {

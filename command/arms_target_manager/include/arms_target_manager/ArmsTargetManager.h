@@ -9,6 +9,7 @@
 #include <vector>
 #include <mutex>
 #include <array>
+#include <functional>
 #include <rclcpp/rclcpp.hpp>
 #include <geometry_msgs/msg/pose.hpp>
 #include <geometry_msgs/msg/pose_stamped.hpp>
@@ -206,10 +207,6 @@ namespace arms_ros2_control::command
          */
         visualization_msgs::msg::Marker createArrowMarker(const std::string& color = "green") const;
 
-        /**
-         * 设置头部菜单系统
-         */
-        void setupHeadMenu();
 
         /**
          * 从quaternion提取头部关节角度（yaw和pitch）
@@ -238,6 +235,19 @@ namespace arms_ros2_control::command
          * 设置菜单系统
          */
         void setupMenu();
+
+        /**
+         * 通用的菜单设置辅助函数
+         * @param menu_handler 菜单处理器（输出参数）
+         * @param send_handle 发送菜单项句柄（输出参数）
+         * @param toggle_handle 切换菜单项句柄（输出参数）
+         * @param sendCallback 发送目标的回调函数
+         */
+        void setupMarkerMenu(
+            std::shared_ptr<interactive_markers::MenuHandler>& menu_handler,
+            interactive_markers::MenuHandler::EntryHandle& send_handle,
+            interactive_markers::MenuHandler::EntryHandle& toggle_handle,
+            std::function<void()> sendCallback);
 
         /**
          * 更新marker形状
