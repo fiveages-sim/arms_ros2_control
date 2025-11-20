@@ -125,11 +125,14 @@ namespace arms_ros2_control::command
         MarkerState getCurrentMode() const;
 
         /**
-         * 发送目标pose（单次发布模式）
+         * 发送目标位置（统一函数，根据marker类型区分手臂和头部）
+         * @param marker_type marker类型：
+         *                    "left_arm" - 只发送左臂目标位姿
+         *                    "right_arm" - 只发送右臂目标位姿
+         *                    "head" - 发送头部关节角度
+         *                    空字符串或默认 - 发送手臂目标位姿
          */
-        void sendTargetPose();
-
-
+        void sendTargetPose(const std::string& marker_type = "arm");
 
         /**
          * 启用/禁用基于状态的自动marker更新
@@ -162,10 +165,6 @@ namespace arms_ros2_control::command
          */
         void controlInputCallback(arms_ros2_control_msgs::msg::Inputs::ConstSharedPtr msg);
 
-        /**
-         * 发送头部目标关节位置（单次发布模式）
-         */
-        void sendHeadTargetJointPosition();
 
     private:
         /**

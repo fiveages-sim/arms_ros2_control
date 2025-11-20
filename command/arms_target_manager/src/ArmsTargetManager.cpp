@@ -644,10 +644,8 @@ namespace arms_ros2_control::command
 
             if (current_mode_ == MarkerState::CONTINUOUS)
             {
-                // 发布时需要转换到control_base_frame_
-                geometry_msgs::msg::Pose publish_pose = transformPose(
-                    left_pose_, marker_fixed_frame_, control_base_frame_);
-                left_pose_publisher_->publish(publish_pose);
+                // 在连续发布模式下，只发送左臂目标位姿
+                sendTargetPose("left_arm");
             }
         }
         else if (marker_name == "right_arm_target")
@@ -657,10 +655,8 @@ namespace arms_ros2_control::command
 
             if (current_mode_ == MarkerState::CONTINUOUS)
             {
-                // 发布时需要转换到control_base_frame_
-                geometry_msgs::msg::Pose publish_pose = transformPose(
-                    right_pose_, marker_fixed_frame_, control_base_frame_);
-                right_pose_publisher_->publish(publish_pose);
+                // 在连续发布模式下，只发送右臂目标位姿
+                sendTargetPose("right_arm");
             }
         }
         else if (marker_name == "head_target")
@@ -671,7 +667,7 @@ namespace arms_ros2_control::command
             if (current_mode_ == MarkerState::CONTINUOUS)
             {
                 // 在连续发布模式下，发送头部目标关节位置
-                sendHeadTargetJointPosition();
+                sendTargetPose("head");
             }
         }
         else
@@ -706,16 +702,49 @@ namespace arms_ros2_control::command
         return current_mode_;
     }
 
-    void ArmsTargetManager::sendTargetPose()
+    void ArmsTargetManager::sendTargetPose(const std::string& marker_type)
     {
-        // 将pose从marker_fixed_frame_转换到control_base_frame_后发布
-        geometry_msgs::msg::Pose transformed_left_pose = transformPose(left_pose_, marker_fixed_frame_, control_base_frame_);
-        left_pose_publisher_->publish(transformed_left_pose);
-
-        if (dual_arm_mode_)
+        // 根据marker类型执行不同的发送操作
+        if (marker_type == "head")
         {
+            // 发送头部目标关节位置
+            if (!head_joint_publisher_)
+            {
+                RCLCPP_WARN(node_->get_logger(), "Head joint publisher not initialized");
+                return;
+            }
+
+            // 从头部pose的orientation提取关节角度
+            std::vector<double> joint_angles = quaternionToHeadJointAngles(head_pose_.orientation);
+
+            // 创建并发布消息
+            std_msgs::msg::Float64MultiArray msg;
+            msg.data = joint_angles;
+
+            head_joint_publisher_->publish(msg);
+
+            // RCLCPP_INFO(node_->get_logger(), 
+            //            "Published head target joint angles: [%.3f, %.3f] (head_joint1, head_joint2)",
+            //            joint_angles[0], joint_angles[1]);
+        }
+        else if (marker_type == "left_arm")
+        {
+            // 只发送左臂目标位姿
+            geometry_msgs::msg::Pose transformed_left_pose = transformPose(left_pose_, marker_fixed_frame_, control_base_frame_);
+            left_pose_publisher_->publish(transformed_left_pose);
+        }
+        else if (marker_type == "right_arm")
+        {
+            // 只发送右臂目标位姿
             geometry_msgs::msg::Pose transformed_right_pose = transformPose(right_pose_, marker_fixed_frame_, control_base_frame_);
             right_pose_publisher_->publish(transformed_right_pose);
+        }
+        else
+        {
+            // 未知的marker类型
+            RCLCPP_WARN(node_->get_logger(),
+                       "Unknown marker type: '%s'. Supported types: 'left_arm', 'right_arm', 'head'",
+                       marker_type.c_str());
         }
     }
 
@@ -751,11 +780,11 @@ namespace arms_ros2_control::command
     void ArmsTargetManager::setupMenu()
     {
         // 为左臂设置菜单
-        setupMarkerMenu(
-            left_menu_handler_,
-            left_send_handle_,
-            left_toggle_handle_,
-            [this]() { sendTargetPose(); });
+            setupMarkerMenu(
+                left_menu_handler_,
+                left_send_handle_,
+                left_toggle_handle_,
+                [this]() { sendTargetPose("left_arm"); });
 
         // 为右臂设置菜单（如果是双臂模式）
         if (dual_arm_mode_)
@@ -764,7 +793,7 @@ namespace arms_ros2_control::command
                 right_menu_handler_,
                 right_send_handle_,
                 right_toggle_handle_,
-                [this]() { sendTargetPose(); });
+                [this]() { sendTargetPose("right_arm"); });
         }
 
         // 为头部设置菜单（如果启用头部控制）
@@ -774,7 +803,7 @@ namespace arms_ros2_control::command
                 head_menu_handler_,
                 head_send_handle_,
                 head_toggle_handle_,
-                [this]() { sendHeadTargetJointPosition(); });
+                [this]() { sendTargetPose("head"); });
         }
     }
 
@@ -929,7 +958,7 @@ namespace arms_ros2_control::command
                 else
                 {
                     // 如果没有缓存，从 head_pose_ 提取（可能不是最新的，但总比没有好）
-                    sendHeadTargetJointPosition();
+                    sendTargetPose("head");
                     RCLCPP_INFO(node_->get_logger(),
                                "Entered MOVE state, published head position from marker as target");
                 }
@@ -1244,25 +1273,4 @@ namespace arms_ros2_control::command
 
 
 
-    void ArmsTargetManager::sendHeadTargetJointPosition()
-    {
-        if (!head_joint_publisher_)
-        {
-            RCLCPP_WARN(node_->get_logger(), "Head joint publisher not initialized");
-            return;
-        }
-
-        // 从头部pose的orientation提取关节角度
-        std::vector<double> joint_angles = quaternionToHeadJointAngles(head_pose_.orientation);
-
-        // 创建并发布消息
-        std_msgs::msg::Float64MultiArray msg;
-        msg.data = joint_angles;
-
-        head_joint_publisher_->publish(msg);
-
-        RCLCPP_INFO(node_->get_logger(), 
-                   "Published head target joint angles: [%.3f, %.3f] (head_joint1, head_joint2)",
-                   joint_angles[0], joint_angles[1]);
-    }
 } // namespace arms_ros2_control::command
