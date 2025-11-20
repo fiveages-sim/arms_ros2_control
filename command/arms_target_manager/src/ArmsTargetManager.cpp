@@ -809,14 +809,15 @@ namespace arms_ros2_control::command
 
     void ArmsTargetManager::updateMarkerShape()
     {
-        auto leftMarker = createMarker("left_arm_target", "left_arm");
-        server_->insert(leftMarker);
-
         // 统一使用 handleMarkerFeedback 处理所有 marker 的反馈
         auto markerCallback = [this](const visualization_msgs::msg::InteractiveMarkerFeedback::ConstSharedPtr& feedback)
         {
             handleMarkerFeedback(feedback);
         };
+
+        // 更新左臂 marker
+        auto leftMarker = createMarker("left_arm_target", "left_arm");
+        server_->insert(leftMarker);
         server_->setCallback(leftMarker.name, markerCallback);
         left_menu_handler_->apply(*server_, leftMarker.name);
 
@@ -824,15 +825,17 @@ namespace arms_ros2_control::command
         {
             auto rightMarker = createMarker("right_arm_target", "right_arm");
             server_->insert(rightMarker);
-
             server_->setCallback(rightMarker.name, markerCallback);
             right_menu_handler_->apply(*server_, rightMarker.name);
         }
 
-        // 如果启用头部控制，也更新头部 marker
+        // 更新头部 marker（如果启用头部控制）
         if (enable_head_control_)
         {
-            updateHeadMarkerShape();
+            auto headMarker = createMarker("head_target", "head");
+            server_->insert(headMarker);
+            server_->setCallback(headMarker.name, markerCallback);
+            head_menu_handler_->apply(*server_, headMarker.name);
         }
     }
 
@@ -970,25 +973,6 @@ namespace arms_ros2_control::command
         }
     }
 
-    void ArmsTargetManager::updateHeadMarkerShape()
-    {
-        if (!enable_head_control_)
-        {
-            return;
-        }
-
-        // 统一使用 createMarker 创建头部 marker
-        auto headMarker = createMarker("head_target", "head");
-        server_->insert(headMarker);
-
-        // 统一使用 handleMarkerFeedback 处理所有 marker 的反馈
-        auto markerCallback = [this](const visualization_msgs::msg::InteractiveMarkerFeedback::ConstSharedPtr& feedback)
-        {
-            handleMarkerFeedback(feedback);
-        };
-        server_->setCallback(headMarker.name, markerCallback);
-        head_menu_handler_->apply(*server_, headMarker.name);
-    }
 
     void ArmsTargetManager::leftEndEffectorPoseCallback(const geometry_msgs::msg::PoseStamped::ConstSharedPtr msg)
     {

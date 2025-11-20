@@ -249,14 +249,9 @@ namespace arms_ros2_control::command
             std::function<void()> sendCallback);
 
         /**
-         * 更新marker形状
+         * 更新marker形状（统一管理左臂、右臂和头部marker）
          */
         void updateMarkerShape();
-
-        /**
-         * 更新头部marker形状（根据控制器状态启用/禁用交互）
-         */
-        void updateHeadMarkerShape();
 
         /**
          * 更新菜单可见性
