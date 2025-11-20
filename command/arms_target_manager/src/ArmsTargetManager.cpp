@@ -98,25 +98,24 @@ namespace arms_ros2_control::command
     {
         setupMenu();
 
-        auto leftMarker = createMarker("left_arm_target", "left_arm");
-        server_->insert(leftMarker);
-
         // 统一使用 handleMarkerFeedback 处理所有 marker 的反馈
         auto markerCallback = [this](const visualization_msgs::msg::InteractiveMarkerFeedback::ConstSharedPtr& feedback)
         {
             handleMarkerFeedback(feedback);
         };
-        server_->setCallback(leftMarker.name, markerCallback);
 
+        // 初始化左臂 marker
+        auto leftMarker = createMarker("left_arm_target", "left_arm");
+        server_->insert(leftMarker);
+        server_->setCallback(leftMarker.name, markerCallback);
         left_menu_handler_->apply(*server_, leftMarker.name);
 
+        // 初始化右臂 marker（如果是双臂模式）
         if (dual_arm_mode_)
         {
             auto rightMarker = createMarker("right_arm_target", "right_arm");
             server_->insert(rightMarker);
-
             server_->setCallback(rightMarker.name, markerCallback);
-
             right_menu_handler_->apply(*server_, rightMarker.name);
         }
 
@@ -149,12 +148,10 @@ namespace arms_ros2_control::command
                 // head_pose_.position 已经在构造函数中从 head_marker_position_ 初始化
             }
 
-            // 统一使用 createMarker 创建头部 marker
+            // 初始化头部 marker
             auto headMarker = createMarker("head_target", "head");
             server_->insert(headMarker);
-
             server_->setCallback(headMarker.name, markerCallback);
-
             head_menu_handler_->apply(*server_, headMarker.name);
         }
 
@@ -944,33 +941,46 @@ namespace arms_ros2_control::command
         {
             current_controller_state_ = new_state;
             
-            // 如果切换到 MOVE 状态（command = 3）且启用了头部控制
-            // 将当前头部位置作为目标位置发布，确保头部保持当前位置
-            if (new_state == 3 && enable_head_control_ && head_joint_publisher_)
-            {
-                // 如果有缓存的关节角度，使用缓存的；否则从 head_pose_ 提取
-                if (last_head_joint_angles_.size() == 2)
-                {
-                    std_msgs::msg::Float64MultiArray msg;
-                    msg.data = last_head_joint_angles_;
-                    head_joint_publisher_->publish(msg);
-                    RCLCPP_INFO(node_->get_logger(),
-                               "Entered MOVE state, published current head position as target: [%.3f, %.3f]",
-                               last_head_joint_angles_[0], last_head_joint_angles_[1]);
-                }
-                else
-                {
-                    // 如果没有缓存，从 head_pose_ 提取（可能不是最新的，但总比没有好）
-                    sendTargetPose("head");
-                    RCLCPP_INFO(node_->get_logger(),
-                               "Entered MOVE state, published head position from marker as target");
-                }
-            }
+            // 处理状态切换时的特殊逻辑（根据不同 marker 类型执行相应操作）
+            handleStateTransition(new_state);
             
             // 状态变化时重新创建marker
             updateMarkerShape();
             server_->applyChanges();
         }
+    }
+
+    void ArmsTargetManager::handleStateTransition(int32_t new_state)
+    {
+        // 头部状态切换处理：如果切换到 MOVE 状态（command = 3）且启用了头部控制
+        // 将当前头部位置作为目标位置发布，确保头部保持当前位置
+        if (new_state == 3 && enable_head_control_ && head_joint_publisher_)
+        {
+            // 如果有缓存的关节角度，使用缓存的；否则从 head_pose_ 提取
+            if (last_head_joint_angles_.size() == 2)
+            {
+                std_msgs::msg::Float64MultiArray msg;
+                msg.data = last_head_joint_angles_;
+                head_joint_publisher_->publish(msg);
+                RCLCPP_INFO(node_->get_logger(),
+                           "Entered MOVE state, published current head position as target: [%.3f, %.3f]",
+                           last_head_joint_angles_[0], last_head_joint_angles_[1]);
+            }
+            else
+            {
+                // 如果没有缓存，从 head_pose_ 提取（可能不是最新的，但总比没有好）
+                sendTargetPose("head");
+                RCLCPP_INFO(node_->get_logger(),
+                           "Entered MOVE state, published head position from marker as target");
+            }
+        }
+
+        // 未来可以在这里添加其他 marker 类型的状态切换处理
+        // 例如：
+        // if (new_state == 3 && enable_arms_control_)
+        // {
+        //     // 双臂的状态切换处理
+        // }
     }
 
 

@@ -165,6 +165,12 @@ namespace arms_ros2_control::command
          */
         void controlInputCallback(arms_ros2_control_msgs::msg::Inputs::ConstSharedPtr msg);
 
+        /**
+         * 处理状态切换时的特殊逻辑（根据不同 marker 类型执行相应操作）
+         * @param new_state 新的控制器状态
+         */
+        void handleStateTransition(int32_t new_state);
+
 
     private:
         /**
