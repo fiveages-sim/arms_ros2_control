@@ -34,6 +34,8 @@ namespace basic_joint_controller
         std::mutex target_mutex_;         // Mutex for thread-safe target position updates
         bool has_target_{false};          // Whether a target position has been set
         bool interpolation_active_{false}; // Whether interpolation is currently active
+        
+        static constexpr double TARGET_EPSILON = 1e-6;  // Tolerance for comparing target positions
     };
 } // namespace basic_joint_controller
 

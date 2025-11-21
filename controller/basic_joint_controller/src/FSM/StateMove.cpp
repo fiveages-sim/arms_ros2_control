@@ -123,6 +123,30 @@ namespace basic_joint_controller
     void StateMove::setTargetPosition(const std::vector<double>& target_pos)
     {
         std::lock_guard lock(target_mutex_);
+        
+        // Check if the new target is the same as the current target_pos_
+        bool is_same_target = false;
+        if (has_target_ && target_pos_.size() == target_pos.size())
+        {
+            is_same_target = true;
+            for (size_t i = 0; i < target_pos.size(); ++i)
+            {
+                if (std::abs(target_pos_[i] - target_pos[i]) > TARGET_EPSILON)
+                {
+                    is_same_target = false;
+                    break;
+                }
+            }
+        }
+        
+        // If target is the same, skip re-interpolation
+        if (is_same_target && interpolation_active_)
+        {
+            RCLCPP_DEBUG(logger_, "Received same target position, skipping re-interpolation");
+            return;
+        }
+        
+        // Update target position
         target_pos_ = target_pos;
         has_target_ = true;
         
@@ -137,6 +161,7 @@ namespace basic_joint_controller
                 start_pos_.push_back(value.value_or(0.0));
             }
             percent_ = 0.0;
+            RCLCPP_INFO(logger_, "New target position received, restarting interpolation");
         }
     }
 } // namespace basic_joint_controller
