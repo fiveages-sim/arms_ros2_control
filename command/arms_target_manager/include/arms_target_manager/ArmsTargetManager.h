@@ -168,12 +168,19 @@ namespace arms_ros2_control::command
 
     private:
         /**
-         * 创建interactive marker（使用 MarkerFactory）
+         * 从当前状态构建 interactive marker（适配器函数）
+         * 
+         * 这是一个适配器函数，内部会自动：
+         * 1. 根据 markerType 获取对应的 pose（left_pose_, right_pose_, head_pose_）
+         * 2. 收集当前状态（current_mode_, current_controller_state_, auto_update_enabled_）
+         * 3. 调用 MarkerFactory::createMarker() 执行实际的创建逻辑
+         * 
          * @param name marker名称
          * @param markerType marker类型 ("left_arm", "right_arm", "head", 或其他自定义类型)
          * @return interactive marker消息
+         * @note 实际创建逻辑在 MarkerFactory 中实现
          */
-        visualization_msgs::msg::InteractiveMarker createMarker(
+        visualization_msgs::msg::InteractiveMarker buildMarker(
             const std::string& name,
             const std::string& markerType) const;
 

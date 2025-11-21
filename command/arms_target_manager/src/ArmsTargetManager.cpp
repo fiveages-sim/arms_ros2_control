@@ -80,7 +80,7 @@ namespace arms_ros2_control::command
         auto initMarker = [this](const std::string& markerName, const std::string& markerType,
                                    std::shared_ptr<interactive_markers::MenuHandler>& menuHandler)
         {
-            auto marker = createMarker(markerName, markerType);
+            auto marker = buildMarker(markerName, markerType);
             server_->insert(marker);
             server_->setCallback(marker.name, [this](const visualization_msgs::msg::InteractiveMarkerFeedback::ConstSharedPtr& feedback)
             {
@@ -130,181 +130,7 @@ namespace arms_ros2_control::command
                     control_base_frame_.c_str());
     }
 
-    void ArmsTargetManager::setMarkerPose(
-        const std::string& armType,
-        const geometry_msgs::msg::Point& position,
-        const geometry_msgs::msg::Quaternion& orientation)
-    {
-        geometry_msgs::msg::Pose* current_pose = nullptr;
-        std::string marker_name;
-
-
-        if (armType == "left")
-        {
-            current_pose = &left_pose_;
-            marker_name = "left_arm_target";
-        }
-        else if (armType == "right" && dual_arm_mode_)
-        {
-            current_pose = &right_pose_;
-            marker_name = "right_arm_target";
-        }
-        else
-        {
-            return; // 无效的手臂类型
-        }
-
-        current_pose->position = position;
-        current_pose->orientation = orientation;
-
-        // 更新marker
-        if (server_)
-        {
-            server_->setPose(marker_name, *current_pose);
-            if (shouldUpdateMarker())
-            {
-                server_->applyChanges();
-            }
-        }
-
-        // 在连续发布模式下，发送target pose（需要转换到control_base_frame_）
-        if (current_mode_ == MarkerState::CONTINUOUS)
-        {
-            geometry_msgs::msg::Pose transformed_pose = transformPose(*current_pose, marker_fixed_frame_, control_base_frame_);
-            if (armType == "left" && left_pose_publisher_)
-            {
-                left_pose_publisher_->publish(transformed_pose);
-            }
-            else if (armType == "right" && dual_arm_mode_ && right_pose_publisher_)
-            {
-                right_pose_publisher_->publish(transformed_pose);
-            }
-        }
-    }
-
-    void ArmsTargetManager::updateMarkerPoseIncremental(
-        const std::string& armType,
-        const std::array<double, 3>& positionDelta,
-        const std::array<double, 3>& rpyDelta)
-    {
-        // 检查是否在禁用状态，只有在禁用状态下才允许增量更新
-        if (!isStateDisabled(current_controller_state_))
-        {
-            RCLCPP_DEBUG(node_->get_logger(), "🎮 Incremental update blocked - controller state %d is not disabled",
-                         current_controller_state_);
-            return;
-        }
-
-        geometry_msgs::msg::Pose* current_pose = nullptr;
-        std::string marker_name;
-
-        if (armType == "left")
-        {
-            current_pose = &left_pose_;
-            marker_name = "left_arm_target";
-        }
-        else if (armType == "right" && dual_arm_mode_)
-        {
-            current_pose = &right_pose_;
-            marker_name = "right_arm_target";
-        }
-        else
-        {
-            return; // 无效的手臂类型
-        }
-
-        // 更新位置
-        current_pose->position.x += positionDelta[0];
-        current_pose->position.y += positionDelta[1];
-        current_pose->position.z += positionDelta[2];
-
-        // 更新旋转（使用RPY增量）
-        if (std::abs(rpyDelta[0]) > 0.001 || std::abs(rpyDelta[1]) > 0.001 || std::abs(rpyDelta[2]) > 0.001)
-        {
-            // 将当前四元数转换为Eigen
-            Eigen::Quaterniond current_quat(
-                current_pose->orientation.w,
-                current_pose->orientation.x,
-                current_pose->orientation.y,
-                current_pose->orientation.z
-            );
-
-            // 创建旋转增量
-            Eigen::AngleAxisd rollAngle(rpyDelta[0], Eigen::Vector3d::UnitX());
-            Eigen::AngleAxisd pitchAngle(rpyDelta[1], Eigen::Vector3d::UnitY());
-            Eigen::AngleAxisd yawAngle(rpyDelta[2], Eigen::Vector3d::UnitZ());
-
-            // 组合旋转（ZYX顺序）
-            Eigen::Quaterniond rotationIncrement = yawAngle * pitchAngle * rollAngle;
-
-            // 方案 A：右乘 - 旋转相对于 marker 自身的局部坐标系
-            // 特点：旋转绕 marker 当前的红/绿/蓝箭头方向
-            // 适用场景：末端执行器视角控制，类似第一人称
-            // current_quat = current_quat * rotationIncrement;
-
-            // 方案 B：左乘 - 旋转相对于全局坐标系（世界坐标系）
-            // 特点：旋转始终绕世界的 X/Y/Z 轴，与 marker 朝向无关
-            // 适用场景：固定视角控制，与位置控制一致
-            current_quat = rotationIncrement * current_quat;
-
-            current_quat.normalize();
-
-            // 转换回geometry_msgs
-            current_pose->orientation.w = current_quat.w();
-            current_pose->orientation.x = current_quat.x();
-            current_pose->orientation.y = current_quat.y();
-            current_pose->orientation.z = current_quat.z();
-        }
-
-        // 更新marker
-        if (server_)
-        {
-            server_->setPose(marker_name, *current_pose);
-            if (shouldUpdateMarker())
-            {
-                server_->applyChanges();
-            }
-        }
-
-        // 在连续发布模式下，发送target pose（需要转换到control_base_frame_）
-        if (current_mode_ == MarkerState::CONTINUOUS)
-        {
-            geometry_msgs::msg::Pose transformed_pose = transformPose(*current_pose, marker_fixed_frame_, control_base_frame_);
-            if (armType == "left" && left_pose_publisher_)
-            {
-                left_pose_publisher_->publish(transformed_pose);
-            }
-            else if (armType == "right" && dual_arm_mode_ && right_pose_publisher_)
-            {
-                right_pose_publisher_->publish(transformed_pose);
-            }
-        }
-    }
-
-
-    geometry_msgs::msg::Pose ArmsTargetManager::getMarkerPose(const std::string& armType) const
-    {
-        if (armType == "left")
-        {
-            return left_pose_;
-        }
-        if (armType == "right" && dual_arm_mode_)
-        {
-            return right_pose_;
-        }
-
-        geometry_msgs::msg::Pose zero_pose;
-        zero_pose.position.x = 0.0;
-        zero_pose.position.y = 0.0;
-        zero_pose.position.z = 0.0;
-        zero_pose.orientation.w = 1.0;
-        zero_pose.orientation.x = 0.0;
-        zero_pose.orientation.y = 0.0;
-        zero_pose.orientation.z = 0.0;
-        return zero_pose;
-    }
-
-    visualization_msgs::msg::InteractiveMarker ArmsTargetManager::createMarker(
+    visualization_msgs::msg::InteractiveMarker ArmsTargetManager::buildMarker(
         const std::string& name,
         const std::string& markerType) const
     {
@@ -548,14 +374,14 @@ namespace arms_ros2_control::command
         };
 
         // 更新左臂 marker
-        auto leftMarker = createMarker("left_arm_target", "left_arm");
+        auto leftMarker = buildMarker("left_arm_target", "left_arm");
         server_->insert(leftMarker);
         server_->setCallback(leftMarker.name, markerCallback);
         left_menu_handler_->apply(*server_, leftMarker.name);
 
         if (dual_arm_mode_)
         {
-            auto rightMarker = createMarker("right_arm_target", "right_arm");
+            auto rightMarker = buildMarker("right_arm_target", "right_arm");
             server_->insert(rightMarker);
             server_->setCallback(rightMarker.name, markerCallback);
             right_menu_handler_->apply(*server_, rightMarker.name);
@@ -564,7 +390,7 @@ namespace arms_ros2_control::command
         // 更新头部 marker（如果启用头部控制）
         if (enable_head_control_)
         {
-            auto headMarker = createMarker("head_target", "head");
+            auto headMarker = buildMarker("head_target", "head");
             server_->insert(headMarker);
             server_->setCallback(headMarker.name, markerCallback);
             head_menu_handler_->apply(*server_, headMarker.name);
@@ -989,7 +815,248 @@ namespace arms_ros2_control::command
         return quat;
     }
 
+    // ============================================================================
+    // 外部 API 接口函数（供 VRInputHandler、ControlInputHandler 等外部类调用）
+    // ============================================================================
+    // 这些函数与 marker 的创建和管理逻辑分离，专门用于外部控制接口
+    // 主要包括：VR 输入、手柄控制输入等外部控制方式
 
+    /**
+     * 设置 marker 的绝对位姿（供外部调用，如 VR 输入）
+     * 
+     * 这是一个外部 API 接口，主要用于：
+     * - VRInputHandler: VR 控制器输入时调用，设置 marker 的绝对位置和方向
+     * - 其他外部控制接口：需要直接设置 marker 目标位姿的场景
+     * 
+     * 功能：
+     * 1. 更新内部存储的 pose（left_pose_ 或 right_pose_）
+     * 2. 更新 interactive marker 的可视化位置
+     * 3. 在连续发布模式下，自动发布目标位姿到控制器
+     * 
+     * @param armType 手臂类型："left" 或 "right"
+     * @param position 目标位置（在 marker_fixed_frame_ 坐标系下）
+     * @param orientation 目标方向（四元数）
+     * 
+     * @note 如果 armType 无效或不在双臂模式下请求右臂，函数将静默返回
+     * @note 在连续发布模式下，会自动转换坐标系并发布目标位姿
+     * 
+     * @see VRInputHandler::updateMarkerPose() - VR 输入调用此函数
+     */
+    void ArmsTargetManager::setMarkerPose(
+        const std::string& armType,
+        const geometry_msgs::msg::Point& position,
+        const geometry_msgs::msg::Quaternion& orientation)
+    {
+        geometry_msgs::msg::Pose* current_pose = nullptr;
+        std::string marker_name;
+
+
+        if (armType == "left")
+        {
+            current_pose = &left_pose_;
+            marker_name = "left_arm_target";
+        }
+        else if (armType == "right" && dual_arm_mode_)
+        {
+            current_pose = &right_pose_;
+            marker_name = "right_arm_target";
+        }
+        else
+        {
+            return; // 无效的手臂类型
+        }
+
+        // 更新内部 pose 存储
+        current_pose->position = position;
+        current_pose->orientation = orientation;
+
+        // 更新 interactive marker 的可视化位置
+        if (server_)
+        {
+            server_->setPose(marker_name, *current_pose);
+            if (shouldUpdateMarker())
+            {
+                server_->applyChanges();
+            }
+        }
+
+        // 在连续发布模式下，自动发送目标位姿到控制器
+        if (current_mode_ == MarkerState::CONTINUOUS)
+        {
+            // 转换坐标系：从 marker_fixed_frame_ 转换到 control_base_frame_
+            geometry_msgs::msg::Pose transformed_pose = transformPose(*current_pose, marker_fixed_frame_, control_base_frame_);
+            if (armType == "left" && left_pose_publisher_)
+            {
+                left_pose_publisher_->publish(transformed_pose);
+            }
+            else if (armType == "right" && dual_arm_mode_ && right_pose_publisher_)
+            {
+                right_pose_publisher_->publish(transformed_pose);
+            }
+        }
+    }
+
+    /**
+     * 增量更新 marker 的位姿（供外部调用，如手柄控制输入）
+     * 
+     * 这是一个外部 API 接口，主要用于：
+     * - ControlInputHandler: 手柄/游戏手柄输入时调用，基于增量值更新 marker 位置
+     * - 其他需要相对控制的外部接口：基于增量输入调整 marker 位置的场景
+     * 
+     * 功能：
+     * 1. 检查控制器状态：只有在禁用状态（如 HOME、HOLD）下才允许增量更新
+     * 2. 基于增量值更新位置（相对当前位置的偏移）
+     * 3. 基于 RPY 增量更新旋转（使用全局坐标系）
+     * 4. 更新 interactive marker 的可视化位置
+     * 5. 在连续发布模式下，自动发布目标位姿到控制器
+     * 
+     * @param armType 手臂类型："left" 或 "right"
+     * @param positionDelta 位置增量 [x, y, z]（在 marker_fixed_frame_ 坐标系下，已缩放）
+     * @param rpyDelta 旋转增量 [roll, pitch, yaw]（弧度，已缩放）
+     * 
+     * @note 只有在禁用状态（disable_auto_update_states_）下才允许增量更新
+     * @note 如果在启用状态（如 MOVE）下调用，函数会静默返回
+     * @note 旋转使用全局坐标系（世界坐标系），与 marker 当前朝向无关
+     * @note 在连续发布模式下，会自动转换坐标系并发布目标位姿
+     * 
+     * @see ControlInputHandler::processControlInput() - 手柄控制调用此函数
+     */
+    void ArmsTargetManager::updateMarkerPoseIncremental(
+        const std::string& armType,
+        const std::array<double, 3>& positionDelta,
+        const std::array<double, 3>& rpyDelta)
+    {
+        // 检查是否在禁用状态，只有在禁用状态下才允许增量更新
+        // 这是为了避免在 MOVE 状态下与自动跟踪冲突
+        if (!isStateDisabled(current_controller_state_))
+        {
+            RCLCPP_DEBUG(node_->get_logger(), "🎮 Incremental update blocked - controller state %d is not disabled",
+                         current_controller_state_);
+            return;
+        }
+
+        geometry_msgs::msg::Pose* current_pose = nullptr;
+        std::string marker_name;
+
+        if (armType == "left")
+        {
+            current_pose = &left_pose_;
+            marker_name = "left_arm_target";
+        }
+        else if (armType == "right" && dual_arm_mode_)
+        {
+            current_pose = &right_pose_;
+            marker_name = "right_arm_target";
+        }
+        else
+        {
+            return; // 无效的手臂类型
+        }
+
+        // 更新位置：基于当前位置添加增量
+        current_pose->position.x += positionDelta[0];
+        current_pose->position.y += positionDelta[1];
+        current_pose->position.z += positionDelta[2];
+
+        // 更新旋转：使用 RPY 增量（仅在增量足够大时）
+        if (std::abs(rpyDelta[0]) > 0.001 || std::abs(rpyDelta[1]) > 0.001 || std::abs(rpyDelta[2]) > 0.001)
+        {
+            // 将当前四元数转换为 Eigen 格式
+            Eigen::Quaterniond current_quat(
+                current_pose->orientation.w,
+                current_pose->orientation.x,
+                current_pose->orientation.y,
+                current_pose->orientation.z
+            );
+
+            // 创建旋转增量（RPY 欧拉角）
+            Eigen::AngleAxisd rollAngle(rpyDelta[0], Eigen::Vector3d::UnitX());
+            Eigen::AngleAxisd pitchAngle(rpyDelta[1], Eigen::Vector3d::UnitY());
+            Eigen::AngleAxisd yawAngle(rpyDelta[2], Eigen::Vector3d::UnitZ());
+
+            // 组合旋转（ZYX 顺序：先 roll，再 pitch，最后 yaw）
+            Eigen::Quaterniond rotationIncrement = yawAngle * pitchAngle * rollAngle;
+
+            // 使用全局坐标系旋转（左乘）
+            // 特点：旋转始终绕世界的 X/Y/Z 轴，与 marker 当前朝向无关
+            // 适用场景：固定视角控制，与位置控制一致（符合用户直觉）
+            current_quat = rotationIncrement * current_quat;
+            current_quat.normalize();
+
+            // 转换回 geometry_msgs 格式
+            current_pose->orientation.w = current_quat.w();
+            current_pose->orientation.x = current_quat.x();
+            current_pose->orientation.y = current_quat.y();
+            current_pose->orientation.z = current_quat.z();
+        }
+
+        // 更新 interactive marker 的可视化位置
+        if (server_)
+        {
+            server_->setPose(marker_name, *current_pose);
+            if (shouldUpdateMarker())
+            {
+                server_->applyChanges();
+            }
+        }
+
+        // 在连续发布模式下，自动发送目标位姿到控制器
+        if (current_mode_ == MarkerState::CONTINUOUS)
+        {
+            // 转换坐标系：从 marker_fixed_frame_ 转换到 control_base_frame_
+            geometry_msgs::msg::Pose transformed_pose = transformPose(*current_pose, marker_fixed_frame_, control_base_frame_);
+            if (armType == "left" && left_pose_publisher_)
+            {
+                left_pose_publisher_->publish(transformed_pose);
+            }
+            else if (armType == "right" && dual_arm_mode_ && right_pose_publisher_)
+            {
+                right_pose_publisher_->publish(transformed_pose);
+            }
+        }
+    }
+
+    /**
+     * 获取 marker 的当前位姿（供外部查询调用）
+     * 
+     * 这是一个外部 API 接口，用于：
+     * - 外部系统查询当前 marker 的目标位姿
+     * - 状态监控和日志记录
+     * - 其他需要读取 marker 位置的场景
+     * 
+     * 功能：
+     * - 返回指定手臂的当前目标位姿（存储在 marker_fixed_frame_ 坐标系下）
+     * - 如果手臂类型无效，返回零位姿（默认值）
+     * 
+     * @param armType 手臂类型："left" 或 "right"
+     * @return 当前 marker 的位姿（geometry_msgs::msg::Pose）
+     *         如果 armType 无效，返回零位姿（位置为原点，方向为单位四元数）
+     * 
+     * @note 返回的 pose 在 marker_fixed_frame_ 坐标系下
+     * @note 如果请求右臂但不在双臂模式下，返回零位姿
+     */
+    geometry_msgs::msg::Pose ArmsTargetManager::getMarkerPose(const std::string& armType) const
+    {
+        if (armType == "left")
+        {
+            return left_pose_;
+        }
+        if (armType == "right" && dual_arm_mode_)
+        {
+            return right_pose_;
+        }
+
+        // 无效的手臂类型，返回零位姿（默认值）
+        geometry_msgs::msg::Pose zero_pose;
+        zero_pose.position.x = 0.0;
+        zero_pose.position.y = 0.0;
+        zero_pose.position.z = 0.0;
+        zero_pose.orientation.w = 1.0;
+        zero_pose.orientation.x = 0.0;
+        zero_pose.orientation.y = 0.0;
+        zero_pose.orientation.z = 0.0;
+        return zero_pose;
+    }
 
 
 
