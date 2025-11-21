@@ -28,8 +28,8 @@ int main(int argc, char** argv)
     double vr_update_rate = node->declare_parameter("vr_update_rate", 500.0);
     bool enable_vr = node->declare_parameter("enable_vr", true);
 
-    // 头部控制参数
-    bool enable_head_control = node->declare_parameter("enable_head_control", false);
+    // 头部控制参数（由 launch 参数控制）
+    bool enable_head_control = node->declare_parameter("enable_head_control", true);
     std::string head_controller_name = node->declare_parameter("head_controller_name", "head_joint_controller");
     std::vector<double> head_marker_position = node->declare_parameter("head_marker_position", std::vector<double>{1.0, 0.0, 1.5});
 

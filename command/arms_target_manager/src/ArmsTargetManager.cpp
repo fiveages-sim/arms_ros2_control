@@ -26,12 +26,12 @@ namespace arms_ros2_control::command
         double publishRate,
         const std::vector<int32_t>& disableAutoUpdateStates,
         double markerUpdateInterval,
-        bool enableHeadControl,
+        bool enableHeadControl,  // 由 launch 文件自动检测：检查 ros2_controllers.yaml 中是否有 head_joint_controller 且包含 head_joint1 和 head_joint2
         const std::string& headControllerName,
         const std::array<double, 3>& headMarkerPosition)
         : node_(std::move(node))
           , topic_prefix_(topicPrefix)
-          , dual_arm_mode_(dualArmMode)
+          , dual_arm_mode_(dualArmMode)  // 由 launch 文件自动检测：检查 task.info 中是否有 dualArmMode 或 eeFrame1
           , control_base_frame_(frameId)
           , marker_fixed_frame_(markerFixedFrame)
           , publish_rate_(publishRate)
@@ -41,7 +41,7 @@ namespace arms_ros2_control::command
           , disable_auto_update_states_(disableAutoUpdateStates)
           , last_marker_update_time_(node_->now())
           , marker_update_interval_(markerUpdateInterval)
-          , enable_head_control_(enableHeadControl)
+          , enable_head_control_(enableHeadControl)  // 类似 dual_arm_mode_，由 launch 文件自动检测后通过参数传递
           , head_controller_name_(headControllerName)
           , head_marker_position_(headMarkerPosition)
     {
@@ -401,12 +401,19 @@ namespace arms_ros2_control::command
     {
         setupMenu();
 
+        // 应用菜单到 marker（重新创建菜单后需要先应用）
         left_menu_handler_->apply(*server_, "left_arm_target");
         if (dual_arm_mode_)
         {
             right_menu_handler_->apply(*server_, "right_arm_target");
         }
+        // 应用头部菜单（如果启用头部控制）
+        if (enable_head_control_)
+        {
+            head_menu_handler_->apply(*server_, "head_target");
+        }
 
+        // 根据当前模式设置菜单项可见性
         if (current_mode_ == MarkerState::CONTINUOUS)
         {
             left_menu_handler_->setVisible(left_send_handle_, false);
@@ -434,6 +441,7 @@ namespace arms_ros2_control::command
             }
         }
 
+        // 重新应用菜单（更新可见性和菜单项文本）
         left_menu_handler_->reApply(*server_);
         if (dual_arm_mode_)
         {

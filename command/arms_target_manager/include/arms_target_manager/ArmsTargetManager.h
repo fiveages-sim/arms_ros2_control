@@ -54,9 +54,11 @@ namespace arms_ros2_control::command
          * @param publishRate 连续发布频率，默认为20Hz
          * @param disableAutoUpdateStates 禁用自动更新的状态值数组，默认为{3}（OCS2状态）
          * @param markerUpdateInterval 最小marker更新间隔（秒），默认为0.05秒（20Hz）
-         * @param enableHeadControl 是否启用头部控制，默认为false
+         * @param enableHeadControl 是否启用头部控制，由 launch 文件自动检测（检查 ros2_controllers.yaml 中是否有 head_joint_controller 且包含 head_joint1 和 head_joint2）
          * @param headControllerName 头部控制器名称，默认为"head_joint_controller"
          * @param headMarkerPosition 头部marker在base_footprint中的固定位置，默认为[1.0, 0.0, 1.5]（仅在TF获取失败时使用）
+         * 
+         * 注意：enableHeadControl 由 launch 文件自动检测，类似双臂模式的 dual_arm_mode_ 由 launch 文件自动检测
          */
         ArmsTargetManager(
             rclcpp::Node::SharedPtr node,
@@ -67,7 +69,7 @@ namespace arms_ros2_control::command
             double publishRate = 20.0,
             const std::vector<int32_t>& disableAutoUpdateStates = {3},
             double markerUpdateInterval = 0.05,
-            bool enableHeadControl = true,
+            bool enableHeadControl = false,
             const std::string& headControllerName = "head_joint_controller",
             const std::array<double, 3>& headMarkerPosition = {1.0, 0.0, 1.5});
 
@@ -342,7 +344,9 @@ namespace arms_ros2_control::command
         double marker_update_interval_;  // 最小更新间隔（秒）
         
         // 头部控制相关
-        bool enable_head_control_;  // 是否启用头部控制
+        // 注意：enable_head_control_ 由 launch 文件自动检测（检查 ros2_controllers.yaml 中是否有 head_joint_controller 且包含 head_joint1 和 head_joint2）
+        // 类似双臂模式通过 dual_arm_mode_ 由 launch 文件自动检测
+        bool enable_head_control_;  // 是否启用头部控制（由 launch 文件自动检测）
         std::string head_controller_name_;  // 头部控制器名称
         std::array<double, 3> head_marker_position_;  // marker在base_footprint中的固定位置（仅在TF获取失败时使用）
         std::vector<double> last_head_joint_angles_;  // 缓存最新的头部关节角度

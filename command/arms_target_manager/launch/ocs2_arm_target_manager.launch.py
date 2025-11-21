@@ -2,7 +2,6 @@
 
 import os
 import re
-import yaml
 from launch import LaunchDescription
 from launch.actions import DeclareLaunchArgument, OpaqueFunction
 from launch.substitutions import LaunchConfiguration
@@ -47,26 +46,6 @@ def parse_task_info(task_file_path):
     
     return dual_arm_mode, control_base_frame
 
-def load_head_control_param(robot_name, robot_type=""):
-    """从 ros2_controllers.yaml 中读取 head_joint_controller 的 enable_head_control 参数"""
-    try:
-        from robot_common_launch.common.robot_utils import load_robot_config
-        
-        config, _ = load_robot_config(robot_name, "ros2_control", robot_type)
-        if config is None:
-            print(f"[WARN] Cannot load ros2_controllers.yaml for robot '{robot_name}', using default enable_head_control=false")
-            return False
-        
-        # 从 head_joint_controller 配置中读取 enable_head_control
-        head_controller_config = config.get('head_joint_controller', {}).get('ros__parameters', {})
-        enable_head_control = head_controller_config.get('enable_head_control', False)
-        
-        print(f"[INFO] Loaded enable_head_control={enable_head_control} from head_joint_controller config")
-        return enable_head_control
-    except Exception as e:
-        print(f"[WARN] Failed to load enable_head_control from config: {e}, using default false")
-        return False
-
 def launch_setup(context, *args, **kwargs):
     """Launch setup function using OpaqueFunction"""
     robot_name = context.launch_configurations['robot']
@@ -82,9 +61,9 @@ def launch_setup(context, *args, **kwargs):
     dual_arm_mode, control_base_frame = parse_task_info(task_file_path)
     # marker_fixed_frame 默认为 "base_link"，可以通过 launch 参数覆盖
     marker_fixed_frame = context.launch_configurations.get('marker_fixed_frame', 'base_link')
-    
-    # 从 ros2_controllers.yaml 中读取 enable_head_control 参数
-    enable_head_control = load_head_control_param(robot_name, robot_type)
+
+    # 从 launch 参数读取 enable_head_control 参数
+    enable_head_control = context.launch_configurations.get('enable_head_control', 'true').lower() == 'true'
     
     arms_target_manager_node = Node(
         package='arms_target_manager',
@@ -122,9 +101,16 @@ def generate_launch_description():
         description='Frame ID where markers are actually created (received current_pose will be transformed to this frame)'
     )
 
+    enable_head_control_arg = DeclareLaunchArgument(
+        'enable_head_control',
+        default_value='true',
+        description='Enable head control in arms target manager'
+    )
+
     return LaunchDescription([
         robot_name_arg,
         task_file_arg,
         marker_fixed_frame_arg,
+        enable_head_control_arg,
         OpaqueFunction(function=launch_setup),
     ])
