@@ -714,11 +714,11 @@ namespace arms_ros2_control::command
     void ArmsTargetManager::setupMenu()
     {
         // 为左臂设置菜单
-            setupMarkerMenu(
-                left_menu_handler要_,
-                left_send_handle_,
-                left_toggle_handle_,
-                [this]() { sendTargetPose("left_arm"); });
+        setupMarkerMenu(
+            left_menu_handler_,
+            left_send_handle_,
+            left_toggle_handle_,
+            [this]() { sendTargetPose("left_arm"); });
 
         // 为右臂设置菜单（如果是双臂模式）
         if (dual_arm_mode_)
