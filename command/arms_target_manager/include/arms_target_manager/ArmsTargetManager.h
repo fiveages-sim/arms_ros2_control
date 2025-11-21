@@ -229,11 +229,6 @@ namespace arms_ros2_control::command
         geometry_msgs::msg::Quaternion headJointAnglesToQuaternion(
             const std::vector<double>& joint_angles) const;
 
-        /**
-         * 头部关节状态回调函数
-         * @param msg 关节状态消息
-         */
-        void headJointStateCallback(sensor_msgs::msg::JointState::ConstSharedPtr msg);
 
 
         /**
@@ -279,16 +274,22 @@ namespace arms_ros2_control::command
 
 
         /**
-         * 左臂末端执行器位置回调函数
-         * @param msg 位置消息
+         * 统一的 marker 自动更新回调函数
+         * @param msg PoseStamped 消息（用于左臂和右臂）
+         * @param marker_type marker类型 ("left_arm", "right_arm")
          */
-        void leftEndEffectorPoseCallback(geometry_msgs::msg::PoseStamped::ConstSharedPtr msg);
+        void updateMarkerFromFeedback(
+            const geometry_msgs::msg::PoseStamped::ConstSharedPtr& pose_msg,
+            const std::string& marker_type);
 
         /**
-         * 右臂末端执行器位置回调函数
-         * @param msg 位置消息
+         * 统一的 marker 自动更新回调函数（头部专用）
+         * @param msg JointState 消息（用于头部）
+         * @param marker_type marker类型 ("head")
          */
-        void rightEndEffectorPoseCallback(geometry_msgs::msg::PoseStamped::ConstSharedPtr msg);
+        void updateMarkerFromFeedback(
+            const sensor_msgs::msg::JointState::ConstSharedPtr& joint_msg,
+            const std::string& marker_type);
 
         /**
          * 将pose从源frame_id转换到指定的目标frame_id
