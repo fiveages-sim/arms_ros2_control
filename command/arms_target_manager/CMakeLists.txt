@@ -28,6 +28,7 @@ endforeach ()
 
 add_library(${PROJECT_NAME} SHARED
         src/ArmsTargetManager.cpp
+        src/MarkerFactory.cpp
         src/ControlInputHandler.cpp
         src/VRInputHandler.cpp
 )

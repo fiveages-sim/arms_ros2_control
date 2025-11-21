@@ -24,16 +24,10 @@
 #include <tf2_ros/buffer.h>
 #include <std_msgs/msg/float64_multi_array.hpp>
 #include <sensor_msgs/msg/joint_state.hpp>
+#include "arms_target_manager/MarkerFactory.h"
 
 namespace arms_ros2_control::command
 {
-    /**
-     * Marker状态枚举
-     */
-    enum class MarkerState {
-        SINGLE_SHOT,  // 单次发布模式
-        CONTINUOUS    // 连续发布模式
-    };
 
     /**
      * ArmsTargetManager - 机械臂目标管理器
@@ -174,7 +168,7 @@ namespace arms_ros2_control::command
 
     private:
         /**
-         * 创建interactive marker
+         * 创建interactive marker（使用 MarkerFactory）
          * @param name marker名称
          * @param markerType marker类型 ("left_arm", "right_arm", "head", 或其他自定义类型)
          * @return interactive marker消息
@@ -182,19 +176,6 @@ namespace arms_ros2_control::command
         visualization_msgs::msg::InteractiveMarker createMarker(
             const std::string& name,
             const std::string& markerType) const;
-
-        /**
-         * 创建box marker
-         * @param color 颜色 ("blue", "red", "grey")
-         * @return marker消息
-         */
-        visualization_msgs::msg::Marker createBoxMarker(const std::string& color = "grey") const;
-
-        /**
-         * 添加移动控制
-         * @param interactiveMarker 交互marker
-         */
-        void addMovementControls(visualization_msgs::msg::InteractiveMarker& interactiveMarker) const;
 
         /**
          * 统一的marker反馈回调处理函数
@@ -205,12 +186,6 @@ namespace arms_ros2_control::command
             const visualization_msgs::msg::InteractiveMarkerFeedback::ConstSharedPtr& feedback);
 
 
-        /**
-         * 创建箭头marker（用于头部）
-         * @param color 颜色
-         * @return marker消息
-         */
-        visualization_msgs::msg::Marker createArrowMarker(const std::string& color = "green") const;
 
 
         /**
@@ -265,12 +240,6 @@ namespace arms_ros2_control::command
         void createPublishersAndSubscribers();
 
 
-        /**
-         * 创建球体marker
-         * @param color 颜色
-         * @return marker消息
-         */
-        visualization_msgs::msg::Marker createSphereMarker(const std::string& color = "grey") const;
 
 
         /**
@@ -308,6 +277,9 @@ namespace arms_ros2_control::command
         // 核心成员
         rclcpp::Node::SharedPtr node_;
         std::shared_ptr<interactive_markers::InteractiveMarkerServer> server_;
+        
+        // Marker 工厂（用于创建 marker）
+        std::unique_ptr<MarkerFactory> marker_factory_;
         
         // 发布器
         rclcpp::Publisher<geometry_msgs::msg::Pose>::SharedPtr left_pose_publisher_;
