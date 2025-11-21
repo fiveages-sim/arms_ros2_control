@@ -264,6 +264,11 @@ namespace arms_ros2_control::command
          */
         void updateMenuVisibility();
 
+        /**
+         * 创建所有发布器和订阅器（根据配置统一创建）
+         */
+        void createPublishersAndSubscribers();
+
 
         /**
          * 创建球体marker

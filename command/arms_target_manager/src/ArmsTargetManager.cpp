@@ -45,160 +45,84 @@ namespace arms_ros2_control::command
           , head_controller_name_(headControllerName)
           , head_marker_position_(headMarkerPosition)
     {
-        left_pose_.position.x = 0.0;
-        left_pose_.position.y = 0.5;
-        left_pose_.position.z = 1.0;
-        left_pose_.orientation.w = 1.0;
-        left_pose_.orientation.x = 0.0;
-        left_pose_.orientation.y = 0.0;
-        left_pose_.orientation.z = 0.0;
+    }
 
-        right_pose_.position.x = 0.0;
-        right_pose_.position.y = -0.5;
-        right_pose_.position.z = 1.0;
-        right_pose_.orientation.w = 1.0;
-        right_pose_.orientation.x = 0.0;
-        right_pose_.orientation.y = 0.0;
-        right_pose_.orientation.z = 0.0;
-
+    void ArmsTargetManager::initialize()
+    {
+        // 创建 InteractiveMarkerServer
         server_ = std::make_shared<interactive_markers::InteractiveMarkerServer>(
             "arms_target_manager", node_);
-        left_pose_publisher_ = node_->create_publisher<geometry_msgs::msg::Pose>(
-            "left_target", 1);
-
-        if (dual_arm_mode_)
-        {
-            right_pose_publisher_ = node_->create_publisher<geometry_msgs::msg::Pose>(
-                "right_target", 1);
-        }
-
-        // 如果启用头部控制，创建头部发布器
-        if (enable_head_control_)
-        {
-            std::string head_topic = "/" + head_controller_name_ + "/target_joint_position";
-            head_joint_publisher_ = node_->create_publisher<std_msgs::msg::Float64MultiArray>(
-                head_topic, 1);
-        }
 
         // 初始化TF2 buffer和listener
         tf_buffer_ = std::make_shared<tf2_ros::Buffer>(node_->get_clock());
         tf_listener_ = std::make_shared<tf2_ros::TransformListener>(*tf_buffer_);
 
-        // 初始化头部pose
-        head_pose_.position.x = head_marker_position_[0];
-        head_pose_.position.y = head_marker_position_[1];
-        head_pose_.position.z = head_marker_position_[2];
-        head_pose_.orientation.w = 1.0;
-        head_pose_.orientation.x = 0.0;
-        head_pose_.orientation.y = 0.0;
-        head_pose_.orientation.z = 0.0;
-    }
-
-    void ArmsTargetManager::initialize()
-    {
         setupMenu();
 
-        // 统一使用 handleMarkerFeedback 处理所有 marker 的反馈
-        auto markerCallback = [this](const visualization_msgs::msg::InteractiveMarkerFeedback::ConstSharedPtr& feedback)
+        // 定义所有 lambda 函数
+        // 初始化 pose 的辅助函数
+        auto initPose = [](geometry_msgs::msg::Pose& pose, double x, double y, double z)
         {
-            handleMarkerFeedback(feedback);
+            pose.position.x = x;
+            pose.position.y = y;
+            pose.position.z = z;
+            pose.orientation.w = 1.0;
+            pose.orientation.x = 0.0;
+            pose.orientation.y = 0.0;
+            pose.orientation.z = 0.0;
         };
 
-        // 初始化左臂 marker
-        auto leftMarker = createMarker("left_arm_target", "left_arm");
-        server_->insert(leftMarker);
-        server_->setCallback(leftMarker.name, markerCallback);
-        left_menu_handler_->apply(*server_, leftMarker.name);
+        // 初始化 marker 的辅助函数
+        auto initMarker = [this](const std::string& markerName, const std::string& markerType,
+                                   std::shared_ptr<interactive_markers::MenuHandler>& menuHandler)
+        {
+            auto marker = createMarker(markerName, markerType);
+            server_->insert(marker);
+            server_->setCallback(marker.name, [this](const visualization_msgs::msg::InteractiveMarkerFeedback::ConstSharedPtr& feedback)
+            {
+                handleMarkerFeedback(feedback);
+            });
+            menuHandler->apply(*server_, marker.name);
+        };
 
-        // 初始化右臂 marker（如果是双臂模式）
+        // 左臂：初始化 pose -> 创建 marker
+        initPose(left_pose_, 0.0, 0.5, 1.0);
+        initMarker("left_arm_target", "left_arm", left_menu_handler_);
+
+        // 右臂：初始化 pose -> 创建 marker（如果是双臂模式）
         if (dual_arm_mode_)
         {
-            auto rightMarker = createMarker("right_arm_target", "right_arm");
-            server_->insert(rightMarker);
-            server_->setCallback(rightMarker.name, markerCallback);
-            right_menu_handler_->apply(*server_, rightMarker.name);
+            initPose(right_pose_, 0.0, -0.5, 1.0);
+            initMarker("right_arm_target", "right_arm", right_menu_handler_);
         }
 
-        // 如果启用头部控制，初始化头部marker
+        // 头部：初始化 pose -> 创建 marker（如果启用头部控制）
         if (enable_head_control_)
         {
-            // 从 TF 获取 head_link2 的初始位置
-            try
-            {
-                // 获取 head_link2 在 marker_fixed_frame_ 中的初始位置（统一使用 marker_fixed_frame_）
-                geometry_msgs::msg::TransformStamped transform = tf_buffer_->lookupTransform(
-                    marker_fixed_frame_, HEAD_LINK_NAME, tf2::TimePointZero);
-                
-                head_pose_.position.x = transform.transform.translation.x;
-                head_pose_.position.y = transform.transform.translation.y;
-                head_pose_.position.z = transform.transform.translation.z;
-                
-                RCLCPP_INFO(node_->get_logger(),
-                           "Initialized head marker position from TF: [%.3f, %.3f, %.3f] (link: %s, frame: %s)",
-                           head_pose_.position.x, head_pose_.position.y, head_pose_.position.z,
-                           HEAD_LINK_NAME, marker_fixed_frame_.c_str());
-            }
-            catch (const tf2::TransformException& ex)
-            {
-                // 如果 TF 转换失败，使用配置的固定位置
-                RCLCPP_WARN(node_->get_logger(),
-                           "无法从 TF 获取头部 link %s 的初始位置: %s，使用配置的固定位置 [%.3f, %.3f, %.3f]",
-                           HEAD_LINK_NAME, ex.what(),
-                           head_marker_position_[0], head_marker_position_[1], head_marker_position_[2]);
-                // head_pose_.position 已经在构造函数中从 head_marker_position_ 初始化
-            }
-
-            // 初始化头部 marker
-            auto headMarker = createMarker("head_target", "head");
-            server_->insert(headMarker);
-            server_->setCallback(headMarker.name, markerCallback);
-            head_menu_handler_->apply(*server_, headMarker.name);
+            initPose(head_pose_, head_marker_position_[0], head_marker_position_[1], head_marker_position_[2]);
+            initMarker("head_target", "head", head_menu_handler_);
         }
+
+        // 创建所有发布器和订阅器
+        createPublishersAndSubscribers();
 
         updateMenuVisibility();
 
-        left_end_effector_pose_subscription_ = node_->create_subscription<geometry_msgs::msg::PoseStamped>(
-            "left_current_pose", 10, [this](const geometry_msgs::msg::PoseStamped::ConstSharedPtr msg)
-            {
-                leftEndEffectorPoseCallback(msg);
-            });
-
-        if (dual_arm_mode_)
-        {
-            right_end_effector_pose_subscription_ = node_->create_subscription<geometry_msgs::msg::PoseStamped>(
-                "right_current_pose", 10, [this](const geometry_msgs::msg::PoseStamped::ConstSharedPtr msg)
-                {
-                    rightEndEffectorPoseCallback(msg);
-                });
-        }
-
-        // 如果启用头部控制，订阅关节状态以自动更新头部 marker
-        if (enable_head_control_)
-        {
-            head_joint_state_subscription_ = node_->create_subscription<sensor_msgs::msg::JointState>(
-                "/joint_states", 10, [this](const sensor_msgs::msg::JointState::ConstSharedPtr msg)
-                {
-                    headJointStateCallback(msg);
-                });
-        }
-
         server_->applyChanges();
 
+        // 输出初始化信息
         RCLCPP_INFO(node_->get_logger(),
                     "ArmsTargetManager initialized. Mode: %s, Control Base Frame: %s, Marker Fixed Frame: %s, Publish Rate: %.1f Hz",
                     dual_arm_mode_ ? "dual_arm" : "single_arm",
                     control_base_frame_.c_str(),
                     marker_fixed_frame_.c_str(),
                     publish_rate_);
-
         RCLCPP_INFO(node_->get_logger(),
-                    "📍 Markers will be created in frame: %s",
-                    marker_fixed_frame_.c_str());
-        RCLCPP_INFO(node_->get_logger(),
-                    "🔄 Received current_pose will be transformed to marker frame: %s",
-                    marker_fixed_frame_.c_str());
-        RCLCPP_INFO(node_->get_logger(),
+                    "📍 Markers will be created in frame: %s | "
+                    "🔄 Received current_pose will be transformed to marker frame: %s | "
                     "📤 Published target poses will be transformed to control base frame: %s",
+                    marker_fixed_frame_.c_str(),
+                    marker_fixed_frame_.c_str(),
                     control_base_frame_.c_str());
     }
 
@@ -806,7 +730,7 @@ namespace arms_ros2_control::command
 
     void ArmsTargetManager::updateMarkerShape()
     {
-        // 统一使用 handleMarkerFeedback 处理所有 marker 的反馈
+        // 统一的 marker 回调函数
         auto markerCallback = [this](const visualization_msgs::msg::InteractiveMarkerFeedback::ConstSharedPtr& feedback)
         {
             handleMarkerFeedback(feedback);
@@ -885,6 +809,39 @@ namespace arms_ros2_control::command
         }
     }
 
+    void ArmsTargetManager::createPublishersAndSubscribers()
+    {
+        // 创建左臂发布器和订阅器
+        left_pose_publisher_ = node_->create_publisher<geometry_msgs::msg::Pose>("left_target", 1);
+        left_end_effector_pose_subscription_ = node_->create_subscription<geometry_msgs::msg::PoseStamped>(
+            "left_current_pose", 10, [this](const geometry_msgs::msg::PoseStamped::ConstSharedPtr msg)
+            {
+                leftEndEffectorPoseCallback(msg);
+            });
+
+        // 创建右臂发布器和订阅器（如果是双臂模式）
+        if (dual_arm_mode_)
+        {
+            right_pose_publisher_ = node_->create_publisher<geometry_msgs::msg::Pose>("right_target", 1);
+            right_end_effector_pose_subscription_ = node_->create_subscription<geometry_msgs::msg::PoseStamped>(
+                "right_current_pose", 10, [this](const geometry_msgs::msg::PoseStamped::ConstSharedPtr msg)
+                {
+                    rightEndEffectorPoseCallback(msg);
+                });
+        }
+
+        // 创建头部发布器和订阅器（如果启用头部控制）
+        if (enable_head_control_)
+        {
+            std::string head_topic = "/" + head_controller_name_ + "/target_joint_position";
+            head_joint_publisher_ = node_->create_publisher<std_msgs::msg::Float64MultiArray>(head_topic, 1);
+            head_joint_state_subscription_ = node_->create_subscription<sensor_msgs::msg::JointState>(
+                "/joint_states", 10, [this](const sensor_msgs::msg::JointState::ConstSharedPtr msg)
+                {
+                    headJointStateCallback(msg);
+                });
+        }
+    }
 
     visualization_msgs::msg::Marker ArmsTargetManager::createSphereMarker(const std::string& color) const
     {
