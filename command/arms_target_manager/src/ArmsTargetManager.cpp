@@ -19,7 +19,6 @@ namespace arms_ros2_control::command
 {
     ArmsTargetManager::ArmsTargetManager(
         rclcpp::Node::SharedPtr node,
-        const std::string& topicPrefix,
         bool dualArmMode,
         const std::string& frameId,
         const std::string& markerFixedFrame,
@@ -30,8 +29,7 @@ namespace arms_ros2_control::command
         const std::string& headControllerName,
         const std::array<double, 3>& headMarkerPosition)
         : node_(std::move(node))
-          , topic_prefix_(topicPrefix)
-          , dual_arm_mode_(dualArmMode)  // 由 launch 文件自动检测：检查 task.info 中是否有 dualArmMode 或 eeFrame1
+          , dual_arm_mode_(dualArmMode)
           , control_base_frame_(frameId)
           , marker_fixed_frame_(markerFixedFrame)
           , publish_rate_(publishRate)
@@ -329,8 +327,8 @@ namespace arms_ros2_control::command
 
         send_handle = menu_handler->insert("发送目标", menuSendCallback);
 
-        std::string toggleText = (current_mode_ == MarkerState::CONTINUOUS) 
-            ? "切换到单次发布" 
+        std::string toggleText = (current_mode_ == MarkerState::CONTINUOUS)
+            ? "切换到单次发布"
             : "切换到连续发布";
         toggle_handle = menu_handler->insert(toggleText, menuToggleCallback);
     }
@@ -515,7 +513,7 @@ namespace arms_ros2_control::command
             
             // 处理状态切换时的特殊逻辑（根据不同 marker 类型执行相应操作）
             handleStateTransition(new_state);
-            
+
             // 状态变化时重新创建marker
             updateMarkerShape();
             server_->applyChanges();
@@ -625,18 +623,18 @@ namespace arms_ros2_control::command
 
         // 头部 marker 在所有状态下都自动跟踪 head_link2 的 xyz 位置
         // 但在 MOVE 状态下不更新 orientation（orientation 由用户拖拽控制）
-        
+
         // 检查是否应该更新 orientation
         // HOME (1) 和 HOLD (2) 状态：更新 position 和 orientation（自动跟踪）
         // MOVE (3) 状态：只更新 position，不更新 orientation（position 自动跟踪，orientation 用户控制）
         bool should_update_orientation = true;
-        
+
         // 如果当前状态在禁用列表中（通常是 MOVE 状态），则不更新 orientation
         if (isStateDisabled(current_controller_state_))
         {
             should_update_orientation = false;
         }
-        
+
         // 如果自动更新被禁用，也不更新 orientation
         if (!auto_update_enabled_)
         {
@@ -649,7 +647,7 @@ namespace arms_ros2_control::command
             // 获取 head_link2 在 marker_fixed_frame_ 中的位置（统一使用 marker_fixed_frame_）
             geometry_msgs::msg::TransformStamped transform = tf_buffer_->lookupTransform(
                 marker_fixed_frame_, HEAD_LINK_NAME, tf2::TimePointZero);
-            
+
             // 更新 marker 位置为 head_link2 的实际位置（所有状态下都更新）
             head_pose_.position.x = transform.transform.translation.x;
             head_pose_.position.y = transform.transform.translation.y;
@@ -696,10 +694,10 @@ namespace arms_ros2_control::command
             {
                 // 将关节角度转换为四元数（确保顺序：head_joint1, head_joint2）
                 std::vector<double> head_joint_angles = {head_joint1_angle, head_joint2_angle};
-                
+
                 // 缓存最新的关节角度，用于状态切换时发布
                 last_head_joint_angles_ = head_joint_angles;
-                
+
                 geometry_msgs::msg::Quaternion quat = headJointAnglesToQuaternion(head_joint_angles);
 
                 // 更新头部 pose 的 orientation（只在非 MOVE 状态下更新）
@@ -779,10 +777,10 @@ namespace arms_ros2_control::command
         // 使用 tf2 的 getRPY 从 quaternion 提取欧拉角
         tf2::Quaternion tf_quat;
         tf2::fromMsg(quaternion, tf_quat);
-        
+
         double roll, pitch, yaw;
         tf2::Matrix3x3(tf_quat).getRPY(roll, pitch, yaw);
-        
+
         // yaw (Z轴旋转) -> head_joint1
         // pitch (Y轴旋转) -> head_joint2
         // 注意：pitch 取反，使得向上转动 marker 时头部向上看
@@ -831,23 +829,23 @@ namespace arms_ros2_control::command
 
     /**
      * 设置 marker 的绝对位姿（供外部调用，如 VR 输入）
-     * 
+     *
      * 这是一个外部 API 接口，主要用于：
      * - VRInputHandler: VR 控制器输入时调用，设置 marker 的绝对位置和方向
      * - 其他外部控制接口：需要直接设置 marker 目标位姿的场景
-     * 
+     *
      * 功能：
      * 1. 更新内部存储的 pose（left_pose_ 或 right_pose_）
      * 2. 更新 interactive marker 的可视化位置
      * 3. 在连续发布模式下，自动发布目标位姿到控制器
-     * 
+     *
      * @param armType 手臂类型："left" 或 "right"
      * @param position 目标位置（在 marker_fixed_frame_ 坐标系下）
      * @param orientation 目标方向（四元数）
-     * 
+     *
      * @note 如果 armType 无效或不在双臂模式下请求右臂，函数将静默返回
      * @note 在连续发布模式下，会自动转换坐标系并发布目标位姿
-     * 
+     *
      * @see VRInputHandler::updateMarkerPose() - VR 输入调用此函数
      */
     void ArmsTargetManager::setMarkerPose(
@@ -906,27 +904,27 @@ namespace arms_ros2_control::command
 
     /**
      * 增量更新 marker 的位姿（供外部调用，如手柄控制输入）
-     * 
+     *
      * 这是一个外部 API 接口，主要用于：
      * - ControlInputHandler: 手柄/游戏手柄输入时调用，基于增量值更新 marker 位置
      * - 其他需要相对控制的外部接口：基于增量输入调整 marker 位置的场景
-     * 
+     *
      * 功能：
      * 1. 检查控制器状态：只有在禁用状态（如 HOME、HOLD）下才允许增量更新
      * 2. 基于增量值更新位置（相对当前位置的偏移）
      * 3. 基于 RPY 增量更新旋转（使用全局坐标系）
      * 4. 更新 interactive marker 的可视化位置
      * 5. 在连续发布模式下，自动发布目标位姿到控制器
-     * 
+     *
      * @param armType 手臂类型："left" 或 "right"
      * @param positionDelta 位置增量 [x, y, z]（在 marker_fixed_frame_ 坐标系下，已缩放）
      * @param rpyDelta 旋转增量 [roll, pitch, yaw]（弧度，已缩放）
-     * 
+     *
      * @note 只有在禁用状态（disable_auto_update_states_）下才允许增量更新
      * @note 如果在启用状态（如 MOVE）下调用，函数会静默返回
      * @note 旋转使用全局坐标系（世界坐标系），与 marker 当前朝向无关
      * @note 在连续发布模式下，会自动转换坐标系并发布目标位姿
-     * 
+     *
      * @see ControlInputHandler::processControlInput() - 手柄控制调用此函数
      */
     void ArmsTargetManager::updateMarkerPoseIncremental(
@@ -1026,20 +1024,20 @@ namespace arms_ros2_control::command
 
     /**
      * 获取 marker 的当前位姿（供外部查询调用）
-     * 
+     *
      * 这是一个外部 API 接口，用于：
      * - 外部系统查询当前 marker 的目标位姿
      * - 状态监控和日志记录
      * - 其他需要读取 marker 位置的场景
-     * 
+     *
      * 功能：
      * - 返回指定手臂的当前目标位姿（存储在 marker_fixed_frame_ 坐标系下）
      * - 如果手臂类型无效，返回零位姿（默认值）
-     * 
+     *
      * @param armType 手臂类型："left" 或 "right"
      * @return 当前 marker 的位姿（geometry_msgs::msg::Pose）
      *         如果 armType 无效，返回零位姿（位置为原点，方向为单位四元数）
-     * 
+     *
      * @note 返回的 pose 在 marker_fixed_frame_ 坐标系下
      * @note 如果请求右臂但不在双臂模式下，返回零位姿
      */

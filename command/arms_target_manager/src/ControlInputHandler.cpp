@@ -33,8 +33,8 @@ namespace arms_ros2_control::command
         double yaw_input = msg->yaw;
 
         // 检查是否有有效输入
-        bool hasValidInput = (std::abs(x_input) > 0.001 || std::abs(y_input) > 0.001 || std::abs(z_input) > 0.001 ||
-                             std::abs(roll_input) > 0.001 || std::abs(pitch_input) > 0.001 || std::abs(yaw_input) > 0.001);
+        bool hasValidInput = std::abs(x_input) > 0.001 || std::abs(y_input) > 0.001 || std::abs(z_input) > 0.001 ||
+            std::abs(roll_input) > 0.001 || std::abs(pitch_input) > 0.001 || std::abs(yaw_input) > 0.001;
 
         if (hasValidInput && target_manager_)
         {

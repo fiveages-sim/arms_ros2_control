@@ -15,7 +15,7 @@
       rb_button: 5         # 右肩键 - 预留
       back_button: 6       # Back 按钮 - 预留
       start_button: 7      # Start 按钮 - 特殊命令
-      left_stick_button: 9 # 左摇杆按下 - 预留
+      left_stick_button: 9 # 左摇杆按下 - 切换高速/低速模式
       right_stick_button: 10 # 右摇杆按下 - 启用/禁用控制
 
     # 摇杆和 D-Pad 映射 (Axes Mapping)
@@ -34,4 +34,10 @@
     # 镜像移动配置 (Mirror Movement)
     # 当启用时，左摇杆的 X 和 Y 方向都会取反（镜像）
     mirror_movement: true  # 默认开启镜像移动
+    
+    # 速度模式配置 (Speed Mode)
+    # 通过按下左摇杆按钮可以在高速和低速模式之间切换
+    speed:
+      low_scale: 0.3   # 低速模式缩放因子 (30% 速度)
+      high_scale: 1.0  # 高速模式缩放因子 (100% 速度)
 

@@ -167,7 +167,6 @@ def launch_setup(context, *args, **kwargs):
             '/ocs2_arm_target_manager.launch.py',
         ]),
         launch_arguments=[
-            ('robot', robot_name),
             ('task_file', task_file_path),
             ('enable_head_control', LaunchConfiguration('enable_head')),
         ],

@@ -18,7 +18,6 @@ int main(int argc, char** argv)
     auto node = rclcpp::Node::make_shared("arms_target_manager_node");
 
     // 获取参数
-    std::string topic_prefix = node->declare_parameter("topic_prefix", "arm_controller");
     bool dual_arm_mode = node->declare_parameter("dual_arm_mode", false);
     std::string control_base_frame = node->declare_parameter("control_base_frame", "world");
     std::string marker_fixed_frame = node->declare_parameter("marker_fixed_frame", "base_link");
@@ -33,9 +32,8 @@ int main(int argc, char** argv)
     std::string head_controller_name = node->declare_parameter("head_controller_name", "head_joint_controller");
     std::vector<double> head_marker_position = node->declare_parameter("head_marker_position", std::vector<double>{1.0, 0.0, 1.5});
 
-    RCLCPP_INFO(node->get_logger(), 
-               "Starting ArmsTargetManager with topic_prefix: %s, dual_arm_mode: %s, control_base_frame: %s, marker_fixed_frame: %s",
-               topic_prefix.c_str(), 
+    RCLCPP_INFO(node->get_logger(),
+               "Starting ArmsTargetManager with dual_arm_mode: %s, control_base_frame: %s, marker_fixed_frame: %s",
                dual_arm_mode ? "true" : "false",
                control_base_frame.c_str(),
                marker_fixed_frame.c_str());
@@ -52,13 +50,13 @@ int main(int argc, char** argv)
         // 创建ArmsTargetManager
         std::array<double, 3> head_position_array = {head_marker_position[0], head_marker_position[1], head_marker_position[2]};
         auto target_manager = std::make_unique<ArmsTargetManager>(
-            node, topic_prefix, dual_arm_mode, control_base_frame, marker_fixed_frame,
+            node, dual_arm_mode, control_base_frame, marker_fixed_frame,
             20.0, std::vector<int32_t>{3}, 0.05,
             enable_head_control, head_controller_name, head_position_array);
 
         if (enable_head_control)
         {
-            RCLCPP_INFO(node->get_logger(), 
+            RCLCPP_INFO(node->get_logger(),
                        "Head control enabled: frame=%s, controller=%s, link=head_link2 (position from TF, fallback=[%.2f, %.2f, %.2f])",
                        marker_fixed_frame.c_str(), head_controller_name.c_str(),
                        head_marker_position[0], head_marker_position[1], head_marker_position[2]);

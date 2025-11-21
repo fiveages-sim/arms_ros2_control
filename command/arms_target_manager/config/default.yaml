@@ -1,0 +1,14 @@
+/**:
+  ros__parameters:
+    # 线性控制缩放因子（用于手柄/键盘控制）
+    linear_scale: 0.005
+    
+    # 角度控制缩放因子（用于手柄/键盘控制）
+    angular_scale: 0.05
+    
+    # VR更新频率（Hz）
+    vr_update_rate: 500.0
+    
+    # 是否启用VR输入处理
+    enable_vr: true
+
