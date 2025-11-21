@@ -20,22 +20,17 @@ colcon build --packages-up-to arms_target_manager
 
 ### 2. 启动节点
 
-#### 单臂模式
+通常通过 OCS2 控制器 launch 文件启动（会自动包含 ArmsTargetManager）：
+
 ```bash
-ros2 launch arms_target_manager single_arm.launch.py
+ros2 launch ocs2_arm_controller full_body.launch.py robot:=cr5
 ```
 
-#### 双臂模式
-```bash
-ros2 launch arms_target_manager dual_arm.launch.py
-```
+或者直接使用 OCS2 专用的 launch 文件：
 
-#### 自定义参数
 ```bash
-ros2 launch arms_target_manager arms_target_manager.launch.py \
-    topic_prefix:=my_arm \
-    dual_arm_mode:=true \
-    frame_id:=base_link
+ros2 launch arms_target_manager ocs2_arm_target_manager.launch.py \
+    task_file:=/path/to/task.info
 ```
 
 ### 3. 在RViz中查看
@@ -47,14 +42,30 @@ ros2 launch arms_target_manager arms_target_manager.launch.py \
 
 ## 参数说明
 
-- `topic_prefix`：主题前缀，默认为"arm_controller"
-- `dual_arm_mode`：是否为双臂模式，默认为false
-- `frame_id`：坐标系ID，默认为"world"
+### Launch 参数
+- `task_file`：task.info 文件路径（必需，用于自动检测 dual_arm_mode 和 control_base_frame）
+- `marker_fixed_frame`：Marker 固定坐标系，默认为 "base_link"
+
+### 配置文件查找逻辑
+配置文件会自动按以下优先级查找：
+1. **task_file 同目录下的 `target_manager.yaml`**（如果存在）
+2. **默认配置文件** `arms_target_manager/config/default.yaml`
+
+### YAML 配置参数
+- `linear_scale`：线性控制缩放因子，默认 0.005
+- `angular_scale`：角度控制缩放因子，默认 0.05
+- `vr_update_rate`：VR 更新频率（Hz），默认 500.0
+- `enable_vr`：是否启用 VR 输入处理，默认 true
 
 ## 发布主题
 
-- `{topic_prefix}_left_pose_target`：左臂目标pose
-- `{topic_prefix}_right_pose_target`：右臂目标pose（仅双臂模式）
+- `left_target`：左臂目标pose
+- `right_target`：右臂目标pose（仅双臂模式）
+
+## 订阅主题
+
+- `left_current_pose`：左臂当前pose（用于自动更新marker）
+- `right_current_pose`：右臂当前pose（仅双臂模式）
 
 ## 与PoseBasedReferenceManager配合使用
 
@@ -68,19 +79,24 @@ ros2 launch arms_target_manager arms_target_manager.launch.py \
 
 ## 示例配置
 
-### 单臂机器人
+### YAML 配置文件示例 (config/default.yaml)
 ```yaml
-topic_prefix: "arm_controller"
-dual_arm_mode: false
-frame_id: "world"
+/**:
+  ros__parameters:
+    # 线性控制缩放因子（用于手柄/键盘控制）
+    linear_scale: 0.005
+    
+    # 角度控制缩放因子（用于手柄/键盘控制）
+    angular_scale: 0.05
+    
+    # VR更新频率（Hz）
+    vr_update_rate: 500.0
+    
+    # 是否启用VR输入处理
+    enable_vr: true
 ```
 
-### 双臂机器人
-```yaml
-topic_prefix: "arm_controller"
-dual_arm_mode: true
-frame_id: "world"
-```
+注意：`dual_arm_mode` 和 `control_base_frame` 会自动从 `task_file` 中解析，不需要在 YAML 中配置。
 
 ## 依赖
 

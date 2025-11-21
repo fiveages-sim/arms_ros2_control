@@ -90,6 +90,13 @@ private:
     
     // Mirror movement configuration
     bool mirror_movement_;
+    
+    // Speed mode (true = high speed, false = low speed)
+    bool high_speed_mode_;
+    
+    // Speed scaling factors
+    double low_speed_scale_;
+    double high_speed_scale_;
 };
 
 #endif //JOYSTICK_TELEOP_H 

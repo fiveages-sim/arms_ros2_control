@@ -17,7 +17,6 @@ namespace arms_ros2_control::command
 {
     ArmsTargetManager::ArmsTargetManager(
         rclcpp::Node::SharedPtr node,
-        const std::string& topicPrefix,
         bool dualArmMode,
         const std::string& frameId,
         const std::string& markerFixedFrame,
@@ -25,7 +24,6 @@ namespace arms_ros2_control::command
         const std::vector<int32_t>& disableAutoUpdateStates,
         double markerUpdateInterval)
         : node_(std::move(node))
-          , topic_prefix_(topicPrefix)
           , dual_arm_mode_(dualArmMode)
           , control_base_frame_(frameId)
           , marker_fixed_frame_(markerFixedFrame)

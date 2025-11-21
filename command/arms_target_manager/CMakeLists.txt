@@ -70,6 +70,11 @@ install(
         DESTINATION share/${PROJECT_NAME}/launch
 )
 
+install(
+        DIRECTORY config/
+        DESTINATION share/${PROJECT_NAME}/config
+)
+
 ament_export_dependencies(${TARGET_MANAGER_INCLUDE_DEPENDS})
 ament_export_targets(export_${PROJECT_NAME} HAS_LIBRARY_TARGET)
 

@@ -18,7 +18,6 @@ int main(int argc, char** argv)
     auto node = rclcpp::Node::make_shared("arms_target_manager_node");
 
     // 获取参数
-    std::string topic_prefix = node->declare_parameter("topic_prefix", "arm_controller");
     bool dual_arm_mode = node->declare_parameter("dual_arm_mode", false);
     std::string control_base_frame = node->declare_parameter("control_base_frame", "world");
     std::string marker_fixed_frame = node->declare_parameter("marker_fixed_frame", "base_link");
@@ -29,8 +28,7 @@ int main(int argc, char** argv)
     bool enable_vr = node->declare_parameter("enable_vr", true);
 
     RCLCPP_INFO(node->get_logger(), 
-               "Starting ArmsTargetManager with topic_prefix: %s, dual_arm_mode: %s, control_base_frame: %s, marker_fixed_frame: %s",
-               topic_prefix.c_str(), 
+               "Starting ArmsTargetManager with dual_arm_mode: %s, control_base_frame: %s, marker_fixed_frame: %s",
                dual_arm_mode ? "true" : "false",
                control_base_frame.c_str(),
                marker_fixed_frame.c_str());
@@ -46,7 +44,7 @@ int main(int argc, char** argv)
     {
         // 创建ArmsTargetManager
         auto target_manager = std::make_unique<ArmsTargetManager>(
-            node, topic_prefix, dual_arm_mode, control_base_frame, marker_fixed_frame);
+            node, dual_arm_mode, control_base_frame, marker_fixed_frame);
 
         // 初始化
         target_manager->initialize();

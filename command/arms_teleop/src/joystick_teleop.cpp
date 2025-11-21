@@ -46,6 +46,15 @@ JoystickTeleop::JoystickTeleop() : Node("joystick_teleop_node") {
     left_gripper_open_ = false;   // Left arm gripper initially closed
     right_gripper_open_ = false;  // Right arm gripper initially closed
     
+    // Initialize speed mode (start with low speed)
+    high_speed_mode_ = false;
+    
+    // Load speed scaling parameters
+    this->declare_parameter("speed.low_scale", 0.3);
+    this->declare_parameter("speed.high_scale", 1.0);
+    low_speed_scale_ = this->get_parameter("speed.low_scale").as_double();
+    high_speed_scale_ = this->get_parameter("speed.high_scale").as_double();
+    
     // Initialize inputs message
     inputs_.command = 0;
     inputs_.x = 0.0;
@@ -59,6 +68,8 @@ JoystickTeleop::JoystickTeleop() : Node("joystick_teleop_node") {
     RCLCPP_INFO(get_logger(), "🎮 JoystickTeleop created");
     RCLCPP_INFO(get_logger(), "🎮 Joystick control is DISABLED by default. Press right stick to enable.");
     RCLCPP_INFO(get_logger(), "🎮 Controls: Right stick=toggle control, A=switch target arm, B=send command, X=toggle gripper");
+    RCLCPP_INFO(get_logger(), "🎮 Speed mode: Left stick button=toggle high/low speed (Current: %s)", 
+                high_speed_mode_ ? "HIGH" : "LOW");
     
     // Print button mapping configuration
     printButtonMapping();
@@ -202,6 +213,7 @@ void JoystickTeleop::processButtons(const sensor_msgs::msg::Joy::SharedPtr msg) 
     bool right_stick_just_pressed = right_stick_pressed && !last_right_stick_pressed_;
     bool a_just_pressed = a_pressed && !last_a_pressed_;
     bool x_just_pressed = x_pressed && !last_x_pressed_;
+    bool left_stick_just_pressed = left_stick_pressed && !last_left_stick_pressed_;
 
     // Update last button states
     last_x_pressed_ = x_pressed;
@@ -228,7 +240,7 @@ void JoystickTeleop::processButtons(const sensor_msgs::msg::Joy::SharedPtr msg) 
 
     if (a_just_pressed && enabled_) {
         // A button: switch target arm
-        currentTarget_ = (currentTarget_ == 1) ? 2 : 1;
+        currentTarget_ = currentTarget_ == 1 ? 2 : 1;
         inputs_.target = currentTarget_;
         RCLCPP_INFO(get_logger(), "🎮 Switched target arm to: %s", 
                     (currentTarget_ == 1) ? "LEFT" : "RIGHT");
@@ -244,6 +256,14 @@ void JoystickTeleop::processButtons(const sensor_msgs::msg::Joy::SharedPtr msg) 
         std::string arm_name = (currentTarget_ == 1) ? "LEFT" : "RIGHT";
         RCLCPP_INFO(get_logger(), "🎮 %s gripper %s",
                    arm_name.c_str(), current_gripper_state ? "OPENED" : "CLOSED");
+    }
+
+    if (left_stick_just_pressed && enabled_) {
+        // Left stick button: toggle speed mode
+        high_speed_mode_ = !high_speed_mode_;
+        RCLCPP_INFO(get_logger(), "🎮 Speed mode switched to: %s (Scale: %.2f)",
+                   high_speed_mode_ ? "HIGH" : "LOW",
+                   high_speed_mode_ ? high_speed_scale_ : low_speed_scale_);
     }
 }
 
@@ -277,15 +297,18 @@ void JoystickTeleop::processAxes(const sensor_msgs::msg::Joy::SharedPtr msg) {
     double dpad_x = applyDeadzone(msg->axes[axes_map_.dpad_x], axes_map_.dpad_deadzone);
     double dpad_y = applyDeadzone(msg->axes[axes_map_.dpad_y], axes_map_.dpad_deadzone);
 
-    // Update position (x, y, z)
-    inputs_.x = left_stick_y;   // Left stick Y: forward/backward
-    inputs_.y = left_stick_x;   // Left stick X: left/right
-    inputs_.z = right_stick_y;  // Right stick Y: up/down
+    // Apply speed scaling based on current mode
+    double speed_scale = high_speed_mode_ ? high_speed_scale_ : low_speed_scale_;
 
-    // Update rotation (roll, pitch, yaw)
-    inputs_.roll = dpad_x;         // D-pad X: roll
-    inputs_.pitch = -dpad_y;       // D-pad Y: pitch (inverted)
-    inputs_.yaw = right_stick_x;   // Right stick X: yaw
+    // Update position (x, y, z) with speed scaling
+    inputs_.x = left_stick_y * speed_scale;   // Left stick Y: forward/backward
+    inputs_.y = left_stick_x * speed_scale;   // Left stick X: left/right
+    inputs_.z = right_stick_y * speed_scale;  // Right stick Y: up/down
+
+    // Update rotation (roll, pitch, yaw) with speed scaling
+    inputs_.roll = dpad_x * speed_scale;         // D-pad X: roll
+    inputs_.pitch = -dpad_y * speed_scale;       // D-pad Y: pitch (inverted)
+    inputs_.yaw = right_stick_x * speed_scale;   // Right stick X: yaw
 }
 
 double JoystickTeleop::applyDeadzone(double value, double deadzone) const {

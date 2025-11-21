@@ -39,8 +39,8 @@ namespace arms_ros2_control::command
      * 支持单臂和双臂模式，包含右键菜单和连续发布功能
      * 
      * 发布主题: 
-     * - {topicPrefix}_left_target: 左臂目标pose
-     * - {topicPrefix}_right_target: 右臂目标pose
+     * - left_target: 左臂目标pose
+     * - right_target: 右臂目标pose
      * 
      * 单臂机器人默认使用左臂主题
      */
@@ -50,7 +50,6 @@ namespace arms_ros2_control::command
         /**
          * 构造函数
          * @param node ROS节点指针
-         * @param topicPrefix 主题前缀
          * @param dualArmMode 是否为双臂模式
          * @param frameId 坐标系ID，默认为"world"（目标frame，marker会转换到这个frame下发布）
          * @param markerFixedFrame marker实际创建的frame，默认为"world"（接收到的current_pose会转换到这个frame下）
@@ -60,7 +59,6 @@ namespace arms_ros2_control::command
          */
         ArmsTargetManager(
             rclcpp::Node::SharedPtr node,
-            const std::string& topicPrefix,
             bool dualArmMode = false,
             const std::string& frameId = "world",
             const std::string& markerFixedFrame = "base_link",
@@ -266,7 +264,6 @@ namespace arms_ros2_control::command
         interactive_markers::MenuHandler::EntryHandle right_toggle_handle_;
         
         // 配置
-        std::string topic_prefix_;
         bool dual_arm_mode_;
         std::string control_base_frame_;  // 目标frame，marker会转换到这个frame下发布
         std::string marker_fixed_frame_;  // marker实际创建的frame，接收到的current_pose会转换到这个frame下
