@@ -82,7 +82,7 @@ def launch_setup(context, *args, **kwargs):
     # marker_fixed_frame: 从launch参数获取，默认值为 'base_link'
     marker_fixed_frame = context.launch_configurations.get('marker_fixed_frame', 'base_link')
 
-    enable_head_control = context.launch_configurations.get('enable_head_control', 'true').lower() == 'true'
+    enable_head_control = context.launch_configurations.get('enable_head_control', 'false').lower() == 'true'
     # 构建参数列表：先加载YAML配置，然后用launch参数覆盖
     parameters = []
     if config_path:
@@ -124,7 +124,7 @@ def generate_launch_description():
 
     enable_head_control_arg = DeclareLaunchArgument(
         'enable_head_control',
-        default_value='true',
+        default_value='false',
         description='Enable head control in arms target manager'
     )
 

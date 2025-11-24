@@ -25,7 +25,7 @@ namespace arms_ros2_control::command
         double publishRate,
         const std::vector<int32_t>& disableAutoUpdateStates,
         double markerUpdateInterval,
-        bool enableHeadControl,  // 由 launch 文件自动检测：检查 ros2_controllers.yaml 中是否有 head_joint_controller 且包含 head_joint1 和 head_joint2
+        bool enableHeadControl,  
         const std::string& headControllerName,
         const std::array<double, 3>& headMarkerPosition)
         : node_(std::move(node))
@@ -39,7 +39,7 @@ namespace arms_ros2_control::command
           , disable_auto_update_states_(disableAutoUpdateStates)
           , last_marker_update_time_(node_->now())
           , marker_update_interval_(markerUpdateInterval)
-          , enable_head_control_(enableHeadControl)  // 类似 dual_arm_mode_，由 launch 文件自动检测后通过参数传递
+          , enable_head_control_(enableHeadControl)  
           , head_controller_name_(headControllerName)
           , head_marker_position_(headMarkerPosition)
     {
