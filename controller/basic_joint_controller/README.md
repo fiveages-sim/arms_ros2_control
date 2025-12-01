@@ -61,7 +61,32 @@ For example, if `switch_command_base = 4` (for backward compatibility):
 
 ## 5. Usage
 
-### 5.1 State Switching
+### 5.1 Demo Launch File
+
+The demo launch file provides a convenient way to launch head controllers or body controllers:
+
+```bash
+# Launch both head and body controllers (default)
+source ~/ros2_ws/install/setup.bash
+ros2 launch basic_joint_controller demo.launch.py robot:=fiveages_w1
+
+# Launch only head controller
+ros2 launch basic_joint_controller demo.launch.py robot:=fiveages_w1 enable_body:=false
+
+# Launch only body controller
+ros2 launch basic_joint_controller demo.launch.py robot:=fiveages_w1 enable_head:=false
+```
+
+Launch file arguments:
+- `robot`: Robot name (default: fiveages_w1)
+- `type`: Robot type (optional)
+- `hardware`: Hardware type, 'gz' for Gazebo simulation, 'isaac' for Isaac simulation, 'mock_components' for mock components (default: mock_components)
+- `world`: Gazebo world name (only used when hardware=gz, default: dart)
+- `enable_head`: Enable head controllers (default: true)
+- `enable_body`: Enable body controllers (default: true)
+- `use_rviz`: Launch RViz visualization (default: true)
+
+### 5.2 State Switching
 
 Switch states by publishing to the `/control_input` topic:
 
@@ -71,7 +96,7 @@ ros2 topic pub /control_input arms_ros2_control_msgs/msg/Inputs "{command: 2}"  
 ros2 topic pub /control_input arms_ros2_control_msgs/msg/Inputs "{command: 3}"  # Switch to MOVE
 ```
 
-### 5.2 Setting Target Position (Move State)
+### 5.3 Setting Target Position (Move State)
 
 In the MOVE state, set target joint positions by publishing to the `target_joint_position` topic (relative to controller namespace):
 

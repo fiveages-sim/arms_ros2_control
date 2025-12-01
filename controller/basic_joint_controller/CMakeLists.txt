@@ -54,6 +54,12 @@ install(
         RUNTIME DESTINATION bin
 )
 
+install(
+        DIRECTORY launch config
+        DESTINATION share/${PROJECT_NAME}/
+        OPTIONAL
+)
+
 ament_export_dependencies(${CONTROLLER_INCLUDE_DEPENDS})
 ament_export_targets(export_${PROJECT_NAME} HAS_LIBRARY_TARGET)
 
