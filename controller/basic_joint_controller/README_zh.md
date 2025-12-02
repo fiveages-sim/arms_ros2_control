@@ -61,7 +61,32 @@ basic_joint_controller:
 
 ## 5. 使用方法
 
-### 5.1 状态切换
+### 5.1 Demo Launch 文件
+
+使用 demo launch 文件可以方便地启动头部控制器或身体控制器：
+
+```bash
+# 启动头部和身体控制器（默认）
+source ~/ros2_ws/install/setup.bash
+ros2 launch basic_joint_controller demo.launch.py robot:=fiveages_w1
+
+# 只启动头部控制器
+ros2 launch basic_joint_controller demo.launch.py robot:=fiveages_w1 enable_body:=false
+
+# 只启动身体控制器
+ros2 launch basic_joint_controller demo.launch.py robot:=fiveages_w1 enable_head:=false
+```
+
+Launch 文件参数：
+- `robot`: 机器人名称（默认：fiveages_w1）
+- `type`: 机器人类型（可选）
+- `hardware`: 硬件类型，'gz' 用于 Gazebo 仿真，'isaac' 用于 Isaac 仿真，'mock_components' 用于模拟组件（默认：mock_components）
+- `world`: Gazebo 世界名称（仅在 hardware=gz 时使用，默认：dart）
+- `enable_head`: 是否启用头部控制器（默认：true）
+- `enable_body`: 是否启用身体控制器（默认：true）
+- `use_rviz`: 是否启动 RViz 可视化（默认：true）
+
+### 5.2 状态切换
 
 通过发布 `/control_input` 话题来切换状态：
 
@@ -71,7 +96,7 @@ ros2 topic pub /control_input arms_ros2_control_msgs/msg/Inputs "{command: 2}"  
 ros2 topic pub /control_input arms_ros2_control_msgs/msg/Inputs "{command: 3}"  # 切换到 MOVE
 ```
 
-### 5.2 设置目标位置（Move 状态）
+### 5.3 设置目标位置（Move 状态）
 
 在 MOVE 状态下，通过发布 `target_joint_position` 话题（相对于控制器命名空间）来设置目标关节位置：
 

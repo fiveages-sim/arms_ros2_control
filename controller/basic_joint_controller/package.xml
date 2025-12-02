@@ -14,9 +14,11 @@
 	<depend>arms_ros2_control_msgs</depend>
 	<depend>std_msgs</depend>
 	<depend>geometry_msgs</depend>
+	<depend>robot_common_launch</depend>
 
 	<exec_depend>controller_manager</exec_depend>
 	<exec_depend>joint_state_broadcaster</exec_depend>
+	<exec_depend>rviz2</exec_depend>
 
 	<test_depend>ament_lint_auto</test_depend>
 	<test_depend>ament_lint_common</test_depend>

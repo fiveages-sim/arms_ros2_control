@@ -10,5 +10,5 @@
     vr_update_rate: 500.0
     
     # 是否启用VR输入处理
-    enable_vr: true
+    enable_vr: false
 

@@ -15,7 +15,8 @@ from robot_common_launch import (
     get_planning_urdf_path,
     get_info_file_name,
     detect_controllers,
-    create_controller_spawners
+    create_controller_spawners,
+    get_ros2_control_robot_description
 )
 
 # All utility functions are now imported from robot_common_launch
@@ -90,7 +91,13 @@ def launch_setup(context, *args, **kwargs):
     hand_controller_spawners = []
     
     if enable_gripper:
-        hand_controllers = detect_controllers(robot_name, robot_type, ['hand', 'gripper'])
+        # Get ros2_control robot_description to verify joints exist in xacro
+        # This uses the same logic as controller_manager.launch.py
+        robot_description = get_ros2_control_robot_description(robot_name, robot_type, hardware)
+        
+        # Detect controllers matching hand/gripper patterns
+        # Pass robot_description to verify joints exist in xacro
+        hand_controllers = detect_controllers(robot_name, robot_type, ['hand', 'gripper'], robot_description=robot_description)
         hand_controller_spawners = create_controller_spawners(hand_controllers, use_sim_time)
 
     # Get info file name from controller configuration
