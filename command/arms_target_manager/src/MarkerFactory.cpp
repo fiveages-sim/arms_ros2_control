@@ -20,54 +20,13 @@ namespace arms_ros2_control::command
     {
     }
 
-    visualization_msgs::msg::InteractiveMarker MarkerFactory::createMarker(
-        const std::string& name,
-        const std::string& markerType,
-        const geometry_msgs::msg::Pose& pose,
-        MarkerState mode,
-        int32_t controller_state,
-        bool auto_update_enabled) const
-    {
-        // 根据 marker 类型分发到对应的创建函数
-        if (markerType == "left_arm")
-        {
-            // 判断是否启用自动更新
-            bool is_auto_update_enabled = auto_update_enabled && !isStateDisabled(controller_state);
-            return createArmMarker(name, "Left Arm Target", pose, "blue", mode, is_auto_update_enabled);
-        }
-        else if (markerType == "right_arm")
-        {
-            // 判断是否启用自动更新
-            bool is_auto_update_enabled = auto_update_enabled && !isStateDisabled(controller_state);
-            return createArmMarker(name, "Right Arm Target", pose, "red", mode, is_auto_update_enabled);
-        }
-        else if (markerType == "head")
-        {
-            return createHeadMarker(name, pose, controller_state);
-        }
-        else
-        {
-            // 未知的 marker 类型，返回空的 InteractiveMarker 并记录警告
-            RCLCPP_WARN(node_->get_logger(),
-                       "Unknown marker type: '%s'. Returning empty InteractiveMarker.",
-                       markerType.c_str());
-            visualization_msgs::msg::InteractiveMarker interactiveMarker;
-            interactiveMarker.header.frame_id = frame_id_;
-            interactiveMarker.header.stamp = node_->now();
-            interactiveMarker.name = name;
-            interactiveMarker.scale = 0.1;
-            interactiveMarker.description = "Unknown Marker Type: " + markerType;
-            return interactiveMarker;
-        }
-    }
-
     visualization_msgs::msg::InteractiveMarker MarkerFactory::createArmMarker(
         const std::string& name,
         const std::string& description,
         const geometry_msgs::msg::Pose& pose,
         const std::string& color,
         MarkerState mode,
-        bool is_auto_update_enabled) const
+        bool enable_interaction) const
     {
         visualization_msgs::msg::InteractiveMarker interactiveMarker;
         interactiveMarker.header.frame_id = frame_id_;
@@ -95,20 +54,20 @@ namespace arms_ros2_control::command
         boxControl.always_visible = true;
         boxControl.markers.push_back(marker);
 
-        // 如果当前state启用自动更新，则禁用交互功能
-        if (is_auto_update_enabled)
+        // 根据是否启用交互功能设置交互模式
+        if (enable_interaction)
         {
-            boxControl.interaction_mode = visualization_msgs::msg::InteractiveMarkerControl::NONE;
+            boxControl.interaction_mode = visualization_msgs::msg::InteractiveMarkerControl::MOVE_ROTATE_3D;
         }
         else
         {
-            boxControl.interaction_mode = visualization_msgs::msg::InteractiveMarkerControl::MOVE_ROTATE_3D;
+            boxControl.interaction_mode = visualization_msgs::msg::InteractiveMarkerControl::NONE;
         }
 
         interactiveMarker.controls.push_back(boxControl);
 
-        // 只有在非自动更新模式下才添加移动控制
-        if (!is_auto_update_enabled)
+        // 只有在启用交互功能时才添加移动控制
+        if (enable_interaction)
         {
             addMovementControls(interactiveMarker);
         }
@@ -119,7 +78,8 @@ namespace arms_ros2_control::command
     visualization_msgs::msg::InteractiveMarker MarkerFactory::createHeadMarker(
         const std::string& name,
         const geometry_msgs::msg::Pose& pose,
-        int32_t controller_state) const
+        bool enable_interaction,
+        const std::set<std::string>& available_joints) const
     {
         visualization_msgs::msg::InteractiveMarker interactiveMarker;
         interactiveMarker.header.frame_id = frame_id_;
@@ -141,33 +101,48 @@ namespace arms_ros2_control::command
         arrowControl.interaction_mode = visualization_msgs::msg::InteractiveMarkerControl::NONE;
         interactiveMarker.controls.push_back(arrowControl);
 
-        // 只有在 MOVE 状态（command = 3）时才启用交互功能
-        // HOME (1) 和 HOLD (2) 状态时禁用交互
-        bool is_head_control_enabled = (controller_state == 3);
-
-        if (is_head_control_enabled)
+        // 根据是否启用交互功能和可用的关节添加旋转控制
+        if (enable_interaction)
         {
-            // 只添加左右旋转（yaw）和上下旋转（pitch）控制，不添加roll旋转
-            // 左右旋转（绕Z轴 - yaw）
             visualization_msgs::msg::InteractiveMarkerControl control;
-            control.orientation.w = 1;
-            control.orientation.x = 0;
-            control.orientation.y = 0;
-            control.orientation.z = 1;
-            control.name = "rotate_z";
-            control.interaction_mode = visualization_msgs::msg::InteractiveMarkerControl::ROTATE_AXIS;
-            interactiveMarker.controls.push_back(control);
 
-            // 上下旋转（绕Y轴 - pitch）
-            control.orientation.w = 1;
-            control.orientation.x = 0;
-            control.orientation.y = 1;
-            control.orientation.z = 0;
-            control.name = "rotate_y";
-            control.interaction_mode = visualization_msgs::msg::InteractiveMarkerControl::ROTATE_AXIS;
-            interactiveMarker.controls.push_back(control);
+            // 根据可用的关节添加对应的旋转控制
+            if (available_joints.find("head_roll") != available_joints.end())
+            {
+                // 绕X轴旋转（roll）
+                control.orientation.w = 1;
+                control.orientation.x = 1;
+                control.orientation.y = 0;
+                control.orientation.z = 0;
+                control.name = "rotate_x";
+                control.interaction_mode = visualization_msgs::msg::InteractiveMarkerControl::ROTATE_AXIS;
+                interactiveMarker.controls.push_back(control);
+            }
+
+            if (available_joints.find("head_pitch") != available_joints.end())
+            {
+                // 绕Y轴旋转（pitch）
+                control.orientation.w = 1;
+                control.orientation.x = 0;
+                control.orientation.y = 1;
+                control.orientation.z = 0;
+                control.name = "rotate_y";
+                control.interaction_mode = visualization_msgs::msg::InteractiveMarkerControl::ROTATE_AXIS;
+                interactiveMarker.controls.push_back(control);
+            }
+
+            if (available_joints.find("head_yaw") != available_joints.end())
+            {
+                // 绕Z轴旋转（yaw）
+                control.orientation.w = 1;
+                control.orientation.x = 0;
+                control.orientation.y = 0;
+                control.orientation.z = 1;
+                control.name = "rotate_z";
+                control.interaction_mode = visualization_msgs::msg::InteractiveMarkerControl::ROTATE_AXIS;
+                interactiveMarker.controls.push_back(control);
+            }
         }
-        // 如果不在 MOVE 状态，不添加交互控制，marker 将不可交互
 
         return interactiveMarker;
     }

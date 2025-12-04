@@ -30,37 +30,27 @@ int main(int argc, char** argv)
     // 头部控制参数（由 launch 参数控制）
     bool enable_head_control = node->declare_parameter("enable_head_control", true);
     std::string head_controller_name = node->declare_parameter("head_controller_name", "head_joint_controller");
-    std::vector<double> head_marker_position = node->declare_parameter("head_marker_position", std::vector<double>{1.0, 0.0, 1.5});
+    std::string head_link_name = node->declare_parameter("head_link_name", "head_link2");
 
     RCLCPP_INFO(node->get_logger(),
-               "Starting ArmsTargetManager with dual_arm_mode: %s, control_base_frame: %s, marker_fixed_frame: %s",
-               dual_arm_mode ? "true" : "false",
-               control_base_frame.c_str(),
-               marker_fixed_frame.c_str());
-    RCLCPP_INFO(node->get_logger(), 
-               "Control scales: linear=%.3f, angular=%.3f (deadzone handled at input source)",
-               linear_scale, angular_scale);
-               
-    RCLCPP_INFO(node->get_logger(), 
-               "VR control: enabled=%s, update_rate=%.1f Hz",
-               enable_vr ? "true" : "false", vr_update_rate);
+                "Starting ArmsTargetManager with dual_arm_mode: %s, control_base_frame: %s, marker_fixed_frame: %s",
+                dual_arm_mode ? "true" : "false",
+                control_base_frame.c_str(),
+                marker_fixed_frame.c_str());
+    RCLCPP_INFO(node->get_logger(),
+                "Control scales: linear=%.3f, angular=%.3f (deadzone handled at input source)",
+                linear_scale, angular_scale);
+
+    RCLCPP_INFO(node->get_logger(),
+                "VR control: enabled=%s, update_rate=%.1f Hz",
+                enable_vr ? "true" : "false", vr_update_rate);
 
     try
     {
-        // 创建ArmsTargetManager
-        std::array<double, 3> head_position_array = {head_marker_position[0], head_marker_position[1], head_marker_position[2]};
         auto target_manager = std::make_unique<ArmsTargetManager>(
             node, dual_arm_mode, control_base_frame, marker_fixed_frame,
             20.0, std::vector<int32_t>{3}, 0.05,
-            enable_head_control, head_controller_name, head_position_array);
-
-        if (enable_head_control)
-        {
-            RCLCPP_INFO(node->get_logger(),
-                       "Head control enabled: frame=%s, controller=%s, link=head_link2 (position from TF, fallback=[%.2f, %.2f, %.2f])",
-                       marker_fixed_frame.c_str(), head_controller_name.c_str(),
-                       head_marker_position[0], head_marker_position[1], head_marker_position[2]);
-        }
+            enable_head_control, head_controller_name, head_link_name);
 
         // 初始化
         target_manager->initialize();
@@ -71,21 +61,26 @@ int main(int argc, char** argv)
 
         // 创建VRInputHandler（如果启用）
         std::unique_ptr<VRInputHandler> vr_handler = nullptr;
-        if (enable_vr) {
+        if (enable_vr)
+        {
             vr_handler = std::make_unique<VRInputHandler>(
                 node, target_manager.get(), vr_update_rate);
         }
 
         // 创建control input订阅器，同时处理两个回调
         auto control_subscription = node->create_subscription<arms_ros2_control_msgs::msg::Inputs>(
-            "control_input", 10, 
-            [control_handler_ptr = control_handler.get(), target_manager_ptr = target_manager.get()](const arms_ros2_control_msgs::msg::Inputs::ConstSharedPtr msg) {
+            "control_input", 10,
+            [control_handler_ptr = control_handler.get(), target_manager_ptr = target_manager.get()](
+            const arms_ros2_control_msgs::msg::Inputs::ConstSharedPtr msg)
+            {
                 // 先处理ControlInputHandler
-                if (control_handler_ptr) {
+                if (control_handler_ptr)
+                {
                     control_handler_ptr->processControlInput(msg);
                 }
                 // 再处理ArmsTargetManager的状态更新
-                if (target_manager_ptr) {
+                if (target_manager_ptr)
+                {
                     target_manager_ptr->controlInputCallback(msg);
                 }
             });
@@ -93,7 +88,8 @@ int main(int argc, char** argv)
         RCLCPP_INFO(node->get_logger(), "ArmsTargetManager is ready!");
         RCLCPP_INFO(node->get_logger(), "Use RViz to interact with the markers.");
         RCLCPP_INFO(node->get_logger(), "Control input handler is ready for joystick/keyboard control!");
-        if (enable_vr) {
+        if (enable_vr)
+        {
             RCLCPP_INFO(node->get_logger(), "VR input handler is ready for VR control!");
         }
 
