@@ -16,6 +16,7 @@ set(TARGET_MANAGER_INCLUDE_DEPENDS
         arms_ros2_control_msgs
         tf2_ros
         tf2_geometry_msgs
+        std_msgs
         Eigen3
 )
 
@@ -27,6 +28,7 @@ endforeach ()
 
 add_library(${PROJECT_NAME} SHARED
         src/ArmsTargetManager.cpp
+        src/MarkerFactory.cpp
         src/ControlInputHandler.cpp
         src/VRInputHandler.cpp
 )

@@ -7,18 +7,17 @@
 
 namespace arms_ros2_control::command
 {
-
     ControlInputHandler::ControlInputHandler(
         rclcpp::Node::SharedPtr node,
         ArmsTargetManager* targetManager,
         const double linearScale,
         const double angularScale)
         : node_(std::move(node))
-        , target_manager_(targetManager)
-        , linear_scale_(linearScale)
-        , angular_scale_(angularScale)
+          , target_manager_(targetManager)
+          , linear_scale_(linearScale)
+          , angular_scale_(angularScale)
     {
-        RCLCPP_INFO(node_->get_logger(), "🎮 ControlInputHandler created with scales: linear=%.3f, angular=%.3f", 
+        RCLCPP_INFO(node_->get_logger(), "🎮 ControlInputHandler created with scales: linear=%.3f, angular=%.3f",
                     linear_scale_, angular_scale_);
     }
 
@@ -55,15 +54,11 @@ namespace arms_ros2_control::command
             std::string armType = msg->target == 1 ? "left" : "right";
             target_manager_->updateMarkerPoseIncremental(armType, positionDelta, rpyDelta);
 
-            RCLCPP_DEBUG(node_->get_logger(), "🎮 Updated %s arm pose incrementally: pos[%.3f, %.3f, %.3f], rpy[%.3f, %.3f, %.3f]",
+            RCLCPP_DEBUG(node_->get_logger(),
+                         "🎮 Updated %s arm pose incrementally: pos[%.3f, %.3f, %.3f], rpy[%.3f, %.3f, %.3f]",
                          armType.c_str(),
                          positionDelta[0], positionDelta[1], positionDelta[2],
                          rpyDelta[0], rpyDelta[1], rpyDelta[2]);
         }
     }
-
-
-
-
-
 } // namespace arms_ros2_control::command

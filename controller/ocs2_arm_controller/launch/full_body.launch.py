@@ -175,6 +175,7 @@ def launch_setup(context, *args, **kwargs):
         ]),
         launch_arguments=[
             ('task_file', task_file_path),
+            ('enable_head_control', LaunchConfiguration('enable_head')),
         ],
         condition=IfCondition(LaunchConfiguration('enable_arms_target_manager'))
     )

@@ -43,8 +43,6 @@ namespace arms_ros2_control::command
          */
         void processControlInput(arms_ros2_control_msgs::msg::Inputs::ConstSharedPtr msg);
 
-
-
     private:
         // ROS节点和TargetManager
         rclcpp::Node::SharedPtr node_;
@@ -54,5 +52,4 @@ namespace arms_ros2_control::command
         double linear_scale_;
         double angular_scale_;
     };
-
 } // namespace arms_ros2_control::command
