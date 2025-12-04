@@ -321,8 +321,15 @@ namespace arms_ros2_control::command
         std::string head_link_name_; // 头部link名称，用于从TF获取实际位置
         std::array<double, 3> head_marker_position_ = {1.0, 0.0, 1.5}; // marker在base_footprint中的固定位置（仅在TF获取失败时使用）
         std::set<std::string> available_head_joints_; // 可用的头部关节名称集合（head_roll, head_pitch, head_yaw）
-        std::vector<std::string> head_joint_order_; // 头部关节名称的顺序（按照 joint_states 中的顺序）
+        std::vector<std::string> head_joint_order_; // 头部关节名称的顺序（按照 joint_states 中的顺序或配置文件中的顺序）
         bool head_joints_detected_; // 是否已经检测过头部关节（只检测一次）
         std::map<std::string, size_t> head_joint_indices_; // 头部关节名称到索引的映射（用于快速访问）
+        
+        // RPY到关节的映射配置（从target_manager.yaml读取）
+        std::map<std::string, std::string> head_rpy_to_joint_mapping_; // RPY角度到关节名称的映射（如 "head_yaw" -> "head_joint1"）
+        std::vector<std::string> head_rpy_config_order_; // 映射配置的顺序（按照配置文件中出现的顺序，如 ["head_yaw", "head_pitch"]）
+        std::vector<std::string> head_joint_send_order_; // 发送时的关节顺序（如 ["head_joint1", "head_joint2"]）
+        std::map<std::string, double> head_rpy_axis_direction_; // RPY旋转轴方向（1或-1，如 "head_yaw" -> 1.0 或 -1.0）
+        bool use_config_mapping_; // 是否使用配置文件中的映射（如果配置了则优先使用）
     };
 } // namespace arms_ros2_control::command
