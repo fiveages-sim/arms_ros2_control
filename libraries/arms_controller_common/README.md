@@ -37,6 +37,8 @@ arms_controller_common/
 
 ### 1. 基本使用（仅位置控制）
 
+#### 方式一：手动设置配置
+
 ```cpp
 #include "arms_controller_common/FSM/StateHome.h"
 #include "arms_controller_common/FSM/StateHold.h"
@@ -45,14 +47,43 @@ arms_controller_common/
 auto state_home = std::make_shared<arms_controller_common::StateHome>(
     ctrl_interfaces_, logger_, 3.0);
 
-// 设置 home 位置
+// 设置单个 home 位置
 std::vector<double> home_pos = {0.0, 0.0, 0.0, 0.0, 0.0, 0.0};
 state_home->setHomePosition(home_pos);
+
+// 或设置多个配置
+std::vector<std::vector<double>> home_configs = {
+    {0.0, 0.0, 0.0, 0.0, 0.0, 0.0},
+    {0.5, 0.5, 0.5, 0.5, 0.5, 0.5}
+};
+state_home->setHomeConfigurations(home_configs);
 
 // 创建 StateHold
 auto state_hold = std::make_shared<arms_controller_common::StateHold>(
     ctrl_interfaces_, logger_, 0.1);
 ```
+
+#### 方式二：从参数自动加载（推荐）
+
+```cpp
+#include "arms_controller_common/FSM/StateHome.h"
+
+// 创建 StateHome
+auto state_home = std::make_shared<arms_controller_common::StateHome>(
+    ctrl_interfaces_, logger_, 3.0);
+
+// 使用 init() 方法自动从参数加载配置（home_1, home_2, home_3, ...）
+// 在控制器的 on_init() 中调用
+state_home->init([this](const std::string& name, const std::vector<double>& default_value)
+{
+    return this->auto_declare<std::vector<double>>(name, default_value);
+});
+
+// 设置配置切换命令基值
+state_home->setSwitchCommandBase(100);
+```
+
+这种方式会自动从 ROS 参数中读取 `home_1`, `home_2`, `home_3` 等配置，非常方便！
 
 ### 2. 使用重力补偿（力控模式）
 

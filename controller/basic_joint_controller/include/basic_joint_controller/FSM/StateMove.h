@@ -5,11 +5,17 @@
 
 #include <vector>
 #include <mutex>
-#include "basic_joint_controller/BasicJointController.h"
+#include <arms_controller_common/FSM/FSMState.h>
+#include <arms_controller_common/CtrlInterfaces.h>
+#include <rclcpp/rclcpp.hpp>
 
 namespace basic_joint_controller
 {
-    class StateMove : public FSMState
+    // Use types from arms_controller_common
+    using CtrlInterfaces = arms_controller_common::CtrlInterfaces;
+    using FSMStateName = arms_controller_common::FSMStateName;
+
+    class StateMove : public arms_controller_common::FSMState
     {
     public:
         StateMove(CtrlInterfaces& ctrl_interfaces, const rclcpp::Logger& logger, double duration = 3.0);

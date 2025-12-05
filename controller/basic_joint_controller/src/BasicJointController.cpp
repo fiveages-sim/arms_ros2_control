@@ -3,9 +3,9 @@
 //
 
 #include "basic_joint_controller/BasicJointController.h"
-#include "basic_joint_controller/FSM/StateHome.h"
-#include "basic_joint_controller/FSM/StateHold.h"
 #include "basic_joint_controller/FSM/StateMove.h"
+#include "basic_joint_controller/FSM/BasicStateHold.h"
+#include <arms_controller_common/FSM/StateHome.h>
 
 #include <std_msgs/msg/float64_multi_array.hpp>
 #include <string>
@@ -104,18 +104,26 @@ namespace basic_joint_controller
             // Get logger for FSM states
             rclcpp::Logger logger = get_node()->get_logger();
 
-            // Create states
-            // StateHome will load configurations via init() method using auto_declare
-            state_list_.home = std::make_shared<StateHome>(ctrl_interfaces_, logger, home_duration_,
-                                                           switch_command_base);
-
+            // Create states using arms_controller_common
+            // StateHome - configurations will be loaded via init() method using auto_declare
+            state_list_.home = std::make_shared<arms_controller_common::StateHome>(
+                ctrl_interfaces_, logger, home_duration_);
+            
             // Initialize StateHome with configurations from parameters (home_1, home_2, home_3, etc.)
             // Pass auto_declare as a lambda to allow StateHome to use it
             state_list_.home->init([this](const std::string& name, const std::vector<double>& default_value)
             {
                 return this->auto_declare<std::vector<double>>(name, default_value);
             });
-            state_list_.hold = std::make_shared<StateHold>(ctrl_interfaces_, logger, hold_position_threshold_);
+            
+            // Set configuration switch command base
+            state_list_.home->setSwitchCommandBase(switch_command_base);
+            
+            // BasicStateHold - extends common StateHold to support MOVE transition
+            state_list_.hold = std::make_shared<BasicStateHold>(
+                ctrl_interfaces_, logger, hold_position_threshold_);
+            
+            // StateMove (specific to basic_joint_controller)
             state_list_.move = std::make_shared<StateMove>(ctrl_interfaces_, logger, move_duration_);
 
             return CallbackReturn::SUCCESS;

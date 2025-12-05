@@ -15,80 +15,30 @@
 #include <hardware_interface/loaned_command_interface.hpp>
 #include <hardware_interface/loaned_state_interface.hpp>
 
+// Use common FSM and interfaces from arms_controller_common
+#include <arms_controller_common/FSM/FSMState.h>
+#include <arms_controller_common/FSM/StateHome.h>
+#include <arms_controller_common/FSM/StateHold.h>
+#include <arms_controller_common/CtrlInterfaces.h>
+
 namespace basic_joint_controller
 {
+    // Use FSM types from arms_controller_common
+    using FSMState = arms_controller_common::FSMState;
+    using FSMStateName = arms_controller_common::FSMStateName;
+    using FSMMode = arms_controller_common::FSMMode;
+    using CtrlInterfaces = arms_controller_common::CtrlInterfaces;
+
     // Forward declarations
-    class FSMState;
-    class StateHome;
-    class StateHold;
-    class StateMove;
-
-    // FSM State names enum
-    enum class FSMStateName
-    {
-        INVALID,
-        HOME,
-        HOLD,
-        MOVE
-    };
-
-    // FSM Mode enum
-    enum class FSMMode
-    {
-        NORMAL,
-        CHANGE
-    };
-
-    // Base FSM State class
-    class FSMState
-    {
-    public:
-        virtual ~FSMState() = default;
-
-        FSMState(FSMStateName state_name, std::string state_name_string)
-            : state_name(state_name), state_name_string(std::move(state_name_string))
-        {
-        }
-
-        virtual void enter() = 0;
-        virtual void run(const rclcpp::Time& time, const rclcpp::Duration& period) = 0;
-        virtual void exit() = 0;
-        virtual FSMStateName checkChange() { return FSMStateName::INVALID; }
-
-        FSMStateName state_name;
-        std::string state_name_string;
-    };
-
-    // Control interfaces structure
-    struct CtrlInterfaces
-    {
-        // Command interfaces - position control only
-        std::vector<std::reference_wrapper<hardware_interface::LoanedCommandInterface>>
-        joint_position_command_interface_;
-
-        // State interfaces
-        std::vector<std::reference_wrapper<hardware_interface::LoanedStateInterface>> 
-        joint_position_state_interface_;
-        std::vector<std::reference_wrapper<hardware_interface::LoanedStateInterface>> 
-        joint_velocity_state_interface_;
-
-        arms_ros2_control_msgs::msg::Inputs control_inputs_;
-        int frequency_ = 1000;
-
-        void clear()
-        {
-            joint_position_command_interface_.clear();
-            joint_position_state_interface_.clear();
-            joint_velocity_state_interface_.clear();
-        }
-    };
+    class StateMove;  // StateMove is specific to basic_joint_controller
+    class BasicStateHold;  // Extended StateHold with MOVE transition
 
     struct FSMStateList
     {
         std::shared_ptr<FSMState> invalid;
-        std::shared_ptr<StateHome> home;
-        std::shared_ptr<StateHold> hold;
-        std::shared_ptr<StateMove> move;
+        std::shared_ptr<arms_controller_common::StateHome> home;  // Use common StateHome
+        std::shared_ptr<BasicStateHold> hold;  // Extended StateHold for basic_joint_controller
+        std::shared_ptr<StateMove> move;  // StateMove is specific to basic_joint_controller
     };
 
     class BasicJointController final : public controller_interface::ControllerInterface

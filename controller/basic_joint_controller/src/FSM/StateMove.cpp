@@ -10,7 +10,7 @@
 namespace basic_joint_controller
 {
     StateMove::StateMove(CtrlInterfaces& ctrl_interfaces, const rclcpp::Logger& logger, double duration)
-        : FSMState(FSMStateName::MOVE, "move"),
+        : FSMState(FSMStateName::MOVE, "move", ctrl_interfaces),
           ctrl_interfaces_(ctrl_interfaces),
           logger_(logger),
           duration_(duration)
