@@ -136,10 +136,12 @@ namespace arms_ros2_control::command
         bool isStateDisabled(int32_t state) const;
 
         /**
-         * 节流更新marker（避免频繁更新导致RViz警告）
-         * @return 如果应该更新marker返回true
+         * 通用的节流检查函数
+         * @param last_time 最后执行时间（会被更新）
+         * @param interval 最小间隔（秒）
+         * @return 如果应该执行返回true
          */
-        bool shouldUpdateMarker();
+        bool shouldThrottle(rclcpp::Time& last_time, double interval);
 
         /**
          * 控制输入回调函数
@@ -312,6 +314,7 @@ namespace arms_ros2_control::command
         // 更新节流
         rclcpp::Time last_marker_update_time_;
         double marker_update_interval_; // 最小更新间隔（秒）
+        rclcpp::Time last_publish_time_; // 连续发布模式的最后发布时间
 
         // 头部控制相关
         // 注意：enable_head_control_ 由 launch 文件自动检测（检查 ros2_controllers.yaml 中是否有 head_joint_controller 且包含 head_joint1 和 head_joint2）

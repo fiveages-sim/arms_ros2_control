@@ -36,6 +36,7 @@ namespace arms_ros2_control::command
           , disable_auto_update_states_(disableAutoUpdateStates)
           , last_marker_update_time_(node_->now())
           , marker_update_interval_(markerUpdateInterval)
+          , last_publish_time_(node_->now())
           , enable_head_control_(enableHeadControl)
           , head_controller_name_(headControllerName)
           , head_link_name_(headLinkName)
@@ -46,36 +47,16 @@ namespace arms_ros2_control::command
 
     void ArmsTargetManager::initialize()
     {
-        try
-        {
         // 读取头部link名称配置（如果启用头部控制）
         if (enable_head_control_)
         {
-            // 从配置文件读取head_link_name（如果存在则覆盖默认值）
-            // 注意：参数可能已经在node中声明，所以先检查是否存在
-            try
+            // 从配置文件读取head_link_name（参数已在节点创建时声明，这里只需获取）
+            std::string config_head_link_name = node_->get_parameter("head_link_name").as_string();
+            if (!config_head_link_name.empty())
             {
-                if (node_->has_parameter("head_link_name"))
-                {
-                    std::string config_head_link_name = node_->get_parameter("head_link_name").as_string();
-                    if (!config_head_link_name.empty())
-                    {
-                        head_link_name_ = config_head_link_name;
-                        RCLCPP_INFO(node_->get_logger(),
-                                   "配置头部link名称: %s", head_link_name_.c_str());
-                    }
-                }
-                else
-                {
-                    // 如果参数不存在，声明并设置默认值
-                    node_->declare_parameter("head_link_name", head_link_name_);
-                }
-            }
-            catch (const std::exception& e)
-            {
-                RCLCPP_DEBUG(node_->get_logger(),
-                            "无法读取参数 head_link_name，使用默认值 %s: %s",
-                            head_link_name_.c_str(), e.what());
+                head_link_name_ = config_head_link_name;
+                RCLCPP_INFO(node_->get_logger(),
+                           "配置头部link名称: %s", head_link_name_.c_str());
             }
         }
         
@@ -198,14 +179,6 @@ namespace arms_ros2_control::command
                 RCLCPP_INFO(node_->get_logger(),
                            "未找到头部关节映射配置，将使用自动检测的方式");
             }
-        }
-        }
-        catch (const std::exception& e)
-        {
-            RCLCPP_ERROR(node_->get_logger(),
-                        "初始化头部配置时出错: %s，将使用默认配置", e.what());
-            // 确保即使出错也能继续初始化
-            use_config_mapping_ = false;
         }
 
         // 创建 MarkerFactory
@@ -386,8 +359,11 @@ namespace arms_ros2_control::command
 
             if (current_mode_ == MarkerState::CONTINUOUS)
             {
-                // 在连续发布模式下，只发送左臂目标位姿
-                sendTargetPose("left_arm");
+                // 在连续发布模式下，只发送左臂目标位姿（使用 publish_rate_ 节流）
+                if (shouldThrottle(last_publish_time_, 1.0 / publish_rate_))
+                {
+                    sendTargetPose("left_arm");
+                }
             }
         }
         else if (marker_name == "right_arm_target")
@@ -397,8 +373,11 @@ namespace arms_ros2_control::command
 
             if (current_mode_ == MarkerState::CONTINUOUS)
             {
-                // 在连续发布模式下，只发送右臂目标位姿
-                sendTargetPose("right_arm");
+                // 在连续发布模式下，只发送右臂目标位姿（使用 publish_rate_ 节流）
+                if (shouldThrottle(last_publish_time_, 1.0 / publish_rate_))
+                {
+                    sendTargetPose("right_arm");
+                }
             }
         }
         else if (marker_name == "head_target")
@@ -408,8 +387,11 @@ namespace arms_ros2_control::command
 
             if (current_mode_ == MarkerState::CONTINUOUS)
             {
-                // 在连续发布模式下，发送头部目标关节位置
-                sendTargetPose("head");
+                // 在连续发布模式下，发送头部目标关节位置（使用 publish_rate_ 节流）
+                if (shouldThrottle(last_publish_time_, 1.0 / publish_rate_))
+                {
+                    sendTargetPose("head");
+                }
             }
         }
         else
@@ -728,7 +710,7 @@ namespace arms_ros2_control::command
         *target_pose = transformed_pose;
         server_->setPose(marker_name, *target_pose);
 
-        if (shouldUpdateMarker())
+        if (shouldThrottle(last_marker_update_time_, marker_update_interval_))
         {
             server_->applyChanges();
         }
@@ -786,7 +768,7 @@ namespace arms_ros2_control::command
             head_pose_.position.z = transform.transform.translation.z;
             server_->setPose("head_target", head_pose_);
 
-            if (shouldUpdateMarker())
+            if (shouldThrottle(last_marker_update_time_, marker_update_interval_))
             {
                 server_->applyChanges();
             }
@@ -904,7 +886,7 @@ namespace arms_ros2_control::command
         // 更新 marker（position 已更新，orientation 根据状态决定是否更新）
         server_->setPose("head_target", head_pose_);
 
-        if (shouldUpdateMarker())
+        if (shouldThrottle(last_marker_update_time_, marker_update_interval_))
         {
             server_->applyChanges();
         }
@@ -917,18 +899,19 @@ namespace arms_ros2_control::command
             disable_auto_update_states_.end();
     }
 
-    bool ArmsTargetManager::shouldUpdateMarker()
+    bool ArmsTargetManager::shouldThrottle(rclcpp::Time& last_time, double interval)
     {
         auto now = node_->now();
-        auto time_since_last_update = (now - last_marker_update_time_).seconds();
+        auto time_since_last = (now - last_time).seconds();
 
-        if (time_since_last_update >= marker_update_interval_)
+        if (time_since_last >= interval)
         {
-            last_marker_update_time_ = now;
+            last_time = now;
             return true;
         }
         return false;
     }
+
 
     geometry_msgs::msg::Pose ArmsTargetManager::transformPose(
         const geometry_msgs::msg::Pose& pose,
@@ -1147,25 +1130,28 @@ namespace arms_ros2_control::command
         if (server_)
         {
             server_->setPose(marker_name, *current_pose);
-            if (shouldUpdateMarker())
+            if (shouldThrottle(last_marker_update_time_, marker_update_interval_))
             {
                 server_->applyChanges();
             }
         }
 
-        // 在连续发布模式下，自动发送目标位姿到控制器
+        // 在连续发布模式下，自动发送目标位姿到控制器（使用 publish_rate_ 节流）
         if (current_mode_ == MarkerState::CONTINUOUS)
         {
-            // 转换坐标系：从 marker_fixed_frame_ 转换到 control_base_frame_
-            geometry_msgs::msg::Pose transformed_pose = transformPose(*current_pose, marker_fixed_frame_,
-                                                                      control_base_frame_);
-            if (armType == "left" && left_pose_publisher_)
+            if (shouldThrottle(last_publish_time_, 1.0 / publish_rate_))
             {
-                left_pose_publisher_->publish(transformed_pose);
-            }
-            else if (armType == "right" && dual_arm_mode_ && right_pose_publisher_)
-            {
-                right_pose_publisher_->publish(transformed_pose);
+                // 转换坐标系：从 marker_fixed_frame_ 转换到 control_base_frame_
+                geometry_msgs::msg::Pose transformed_pose = transformPose(*current_pose, marker_fixed_frame_,
+                                                                          control_base_frame_);
+                if (armType == "left" && left_pose_publisher_)
+                {
+                    left_pose_publisher_->publish(transformed_pose);
+                }
+                else if (armType == "right" && dual_arm_mode_ && right_pose_publisher_)
+                {
+                    right_pose_publisher_->publish(transformed_pose);
+                }
             }
         }
     }
@@ -1268,25 +1254,28 @@ namespace arms_ros2_control::command
         if (server_)
         {
             server_->setPose(marker_name, *current_pose);
-            if (shouldUpdateMarker())
+            if (shouldThrottle(last_marker_update_time_, marker_update_interval_))
             {
                 server_->applyChanges();
             }
         }
 
-        // 在连续发布模式下，自动发送目标位姿到控制器
+        // 在连续发布模式下，自动发送目标位姿到控制器（使用 publish_rate_ 节流）
         if (current_mode_ == MarkerState::CONTINUOUS)
         {
-            // 转换坐标系：从 marker_fixed_frame_ 转换到 control_base_frame_
-            geometry_msgs::msg::Pose transformed_pose = transformPose(*current_pose, marker_fixed_frame_,
-                                                                      control_base_frame_);
-            if (armType == "left" && left_pose_publisher_)
+            if (shouldThrottle(last_publish_time_, 1.0 / publish_rate_))
             {
-                left_pose_publisher_->publish(transformed_pose);
-            }
-            else if (armType == "right" && dual_arm_mode_ && right_pose_publisher_)
-            {
-                right_pose_publisher_->publish(transformed_pose);
+                // 转换坐标系：从 marker_fixed_frame_ 转换到 control_base_frame_
+                geometry_msgs::msg::Pose transformed_pose = transformPose(*current_pose, marker_fixed_frame_,
+                                                                          control_base_frame_);
+                if (armType == "left" && left_pose_publisher_)
+                {
+                    left_pose_publisher_->publish(transformed_pose);
+                }
+                else if (armType == "right" && dual_arm_mode_ && right_pose_publisher_)
+                {
+                    right_pose_publisher_->publish(transformed_pose);
+                }
             }
         }
     }
