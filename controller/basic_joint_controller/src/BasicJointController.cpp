@@ -3,8 +3,8 @@
 //
 
 #include "basic_joint_controller/BasicJointController.h"
-#include "basic_joint_controller/FSM/StateMove.h"
-#include "basic_joint_controller/FSM/BasicStateHold.h"
+#include "basic_joint_controller/FSM/StateHold.h"
+#include "basic_joint_controller/FSM/StateMoveJ.h"
 #include <arms_controller_common/FSM/StateHome.h>
 
 #include <std_msgs/msg/float64_multi_array.hpp>
@@ -119,12 +119,13 @@ namespace basic_joint_controller
             // Set configuration switch command base
             state_list_.home->setSwitchCommandBase(switch_command_base);
             
-            // BasicStateHold - extends common StateHold to support MOVE transition
-            state_list_.hold = std::make_shared<BasicStateHold>(
+            // StateHold - extends common StateHold to support MOVEJ transition
+            state_list_.hold = std::make_shared<StateHold>(
                 ctrl_interfaces_, logger, hold_position_threshold_);
             
-            // StateMove (specific to basic_joint_controller)
-            state_list_.move = std::make_shared<StateMove>(ctrl_interfaces_, logger, move_duration_);
+            // StateMoveJ - extends common StateMoveJ for basic_joint_controller
+            state_list_.movej = std::make_shared<StateMoveJ>(
+                ctrl_interfaces_, logger, move_duration_);
 
             return CallbackReturn::SUCCESS;
         }
@@ -156,9 +157,9 @@ namespace basic_joint_controller
                 {
                     target_pos.push_back(val);
                 }
-                if (state_list_.move && !target_pos.empty())
+                if (state_list_.movej && !target_pos.empty())
                 {
-                    state_list_.move->setTargetPosition(target_pos);
+                    state_list_.movej->setTargetPosition(target_pos);
                 }
             });
 
@@ -236,8 +237,8 @@ namespace basic_joint_controller
             return state_list_.home;
         case FSMStateName::HOLD:
             return state_list_.hold;
-        case FSMStateName::MOVE:
-            return state_list_.move;
+        case FSMStateName::MOVEJ:
+            return state_list_.movej;
         default:
             return state_list_.invalid;
         }

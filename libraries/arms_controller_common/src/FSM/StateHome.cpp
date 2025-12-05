@@ -201,8 +201,6 @@ namespace arms_controller_common
         current_config_index_ = config_index;
         current_target_ = home_configs_[config_index];
         startInterpolation();
-
-        RCLCPP_INFO(logger_, "Switching to configuration %zu", config_index);
     }
 
     void StateHome::switchConfiguration()
@@ -217,8 +215,6 @@ namespace arms_controller_common
         current_config_index_ = (current_config_index_ + 1) % home_configs_.size();
         current_target_ = home_configs_[current_config_index_];
         startInterpolation();
-
-        RCLCPP_INFO(logger_, "Switching to configuration %zu", current_config_index_);
     }
 
     void StateHome::switchPose()

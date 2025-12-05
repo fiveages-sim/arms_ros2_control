@@ -16,8 +16,8 @@ namespace arms_controller_common
         INVALID,
         HOME,
         HOLD,
-        MOVE,  // For basic_joint_controller
-        OCS2   // For ocs2_arm_controller
+        MOVEJ,  // Move Joint - for basic_joint_controller
+        OCS2    // For ocs2_arm_controller
     };
 
     // FSM Mode enum

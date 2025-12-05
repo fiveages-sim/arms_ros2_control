@@ -25,8 +25,8 @@ endforeach ()
 
 add_library(${PROJECT_NAME} SHARED
         src/BasicJointController.cpp
-        src/FSM/StateMove.cpp
-        src/FSM/BasicStateHold.cpp
+        src/FSM/StateHold.cpp
+        src/FSM/StateMoveJ.cpp
 )
 
 target_include_directories(${PROJECT_NAME}

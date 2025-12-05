@@ -29,6 +29,7 @@ endforeach ()
 add_library(${PROJECT_NAME} SHARED
         src/FSM/StateHome.cpp
         src/FSM/StateHold.cpp
+        src/FSM/StateMoveJ.cpp
         src/utils/GravityCompensation.cpp
 )
 

@@ -30,15 +30,15 @@ namespace basic_joint_controller
     using CtrlInterfaces = arms_controller_common::CtrlInterfaces;
 
     // Forward declarations
-    class StateMove;  // StateMove is specific to basic_joint_controller
-    class BasicStateHold;  // Extended StateHold with MOVE transition
+    class StateHold;  // Extended StateHold with MOVEJ transition
+    class StateMoveJ;  // Extended StateMoveJ for basic_joint_controller
 
     struct FSMStateList
     {
         std::shared_ptr<FSMState> invalid;
         std::shared_ptr<arms_controller_common::StateHome> home;  // Use common StateHome
-        std::shared_ptr<BasicStateHold> hold;  // Extended StateHold for basic_joint_controller
-        std::shared_ptr<StateMove> move;  // StateMove is specific to basic_joint_controller
+        std::shared_ptr<StateHold> hold;  // Extended StateHold for basic_joint_controller
+        std::shared_ptr<StateMoveJ> movej;  // Extended StateMoveJ for basic_joint_controller
     };
 
     class BasicJointController final : public controller_interface::ControllerInterface
