@@ -125,8 +125,14 @@ namespace arms_controller_common
     void StateMoveJ::exit()
     {
         std::lock_guard lock(target_mutex_);
+        // Reset all state variables
         percent_ = 0.0;
         interpolation_active_ = false;
+        has_target_ = false;
+        target_pos_.clear();
+        start_pos_.clear();
+        
+        RCLCPP_DEBUG(logger_, "StateMoveJ exited, all state variables reset");
     }
 
     FSMStateName StateMoveJ::checkChange()

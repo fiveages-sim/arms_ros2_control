@@ -246,6 +246,7 @@ namespace arms_rviz_control_plugin
             hold_to_ocs2_btn_->setVisible(false);
             hold_to_home_btn_->setVisible(false);
             ocs2_to_hold_btn_->setVisible(false);
+            hold_to_movej_btn_->setVisible(false);
             movej_to_hold_btn_->setVisible(true);
             movej_to_hold_btn_->setEnabled(true);
         }
