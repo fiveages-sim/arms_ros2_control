@@ -27,6 +27,17 @@ namespace arms_controller_common
         }
     }
 
+    GravityCompensation::GravityCompensation(const pinocchio::Model& model)
+        : model_(model)
+    {
+        // Create data from the provided model
+        data_ = pinocchio::Data(model_);
+        
+        RCLCPP_INFO(rclcpp::get_logger("GravityCompensation"),
+                   "Initialized gravity compensation from existing Pinocchio model: %zu joints", 
+                   model_.nq);
+    }
+
     std::vector<double> GravityCompensation::calculateStaticTorques(
         const std::vector<double>& joint_positions) const
     {

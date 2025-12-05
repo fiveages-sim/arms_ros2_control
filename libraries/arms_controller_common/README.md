@@ -56,10 +56,12 @@ auto state_hold = std::make_shared<arms_controller_common::StateHold>(
 
 ### 2. 使用重力补偿（力控模式）
 
+#### 方式一：从 URDF 文件创建（适用于 basic_joint_controller）
+
 ```cpp
 #include "arms_controller_common/utils/GravityCompensation.h"
 
-// 创建重力补偿工具（需要 URDF 路径）
+// 创建重力补偿工具（从 URDF 文件路径）
 std::string urdf_path = "/path/to/robot.urdf";
 auto gravity_comp = std::make_shared<arms_controller_common::GravityCompensation>(urdf_path);
 
@@ -71,6 +73,27 @@ auto state_home = std::make_shared<arms_controller_common::StateHome>(
 auto state_hold = std::make_shared<arms_controller_common::StateHold>(
     ctrl_interfaces_, logger_, 0.1, gravity_comp);
 ```
+
+#### 方式二：从现有 Pinocchio 模型创建（适用于 ocs2_arm_controller，避免重复加载）
+
+```cpp
+#include "arms_controller_common/utils/GravityCompensation.h"
+#include <ocs2_mobile_manipulator/MobileManipulatorInterface.h>
+
+// 从 OCS2 interface 获取 Pinocchio 模型（避免重复加载 URDF）
+const auto& pinocchio_model = ctrl_comp_->interface_->getPinocchioInterface().getModel();
+auto gravity_comp = std::make_shared<arms_controller_common::GravityCompensation>(pinocchio_model);
+
+// 创建带重力补偿的 StateHome
+auto state_home = std::make_shared<arms_controller_common::StateHome>(
+    ctrl_interfaces_, logger_, 3.0, gravity_comp);
+
+// 创建带重力补偿的 StateHold
+auto state_hold = std::make_shared<arms_controller_common::StateHold>(
+    ctrl_interfaces_, logger_, 0.1, gravity_comp);
+```
+
+**优势**：方式二避免了重复加载 URDF 文件，直接复用 OCS2 已经加载的 Pinocchio 模型，更高效。
 
 ### 3. 多配置支持
 
@@ -154,7 +177,15 @@ colcon build --packages-select arms_controller_common
 #include "arms_controller_common/FSM/StateHold.h"
 #include "arms_controller_common/utils/GravityCompensation.h"
 
+// 从 OCS2 interface 获取 Pinocchio 模型（避免重复加载）
+const auto& pinocchio_model = ctrl_comp_->interface_->getPinocchioInterface().getModel();
+auto gravity_comp = std::make_shared<arms_controller_common::GravityCompensation>(pinocchio_model);
+
 // 使用通用库，并添加重力补偿支持
+auto state_home = std::make_shared<arms_controller_common::StateHome>(
+    ctrl_interfaces_, logger_, 3.0, gravity_comp);
+auto state_hold = std::make_shared<arms_controller_common::StateHold>(
+    ctrl_interfaces_, logger_, 0.1, gravity_comp);
 ```
 
 ## 优势

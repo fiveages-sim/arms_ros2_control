@@ -19,6 +19,10 @@ namespace arms_controller_common
      * 
      * Calculates static torques (gravity compensation) for a robot arm
      * using Pinocchio library and URDF model.
+     * 
+     * Supports two construction modes:
+     * 1. From URDF file path (for basic_joint_controller)
+     * 2. From existing Pinocchio model (for ocs2_arm_controller, avoids duplicate loading)
      */
     class GravityCompensation
     {
@@ -28,6 +32,12 @@ namespace arms_controller_common
          * @param urdf_path Path to URDF file
          */
         explicit GravityCompensation(const std::string& urdf_path);
+
+        /**
+         * @brief Constructor - uses existing Pinocchio model (for OCS2 controllers)
+         * @param model Reference to existing Pinocchio model (typically from OCS2 interface)
+         */
+        explicit GravityCompensation(const pinocchio::Model& model);
 
         /**
          * @brief Calculate static torques for given joint positions
