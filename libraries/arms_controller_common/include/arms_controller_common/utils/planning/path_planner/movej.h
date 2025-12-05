@@ -1,5 +1,5 @@
 #pragma once
-#include "doubles_with_zero_boundary_of_vel_and_acc.h"
+#include "arms_controller_common/utils/planning/velocity_planner/doubles_with_zero_boundary_of_vel_and_acc.h"
 #include "planner.h"
 
 namespace planning {

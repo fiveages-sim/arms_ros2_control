@@ -1,4 +1,4 @@
-#include "arms_controllers/utils/planning/common/joint_vector.h"
+#include "arms_controller_common/utils/planning/common/joint_vector.h"
 namespace planning {
 JointVector::JointVector(){};
 

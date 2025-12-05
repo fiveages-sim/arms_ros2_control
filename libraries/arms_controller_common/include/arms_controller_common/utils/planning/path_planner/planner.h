@@ -1,5 +1,5 @@
 #pragma once
-#include "trajectory_init_parameters.h"
+#include "arms_controller_common/utils/planning/common/trajectory_init_parameters.h"
 namespace planning {
 class Planner {
 

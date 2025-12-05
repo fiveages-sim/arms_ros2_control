@@ -1,4 +1,4 @@
-#include "arms_controller_common/util/planning/common/normalization_point.h"
+#include "arms_controller_common/utils/planning/common/normalization_point.h"
 
 namespace planning {
 NormalizationPoint::NormalizationPoint(double _time, double _pos, double _vel,

@@ -1,5 +1,5 @@
 #pragma once
-#include "normalization_point.h"
+#include "arms_controller_common/utils/planning/common/normalization_point.h"
 
 namespace planning {
     /**
