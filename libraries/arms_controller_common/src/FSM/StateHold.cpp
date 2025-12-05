@@ -93,7 +93,7 @@ namespace arms_controller_common
         for (size_t i = 0; i < ctrl_interfaces_.joint_position_command_interface_.size() &&
              i < hold_positions_.size(); ++i)
         {
-            ctrl_interfaces_.joint_position_command_interface_[i].get().set_value(hold_positions_[i]);
+            std::ignore = ctrl_interfaces_.joint_position_command_interface_[i].get().set_value(hold_positions_[i]);
         }
 
         // In force control mode, calculate static torques

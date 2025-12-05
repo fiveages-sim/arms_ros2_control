@@ -145,7 +145,7 @@ namespace arms_controller_common
              i < current_target_.size() && i < start_pos_.size(); ++i)
         {
             double interpolated_value = phase * current_target_[i] + (1.0 - phase) * start_pos_[i];
-            ctrl_interfaces_.joint_position_command_interface_[i].get().set_value(interpolated_value);
+            std::ignore = ctrl_interfaces_.joint_position_command_interface_[i].get().set_value(interpolated_value);
         }
 
         // In force control mode, calculate static torques
@@ -155,8 +155,8 @@ namespace arms_controller_common
             std::vector<double> interpolated_positions;
             for (size_t i = 0; i < ctrl_interfaces_.joint_position_command_interface_.size(); ++i)
             {
-                interpolated_positions.push_back(
-                    ctrl_interfaces_.joint_position_command_interface_[i].get().get_value());
+                auto value = ctrl_interfaces_.joint_position_command_interface_[i].get().get_optional();
+                interpolated_positions.push_back(value.value_or(0.0));
             }
 
             // Calculate static torques

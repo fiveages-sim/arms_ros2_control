@@ -14,10 +14,10 @@ namespace basic_joint_controller
         case 1:
             return arms_controller_common::FSMStateName::HOME;
         case 3:
+        case 4:
             return arms_controller_common::FSMStateName::MOVEJ;
         default:
             return arms_controller_common::FSMStateName::HOLD;
         }
     }
 } // namespace basic_joint_controller
-

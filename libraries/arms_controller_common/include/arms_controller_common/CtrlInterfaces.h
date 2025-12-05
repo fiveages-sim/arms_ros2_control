@@ -56,6 +56,9 @@ namespace arms_controller_common
 
         // Force control gains [kp, kd]
         std::vector<double> default_gains_;
+        
+        // PD control gains [kp, kd] - used when entering OCS2 state (optional, for ocs2_arm_controller)
+        std::vector<double> pd_gains_;
 
         // Auto mode detection function - called once during initialization
         void detectAndSetControlMode()

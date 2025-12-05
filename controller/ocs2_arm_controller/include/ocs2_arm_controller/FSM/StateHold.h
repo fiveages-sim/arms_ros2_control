@@ -1,34 +1,34 @@
 //
-// Created for OCS2 Arm Controller - StateHold
+// OCS2 Arm Controller - StateHold (extends arms_controller_common::StateHold)
 //
 #pragma once
 
-#include <vector>
-#include <memory>
-
-#include "ocs2_arm_controller/Ocs2ArmController.h"
+#include <arms_controller_common/FSM/StateHold.h>
+#include <arms_controller_common/CtrlInterfaces.h>
+#include <rclcpp/rclcpp.hpp>
 
 namespace ocs2::mobile_manipulator
 {
-    class StateHold : public FSMState
+    /**
+     * @brief StateHold for ocs2_arm_controller
+     * 
+     * Extends arms_controller_common::StateHold for custom state transition logic
+     */
+    class StateHold : public arms_controller_common::StateHold
     {
     public:
-        StateHold(CtrlInterfaces& ctrl_interfaces,
-                  const std::shared_ptr<CtrlComponent>& ctrl_comp = nullptr);
+        StateHold(arms_controller_common::CtrlInterfaces& ctrl_interfaces,
+                 const rclcpp::Logger& logger,
+                 double position_threshold = 0.1,
+                 std::shared_ptr<arms_controller_common::GravityCompensation> gravity_compensation = nullptr)
+            : arms_controller_common::StateHold(ctrl_interfaces, logger, position_threshold, gravity_compensation)
+        {
+        }
 
-        void enter() override;
-        void run(const rclcpp::Time& time, const rclcpp::Duration& period) override;
-        void exit() override;
-        FSMStateName checkChange() override;
-
-    private:
-        CtrlInterfaces& ctrl_interfaces_;
-        std::shared_ptr<CtrlComponent> ctrl_comp_;  // CtrlComponent reference for torque calculation
-        std::shared_ptr<rclcpp_lifecycle::LifecycleNode> node_;  // Node reference for logging and parameters
-        // State variables
-        std::vector<double> hold_positions_; // Positions recorded when entering
-        bool positions_recorded_{false};
-        // Threshold for joint position difference check (in radians)
-        double joint_position_threshold_; // Configurable threshold, default 0.1 rad (~5.7 degrees)
+        /**
+         * @brief Override checkChange for custom state transition logic
+         * @return Next state name
+         */
+        arms_controller_common::FSMStateName checkChange() override;
     };
-} // namespace ocs2_arm_controller
+} // namespace ocs2::mobile_manipulator

@@ -6,6 +6,9 @@
 #include "ocs2_arm_controller/FSM/StateHome.h"
 #include "ocs2_arm_controller/FSM/StateOCS2.h"
 #include "ocs2_arm_controller/FSM/StateHold.h"
+#include "ocs2_arm_controller/FSM/StateMoveJ.h"
+#include <arms_controller_common/utils/GravityCompensation.h>
+#include <std_msgs/msg/float64_multi_array.hpp>
 
 #include <rclcpp/rclcpp.hpp>
 
@@ -115,8 +118,8 @@ namespace ocs2::mobile_manipulator
             // Force control parameters
             ctrl_interfaces_.default_gains_ = auto_declare<std::vector<double>>("default_gains", ctrl_interfaces_.default_gains_);
             
-            // OCS2 control parameters
-            ctrl_interfaces_.ocs2_gains_ = auto_declare<std::vector<double>>("ocs2_gains", ctrl_interfaces_.ocs2_gains_);
+            // PD control parameters (for OCS2 state)
+            ctrl_interfaces_.pd_gains_ = auto_declare<std::vector<double>>("pd_gains", ctrl_interfaces_.pd_gains_);
 
             // MPC frequency parameter - default value 0 if not set
             auto_declare<int>("mpc_frequency", 0);
@@ -130,8 +133,30 @@ namespace ocs2::mobile_manipulator
             // Create CtrlComponent (auto-initialize interface)
             ctrl_comp_ = std::make_shared<CtrlComponent>(get_node(), ctrl_interfaces_);
 
-            // Create states
-            state_list_.home = std::make_shared<StateHome>(ctrl_interfaces_, home_pos_, ctrl_comp_, home_duration);
+            // Create GravityCompensation from CtrlComponent's Pinocchio model
+            std::shared_ptr<arms_controller_common::GravityCompensation> gravity_compensation = nullptr;
+            if (ctrl_comp_->interface_)
+            {
+                const auto& pinocchio_model = ctrl_comp_->interface_->getPinocchioInterface().getModel();
+                gravity_compensation = std::make_shared<arms_controller_common::GravityCompensation>(pinocchio_model);
+                RCLCPP_INFO(get_node()->get_logger(), 
+                            "Gravity compensation initialized from OCS2 Pinocchio model");
+            }
+
+            // Get logger for FSM states
+            rclcpp::Logger logger = get_node()->get_logger();
+
+            // Create StateHome using common implementation
+            state_list_.home = std::make_shared<StateHome>(
+                ctrl_interfaces_, logger, home_duration, gravity_compensation);
+            
+            // Set home position
+            if (!home_pos_.empty())
+            {
+                state_list_.home->setHomePosition(home_pos_);
+                RCLCPP_INFO(get_node()->get_logger(), 
+                            "Home position configured with %zu joints", home_pos_.size());
+            }
             
             // Configure rest pose if available
             if (!rest_pos_.empty())
@@ -146,7 +171,20 @@ namespace ocs2::mobile_manipulator
             }
             
             state_list_.ocs2 = std::make_shared<StateOCS2>(ctrl_interfaces_, get_node(), ctrl_comp_);
-            state_list_.hold = std::make_shared<StateHold>(ctrl_interfaces_, ctrl_comp_);
+            
+            // Hold state parameters
+            double hold_position_threshold = auto_declare<double>("hold_position_threshold", 0.1);
+            
+            // Create StateHold using common implementation
+            state_list_.hold = std::make_shared<StateHold>(
+                ctrl_interfaces_, logger, hold_position_threshold, gravity_compensation);
+
+            // MoveJ state parameters
+            double move_duration = auto_declare<double>("move_duration", 3.0);
+            
+            // Create StateMoveJ using common implementation
+            state_list_.movej = std::make_shared<StateMoveJ>(
+                ctrl_interfaces_, logger, move_duration, gravity_compensation);
 
             return CallbackReturn::SUCCESS;
         }
@@ -164,6 +202,23 @@ namespace ocs2::mobile_manipulator
             "/control_input", 10, [this](const arms_ros2_control_msgs::msg::Inputs::SharedPtr msg)
             {
                 ctrl_interfaces_.control_inputs_ = *msg;
+            });
+
+        // Subscribe to target position for MoveJ state
+        target_position_subscription_ = get_node()->create_subscription<std_msgs::msg::Float64MultiArray>(
+            get_node()->get_name() + std::string("/target_joint_position"), 10,
+            [this](const std_msgs::msg::Float64MultiArray::SharedPtr msg)
+            {
+                // Convert Float64MultiArray message to vector of joint positions
+                std::vector<double> target_pos;
+                for (const auto& val : msg->data)
+                {
+                    target_pos.push_back(val);
+                }
+                if (state_list_.movej && !target_pos.empty())
+                {
+                    state_list_.movej->setTargetPosition(target_pos);
+                }
             });
 
         return CallbackReturn::SUCCESS;
@@ -254,6 +309,8 @@ namespace ocs2::mobile_manipulator
             return state_list_.ocs2;
         case FSMStateName::HOLD:
             return state_list_.hold;
+        case FSMStateName::MOVEJ:
+            return state_list_.movej;
         default:
             return state_list_.invalid;
         }

@@ -35,6 +35,8 @@ private Q_SLOTS:
   void onHoldToOCS2();
   void onOCS2ToHold();
   void onHoldToHome();
+  void onHoldToMoveJ();
+  void onMoveJToHold();
   void onSwitchPose();
   void onSwitchPoseReleased();
 
@@ -55,6 +57,8 @@ private:
   QPushButton* hold_to_ocs2_btn_;
   QPushButton* ocs2_to_hold_btn_;
   QPushButton* hold_to_home_btn_;
+  QPushButton* hold_to_movej_btn_;
+  QPushButton* movej_to_hold_btn_;
   QPushButton* switch_pose_btn_;
   QLabel* current_state_label_;
 
