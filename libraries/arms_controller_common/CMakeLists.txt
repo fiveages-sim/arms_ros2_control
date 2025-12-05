@@ -30,6 +30,14 @@ add_library(${PROJECT_NAME} SHARED
         src/FSM/StateHome.cpp
         src/FSM/StateHold.cpp
         src/utils/GravityCompensation.cpp
+
+        src/utils/planning/common/normalization_point.cpp
+        src/utils/planning/common/joint_vector.cpp
+        src/utils/planning/common/trajectory_init_parameters.cpp
+
+        src/utils/planning/velocity_planner/doubles_with_zero_boundary_of_vel_and_acc.cpp
+
+        src/utils/planning/path_planner/movej.cpp
 )
 
 target_include_directories(${PROJECT_NAME}
@@ -37,7 +45,12 @@ target_include_directories(${PROJECT_NAME}
         "$<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>"
         "$<INSTALL_INTERFACE:include/${PROJECT_NAME}>"
         PRIVATE
-        src)
+        src
+        src/utils/planning
+        src/utils/planning/common
+        src/utils/planning/velocity_planner
+        src/utils/planning/path_planner
+)
 
 ament_target_dependencies(
         ${PROJECT_NAME} PUBLIC
@@ -50,6 +63,9 @@ target_include_directories(${PROJECT_NAME} PUBLIC ${EIGEN3_INCLUDE_DIR})
 install(
         DIRECTORY include/
         DESTINATION include/${PROJECT_NAME}
+
+        PATTERN "*.hpp"
+        PATTERN "*.h"
 )
 
 install(
