@@ -328,10 +328,9 @@ namespace arms_ros2_control::command
         bool head_joints_detected_; // 是否已经检测过头部关节（只检测一次）
         std::map<std::string, size_t> head_joint_indices_; // 头部关节名称到索引的映射（用于快速访问）
         
-        // RPY到关节的映射配置（从target_manager.yaml读取）
-        std::map<std::string, std::string> head_rpy_to_joint_mapping_; // RPY角度到关节名称的映射（如 "head_yaw" -> "head_joint1"）
-        std::vector<std::string> head_rpy_config_order_; // 映射配置的顺序（按照配置文件中出现的顺序，如 ["head_yaw", "head_pitch"]）
-        std::vector<std::string> head_joint_send_order_; // 发送时的关节顺序（如 ["head_joint1", "head_joint2"]）
+        // 关节到RPY的映射配置（从target_manager.yaml读取）
+        std::map<std::string, std::string> head_joint_to_rpy_mapping_; // 关节名称到RPY角度的映射（如 "head_joint1" -> "head_yaw"）
+        std::vector<std::string> head_joint_send_order_; // 发送时的关节顺序（按照控制器期望的顺序，如 ["head_joint1", "head_joint2"]）
         std::map<std::string, double> head_rpy_axis_direction_; // RPY旋转轴方向（1或-1，如 "head_yaw" -> 1.0 或 -1.0）
     };
 } // namespace arms_ros2_control::command
