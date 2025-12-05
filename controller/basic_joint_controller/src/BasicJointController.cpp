@@ -126,6 +126,9 @@ namespace basic_joint_controller
             // StateMoveJ - extends common StateMoveJ for basic_joint_controller
             state_list_.movej = std::make_shared<StateMoveJ>(
                 ctrl_interfaces_, logger, move_duration_);
+            
+            // Set joint names from controller parameters
+            state_list_.movej->setJointNames(joint_names_);
 
             return CallbackReturn::SUCCESS;
         }
@@ -146,22 +149,12 @@ namespace basic_joint_controller
                 ctrl_interfaces_.control_inputs_ = *msg;
             });
 
-        // Subscribe to target position for Move state
-        target_position_subscription_ = get_node()->create_subscription<std_msgs::msg::Float64MultiArray>(
-            get_node()->get_name() + std::string("/target_joint_position"), 10,
-            [this](const std_msgs::msg::Float64MultiArray::SharedPtr msg)
-            {
-                // Convert Float64MultiArray message to vector of joint positions
-                std::vector<double> target_pos;
-                for (const auto& val : msg->data)
-                {
-                    target_pos.push_back(val);
-                }
-                if (state_list_.movej && !target_pos.empty())
-                {
-                    state_list_.movej->setTargetPosition(target_pos);
-                }
-            });
+        // Setup subscriptions for target positions in StateMoveJ
+        // For basic_joint_controller, disable prefix topics (left/right/body)
+        if (state_list_.movej)
+        {
+            state_list_.movej->setupSubscriptions(get_node(), "target_joint_position", false);
+        }
 
         return CallbackReturn::SUCCESS;
     }

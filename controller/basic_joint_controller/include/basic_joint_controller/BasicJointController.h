@@ -97,7 +97,6 @@ namespace basic_joint_controller
 
         // ROS subscriptions
         rclcpp::Subscription<arms_ros2_control_msgs::msg::Inputs>::SharedPtr control_input_subscription_;
-        rclcpp::Subscription<std_msgs::msg::Float64MultiArray>::SharedPtr target_position_subscription_;
     };
 }
 

@@ -52,9 +52,9 @@ private:
 
 
   // UI Elements
-  QPushButton* left_gripper_btn_;
-  QPushButton* right_gripper_btn_;
-  QLabel* no_controller_label_;
+  std::unique_ptr<QPushButton> left_gripper_btn_;
+  std::unique_ptr<QPushButton> right_gripper_btn_;
+  std::unique_ptr<QLabel> no_controller_label_;
 
   // Robot configuration
   bool is_dual_arm_mode_;

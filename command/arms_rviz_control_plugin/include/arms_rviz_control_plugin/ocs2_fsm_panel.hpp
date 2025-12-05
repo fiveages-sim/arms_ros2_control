@@ -53,22 +53,22 @@ private:
   rclcpp::Subscription<arms_ros2_control_msgs::msg::Inputs>::SharedPtr subscriber_;
 
   // UI Elements
-  QPushButton* home_to_hold_btn_;
-  QPushButton* hold_to_ocs2_btn_;
-  QPushButton* ocs2_to_hold_btn_;
-  QPushButton* hold_to_home_btn_;
-  QPushButton* hold_to_movej_btn_;
-  QPushButton* movej_to_hold_btn_;
-  QPushButton* switch_pose_btn_;
-  QLabel* current_state_label_;
+  std::unique_ptr<QPushButton> home_to_hold_btn_;
+  std::unique_ptr<QPushButton> hold_to_ocs2_btn_;
+  std::unique_ptr<QPushButton> ocs2_to_hold_btn_;
+  std::unique_ptr<QPushButton> hold_to_home_btn_;
+  std::unique_ptr<QPushButton> hold_to_movej_btn_;
+  std::unique_ptr<QPushButton> movej_to_hold_btn_;
+  std::unique_ptr<QPushButton> switch_pose_btn_;
+  std::unique_ptr<QLabel> current_state_label_;
 
   // Current state tracking
-  int32_t current_command_;
-  std::string current_state_;
+  int32_t current_command_ = 0;
+  std::string current_state_ = "HOLD";
   
   // Switch pose button state
-  bool switch_pose_pressed_;
-  QTimer* reset_timer_;
+  bool switch_pose_pressed_ = false;
+  std::unique_ptr<QTimer> reset_timer_;
 };
 
 } // namespace arms_rviz_control_plugin

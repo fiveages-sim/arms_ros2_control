@@ -185,6 +185,9 @@ namespace ocs2::mobile_manipulator
             // Create StateMoveJ using common implementation
             state_list_.movej = std::make_shared<StateMoveJ>(
                 ctrl_interfaces_, logger, move_duration, gravity_compensation);
+            
+            // Set joint names from controller parameters
+            state_list_.movej->setJointNames(joint_names_);
 
             return CallbackReturn::SUCCESS;
         }
@@ -204,22 +207,12 @@ namespace ocs2::mobile_manipulator
                 ctrl_interfaces_.control_inputs_ = *msg;
             });
 
-        // Subscribe to target position for MoveJ state
-        target_position_subscription_ = get_node()->create_subscription<std_msgs::msg::Float64MultiArray>(
-            get_node()->get_name() + std::string("/target_joint_position"), 10,
-            [this](const std_msgs::msg::Float64MultiArray::SharedPtr msg)
-            {
-                // Convert Float64MultiArray message to vector of joint positions
-                std::vector<double> target_pos;
-                for (const auto& val : msg->data)
-                {
-                    target_pos.push_back(val);
-                }
-                if (state_list_.movej && !target_pos.empty())
-                {
-                    state_list_.movej->setTargetPosition(target_pos);
-                }
-            });
+        // Setup subscriptions for target positions in StateMoveJ
+        // Enable prefix topics (left/right/body) for ocs2_arm_controller
+        if (state_list_.movej)
+        {
+            state_list_.movej->setupSubscriptions(get_node(), "target_joint_position", true);
+        }
 
         return CallbackReturn::SUCCESS;
     }

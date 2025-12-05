@@ -12,18 +12,22 @@ find_package(ament_cmake REQUIRED)
 find_package(rclcpp REQUIRED)
 find_package(rviz_common REQUIRED)
 find_package(arms_ros2_control_msgs REQUIRED)
+find_package(sensor_msgs REQUIRED)
+find_package(std_msgs REQUIRED)
 find_package(Qt5 COMPONENTS Widgets REQUIRED)
 
 # 使用 qt5_wrap_cpp 宏生成MOC_FILES，用于处理Qt元对象编译
 qt5_wrap_cpp(MOC_FILES
         include/arms_rviz_control_plugin/ocs2_fsm_panel.hpp
         include/arms_rviz_control_plugin/gripper_control_panel.hpp
+        include/arms_rviz_control_plugin/joint_control_panel.hpp
 )
 
 # 设置源代码文件列表
 set(SRC_FILES
         src/ocs2_fsm_panel.cpp
         src/gripper_control_panel.cpp
+        src/joint_control_panel.cpp
 )
 
 # Include directories
@@ -42,6 +46,8 @@ ament_target_dependencies(${PROJECT_NAME}
   rclcpp
   rviz_common
   arms_ros2_control_msgs
+  sensor_msgs
+  std_msgs
 )
 
 # Export the plugin
