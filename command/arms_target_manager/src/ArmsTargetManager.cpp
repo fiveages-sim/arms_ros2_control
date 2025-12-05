@@ -41,7 +41,6 @@ namespace arms_ros2_control::command
           , head_controller_name_(headControllerName)
           , head_link_name_(headLinkName)
           , head_joints_detected_(false)
-          , use_config_mapping_(false)
     {
     }
 
@@ -63,94 +62,56 @@ namespace arms_ros2_control::command
         // 读取头部关节映射配置（如果启用头部控制）
         if (enable_head_control_)
         {
-            // 读取RPY到关节的映射配置（使用嵌套参数方式）
-            // 注意：顺序按照配置文件中出现的顺序（yaw, pitch, roll），以保持发送顺序
+
             std::vector<std::string> rpy_names = {"head_yaw", "head_pitch", "head_roll"};
             bool has_mapping = false;
-            
-            // 先声明嵌套参数（如果不存在，使用空字符串作为默认值）
-            // 这样即使YAML中没有配置，也不会报错
-            for (const auto& rpy_name : rpy_names)
-            {
-                std::string param_name = "head_rpy_to_joint_mapping." + rpy_name;
-                try
-                {
-                    node_->declare_parameter(param_name, "");
-                }
-                catch (const std::exception& e)
-                {
-                    RCLCPP_DEBUG(node_->get_logger(),
-                                "声明参数 %s 时出错: %s", param_name.c_str(), e.what());
-                }
-            }
             
             // 逐个读取嵌套参数（ROS2使用嵌套参数方式，如 head_rpy_to_joint_mapping.head_yaw）
             // 按照rpy_names的顺序读取，以保持配置顺序
             for (const auto& rpy_name : rpy_names)
             {
                 std::string param_name = "head_rpy_to_joint_mapping." + rpy_name;
-                try
+
+                node_->declare_parameter(param_name, "");
+
+
+                std::string joint_name = node_->get_parameter(param_name).as_string();
+                if (!joint_name.empty())
                 {
-                    std::string joint_name = node_->get_parameter(param_name).as_string();
-                    if (!joint_name.empty())
-                    {
-                        head_rpy_to_joint_mapping_[rpy_name] = joint_name;
-                        // 保存配置顺序（按照配置文件中出现的顺序）
-                        head_rpy_config_order_.push_back(rpy_name);
-                        RCLCPP_INFO(node_->get_logger(),
-                                   "配置头部映射: %s -> %s", rpy_name.c_str(), joint_name.c_str());
-                        has_mapping = true;
-                    }
+                    head_rpy_to_joint_mapping_[rpy_name] = joint_name;
+                    // 保存配置顺序（按照配置文件中出现的顺序）
+                    head_rpy_config_order_.push_back(rpy_name);
+                    RCLCPP_INFO(node_->get_logger(),
+                                "配置头部映射: %s -> %s", rpy_name.c_str(), joint_name.c_str());
+                    has_mapping = true;
                 }
-                catch (const std::exception& e)
-                {
-                    RCLCPP_DEBUG(node_->get_logger(),
-                                "无法读取参数 %s: %s", param_name.c_str(), e.what());
-                }
+
             }
             
-            // 声明并读取旋转轴方向配置（默认为1.0，表示正方向）
-            for (const auto& rpy_name : rpy_names)
+            // 读取旋转轴方向配置（默认为1.0，表示正方向）
+            // ROS2 规则：必须先 declare，然后才能 get
+            // 如果配置了映射，只处理映射中出现的项；否则处理所有项
+            const std::vector<std::string>& rpy_names_to_process = 
+                has_mapping ? head_rpy_config_order_ : rpy_names;
+            
+            for (const auto& rpy_name : rpy_names_to_process)
             {
                 std::string param_name = "head_rpy_axis_direction." + rpy_name;
-                try
-                {
-                    // 先声明参数，使用double类型
-                    node_->declare_parameter(param_name, 1.0);
-                    // 尝试读取参数
-                    rclcpp::Parameter param = node_->get_parameter(param_name);
-                    double direction = 1.0;
-                    
-                    // 如果参数是整数类型，先转换为double
-                    if (param.get_type() == rclcpp::ParameterType::PARAMETER_INTEGER)
-                    {
-                        direction = static_cast<double>(param.as_int());
-                        RCLCPP_WARN(node_->get_logger(),
-                                   "参数 %s 是整数类型，将转换为浮点数: %.0f -> %.1f",
-                                   param_name.c_str(), static_cast<double>(param.as_int()), direction);
-                    }
-                    else
-                    {
-                        direction = param.as_double();
-                    }
-                    
-                    head_rpy_axis_direction_[rpy_name] = direction;
-                    RCLCPP_INFO(node_->get_logger(),
-                               "配置旋转轴方向: %s -> %.1f", rpy_name.c_str(), direction);
-                }
-                catch (const std::exception& e)
-                {
-                    // 如果读取失败，使用默认值1.0
-                    head_rpy_axis_direction_[rpy_name] = 1.0;
-                    RCLCPP_DEBUG(node_->get_logger(),
-                                "无法读取参数 %s，使用默认值1.0: %s", param_name.c_str(), e.what());
-                }
+                
+                node_->declare_parameter<double>(param_name, 1.0);
+
+                // 读取参数值（配置文件中肯定是 double 类型）
+                head_rpy_axis_direction_[rpy_name] = node_->get_parameter(param_name).as_double();
+                
+                RCLCPP_INFO(node_->get_logger(),
+                            "配置头部旋转轴方向: %s = %.1f",
+                            param_name.c_str(),
+                            head_rpy_axis_direction_[rpy_name]);
             }
             
             // 如果配置了映射，直接使用映射配置的顺序（按照映射配置中出现的顺序）
             if (has_mapping)
             {
-                use_config_mapping_ = true;
                 // 按照配置文件中出现的顺序构建发送顺序
                 // head_rpy_config_order_ 已经保存了配置的顺序
                 for (const auto& rpy_name : head_rpy_config_order_)
@@ -284,7 +245,7 @@ namespace arms_ros2_control::command
             std::set<std::string> joints_to_use;
             
             // 如果使用了配置映射，根据映射关系确定可用的RPY
-            if (use_config_mapping_ && !head_rpy_to_joint_mapping_.empty())
+            if (!head_rpy_to_joint_mapping_.empty())
             {
                 // 使用配置映射中的RPY名称
                 for (const auto& [rpy_name, joint_name] : head_rpy_to_joint_mapping_)
@@ -804,7 +765,7 @@ namespace arms_ros2_control::command
         bool found_yaw = false;
 
         // 如果使用了配置映射，根据映射关系查找实际的关节名称
-        if (use_config_mapping_ && !head_rpy_to_joint_mapping_.empty())
+        if (!head_rpy_to_joint_mapping_.empty())
         {
             // 反向查找：从RPY名称找到对应的实际关节名称
             for (const auto& [rpy_name, joint_name] : head_rpy_to_joint_mapping_)
@@ -984,7 +945,7 @@ namespace arms_ros2_control::command
         }
         
         // 如果使用配置文件中的映射，按映射配置的顺序组织数据
-        if (use_config_mapping_ && !head_rpy_to_joint_mapping_.empty())
+        if (!head_rpy_to_joint_mapping_.empty())
         {
             std::vector<double> joint_angles;
             std::map<std::string, double> rpy_values = {

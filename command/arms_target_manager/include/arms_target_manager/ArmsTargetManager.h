@@ -333,6 +333,5 @@ namespace arms_ros2_control::command
         std::vector<std::string> head_rpy_config_order_; // 映射配置的顺序（按照配置文件中出现的顺序，如 ["head_yaw", "head_pitch"]）
         std::vector<std::string> head_joint_send_order_; // 发送时的关节顺序（如 ["head_joint1", "head_joint2"]）
         std::map<std::string, double> head_rpy_axis_direction_; // RPY旋转轴方向（1或-1，如 "head_yaw" -> 1.0 或 -1.0）
-        bool use_config_mapping_; // 是否使用配置文件中的映射（如果配置了则优先使用）
     };
 } // namespace arms_ros2_control::command
