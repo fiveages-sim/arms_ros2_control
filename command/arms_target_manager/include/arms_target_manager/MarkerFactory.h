@@ -44,7 +44,7 @@ namespace arms_ros2_control::command
          */
         MarkerFactory(
             rclcpp::Node::SharedPtr node,
-            const std::string& frame_id,
+            std::string  frame_id,
             const std::vector<int32_t>& disable_states);
 
         ~MarkerFactory() = default;

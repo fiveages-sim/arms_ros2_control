@@ -49,6 +49,7 @@ def parse_task_info(task_file_path):
 def launch_setup(context, *args, **kwargs):
     """Launch setup function using OpaqueFunction"""
     task_file_path = context.launch_configurations.get('task_file', '')
+    config_file_path = context.launch_configurations.get('config_file', '')
     # robot_type 可能来自 'type' 或 'robot_type' 参数
     robot_type = context.launch_configurations.get('type', '') or context.launch_configurations.get('robot_type', '')
 
@@ -57,15 +58,24 @@ def launch_setup(context, *args, **kwargs):
         print(f"[ERROR] No task_file provided")
         return []
 
-    # 确定配置文件路径（优先级：task_file同目录 > 默认配置）
+    # 确定配置文件路径（优先级：显式指定的config_file > task_file同目录 > 默认配置）
     config_path = None
 
-    # 检查task_file同目录下是否有target_manager.yaml
-    task_file_dir = os.path.dirname(task_file_path)
-    task_dir_config = os.path.join(task_file_dir, 'target_manager.yaml')
-    if os.path.exists(task_dir_config):
-        config_path = task_dir_config
-        print(f"[INFO] Using config file from task file directory: {config_path}")
+    # 如果显式指定了配置文件路径，优先使用
+    if config_file_path:
+        if os.path.exists(config_file_path):
+            config_path = config_file_path
+            print(f"[INFO] Using explicitly specified config file: {config_path}")
+        else:
+            print(f"[WARN] Specified config file not found: {config_file_path}, falling back to default search")
+
+    # 如果还没有找到，检查task_file同目录下是否有target_manager.yaml
+    if not config_path:
+        task_file_dir = os.path.dirname(task_file_path)
+        task_dir_config = os.path.join(task_file_dir, 'target_manager.yaml')
+        if os.path.exists(task_dir_config):
+            config_path = task_dir_config
+            print(f"[INFO] Using config file from task file directory: {config_path}")
 
     # 如果还没有找到，使用默认配置文件
     if not config_path:
@@ -116,6 +126,12 @@ def generate_launch_description():
         description='Path to task.info file'
     )
     
+    config_file_arg = DeclareLaunchArgument(
+        'config_file',
+        default_value='',
+        description='Path to target_manager.yaml config file (optional, if not specified, will search in task file directory)'
+    )
+    
     marker_fixed_frame_arg = DeclareLaunchArgument(
         'marker_fixed_frame',
         default_value='base_link',
@@ -130,6 +146,7 @@ def generate_launch_description():
 
     return LaunchDescription([
         task_file_arg,
+        config_file_arg,
         marker_fixed_frame_arg,
         enable_head_control_arg,
         OpaqueFunction(function=launch_setup),

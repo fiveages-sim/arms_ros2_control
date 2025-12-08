@@ -7,15 +7,16 @@
 #include <rclcpp/rclcpp.hpp>
 #include <algorithm>
 #include <cmath>
+#include <utility>
 
 namespace arms_ros2_control::command
 {
     MarkerFactory::MarkerFactory(
         rclcpp::Node::SharedPtr node,
-        const std::string& frame_id,
+        std::string  frame_id,
         const std::vector<int32_t>& disable_states)
         : node_(std::move(node))
-          , frame_id_(frame_id)
+          , frame_id_(std::move(frame_id))
           , disable_states_(disable_states)
     {
     }

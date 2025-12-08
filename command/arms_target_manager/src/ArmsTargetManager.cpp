@@ -13,51 +13,44 @@
 #include <set>
 #include <map>
 #include <algorithm>
+#include <utility>
 
 namespace arms_ros2_control::command
 {
     ArmsTargetManager::ArmsTargetManager(
         rclcpp::Node::SharedPtr node,
-        bool dualArmMode,
-        const std::string& frameId,
-        const std::string& markerFixedFrame,
-        double publishRate,
+        const bool dualArmMode,
+        std::string  frameId,
+        std::string  markerFixedFrame,
+        const double publishRate,
         const std::vector<int32_t>& disableAutoUpdateStates,
-        double markerUpdateInterval,
-        bool enableHeadControl,
-        const std::string& headControllerName,
-        const std::string& headLinkName)
+        const double markerUpdateInterval)
         : node_(std::move(node))
           , dual_arm_mode_(dualArmMode)
-          , control_base_frame_(frameId)
-          , marker_fixed_frame_(markerFixedFrame)
+          , control_base_frame_(std::move(frameId))
+          , marker_fixed_frame_(std::move(markerFixedFrame))
           , publish_rate_(publishRate)
-          , current_mode_(MarkerState::SINGLE_SHOT)
-          , current_controller_state_(2)
           , disable_auto_update_states_(disableAutoUpdateStates)
           , last_marker_update_time_(node_->now())
           , marker_update_interval_(markerUpdateInterval)
           , last_publish_time_(node_->now())
-          , enable_head_control_(enableHeadControl)
-          , head_controller_name_(headControllerName)
-          , head_link_name_(headLinkName)
-          , head_joints_detected_(false)
     {
     }
 
     void ArmsTargetManager::initialize()
     {
-        // 读取头部控制相关配置（如果启用头部控制）
+        // 读取头部控制相关配置
+        // 首先读取是否启用头部控制
+        node_->declare_parameter<bool>("enable_head_control", false);
+        enable_head_control_ = node_->get_parameter("enable_head_control").as_bool();
+        
         if (enable_head_control_)
         {
-            // 从配置文件读取head_link_name（参数已在节点创建时声明，这里只需获取）
-            std::string config_head_link_name = node_->get_parameter("head_link_name").as_string();
-            if (!config_head_link_name.empty())
-            {
-                head_link_name_ = config_head_link_name;
-                RCLCPP_INFO(node_->get_logger(),
-                           "头部marker所在的link名称: %s", head_link_name_.c_str());
-            }
+            // 读取头部link名称配置（从配置文件或参数）
+            node_->declare_parameter<std::string>("head_link_name", "head_link2");
+            head_link_name_ = node_->get_parameter("head_link_name").as_string();
+            RCLCPP_INFO(node_->get_logger(),
+                       "头部marker所在的link名称: %s", head_link_name_.c_str());
 
             // 读取头部关节映射配置
             std::string parent_param_name = "head_joint_to_rpy_mapping";
@@ -248,7 +241,7 @@ namespace arms_ros2_control::command
             // createHeadMarker期望的是RPY名称（head_roll, head_pitch, head_yaw）
             std::set<std::string> joints_to_use;
             
-            // 根据映射关系确定可用的RPY
+            // 根据配置的映射关系确定可用的RPY
             for (const auto& [joint_name, rpy_name] : head_joint_to_rpy_mapping_)
             {
                 if (!rpy_name.empty())
@@ -257,42 +250,15 @@ namespace arms_ros2_control::command
                 }
             }
             
-            // 如果映射为空，使用默认的RPY名称
+            // 如果映射为空，使用默认的RPY名称（向后兼容，但不推荐）
             if (joints_to_use.empty())
             {
-                // 使用原来的逻辑：检查available_head_joints_中是否有对应的RPY名称
-                // 或者如果没有检测到，使用默认值
-                if (available_head_joints_.empty())
-                {
-                    // 默认包含所有可能的RPY关节
-                    joints_to_use.insert("head_roll");
-                    joints_to_use.insert("head_pitch");
-                    joints_to_use.insert("head_yaw");
-                }
-                else
-                {
-                    // 检查available_head_joints_中是否有RPY名称（向后兼容）
-                    if (available_head_joints_.find("head_roll") != available_head_joints_.end())
-                    {
-                        joints_to_use.insert("head_roll");
-                    }
-                    if (available_head_joints_.find("head_pitch") != available_head_joints_.end())
-                    {
-                        joints_to_use.insert("head_pitch");
-                    }
-                    if (available_head_joints_.find("head_yaw") != available_head_joints_.end())
-                    {
-                        joints_to_use.insert("head_yaw");
-                    }
-                    
-                    // 如果没有找到RPY名称，但有检测到的关节，默认启用所有RPY（让用户可以通过marker控制）
-                    if (joints_to_use.empty())
-                    {
-                        joints_to_use.insert("head_roll");
-                        joints_to_use.insert("head_pitch");
-                        joints_to_use.insert("head_yaw");
-                    }
-                }
+                RCLCPP_WARN(node_->get_logger(),
+                           "头部关节映射配置为空，使用默认RPY（head_roll, head_pitch, head_yaw）。"
+                           "建议在配置文件中设置 head_joint_to_rpy_mapping");
+                joints_to_use.insert("head_roll");
+                joints_to_use.insert("head_pitch");
+                joints_to_use.insert("head_yaw");
             }
             
             return marker_factory_->createHeadMarker(name, head_pose_, enable_interaction, joints_to_use);
@@ -599,7 +565,7 @@ namespace arms_ros2_control::command
         // 创建头部发布器和订阅器（如果启用头部控制）
         if (enable_head_control_)
         {
-            std::string head_topic = "/" + head_controller_name_ + "/target_joint_position";
+            std::string head_topic = "/head_joint_controller/target_joint_position";
             head_joint_publisher_ = node_->create_publisher<std_msgs::msg::Float64MultiArray>(head_topic, 1);
             head_joint_state_subscription_ = node_->create_subscription<sensor_msgs::msg::JointState>(
                 "/joint_states", 10, [this](const sensor_msgs::msg::JointState::ConstSharedPtr msg)
@@ -682,41 +648,48 @@ namespace arms_ros2_control::command
     void ArmsTargetManager::updateHeadMarkerFromTopic(
         const sensor_msgs::msg::JointState::ConstSharedPtr& joint_msg)
     {
-        // 只在第一次收到 joint_states 时检测可用的头部关节列表并缓存索引（只检测一次）
-        if (!head_joints_detected_)
+        // 如果关节索引还未初始化，基于配置的映射关系查找并缓存（只初始化一次）
+        if (head_joint_indices_.empty() && !head_joint_to_rpy_mapping_.empty())
         {
-            for (size_t i = 0; i < joint_msg->name.size(); ++i)
+            // 基于配置的映射关系查找关节索引
+            for (const auto& [joint_name, rpy_name] : head_joint_to_rpy_mapping_)
             {
-                const std::string& joint_name = joint_msg->name[i];
-                if (joint_name == "head_joint1" || joint_name == "head_joint2" || joint_name == "head_joint3")
+                if (rpy_name.empty())
                 {
-                    available_head_joints_.insert(joint_name);
-                    head_joint_indices_[joint_name] = i; // 缓存关节索引
-                    head_joint_order_.push_back(joint_name); // 按照 joint_states 中的顺序保存
+                    continue; // 跳过空映射
+                }
+                
+                // 在 joint_states 中查找对应的关节
+                for (size_t i = 0; i < joint_msg->name.size(); ++i)
+                {
+                    if (joint_msg->name[i] == joint_name)
+                    {
+                        head_joint_indices_[joint_name] = i; // 缓存关节索引
+                        break;
+                    }
                 }
             }
-            head_joints_detected_ = true;
 
             // 输出检测到的头部关节信息
-            if (!available_head_joints_.empty())
+            if (!head_joint_indices_.empty())
             {
                 std::string joints_str;
-                for (const auto& joint : head_joint_order_)
+                for (const auto& [joint_name, index] : head_joint_indices_)
                 {
                     if (!joints_str.empty())
                     {
                         joints_str += ", ";
                     }
-                    joints_str += joint;
+                    joints_str += joint_name;
                 }
                 RCLCPP_INFO(node_->get_logger(),
-                           "检测到头部关节: [%s] (共 %zu 个关节)",
-                           joints_str.c_str(), available_head_joints_.size());
+                           "基于配置映射初始化头部关节索引: [%s] (共 %zu 个关节)",
+                           joints_str.c_str(), head_joint_indices_.size());
             }
             else
             {
                 RCLCPP_WARN(node_->get_logger(),
-                           "未检测到任何头部关节 (head_joint1, head_joint2, head_joint3)");
+                           "未在 joint_states 中找到配置的头部关节。请检查配置文件和关节名称是否正确。");
             }
         }
 
@@ -800,30 +773,20 @@ namespace arms_ros2_control::command
             }
         }
         
-        // 如果映射为空或没找到任何值，尝试直接查找RPY名称（向后兼容）
-        if (!found_roll && !found_pitch && !found_yaw && head_joint_to_rpy_mapping_.empty())
+        // 如果映射为空或没找到任何值，输出警告
+        if (!found_roll && !found_pitch && !found_yaw)
         {
-            auto it_roll = head_joint_indices_.find("head_roll");
-            if (it_roll != head_joint_indices_.end() && it_roll->second < joint_msg->position.size())
+            if (head_joint_to_rpy_mapping_.empty())
             {
-                head_roll = joint_msg->position[it_roll->second];
-                found_roll = true;
+                RCLCPP_WARN_THROTTLE(node_->get_logger(), *node_->get_clock(), 5000,
+                                    "头部关节映射配置为空，无法更新头部marker方向。"
+                                    "请在配置文件中设置 head_joint_to_rpy_mapping");
             }
-
-            auto it_pitch = head_joint_indices_.find("head_pitch");
-            if (it_pitch != head_joint_indices_.end() && it_pitch->second < joint_msg->position.size())
+            else
             {
-                head_pitch = joint_msg->position[it_pitch->second];
-                found_pitch = true;
+                RCLCPP_DEBUG_THROTTLE(node_->get_logger(), *node_->get_clock(), 5000,
+                                     "未在 joint_states 中找到配置的头部关节，无法更新头部marker方向");
             }
-
-            auto it_yaw = head_joint_indices_.find("head_yaw");
-            if (it_yaw != head_joint_indices_.end() && it_yaw->second < joint_msg->position.size())
-            {
-                head_yaw = joint_msg->position[it_yaw->second];
-                found_yaw = true;
-            }
-            
         }
 
         // 只要找到任何一个关节有数值，就更新头部 marker 的 orientation
@@ -984,25 +947,12 @@ namespace arms_ros2_control::command
             return joint_angles;
         }
         
-        // 否则使用原来的方式（按 joint_states 或控制器参数中的顺序）
-        std::vector<double> joint_angles;
-        for (const auto& joint_name : head_joint_order_)
-        {
-            if (joint_name == "head_roll")
-            {
-                joint_angles.push_back(roll_with_direction);
-            }
-            else if (joint_name == "head_pitch")
-            {
-                joint_angles.push_back(pitch_with_direction);
-            }
-            else if (joint_name == "head_yaw")
-            {
-                joint_angles.push_back(yaw_with_direction);
-            }
-        }
-
-        return joint_angles;
+        // 如果 head_joint_send_order_ 为空，说明配置有问题
+        // 这种情况下返回空数组，让调用者知道配置错误
+        RCLCPP_ERROR(node_->get_logger(),
+                    "头部关节发送顺序配置为空，无法发送目标关节角度。"
+                    "请在配置文件中设置 head_joint_to_rpy_mapping");
+        return std::vector<double>();
     }
 
 

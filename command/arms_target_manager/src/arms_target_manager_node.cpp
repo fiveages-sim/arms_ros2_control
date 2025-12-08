@@ -27,10 +27,7 @@ int main(int argc, char** argv)
     double vr_update_rate = node->declare_parameter("vr_update_rate", 500.0);
     bool enable_vr = node->declare_parameter("enable_vr", true);
 
-    // 头部控制参数（由 launch 参数控制）
-    bool enable_head_control = node->declare_parameter("enable_head_control", true);
-    std::string head_controller_name = node->declare_parameter("head_controller_name", "head_joint_controller");
-    std::string head_link_name = node->declare_parameter("head_link_name", "head_link2");
+    // 头部控制参数在 ArmsTargetManager::initialize() 中从配置文件读取
 
     RCLCPP_INFO(node->get_logger(),
                 "Starting ArmsTargetManager with dual_arm_mode: %s, control_base_frame: %s, marker_fixed_frame: %s",
@@ -49,8 +46,7 @@ int main(int argc, char** argv)
     {
         auto target_manager = std::make_unique<ArmsTargetManager>(
             node, dual_arm_mode, control_base_frame, marker_fixed_frame,
-            20.0, std::vector<int32_t>{3}, 0.05,
-            enable_head_control, head_controller_name, head_link_name);
+            20.0, std::vector<int32_t>{3}, 0.05);
 
         // 初始化
         target_manager->initialize();

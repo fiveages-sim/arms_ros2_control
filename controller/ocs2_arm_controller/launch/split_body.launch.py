@@ -156,6 +156,7 @@ def launch_setup(context, *args, **kwargs):
         return []
 
     # OCS2 ArmsTargetManager for interactive pose control (auto-detects dual_arm_mode and frame_id from task.info)
+    # task.info 使用 planning_robot_name（机械臂描述，如 m6_CCS）
     task_file_path = os.path.join(
         robot_pkg_path,
         "config",
@@ -163,6 +164,25 @@ def launch_setup(context, *args, **kwargs):
         f"{info_file_name}.info"
     )
     print(f"[INFO] Using task file for ArmsTargetManager: {task_file_path}")
+    
+    # target_manager.yaml 使用原始 robot_name（全身描述，如 fiveages_w2）
+    # 这样可以确保头部控制等配置使用全身机器人的配置
+    full_body_robot_pkg_path = get_robot_package_path(robot_name)
+    config_file_path = None
+    if full_body_robot_pkg_path is not None:
+        full_body_config_path = os.path.join(
+            full_body_robot_pkg_path,
+            "config",
+            "ocs2",
+            "target_manager.yaml"
+        )
+        if os.path.exists(full_body_config_path):
+            config_file_path = full_body_config_path
+            print(f"[INFO] Using target_manager.yaml from full body robot description: {config_file_path}")
+        else:
+            print(f"[WARN] target_manager.yaml not found at: {full_body_config_path}")
+    else:
+        print(f"[WARN] Cannot find full body robot package path for '{robot_name}'")
 
     ocs2_arms_target_manager = IncludeLaunchDescription(
         PythonLaunchDescriptionSource([
@@ -171,7 +191,8 @@ def launch_setup(context, *args, **kwargs):
         ]),
         launch_arguments=[
             ('task_file', task_file_path),
-        ],
+            ('enable_head_control', LaunchConfiguration('enable_body')),
+        ] + ([('config_file', config_file_path)] if config_file_path else []),
         condition=IfCondition(LaunchConfiguration('enable_arms_target_manager'))
     )
 

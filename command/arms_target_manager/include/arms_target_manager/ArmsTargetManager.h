@@ -52,24 +52,16 @@ namespace arms_ros2_control::command
          * @param publishRate 连续发布频率，默认为20Hz
          * @param disableAutoUpdateStates 禁用自动更新的状态值数组，默认为{3}（OCS2状态）
          * @param markerUpdateInterval 最小marker更新间隔（秒），默认为0.05秒（20Hz）
-         * @param enableHeadControl 是否启用头部控制，由 launch 文件自动检测（检查 ros2_controllers.yaml 中是否有 head_joint_controller 且包含 head_joint1 和 head_joint2）
-         * @param headControllerName 头部控制器名称，默认为"head_joint_controller"
-         * @param headLinkName 头部link名称，用于从TF获取实际位置，默认为"head_link2"
-         * @param headMarkerPosition 头部marker在base_footprint中的固定位置，默认为[1.0, 0.0, 1.5]（仅在TF获取失败时使用）
-         * 
-         * 注意：enableHeadControl 由 launch 文件自动检测，类似双臂模式的 dual_arm_mode_ 由 launch 文件自动检测
+         * 注意：头部控制相关参数（enable_head_control、head_link_name、head_joint_to_rpy_mapping等）在 initialize() 中从配置文件读取
          */
         ArmsTargetManager(
             rclcpp::Node::SharedPtr node,
             bool dualArmMode = false,
-            const std::string& frameId = "world",
-            const std::string& markerFixedFrame = "base_footprint",
+            std::string  frameId = "world",
+            std::string  markerFixedFrame = "base_footprint",
             double publishRate = 20.0,
             const std::vector<int32_t>& disableAutoUpdateStates = {3},
-            double markerUpdateInterval = 0.05,
-            bool enableHeadControl = false,
-            const std::string& headControllerName = "head_joint_controller",
-            const std::string& headLinkName = "head_link2");
+            double markerUpdateInterval = 0.05);
 
         ~ArmsTargetManager() = default;
 
@@ -281,12 +273,12 @@ namespace arms_ros2_control::command
         std::shared_ptr<interactive_markers::MenuHandler> head_menu_handler_;
 
         // 菜单句柄
-        interactive_markers::MenuHandler::EntryHandle left_send_handle_;
-        interactive_markers::MenuHandler::EntryHandle left_toggle_handle_;
-        interactive_markers::MenuHandler::EntryHandle right_send_handle_;
-        interactive_markers::MenuHandler::EntryHandle right_toggle_handle_;
-        interactive_markers::MenuHandler::EntryHandle head_send_handle_;
-        interactive_markers::MenuHandler::EntryHandle head_toggle_handle_;
+        interactive_markers::MenuHandler::EntryHandle left_send_handle_{};
+        interactive_markers::MenuHandler::EntryHandle left_toggle_handle_{};
+        interactive_markers::MenuHandler::EntryHandle right_send_handle_{};
+        interactive_markers::MenuHandler::EntryHandle right_toggle_handle_{};
+        interactive_markers::MenuHandler::EntryHandle head_send_handle_{};
+        interactive_markers::MenuHandler::EntryHandle head_toggle_handle_{};
 
         // 配置
         bool dual_arm_mode_;
@@ -299,7 +291,7 @@ namespace arms_ros2_control::command
         std::shared_ptr<tf2_ros::TransformListener> tf_listener_;
 
         // 状态管理
-        MarkerState current_mode_;
+        MarkerState current_mode_ = MarkerState::SINGLE_SHOT;
 
         // 当前pose状态
         geometry_msgs::msg::Pose left_pose_;
@@ -308,7 +300,7 @@ namespace arms_ros2_control::command
 
         // 状态管理
         mutable std::mutex state_update_mutex_;
-        int32_t current_controller_state_; // 当前控制器状态
+        int32_t current_controller_state_ = 2; // 当前控制器状态
         std::vector<int32_t> disable_auto_update_states_; // 禁用自动更新的状态值数组
 
         // 更新节流
@@ -316,17 +308,11 @@ namespace arms_ros2_control::command
         double marker_update_interval_; // 最小更新间隔（秒）
         rclcpp::Time last_publish_time_; // 连续发布模式的最后发布时间
 
-        // 头部控制相关
-        // 注意：enable_head_control_ 由 launch 文件自动检测（检查 ros2_controllers.yaml 中是否有 head_joint_controller 且包含 head_joint1 和 head_joint2）
-        // 类似双臂模式通过 dual_arm_mode_ 由 launch 文件自动检测
-        bool enable_head_control_; // 是否启用头部控制（由 launch 文件自动检测）
-        std::string head_controller_name_; // 头部控制器名称
+        // 头部控制相关（在 initialize() 中从配置文件读取）
+        bool enable_head_control_ = false; // 是否启用头部控制
         std::string head_link_name_; // 头部link名称，用于从TF获取实际位置
         std::array<double, 3> head_marker_position_ = {1.0, 0.0, 1.5}; // marker在base_footprint中的固定位置（仅在TF获取失败时使用）
-        std::set<std::string> available_head_joints_; // 可用的头部关节名称集合（head_roll, head_pitch, head_yaw）
-        std::vector<std::string> head_joint_order_; // 头部关节名称的顺序（按照 joint_states 中的顺序或配置文件中的顺序）
-        bool head_joints_detected_; // 是否已经检测过头部关节（只检测一次）
-        std::map<std::string, size_t> head_joint_indices_; // 头部关节名称到索引的映射（用于快速访问）
+        std::map<std::string, size_t> head_joint_indices_; // 头部关节名称到索引的映射（用于快速访问，基于配置的映射构建，在首次收到joint_states时初始化）
         
         // 关节到RPY的映射配置（从target_manager.yaml读取）
         std::map<std::string, std::string> head_joint_to_rpy_mapping_; // 关节名称到RPY角度的映射（如 "head_joint1" -> "head_yaw"）
