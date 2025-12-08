@@ -49,22 +49,34 @@ def parse_task_info(task_file_path):
 def launch_setup(context, *args, **kwargs):
     """Launch setup function using OpaqueFunction"""
     task_file_path = context.launch_configurations.get('task_file', '')
-    
+    config_file_path = context.launch_configurations.get('config_file', '')
+    # robot_type 可能来自 'type' 或 'robot_type' 参数
+    robot_type = context.launch_configurations.get('type', '') or context.launch_configurations.get('robot_type', '')
+
     # 检查是否提供了task_file路径
     if not task_file_path:
         print(f"[ERROR] No task_file provided")
         return []
 
-    # 确定配置文件路径（优先级：task_file同目录 > 默认配置）
+    # 确定配置文件路径（优先级：显式指定的config_file > task_file同目录 > 默认配置）
     config_path = None
-    
-    # 检查task_file同目录下是否有target_manager.yaml
-    task_file_dir = os.path.dirname(task_file_path)
-    task_dir_config = os.path.join(task_file_dir, 'target_manager.yaml')
-    if os.path.exists(task_dir_config):
-        config_path = task_dir_config
-        print(f"[INFO] Using config file from task file directory: {config_path}")
-    
+
+    # 如果显式指定了配置文件路径，优先使用
+    if config_file_path:
+        if os.path.exists(config_file_path):
+            config_path = config_file_path
+            print(f"[INFO] Using explicitly specified config file: {config_path}")
+        else:
+            print(f"[WARN] Specified config file not found: {config_file_path}, falling back to default search")
+
+    # 如果还没有找到，检查task_file同目录下是否有target_manager.yaml
+    if not config_path:
+        task_file_dir = os.path.dirname(task_file_path)
+        task_dir_config = os.path.join(task_file_dir, 'target_manager.yaml')
+        if os.path.exists(task_dir_config):
+            config_path = task_dir_config
+            print(f"[INFO] Using config file from task file directory: {config_path}")
+
     # 如果还没有找到，使用默认配置文件
     if not config_path:
         package_dir = get_package_share_directory('arms_target_manager')
@@ -79,21 +91,23 @@ def launch_setup(context, *args, **kwargs):
     dual_arm_mode, control_base_frame = parse_task_info(task_file_path)
     # marker_fixed_frame: 从launch参数获取，默认值为 'base_link'
     marker_fixed_frame = context.launch_configurations.get('marker_fixed_frame', 'base_link')
-    
+
+    enable_head_control = context.launch_configurations.get('enable_head_control', 'false').lower() == 'true'
     # 构建参数列表：先加载YAML配置，然后用launch参数覆盖
     parameters = []
     if config_path:
         parameters.append(config_path)
-    
+
     # 必须覆盖的参数（从task_file解析或必需参数）
     override_params = {
         'dual_arm_mode': dual_arm_mode,
         'control_base_frame': control_base_frame,
         'marker_fixed_frame': marker_fixed_frame,
+        'enable_head_control': enable_head_control
     }
-    
+
     parameters.append(override_params)
-    
+
     arms_target_manager_node = Node(
         package='arms_target_manager',
         executable='arms_target_manager_node',
@@ -112,14 +126,28 @@ def generate_launch_description():
         description='Path to task.info file'
     )
     
+    config_file_arg = DeclareLaunchArgument(
+        'config_file',
+        default_value='',
+        description='Path to target_manager.yaml config file (optional, if not specified, will search in task file directory)'
+    )
+    
     marker_fixed_frame_arg = DeclareLaunchArgument(
         'marker_fixed_frame',
         default_value='base_link',
         description='Frame ID where markers are actually created (received current_pose will be transformed to this frame)'
     )
 
+    enable_head_control_arg = DeclareLaunchArgument(
+        'enable_head_control',
+        default_value='false',
+        description='Enable head control in arms target manager'
+    )
+
     return LaunchDescription([
         task_file_arg,
+        config_file_arg,
         marker_fixed_frame_arg,
+        enable_head_control_arg,
         OpaqueFunction(function=launch_setup),
     ])

@@ -11,4 +11,10 @@
     base_class_type="rviz_common::Panel">
     <description>Gripper Control Panel for robot arms</description>
   </class>
+  <class
+    name="arms_rviz_control_plugin/JointControlPanel"
+    type="arms_rviz_control_plugin::JointControlPanel"
+    base_class_type="rviz_common::Panel">
+    <description>Joint Control Panel for adjusting joint positions when command is 3 or 4</description>
+  </class>
 </library>

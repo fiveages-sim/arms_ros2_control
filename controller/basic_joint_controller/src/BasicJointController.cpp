@@ -3,9 +3,9 @@
 //
 
 #include "basic_joint_controller/BasicJointController.h"
-#include "basic_joint_controller/FSM/StateHome.h"
 #include "basic_joint_controller/FSM/StateHold.h"
-#include "basic_joint_controller/FSM/StateMove.h"
+#include "basic_joint_controller/FSM/StateMoveJ.h"
+#include <arms_controller_common/FSM/StateHome.h>
 
 #include <std_msgs/msg/float64_multi_array.hpp>
 #include <string>
@@ -104,19 +104,31 @@ namespace basic_joint_controller
             // Get logger for FSM states
             rclcpp::Logger logger = get_node()->get_logger();
 
-            // Create states
-            // StateHome will load configurations via init() method using auto_declare
-            state_list_.home = std::make_shared<StateHome>(ctrl_interfaces_, logger, home_duration_,
-                                                           switch_command_base);
-
+            // Create states using arms_controller_common
+            // StateHome - configurations will be loaded via init() method using auto_declare
+            state_list_.home = std::make_shared<arms_controller_common::StateHome>(
+                ctrl_interfaces_, logger, home_duration_);
+            
             // Initialize StateHome with configurations from parameters (home_1, home_2, home_3, etc.)
             // Pass auto_declare as a lambda to allow StateHome to use it
             state_list_.home->init([this](const std::string& name, const std::vector<double>& default_value)
             {
                 return this->auto_declare<std::vector<double>>(name, default_value);
             });
-            state_list_.hold = std::make_shared<StateHold>(ctrl_interfaces_, logger, hold_position_threshold_);
-            state_list_.move = std::make_shared<StateMove>(ctrl_interfaces_, logger, move_duration_);
+            
+            // Set configuration switch command base
+            state_list_.home->setSwitchCommandBase(switch_command_base);
+            
+            // StateHold - extends common StateHold to support MOVEJ transition
+            state_list_.hold = std::make_shared<StateHold>(
+                ctrl_interfaces_, logger, hold_position_threshold_);
+            
+            // StateMoveJ - extends common StateMoveJ for basic_joint_controller
+            state_list_.movej = std::make_shared<StateMoveJ>(
+                ctrl_interfaces_, logger, move_duration_);
+            
+            // Set joint names from controller parameters
+            state_list_.movej->setJointNames(joint_names_);
 
             return CallbackReturn::SUCCESS;
         }
@@ -137,22 +149,12 @@ namespace basic_joint_controller
                 ctrl_interfaces_.control_inputs_ = *msg;
             });
 
-        // Subscribe to target position for Move state
-        target_position_subscription_ = get_node()->create_subscription<std_msgs::msg::Float64MultiArray>(
-            get_node()->get_name() + std::string("/target_joint_position"), 10,
-            [this](const std_msgs::msg::Float64MultiArray::SharedPtr msg)
-            {
-                // Convert Float64MultiArray message to vector of joint positions
-                std::vector<double> target_pos;
-                for (const auto& val : msg->data)
-                {
-                    target_pos.push_back(val);
-                }
-                if (state_list_.move && !target_pos.empty())
-                {
-                    state_list_.move->setTargetPosition(target_pos);
-                }
-            });
+        // Setup subscriptions for target positions in StateMoveJ
+        // For basic_joint_controller, disable prefix topics (left/right/body)
+        if (state_list_.movej)
+        {
+            state_list_.movej->setupSubscriptions(get_node(), "target_joint_position", false);
+        }
 
         return CallbackReturn::SUCCESS;
     }
@@ -228,8 +230,8 @@ namespace basic_joint_controller
             return state_list_.home;
         case FSMStateName::HOLD:
             return state_list_.hold;
-        case FSMStateName::MOVE:
-            return state_list_.move;
+        case FSMStateName::MOVEJ:
+            return state_list_.movej;
         default:
             return state_list_.invalid;
         }

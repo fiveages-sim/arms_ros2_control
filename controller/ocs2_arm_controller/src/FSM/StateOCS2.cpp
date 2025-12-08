@@ -13,7 +13,7 @@ namespace ocs2::mobile_manipulator
     StateOCS2::StateOCS2(CtrlInterfaces& ctrl_interfaces,
                          const std::shared_ptr<rclcpp_lifecycle::LifecycleNode>& node,
                          const std::shared_ptr<CtrlComponent>& ctrl_comp)
-        : FSMState(FSMStateName::OCS2, "OCS2"), ctrl_comp_(ctrl_comp), ctrl_interfaces_(ctrl_interfaces), node_(node)
+        : FSMState(FSMStateName::OCS2, "ocs2", ctrl_interfaces), ctrl_comp_(ctrl_comp), ctrl_interfaces_(ctrl_interfaces), node_(node)
     {
         // Get joint names
         joint_names_ = node_->get_parameter("joints").as_string_array();
@@ -89,21 +89,21 @@ namespace ocs2::mobile_manipulator
         // Set OCS2 gains only in MIX control mode (kp, kd available)
         if (ctrl_interfaces_.control_mode_ == ControlMode::MIX)
         {
-            if (ctrl_interfaces_.ocs2_gains_.size() >= 2)
+            if (ctrl_interfaces_.pd_gains_.size() >= 2)
             {
-                double kp = ctrl_interfaces_.ocs2_gains_[0]; // Position gain
-                double kd = ctrl_interfaces_.ocs2_gains_[1]; // Velocity gain
+                double kp = ctrl_interfaces_.pd_gains_[0]; // Position gain
+                double kd = ctrl_interfaces_.pd_gains_[1]; // Velocity gain
 
                 RCLCPP_INFO(node_->get_logger(), "Setting OCS2 gains: kp=%.2f, kd=%.2f", kp, kd);
 
                 // Set kp and kd gains for all joints
                 for (size_t i = 0; i < ctrl_interfaces_.joint_kp_command_interface_.size(); ++i)
                 {
-                    ctrl_interfaces_.joint_kp_command_interface_[i].get().set_value(kp);
+                    std::ignore = ctrl_interfaces_.joint_kp_command_interface_[i].get().set_value(kp);
                 }
                 for (size_t i = 0; i < ctrl_interfaces_.joint_kd_command_interface_.size(); ++i)
                 {
-                    ctrl_interfaces_.joint_kd_command_interface_[i].get().set_value(kd);
+                    std::ignore = ctrl_interfaces_.joint_kd_command_interface_[i].get().set_value(kd);
                 }
             }
             else

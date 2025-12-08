@@ -16,10 +16,12 @@
 #include <ocs2_msgs/msg/mpc_observation.hpp>
 #include "ocs2_arm_controller/control/Visualizer.h"
 
+#include <arms_controller_common/CtrlInterfaces.h>
+
 namespace ocs2::mobile_manipulator
 {
-    // Forward declaration
-    struct CtrlInterfaces;
+    // Use CtrlInterfaces from arms_controller_common
+    using CtrlInterfaces = arms_controller_common::CtrlInterfaces;
 
     class CtrlComponent
     {

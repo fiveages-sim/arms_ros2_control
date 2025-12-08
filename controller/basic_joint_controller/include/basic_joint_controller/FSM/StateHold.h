@@ -1,28 +1,35 @@
 //
-// Created for Basic Joint Controller - StateHold
+// Basic Joint Controller - StateHold (extends arms_controller_common::StateHold)
 //
 #pragma once
 
-#include <vector>
-#include "basic_joint_controller/BasicJointController.h"
+#include <arms_controller_common/FSM/StateHold.h>
+#include <arms_controller_common/CtrlInterfaces.h>
+#include <rclcpp/rclcpp.hpp>
 
 namespace basic_joint_controller
 {
-    class StateHold : public FSMState
+    /**
+     * @brief StateHold for basic_joint_controller
+     * 
+     * Extends arms_controller_common::StateHold to support MOVEJ state transition
+     */
+    class StateHold : public arms_controller_common::StateHold
     {
     public:
-        StateHold(CtrlInterfaces& ctrl_interfaces, const rclcpp::Logger& logger, double position_threshold = 0.1);
+        StateHold(arms_controller_common::CtrlInterfaces& ctrl_interfaces,
+                 const rclcpp::Logger& logger,
+                 double position_threshold = 0.1,
+                 std::shared_ptr<arms_controller_common::GravityCompensation> gravity_compensation = nullptr)
+            : arms_controller_common::StateHold(ctrl_interfaces, logger, position_threshold, gravity_compensation)
+        {
+        }
 
-        void enter() override;
-        void run(const rclcpp::Time& time, const rclcpp::Duration& period) override;
-        void exit() override;
-        FSMStateName checkChange() override;
-
-    private:
-        CtrlInterfaces& ctrl_interfaces_;
-        rclcpp::Logger logger_;           // Logger from controller
-        std::vector<double> hold_positions_; // Positions recorded when entering
-        double joint_position_threshold_; // Threshold for joint position difference check (in radians)
+        /**
+         * @brief Override checkChange to support MOVEJ state transition
+         * @return Next state name
+         */
+        arms_controller_common::FSMStateName checkChange() override;
     };
 } // namespace basic_joint_controller
 

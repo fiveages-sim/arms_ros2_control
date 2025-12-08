@@ -17,6 +17,7 @@ set(CONTROLLER_INCLUDE_DEPENDS
         ocs2_ros_interfaces
         arms_ros2_control_msgs
         ocs2_self_collision_visualization
+        arms_controller_common
 )
 
 # find dependencies
@@ -35,6 +36,7 @@ add_library(${PROJECT_NAME} SHARED
         src/FSM/StateHome.cpp
         src/FSM/StateOCS2.cpp
         src/FSM/StateHold.cpp
+        src/FSM/StateMoveJ.cpp
 )
 
 target_include_directories(${PROJECT_NAME}

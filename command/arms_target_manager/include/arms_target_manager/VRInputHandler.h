@@ -17,7 +17,6 @@
 
 namespace arms_ros2_control::command
 {
-
     /**
      * VRInputHandler - VR输入处理器Wrapper
      * 
@@ -143,9 +142,9 @@ namespace arms_ros2_control::command
          * @param position 位置
          * @param orientation 方向
          */
-        void updateMarkerPose(const std::string& armType, 
-                             const Eigen::Vector3d& position, 
-                             const Eigen::Quaterniond& orientation);
+        void updateMarkerPose(const std::string& armType,
+                              const Eigen::Vector3d& position,
+                              const Eigen::Quaterniond& orientation);
 
         /**
          * 将PoseStamped消息转换为Eigen::Matrix4d
@@ -160,9 +159,9 @@ namespace arms_ros2_control::command
          * @param position 输出位置
          * @param orientation 输出方向
          */
-        void matrixToPosOri(const Eigen::Matrix4d& matrix, 
-                           Eigen::Vector3d& position, 
-                           Eigen::Quaterniond& orientation);
+        void matrixToPosOri(const Eigen::Matrix4d& matrix,
+                            Eigen::Vector3d& position,
+                            Eigen::Quaterniond& orientation);
 
         /**
          * 检查pose是否发生显著变化
@@ -172,10 +171,10 @@ namespace arms_ros2_control::command
          * @param prevOri 之前方向
          * @return true如果pose发生显著变化
          */
-        bool hasPoseChanged(const Eigen::Vector3d& currentPos, 
-                           const Eigen::Quaterniond& currentOri,
-                           const Eigen::Vector3d& prevPos, 
-                           const Eigen::Quaterniond& prevOri);
+        bool hasPoseChanged(const Eigen::Vector3d& currentPos,
+                            const Eigen::Quaterniond& currentOri,
+                            const Eigen::Vector3d& prevPos,
+                            const Eigen::Quaterniond& prevOri);
 
         /**
          * 基于差值计算pose并应用到机器人base pose
@@ -188,14 +187,14 @@ namespace arms_ros2_control::command
          * @param resultPos 输出计算的位置
          * @param resultOri 输出计算的方向
          */
-        void calculatePoseFromDifference(const Eigen::Vector3d& vrCurrentPos, 
-                                        const Eigen::Quaterniond& vrCurrentOri,
-                                        const Eigen::Vector3d& vrBasePos, 
-                                        const Eigen::Quaterniond& vrBaseOri,
-                                        const Eigen::Vector3d& robotBasePos, 
-                                        const Eigen::Quaterniond& robotBaseOri,
-                                        Eigen::Vector3d& resultPos, 
-                                        Eigen::Quaterniond& resultOri);
+        void calculatePoseFromDifference(const Eigen::Vector3d& vrCurrentPos,
+                                         const Eigen::Quaterniond& vrCurrentOri,
+                                         const Eigen::Vector3d& vrBasePos,
+                                         const Eigen::Quaterniond& vrBaseOri,
+                                         const Eigen::Vector3d& robotBasePos,
+                                         const Eigen::Quaterniond& robotBaseOri,
+                                         Eigen::Vector3d& resultPos,
+                                         Eigen::Quaterniond& resultOri);
 
         // ROS组件
         rclcpp::Node::SharedPtr node_;
@@ -237,14 +236,14 @@ namespace arms_ros2_control::command
 
         // 状态管理
         std::atomic<bool> enabled_;
-        std::atomic<bool> is_update_mode_;  // true = 更新模式, false = 存储模式
+        std::atomic<bool> is_update_mode_; // true = 更新模式, false = 存储模式
         std::atomic<bool> last_thumbstick_state_;
-        std::atomic<bool> mirror_mode_;  // true = 镜像模式, false = 正常模式
+        std::atomic<bool> mirror_mode_; // true = 镜像模式, false = 正常模式
         std::atomic<bool> last_left_thumbstick_state_;
-        std::atomic<bool> last_left_grip_state_;   // 左握把按钮上次状态
-        std::atomic<bool> last_right_grip_state_;  // 右握把按钮上次状态
-        std::atomic<bool> left_grip_mode_;   // 左摇杆控制模式：false=XY平移, true=Z轴+Yaw
-        std::atomic<bool> right_grip_mode_;  // 右摇杆控制模式：false=XY平移, true=Z轴+Yaw
+        std::atomic<bool> last_left_grip_state_; // 左握把按钮上次状态
+        std::atomic<bool> last_right_grip_state_; // 右握把按钮上次状态
+        std::atomic<bool> left_grip_mode_; // 左摇杆控制模式：false=XY平移, true=Z轴+Yaw
+        std::atomic<bool> right_grip_mode_; // 右摇杆控制模式：false=XY平移, true=Z轴+Yaw
         std::mutex state_mutex_;
 
         // 时间控制
@@ -289,8 +288,7 @@ namespace arms_ros2_control::command
         static const std::string XR_NODE_NAME;
         static const double POSITION_THRESHOLD;
         static const double ORIENTATION_THRESHOLD;
-        static const double LINEAR_SCALE;   // 摇杆位置缩放因子
-        static const double ANGULAR_SCALE;  // 摇杆旋转缩放因子
+        static const double LINEAR_SCALE; // 摇杆位置缩放因子
+        static const double ANGULAR_SCALE; // 摇杆旋转缩放因子
     };
-
 } // namespace arms_ros2_control::command

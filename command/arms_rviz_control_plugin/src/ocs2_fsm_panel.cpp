@@ -11,9 +11,6 @@ namespace arms_rviz_control_plugin
 {
     OCS2FSMPanel::OCS2FSMPanel(QWidget* parent)
         : Panel(parent)
-          , current_command_(0)
-          , current_state_("HOLD")
-          , switch_pose_pressed_(false)
     {
         // Create UI layout
         auto* main_layout = new QVBoxLayout(this);
@@ -24,7 +21,7 @@ namespace arms_rviz_control_plugin
         title_label->setStyleSheet("QLabel { font-weight: bold; font-size: 14px; }");
         
         // Small status indicator
-        current_state_label_ = new QLabel("HOLD", this);
+        current_state_label_ = std::make_unique<QLabel>("HOLD", this);
         current_state_label_->setStyleSheet(
             "QLabel { padding: 1px 4px; background-color: #e3f2fd; border: 1px solid #2196F3; "
             "font-weight: bold; font-size: 9px; border-radius: 2px; margin: 0px; }");
@@ -33,7 +30,7 @@ namespace arms_rviz_control_plugin
         
         title_layout->addStretch(); // 左侧空白
         title_layout->addWidget(title_label);
-        title_layout->addWidget(current_state_label_);
+        title_layout->addWidget(current_state_label_.get());
         title_layout->addStretch(); // 右侧空白
         main_layout->addLayout(title_layout);
 
@@ -43,47 +40,65 @@ namespace arms_rviz_control_plugin
         button_layout->setSpacing(2); // 减少按钮间距
 
         // HOME → HOLD (command = 2) - 修正command值
-        home_to_hold_btn_ = new QPushButton("HOME → HOLD", this);
-        home_to_hold_btn_->setStyleSheet("QPushButton { background-color: #4CAF50; color: white; font-weight: bold; }");
-        button_layout->addWidget(home_to_hold_btn_);
+        home_to_hold_btn_ = std::make_unique<QPushButton>("HOLD", this);
+        home_to_hold_btn_->setStyleSheet("QPushButton { background-color: #FF9800; color: white; font-weight: bold; }");
+        button_layout->addWidget(home_to_hold_btn_.get());
 
         // Switch pose button (command = 4) - 只在HOME状态显示
-        switch_pose_btn_ = new QPushButton("切换姿态 (Home ↔ Rest)", this);
+        switch_pose_btn_ = std::make_unique<QPushButton>("切换姿态 (Home ↔ Rest)", this);
         switch_pose_btn_->setStyleSheet("QPushButton { background-color: #FF5722; color: white; font-weight: bold; }");
-        button_layout->addWidget(switch_pose_btn_);
+        button_layout->addWidget(switch_pose_btn_.get());
 
+        // HOLD → OCS2 和 HOLD → MOVEJ 同一行
+        auto* hold_to_row = new QHBoxLayout();
+        hold_to_row->setSpacing(2);
         // HOLD → OCS2 (command = 3)
-        hold_to_ocs2_btn_ = new QPushButton("HOLD → OCS2", this);
+        hold_to_ocs2_btn_ = std::make_unique<QPushButton>("OCS2", this);
         hold_to_ocs2_btn_->setStyleSheet("QPushButton { background-color: #2196F3; color: white; font-weight: bold; }");
-        button_layout->addWidget(hold_to_ocs2_btn_);
+        hold_to_row->addWidget(hold_to_ocs2_btn_.get());
+        // HOLD → MOVEJ (command = 4)
+        hold_to_movej_btn_ = std::make_unique<QPushButton>("MOVEJ", this);
+        hold_to_movej_btn_->setStyleSheet("QPushButton { background-color: #009688; color: white; font-weight: bold; }");
+        hold_to_row->addWidget(hold_to_movej_btn_.get());
+        button_layout->addLayout(hold_to_row);
 
+        // OCS2 → HOLD 和 MOVEJ → HOLD 同一行
+        auto* to_hold_row = new QHBoxLayout();
+        to_hold_row->setSpacing(2);
         // OCS2 → HOLD (command = 2)
-        ocs2_to_hold_btn_ = new QPushButton("OCS2 → HOLD", this);
+        ocs2_to_hold_btn_ = std::make_unique<QPushButton>("HOLD", this);
         ocs2_to_hold_btn_->setStyleSheet("QPushButton { background-color: #FF9800; color: white; font-weight: bold; }");
-        button_layout->addWidget(ocs2_to_hold_btn_);
+        to_hold_row->addWidget(ocs2_to_hold_btn_.get());
+        // MOVEJ → HOLD (command = 2)
+        movej_to_hold_btn_ = std::make_unique<QPushButton>("HOLD", this);
+        movej_to_hold_btn_->setStyleSheet("QPushButton { background-color: #FF9800; color: white; font-weight: bold; }");
+        to_hold_row->addWidget(movej_to_hold_btn_.get());
+        button_layout->addLayout(to_hold_row);
 
         // HOLD → HOME (command = 1)
-        hold_to_home_btn_ = new QPushButton("HOLD → HOME", this);
+        hold_to_home_btn_ = std::make_unique<QPushButton>("HOME", this);
         hold_to_home_btn_->setStyleSheet("QPushButton { background-color: #9C27B0; color: white; font-weight: bold; }");
-        button_layout->addWidget(hold_to_home_btn_);
+        button_layout->addWidget(hold_to_home_btn_.get());
 
         main_layout->addWidget(button_group);
 
         // Connect signals
-        connect(home_to_hold_btn_, &QPushButton::clicked, this, &OCS2FSMPanel::onHomeToHold);
-        connect(hold_to_ocs2_btn_, &QPushButton::clicked, this, &OCS2FSMPanel::onHoldToOCS2);
-        connect(ocs2_to_hold_btn_, &QPushButton::clicked, this, &OCS2FSMPanel::onOCS2ToHold);
-        connect(hold_to_home_btn_, &QPushButton::clicked, this, &OCS2FSMPanel::onHoldToHome);
-        connect(switch_pose_btn_, &QPushButton::clicked, this, &OCS2FSMPanel::onSwitchPose);
+        connect(home_to_hold_btn_.get(), &QPushButton::clicked, this, &OCS2FSMPanel::onHomeToHold);
+        connect(hold_to_ocs2_btn_.get(), &QPushButton::clicked, this, &OCS2FSMPanel::onHoldToOCS2);
+        connect(ocs2_to_hold_btn_.get(), &QPushButton::clicked, this, &OCS2FSMPanel::onOCS2ToHold);
+        connect(hold_to_movej_btn_.get(), &QPushButton::clicked, this, &OCS2FSMPanel::onHoldToMoveJ);
+        connect(movej_to_hold_btn_.get(), &QPushButton::clicked, this, &OCS2FSMPanel::onMoveJToHold);
+        connect(hold_to_home_btn_.get(), &QPushButton::clicked, this, &OCS2FSMPanel::onHoldToHome);
+        connect(switch_pose_btn_.get(), &QPushButton::clicked, this, &OCS2FSMPanel::onSwitchPose);
 
         // 初始化按钮可见性（初始状态为HOLD）
         updateButtonVisibility();
 
         // 创建重置定时器
-        reset_timer_ = new QTimer(this);
+        reset_timer_ = std::make_unique<QTimer>(this);
         reset_timer_->setSingleShot(true);
         reset_timer_->setInterval(100); // 100ms延迟
-        connect(reset_timer_, &QTimer::timeout, this, &OCS2FSMPanel::onSwitchPoseReleased);
+        connect(reset_timer_.get(), &QTimer::timeout, this, &OCS2FSMPanel::onSwitchPoseReleased);
     }
 
     OCS2FSMPanel::~OCS2FSMPanel() = default;
@@ -127,6 +142,18 @@ namespace arms_rviz_control_plugin
     {
         publishCommand(1);
         setCurrentState("HOME");
+    }
+
+    void OCS2FSMPanel::onHoldToMoveJ()
+    {
+        publishCommand(4);
+        setCurrentState("MOVEJ");
+    }
+
+    void OCS2FSMPanel::onMoveJToHold()
+    {
+        publishCommand(2);
+        setCurrentState("HOLD");
     }
 
     void OCS2FSMPanel::onSwitchPose()
@@ -179,7 +206,9 @@ namespace arms_rviz_control_plugin
         {
             // HOME状态可以转换到HOLD，也可以切换姿态
             hold_to_ocs2_btn_->setVisible(false);
+            hold_to_movej_btn_->setVisible(false);
             ocs2_to_hold_btn_->setVisible(false);
+            movej_to_hold_btn_->setVisible(false);
             hold_to_home_btn_->setVisible(false);
             home_to_hold_btn_->setVisible(true);
             home_to_hold_btn_->setEnabled(true);
@@ -188,14 +217,17 @@ namespace arms_rviz_control_plugin
         }
         else if (current_state_ == "HOLD")
         {
-            // HOLD状态可以转换到OCS2或HOME
+            // HOLD状态可以转换到OCS2、HOME或MOVEJ
             home_to_hold_btn_->setVisible(false);
             switch_pose_btn_->setVisible(false);
             ocs2_to_hold_btn_->setVisible(false);
+            movej_to_hold_btn_->setVisible(false);
             hold_to_home_btn_->setVisible(true);
             hold_to_home_btn_->setEnabled(true);
             hold_to_ocs2_btn_->setVisible(true);
             hold_to_ocs2_btn_->setEnabled(true);
+            hold_to_movej_btn_->setVisible(true);
+            hold_to_movej_btn_->setEnabled(true);
         }
         else if (current_state_ == "OCS2")
         {
@@ -203,9 +235,23 @@ namespace arms_rviz_control_plugin
             home_to_hold_btn_->setVisible(false);
             switch_pose_btn_->setVisible(false);
             hold_to_ocs2_btn_->setVisible(false);
+            hold_to_movej_btn_->setVisible(false);
             hold_to_home_btn_->setVisible(false);
+            movej_to_hold_btn_->setVisible(false);
             ocs2_to_hold_btn_->setVisible(true);
             ocs2_to_hold_btn_->setEnabled(true);
+        }
+        else if (current_state_ == "MOVEJ")
+        {
+            // MOVEJ状态只能转换到HOLD
+            home_to_hold_btn_->setVisible(false);
+            switch_pose_btn_->setVisible(false);
+            hold_to_ocs2_btn_->setVisible(false);
+            hold_to_home_btn_->setVisible(false);
+            ocs2_to_hold_btn_->setVisible(false);
+            hold_to_movej_btn_->setVisible(false);
+            movej_to_hold_btn_->setVisible(true);
+            movej_to_hold_btn_->setEnabled(true);
         }
         else
         {
@@ -213,7 +259,9 @@ namespace arms_rviz_control_plugin
             home_to_hold_btn_->setVisible(false);
             switch_pose_btn_->setVisible(false);
             hold_to_ocs2_btn_->setVisible(false);
+            hold_to_movej_btn_->setVisible(false);
             ocs2_to_hold_btn_->setVisible(false);
+            movej_to_hold_btn_->setVisible(false);
             hold_to_home_btn_->setVisible(false);
         }
     }
@@ -252,8 +300,8 @@ namespace arms_rviz_control_plugin
                     valid_transition = true;
                 }
                 break;
-            case 2: // HOME → HOLD 或 OCS2 → HOLD
-                if (current_state_ == "HOME" || current_state_ == "OCS2")
+            case 2: // HOME → HOLD 或 OCS2 → HOLD 或 MOVEJ → HOLD
+                if (current_state_ == "HOME" || current_state_ == "OCS2" || current_state_ == "MOVEJ")
                 {
                     new_state = "HOLD";
                     valid_transition = true;
@@ -263,6 +311,13 @@ namespace arms_rviz_control_plugin
                 if (current_state_ == "HOLD")
                 {
                     new_state = "OCS2";
+                    valid_transition = true;
+                }
+                break;
+            case 4: // HOLD → MOVEJ
+                if (current_state_ == "HOLD")
+                {
+                    new_state = "MOVEJ";
                     valid_transition = true;
                 }
                 break;

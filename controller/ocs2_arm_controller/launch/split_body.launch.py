@@ -135,10 +135,13 @@ def launch_setup(context, *args, **kwargs):
     # Detect body controllers using robot_common_launch (body, head)
     enable_body = context.launch_configurations.get('enable_body', 'true').lower() == 'true'
     body_controller_spawners = []
+    joint_controller_names = ['ocs2_arm_controller']
 
     if enable_body:
         head_controllers = detect_controllers(robot_name, robot_type, ['body', 'head'])
         body_controller_spawners = create_controller_spawners(head_controllers, use_sim_time)
+        joint_controller_names.extend([c['name'] for c in head_controllers])
+
 
     # Get info file name from controller configuration
     info_file_name = get_info_file_name(robot_name, robot_type)
@@ -153,6 +156,7 @@ def launch_setup(context, *args, **kwargs):
         return []
 
     # OCS2 ArmsTargetManager for interactive pose control (auto-detects dual_arm_mode and frame_id from task.info)
+    # task.info 使用 planning_robot_name（机械臂描述，如 m6_CCS）
     task_file_path = os.path.join(
         robot_pkg_path,
         "config",
@@ -160,6 +164,25 @@ def launch_setup(context, *args, **kwargs):
         f"{info_file_name}.info"
     )
     print(f"[INFO] Using task file for ArmsTargetManager: {task_file_path}")
+    
+    # target_manager.yaml 使用原始 robot_name（全身描述，如 fiveages_w2）
+    # 这样可以确保头部控制等配置使用全身机器人的配置
+    full_body_robot_pkg_path = get_robot_package_path(robot_name)
+    config_file_path = None
+    if full_body_robot_pkg_path is not None:
+        full_body_config_path = os.path.join(
+            full_body_robot_pkg_path,
+            "config",
+            "ocs2",
+            "target_manager.yaml"
+        )
+        if os.path.exists(full_body_config_path):
+            config_file_path = full_body_config_path
+            print(f"[INFO] Using target_manager.yaml from full body robot description: {config_file_path}")
+        else:
+            print(f"[WARN] target_manager.yaml not found at: {full_body_config_path}")
+    else:
+        print(f"[WARN] Cannot find full body robot package path for '{robot_name}'")
 
     ocs2_arms_target_manager = IncludeLaunchDescription(
         PythonLaunchDescriptionSource([
@@ -168,15 +191,31 @@ def launch_setup(context, *args, **kwargs):
         ]),
         launch_arguments=[
             ('task_file', task_file_path),
-        ],
+            ('enable_head_control', LaunchConfiguration('enable_body')),
+        ] + ([('config_file', config_file_path)] if config_file_path else []),
         condition=IfCondition(LaunchConfiguration('enable_arms_target_manager'))
     )
 
     # RViz for visualization
-    rviz_base = os.path.join(
-        get_package_share_directory("ocs2_arm_controller"), "config",
-    )
-    rviz_full_config = os.path.join(rviz_base, "demo.rviz")
+    # 确定配置文件路径（优先级：机器人description包目录 > 默认配置）
+    rviz_config_path = None
+    
+    # 检查机器人description包目录下是否有ocs2rviz配置
+    robot_pkg_path = get_robot_package_path(robot_name)
+    if robot_pkg_path is not None:
+        robot_rviz_config = os.path.join(robot_pkg_path, "config", "rviz", "splitbody.rviz")
+        print(f"[INFO] Checking for rviz config in robot description package: {robot_rviz_config}")
+        if os.path.exists(robot_rviz_config):
+            rviz_config_path = robot_rviz_config
+            print(f"[INFO] Using rviz config from robot description package: {rviz_config_path}")
+    
+    # 如果还没有找到，使用默认配置文件
+    if not rviz_config_path:
+        rviz_base = os.path.join(
+            get_package_share_directory("ocs2_arm_controller"), "config",
+        )
+        rviz_config_path = os.path.join(rviz_base, "demo.rviz")
+        print(f"[INFO] Using default rviz config: {rviz_config_path}")
 
     # Extract hand controller names for GripperControlPanel
     hand_controller_names = []
@@ -190,12 +229,15 @@ def launch_setup(context, *args, **kwargs):
     if hand_controller_names:
         rviz_parameters.append({'hand_controllers': hand_controller_names})
 
+    # Add joint_controllers parameter for JointControlPanel
+    rviz_parameters.append({'joint_controllers': joint_controller_names})
+
     rviz_node = Node(
         package="rviz2",
         executable="rviz2",
         name="rviz2",
         output="log",
-        arguments=["-d", rviz_full_config],
+        arguments=["-d", rviz_config_path],
         parameters=rviz_parameters,
     )
 

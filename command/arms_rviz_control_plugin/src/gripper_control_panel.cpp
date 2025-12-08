@@ -8,9 +8,6 @@ namespace arms_rviz_control_plugin
 {
     GripperControlPanel::GripperControlPanel(QWidget* parent)
         : Panel(parent)
-          , left_gripper_btn_(nullptr)
-          , right_gripper_btn_(nullptr)
-          , no_controller_label_(nullptr)
           , is_dual_arm_mode_(false)
           , left_gripper_open_(false)
           , right_gripper_open_(false)
@@ -23,31 +20,31 @@ namespace arms_rviz_control_plugin
         auto* gripper_layout = new QHBoxLayout(gripper_group);
 
         // Left arm button (disabled by default)
-        left_gripper_btn_ = new QPushButton("Open Left Gripper");
+        left_gripper_btn_ = std::make_unique<QPushButton>("Open Left Gripper", this);
         left_gripper_btn_->setVisible(false);
         left_gripper_btn_->setStyleSheet(
             "QPushButton { background-color: #4CAF50; color: white; font-weight: bold; padding: 10px; }");
-        gripper_layout->addWidget(left_gripper_btn_);
+        gripper_layout->addWidget(left_gripper_btn_.get());
 
         // Right arm button (disabled by default)
-        right_gripper_btn_ = new QPushButton("Open Right Gripper");
+        right_gripper_btn_ = std::make_unique<QPushButton>("Open Right Gripper", this);
         right_gripper_btn_->setVisible(false);
         right_gripper_btn_->setStyleSheet(
             "QPushButton { background-color: #4CAF50; color: white; font-weight: bold; padding: 10px; }");
-        gripper_layout->addWidget(right_gripper_btn_);
+        gripper_layout->addWidget(right_gripper_btn_.get());
 
         // No controller label
-        no_controller_label_ = new QLabel("No gripper controller");
+        no_controller_label_ = std::make_unique<QLabel>("No gripper controller", this);
         no_controller_label_->setStyleSheet(
             "QLabel { color: #666666; font-style: italic; padding: 10px; }");
         no_controller_label_->setAlignment(Qt::AlignCenter);
-        gripper_layout->addWidget(no_controller_label_);
+        gripper_layout->addWidget(no_controller_label_.get());
 
         main_layout->addWidget(gripper_group);
 
         // Connect signals
-        connect(left_gripper_btn_, &QPushButton::clicked, this, &GripperControlPanel::onLeftGripperToggle);
-        connect(right_gripper_btn_, &QPushButton::clicked, this, &GripperControlPanel::onRightGripperToggle);
+        connect(left_gripper_btn_.get(), &QPushButton::clicked, this, &GripperControlPanel::onLeftGripperToggle);
+        connect(right_gripper_btn_.get(), &QPushButton::clicked, this, &GripperControlPanel::onRightGripperToggle);
     }
 
     GripperControlPanel::~GripperControlPanel() = default;

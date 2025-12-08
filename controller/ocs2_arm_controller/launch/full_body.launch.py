@@ -134,10 +134,13 @@ def launch_setup(context, *args, **kwargs):
     # Detect body controllers using robot_common_launch (body, head)
     enable_head = context.launch_configurations.get('enable_head', 'true').lower() == 'true'
     body_controller_spawners = []
+    joint_controller_names = ['ocs2_wbc_controller']
 
     if enable_head:
         head_controllers = detect_controllers(robot_name, robot_type, ['head'])
         body_controller_spawners = create_controller_spawners(head_controllers, use_sim_time)
+        joint_controller_names.extend([c['name'] for c in head_controllers])
+
 
     # Get info file name from ocs2_wbc_controller configuration
     # Use the config already loaded above
@@ -175,15 +178,31 @@ def launch_setup(context, *args, **kwargs):
         ]),
         launch_arguments=[
             ('task_file', task_file_path),
+            ('enable_head_control', LaunchConfiguration('enable_head')),
         ],
         condition=IfCondition(LaunchConfiguration('enable_arms_target_manager'))
     )
 
     # RViz for visualization
-    rviz_base = os.path.join(
-        get_package_share_directory("ocs2_arm_controller"), "config",
-    )
-    rviz_full_config = os.path.join(rviz_base, "demo.rviz")
+    # 确定配置文件路径（优先级：机器人description包目录 > 默认配置）
+    rviz_config_path = None
+    
+    # 检查机器人description包目录下是否有ocs2rviz配置
+    robot_pkg_path = get_robot_package_path(robot_name)
+    if robot_pkg_path is not None:
+        robot_rviz_config = os.path.join(robot_pkg_path, "config", "rviz", "fullbody.rviz")
+        print(f"[INFO] Checking for rviz config in robot description package: {robot_rviz_config}")
+        if os.path.exists(robot_rviz_config):
+            rviz_config_path = robot_rviz_config
+            print(f"[INFO] Using rviz config from robot description package: {rviz_config_path}")
+    
+    # 如果还没有找到，使用默认配置文件
+    if not rviz_config_path:
+        rviz_base = os.path.join(
+            get_package_share_directory("ocs2_arm_controller"), "config",
+        )
+        rviz_config_path = os.path.join(rviz_base, "demo.rviz")
+        print(f"[INFO] Using default rviz config: {rviz_config_path}")
 
     # Extract hand controller names for GripperControlPanel
     hand_controller_names = []
@@ -197,12 +216,15 @@ def launch_setup(context, *args, **kwargs):
     if hand_controller_names:
         rviz_parameters.append({'hand_controllers': hand_controller_names})
 
+    # Add joint_controllers parameter for JointControlPanel
+    rviz_parameters.append({'joint_controllers': joint_controller_names})
+
     rviz_node = Node(
         package="rviz2",
         executable="rviz2",
         name="rviz2",
         output="log",
-        arguments=["-d", rviz_full_config],
+        arguments=["-d", rviz_config_path],
         parameters=rviz_parameters,
     )
 

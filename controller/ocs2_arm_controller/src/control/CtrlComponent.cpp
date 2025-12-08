@@ -147,10 +147,11 @@ namespace ocs2::mobile_manipulator
         }
         // Update observation state
         observation_.time = time.seconds();
-        for (size_t i = 0; i < joint_names_.size(); ++i)
-        {
-            observation_.state[i] = ctrl_interfaces_.joint_position_state_interface_[i].get().get_value();
-        }
+            for (size_t i = 0; i < joint_names_.size(); ++i)
+            {
+                auto value = ctrl_interfaces_.joint_position_state_interface_[i].get().get_optional();
+                observation_.state[i] = value.value_or(0.0);
+            }
         observation_.input = vector_t::Zero(interface_->getManipulatorModelInfo().inputDim);
 
         // 更新PoseBasedReferenceManager的当前观测
@@ -211,9 +212,9 @@ namespace ocs2::mobile_manipulator
             // Extract joint positions from state and set as commands
             if (ctrl_interfaces_.control_mode_ == ControlMode::POSITION)
             {
-                for (size_t i = 0; i < joint_names_.size() && i < future_state.size(); ++i)
+                for (size_t i = 0; i < joint_names_.size() && i < static_cast<size_t>(future_state.size()); ++i)
                 {
-                    ctrl_interfaces_.joint_position_command_interface_[i].get().set_value(future_state(i));
+                    std::ignore = ctrl_interfaces_.joint_position_command_interface_[i].get().set_value(future_state(i));
                 }
                 cached_last_action_ = future_state;
                 last_execute_time_ = time;
@@ -223,19 +224,19 @@ namespace ocs2::mobile_manipulator
                 // Calculate static torques for force control
                 vector_t static_torques = calculateStaticTorques();
 
-                for (size_t i = 0; i < joint_names_.size() && i < static_torques.size(); ++i)
+                for (size_t i = 0; i < joint_names_.size() && i < static_cast<size_t>(static_torques.size()); ++i)
                 {
-                    ctrl_interfaces_.joint_force_command_interface_[i].get().set_value(static_torques(i));
+                    std::ignore = ctrl_interfaces_.joint_force_command_interface_[i].get().set_value(static_torques(i));
                 }
 
-                for (size_t i = 0; i < joint_names_.size() && i < future_state.size(); ++i)
+                for (size_t i = 0; i < joint_names_.size() && i < static_cast<size_t>(future_state.size()); ++i)
                 {
-                    ctrl_interfaces_.joint_position_command_interface_[i].get().set_value(future_state(i));
+                    std::ignore = ctrl_interfaces_.joint_position_command_interface_[i].get().set_value(future_state(i));
                 }
 
-                for (size_t i = 0; i < joint_names_.size() && i < future_input.size(); ++i)
+                for (size_t i = 0; i < joint_names_.size() && i < static_cast<size_t>(future_input.size()); ++i)
                 {
-                    ctrl_interfaces_.joint_velocity_command_interface_[i].get().set_value(future_input(i));
+                    std::ignore = ctrl_interfaces_.joint_velocity_command_interface_[i].get().set_value(future_input(i));
                 }
             }
             else
@@ -250,14 +251,15 @@ namespace ocs2::mobile_manipulator
             vector_t current_positions(joint_names_.size());
             for (size_t i = 0; i < joint_names_.size(); ++i)
             {
-                current_positions(i) = ctrl_interfaces_.joint_position_state_interface_[i].get().get_value();
+                auto value = ctrl_interfaces_.joint_position_state_interface_[i].get().get_optional();
+                current_positions(i) = value.value_or(0.0);
             }
 
             double dt = 1.0 / ctrl_interfaces_.frequency_;
-            for (size_t i = 0; i < joint_names_.size() && i < optimized_input_.size(); ++i)
+            for (size_t i = 0; i < joint_names_.size() && i < static_cast<size_t>(optimized_input_.size()); ++i)
             {
                 double new_position = current_positions(i) + optimized_input_(i) * dt;
-                ctrl_interfaces_.joint_position_command_interface_[i].get().set_value(new_position);
+                std::ignore = ctrl_interfaces_.joint_position_command_interface_[i].get().set_value(new_position);
             }
         }
         visualizer_->updateEndEffectorTrajectory(mpc_mrt_interface_->getPolicy());
