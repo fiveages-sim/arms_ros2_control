@@ -4,6 +4,8 @@
 
 #include "ocs2_arm_controller/control/PoseBasedReferenceManager.h"
 #include <rclcpp/rclcpp.hpp>
+#include <geometry_msgs/msg/pose_stamped.hpp>
+#include <tf2/exceptions.h>
 
 namespace ocs2::mobile_manipulator
 {
@@ -13,9 +15,13 @@ namespace ocs2::mobile_manipulator
         std::shared_ptr<MobileManipulatorInterface> interfacePtr)
         : ReferenceManagerDecorator(std::move(referenceManagerPtr)),
           topic_prefix_(std::move(topicPrefix)),
-          interface_(std::move(interfacePtr))
+          interface_(std::move(interfacePtr)),
+          logger_(rclcpp::get_logger("PoseBasedReferenceManager"))
     {
         dual_arm_mode_ = interface_->dual_arm_;
+
+        // 获取base frame
+        base_frame_ = interface_->getManipulatorModelInfo().baseFrame;
 
         // 初始化target state缓存
         left_target_state_ = vector_t::Zero(7);
@@ -26,6 +32,13 @@ namespace ocs2::mobile_manipulator
 
     void PoseBasedReferenceManager::subscribe(const rclcpp_lifecycle::LifecycleNode::SharedPtr& node)
     {
+        // 保存node的logger用于后续日志输出
+        logger_ = node->get_logger();
+        
+        // 初始化TF2 buffer和listener
+        tf_buffer_ = std::make_shared<tf2_ros::Buffer>(node->get_clock());
+        tf_listener_ = std::make_shared<tf2_ros::TransformListener>(*tf_buffer_);
+
         // 左臂pose订阅者（单臂机器人也使用这个）
         auto leftCallback = [this](const geometry_msgs::msg::Pose::SharedPtr msg)
         {
@@ -43,6 +56,25 @@ namespace ocs2::mobile_manipulator
             };
             right_pose_subscriber_ = node->create_subscription<geometry_msgs::msg::Pose>(
                 "right_target", 1, rightCallback);
+        }
+
+        // 左臂PoseStamped订阅者（单臂机器人也使用这个）
+        auto leftStampedCallback = [this](const geometry_msgs::msg::PoseStamped::SharedPtr msg)
+        {
+            leftPoseStampedCallback(msg);
+        };
+        left_pose_stamped_subscriber_ = node->create_subscription<geometry_msgs::msg::PoseStamped>(
+            "left_target/stamped", 1, leftStampedCallback);
+
+        // 右臂PoseStamped订阅者（仅双臂机器人）
+        if (dual_arm_mode_)
+        {
+            auto rightStampedCallback = [this](const geometry_msgs::msg::PoseStamped::SharedPtr msg)
+            {
+                rightPoseStampedCallback(msg);
+            };
+            right_pose_stamped_subscriber_ = node->create_subscription<geometry_msgs::msg::PoseStamped>(
+                "right_target/stamped", 1, rightStampedCallback);
         }
     }
 
@@ -133,6 +165,60 @@ namespace ocs2::mobile_manipulator
         updateTargetTrajectory();
     }
 
+    void PoseBasedReferenceManager::processPoseStamped(
+        const geometry_msgs::msg::PoseStamped::SharedPtr& msg,
+        std::function<void(geometry_msgs::msg::Pose::SharedPtr)> callback)
+    {
+        // 如果源frame和目标frame相同，直接使用
+        if (msg->header.frame_id == base_frame_)
+        {
+            auto pose_msg = std::make_shared<geometry_msgs::msg::Pose>();
+            pose_msg->position = msg->pose.position;
+            pose_msg->orientation = msg->pose.orientation;
+            callback(pose_msg);
+            return;
+        }
+
+        // 使用TF转换到base frame（使用最新变换）
+        try
+        {
+            geometry_msgs::msg::PoseStamped transformed_pose;
+            
+            // 使用最新可用变换
+            geometry_msgs::msg::TransformStamped transform = tf_buffer_->lookupTransform(
+                base_frame_, msg->header.frame_id, tf2::TimePointZero);
+
+            // 使用doTransform进行转换
+            tf2::doTransform(*msg, transformed_pose, transform);
+
+            // 调用指定的回调方法
+            auto pose_msg = std::make_shared<geometry_msgs::msg::Pose>();
+            pose_msg->position = transformed_pose.pose.position;
+            pose_msg->orientation = transformed_pose.pose.orientation;
+            callback(pose_msg);
+        }
+        catch (const tf2::TransformException& ex)
+        {
+            RCLCPP_WARN(logger_,
+                        "无法将pose从 %s 转换到 %s: %s",
+                        msg->header.frame_id.c_str(), base_frame_.c_str(), ex.what());
+        }
+    }
+
+    void PoseBasedReferenceManager::leftPoseStampedCallback(const geometry_msgs::msg::PoseStamped::SharedPtr msg)
+    {
+        processPoseStamped(msg, [this](geometry_msgs::msg::Pose::SharedPtr pose_msg) {
+            leftPoseCallback(pose_msg);
+        });
+    }
+
+    void PoseBasedReferenceManager::rightPoseStampedCallback(const geometry_msgs::msg::PoseStamped::SharedPtr msg)
+    {
+        processPoseStamped(msg, [this](geometry_msgs::msg::Pose::SharedPtr pose_msg) {
+            rightPoseCallback(pose_msg);
+        });
+    }
+
     void PoseBasedReferenceManager::resetTargetStateCache()
     {
         // 重置target state缓存
@@ -141,7 +227,7 @@ namespace ocs2::mobile_manipulator
         left_target_valid_ = false;
         right_target_valid_ = false;
 
-        RCLCPP_INFO(rclcpp::get_logger("PoseBasedReferenceManager"),
+        RCLCPP_INFO(logger_,
                     "Target state cache reset - cleared all cached target states");
     }
 } // namespace ocs2::mobile_manipulator

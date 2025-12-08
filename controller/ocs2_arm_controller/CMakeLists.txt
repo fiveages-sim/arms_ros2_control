@@ -18,6 +18,8 @@ set(CONTROLLER_INCLUDE_DEPENDS
         arms_ros2_control_msgs
         ocs2_self_collision_visualization
         arms_controller_common
+        tf2_ros
+        tf2_geometry_msgs
 )
 
 # find dependencies

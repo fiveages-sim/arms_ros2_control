@@ -8,9 +8,14 @@
 #include <memory>
 #include <string>
 #include <mutex>
+#include <functional>
 #include <rclcpp/rclcpp.hpp>
 #include <rclcpp_lifecycle/lifecycle_node.hpp>
 #include <geometry_msgs/msg/pose.hpp>
+#include <geometry_msgs/msg/pose_stamped.hpp>
+#include <tf2_ros/transform_listener.h>
+#include <tf2_ros/buffer.h>
+#include <tf2_geometry_msgs/tf2_geometry_msgs.hpp>
 #include <ocs2_oc/synchronized_module/ReferenceManagerDecorator.h>
 #include <ocs2_mobile_manipulator/MobileManipulatorInterface.h>
 #include <ocs2_mpc/SystemObservation.h>
@@ -58,7 +63,14 @@ namespace ocs2::mobile_manipulator
     private:
         void leftPoseCallback(geometry_msgs::msg::Pose::SharedPtr msg);
         void rightPoseCallback(geometry_msgs::msg::Pose::SharedPtr msg);
+        void leftPoseStampedCallback(geometry_msgs::msg::PoseStamped::SharedPtr msg);
+        void rightPoseStampedCallback(geometry_msgs::msg::PoseStamped::SharedPtr msg);
         void updateTargetTrajectory();
+        
+        // 通用的PoseStamped处理函数：转换到base frame并调用指定的回调
+        void processPoseStamped(
+            const geometry_msgs::msg::PoseStamped::SharedPtr& msg,
+            std::function<void(geometry_msgs::msg::Pose::SharedPtr)> callback);
 
         const std::string topic_prefix_;
         std::shared_ptr<MobileManipulatorInterface> interface_;
@@ -66,6 +78,16 @@ namespace ocs2::mobile_manipulator
         
         rclcpp::Subscription<geometry_msgs::msg::Pose>::SharedPtr left_pose_subscriber_;
         rclcpp::Subscription<geometry_msgs::msg::Pose>::SharedPtr right_pose_subscriber_;
+        rclcpp::Subscription<geometry_msgs::msg::PoseStamped>::SharedPtr left_pose_stamped_subscriber_;
+        rclcpp::Subscription<geometry_msgs::msg::PoseStamped>::SharedPtr right_pose_stamped_subscriber_;
+        
+        // TF2相关
+        std::shared_ptr<tf2_ros::Buffer> tf_buffer_;
+        std::shared_ptr<tf2_ros::TransformListener> tf_listener_;
+        std::string base_frame_;
+        
+        // Logger（从node获取，用于日志输出）
+        rclcpp::Logger logger_;
         
         // 当前系统观测（线程安全）
         mutable std::mutex observation_mutex_;

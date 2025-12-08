@@ -19,6 +19,8 @@
 	<depend>arms_target_manager</depend>
 	<depend>adaptive_gripper_controller</depend>
 	<depend>arms_controller_common</depend>
+	<depend>tf2_ros</depend>
+	<depend>tf2_geometry_msgs</depend>
 
 	<exec_depend>controller_manager</exec_depend>
 	<exec_depend>joint_state_broadcaster</exec_depend>
