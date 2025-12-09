@@ -106,9 +106,9 @@ namespace arms_rviz_control_plugin
             else if (controller_lower.find("ocs2_arm_controller") != std::string::npos)
             {
                 // ocs2_arm_controller handles left and right only (not body)
+                // Note: left/right categories will be added later based on actual joint names
                 arm_controller = controller;
-                available_categories_.insert("left");
-                available_categories_.insert("right");
+                // Don't add left/right categories here - wait for joint state to determine
             }
         }
         
@@ -125,10 +125,12 @@ namespace arms_rviz_control_plugin
         }
         
         // Map left and right to arm controller if found (and WBC controller not found)
+        // Note: For ocs2_arm_controller, left/right mapping will be done after joint state is received
+        // to determine if it's a single-arm or dual-arm robot
         if (!arm_controller.empty() && wbc_controller.empty())
         {
-            category_to_controller_["left"] = arm_controller;
-            category_to_controller_["right"] = arm_controller;
+            // Store arm_controller for later use, but don't map left/right yet
+            // Will be mapped in onJointStateReceived() after checking joint names
         }
 
         // Update category combo box options
@@ -288,6 +290,56 @@ namespace arms_rviz_control_plugin
                 }
 
                 joints_initialized_ = true;
+                
+                // For ocs2_arm_controller, check if we have left/right joints
+                // If yes, add left/right categories; if no, it's a single-arm robot
+                std::string arm_controller;
+                for (const auto& controller : available_controllers_)
+                {
+                    std::string controller_lower = controller;
+                    std::transform(controller_lower.begin(), controller_lower.end(), 
+                                  controller_lower.begin(), ::tolower);
+                    if (controller_lower.find("ocs2_arm_controller") != std::string::npos)
+                    {
+                        arm_controller = controller;
+                        break;
+                    }
+                }
+                
+                // Check if we have left/right joints
+                bool has_left_joints = category_to_joints_.find("left") != category_to_joints_.end() &&
+                                       !category_to_joints_["left"].empty();
+                bool has_right_joints = category_to_joints_.find("right") != category_to_joints_.end() &&
+                                        !category_to_joints_["right"].empty();
+                
+                // If we have ocs2_arm_controller and no left/right joints, it's a single-arm robot
+                // Don't add left/right categories
+                if (!arm_controller.empty() && !has_left_joints && !has_right_joints)
+                {
+                    RCLCPP_INFO(node_->get_logger(), "Detected single-arm robot (no left/right prefixes in joint names)");
+                    // For single-arm, all joints go to the base topic
+                    // No need to add left/right categories
+                    // Update category options to reflect this (remove left/right if they were added earlier)
+                    updateCategoryOptions();
+                }
+                // If we have left/right joints, add categories and mappings
+                else if (!arm_controller.empty() && (has_left_joints || has_right_joints))
+                {
+                    RCLCPP_INFO(node_->get_logger(), "Detected dual-arm robot (found left/right prefixes in joint names)");
+                    if (has_left_joints)
+                    {
+                        available_categories_.insert("left");
+                        category_to_controller_["left"] = arm_controller;
+                    }
+                    if (has_right_joints)
+                    {
+                        available_categories_.insert("right");
+                        category_to_controller_["right"] = arm_controller;
+                    }
+                    // Update category options after adding left/right
+                    updateCategoryOptions();
+                }
+                
                 updateJointVisibility();
                 
                 // Log classification results
