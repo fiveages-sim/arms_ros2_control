@@ -8,9 +8,9 @@
 namespace arms_controller_common
 {
     StateHome::StateHome(CtrlInterfaces& ctrl_interfaces,
-                        const rclcpp::Logger& logger,
-                        double duration,
-                        std::shared_ptr<GravityCompensation> gravity_compensation)
+                         const rclcpp::Logger& logger,
+                         double duration,
+                         std::shared_ptr<GravityCompensation> gravity_compensation)
         : FSMState(FSMStateName::HOME, "home", ctrl_interfaces),
           logger_(logger),
           gravity_compensation_(gravity_compensation),
@@ -40,8 +40,53 @@ namespace arms_controller_common
 
     void StateHome::setRestPose(const std::vector<double>& rest_pos)
     {
-        rest_pos_ = rest_pos;
-        has_rest_pose_ = !rest_pos.empty();
+        if (rest_pos.empty())
+        {
+            return;
+        }
+        
+        // Add rest pose as the second configuration (index 1) in home_configs_
+        // If home_configs_ is empty, add it as the first configuration
+        if (home_configs_.empty())
+        {
+            // If no home configs exist, add rest_pos as the first config
+            home_configs_.push_back(rest_pos);
+            current_target_ = rest_pos;
+            current_config_index_ = 0;
+            has_multiple_configs_ = false;
+            RCLCPP_WARN(logger_, 
+                       "Rest pose added but no home configurations exist. Using rest pose as first configuration.");
+        }
+        else if (home_configs_.size() == 1)
+        {
+            // If only one home config exists, add rest_pos as the second config
+            home_configs_.push_back(rest_pos);
+            has_multiple_configs_ = true;
+            RCLCPP_INFO(logger_, 
+                       "Rest pose added as second configuration (index 1). Total configurations: %zu", 
+                       home_configs_.size());
+        }
+        else
+        {
+            // If multiple configs exist, replace or add the second one (index 1) with rest_pos
+            if (home_configs_.size() > 1)
+            {
+                // Replace existing second config with rest_pos
+                home_configs_[1] = rest_pos;
+                RCLCPP_INFO(logger_, 
+                           "Rest pose updated as second configuration (index 1). Total configurations: %zu", 
+                           home_configs_.size());
+            }
+            else
+            {
+                // This shouldn't happen (size should be >= 1 from previous checks), but handle it anyway
+                home_configs_.push_back(rest_pos);
+                has_multiple_configs_ = true;
+                RCLCPP_INFO(logger_, 
+                           "Rest pose added as second configuration (index 1). Total configurations: %zu", 
+                           home_configs_.size());
+            }
+        }
     }
 
     void StateHome::enter()
@@ -52,7 +97,6 @@ namespace arms_controller_common
             current_config_index_ = 0;
             current_target_ = home_configs_[0];
         }
-        is_rest_pose_ = false;
 
         // Get current joint positions as starting positions
         start_pos_.clear();
@@ -73,7 +117,7 @@ namespace arms_controller_common
         percent_ = 0.0;
 
         // Set kp and kd gains for force control if available
-        if (ctrl_interfaces_.control_mode_ == ControlMode::MIX && 
+        if (ctrl_interfaces_.control_mode_ == ControlMode::MIX &&
             ctrl_interfaces_.default_gains_.size() >= 2)
         {
             double kp = ctrl_interfaces_.default_gains_[0];
@@ -91,8 +135,8 @@ namespace arms_controller_common
         }
 
         RCLCPP_INFO(logger_,
-                   "Starting linear interpolation to home configuration %zu over %.1f seconds",
-                   current_config_index_, duration_);
+                    "Starting linear interpolation to home configuration %zu over %.1f seconds",
+                    current_config_index_, duration_);
     }
 
     void StateHome::run(const rclcpp::Time& /*time*/, const rclcpp::Duration& /*period*/)
@@ -122,13 +166,8 @@ namespace arms_controller_common
             ctrl_interfaces_.control_inputs_.command = 0;
         }
 
-        // Handle home/rest pose switching (command == pose_switch_command_)
-        if (current_command == pose_switch_command_ && command_changed && has_rest_pose_)
-        {
-            switchPose();
-            // Reset command after processing
-            ctrl_interfaces_.control_inputs_.command = 0;
-        }
+        // Rest pose is now part of home_configs_ (as index 1), so it's handled by the multi-config switching above
+        // No separate pose switching logic needed
 
         last_command_ = current_command;
 
@@ -160,11 +199,11 @@ namespace arms_controller_common
             }
 
             // Calculate static torques
-            std::vector<double> static_torques = 
+            std::vector<double> static_torques =
                 gravity_compensation_->calculateStaticTorques(interpolated_positions);
 
             // Set effort commands
-            for (size_t i = 0; i < ctrl_interfaces_.joint_force_command_interface_.size() && 
+            for (size_t i = 0; i < ctrl_interfaces_.joint_force_command_interface_.size() &&
                  i < static_torques.size(); ++i)
             {
                 std::ignore = ctrl_interfaces_.joint_force_command_interface_[i].get().set_value(static_torques[i]);
@@ -182,6 +221,8 @@ namespace arms_controller_common
         switch (ctrl_interfaces_.control_inputs_.command)
         {
         case 2:
+        case 3:
+        case 4:
             return FSMStateName::HOLD;
         default:
             return FSMStateName::HOME;
@@ -193,8 +234,8 @@ namespace arms_controller_common
         if (config_index >= home_configs_.size())
         {
             RCLCPP_WARN(logger_,
-                       "Invalid configuration index %zu (max: %zu)", 
-                       config_index, home_configs_.size() - 1);
+                        "Invalid configuration index %zu (max: %zu)",
+                        config_index, home_configs_.size() - 1);
             return;
         }
 
@@ -215,22 +256,6 @@ namespace arms_controller_common
         current_config_index_ = (current_config_index_ + 1) % home_configs_.size();
         current_target_ = home_configs_[current_config_index_];
         startInterpolation();
-    }
-
-    void StateHome::switchPose()
-    {
-        if (!has_rest_pose_)
-        {
-            RCLCPP_WARN(logger_, "Cannot switch pose: rest pose not configured");
-            return;
-        }
-
-        // Toggle between home and rest pose
-        is_rest_pose_ = !is_rest_pose_;
-        current_target_ = is_rest_pose_ ? rest_pos_ : home_configs_[current_config_index_];
-        startInterpolation();
-
-        RCLCPP_INFO(logger_, "Switching to %s pose", is_rest_pose_ ? "rest" : "home");
     }
 
     void StateHome::startInterpolation()
@@ -254,8 +279,7 @@ namespace arms_controller_common
         percent_ = 0.0;
 
         RCLCPP_INFO(logger_,
-                   "Starting interpolation to configuration %zu over %.1f seconds",
-                   current_config_index_, duration_);
+                    "Starting interpolation to configuration %zu over %.1f seconds",
+                    current_config_index_, duration_);
     }
 } // namespace arms_controller_common
-

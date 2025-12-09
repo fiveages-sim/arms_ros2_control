@@ -161,7 +161,7 @@ namespace arms_rviz_control_plugin
         if (!switch_pose_pressed_)
         {
             // 按下：发送command=4来触发姿态切换
-            publishCommand(4);
+            publishCommand(100);
             switch_pose_pressed_ = true;
 
             // 启动定时器，100ms后自动"释放"

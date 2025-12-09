@@ -129,6 +129,7 @@ namespace ocs2::mobile_manipulator
 
             // Home state parameters
             double home_duration = auto_declare<double>("home_duration", 3.0);  // Default: 3.0 seconds
+            int switch_command_base = auto_declare<int>("switch_command_base", 100);  // Default: 100 for multi-home switching
 
             // Create CtrlComponent (auto-initialize interface)
             ctrl_comp_ = std::make_shared<CtrlComponent>(get_node(), ctrl_interfaces_);
@@ -150,12 +151,35 @@ namespace ocs2::mobile_manipulator
             state_list_.home = std::make_shared<StateHome>(
                 ctrl_interfaces_, logger, home_duration, gravity_compensation);
             
-            // Set home position
-            if (!home_pos_.empty())
+            // Try to load multiple home configurations (home_1, home_2, etc.)
+            // This supports the new multi-home configuration mechanism
+            // init() returns true if at least one configuration (home_1) was loaded
+            bool configs_loaded = state_list_.home->init([this](const std::string& name, const std::vector<double>& default_value)
             {
+                return this->auto_declare<std::vector<double>>(name, default_value);
+            });
+
+            state_list_.home->setSwitchCommandBase(switch_command_base);
+            
+            if (configs_loaded)
+            {
+                // Multi-home configuration was loaded successfully
+                RCLCPP_INFO(get_node()->get_logger(), 
+                            "Using multi-home configuration (home_1, home_2, etc.) with switch_command_base=%d",
+                            switch_command_base);
+            }
+            else if (!home_pos_.empty())
+            {
+                // Fallback to legacy single home_pos configuration (backward compatibility)
                 state_list_.home->setHomePosition(home_pos_);
                 RCLCPP_INFO(get_node()->get_logger(), 
-                            "Home position configured with %zu joints", home_pos_.size());
+                            "Using legacy home_pos configuration with %zu joints (switch_command_base=%d)",
+                            home_pos_.size(), switch_command_base);
+            }
+            else
+            {
+                RCLCPP_WARN(get_node()->get_logger(), 
+                            "No home configuration found (neither home_1 nor home_pos)");
             }
             
             // Configure rest pose if available

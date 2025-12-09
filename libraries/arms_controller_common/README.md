@@ -148,13 +148,13 @@ state_home->setSwitchCommandBase(100);
 ### 4. Home/Rest Pose 切换
 
 ```cpp
-// 设置 rest pose
+// 设置 rest pose（将作为第二个配置，index 1）
 std::vector<double> rest_pos = {0.2, 0.2, 0.2, 0.2, 0.2, 0.2};
 state_home->setRestPose(rest_pos);
 
-// 设置 pose 切换命令（默认 4）
-state_home->setPoseSwitchCommand(4);
-// command = 4: 在 home 和 rest pose 之间切换
+// Rest pose 现在是 home_configs_ 的第二个配置（index 1）
+// 可以通过配置切换命令访问：
+// command = switch_command_base + 2 (默认 102): 切换到 rest pose (配置 1)
 ```
 
 ## 控制模式

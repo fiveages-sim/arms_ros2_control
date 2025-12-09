@@ -58,9 +58,10 @@ namespace arms_controller_common
          *                          Typically: [this](const std::string& name, const std::vector<double>& default_value) {
          *                              return this->auto_declare<std::vector<double>>(name, default_value);
          *                          }
+         * @return true if at least one home configuration (home_1) was found and loaded, false otherwise
          */
         template<typename AutoDeclareFunc>
-        void init(AutoDeclareFunc auto_declare_func)
+        bool init(AutoDeclareFunc auto_declare_func)
         {
             // Read multiple home configurations using naming pattern: home_1, home_2, home_3, etc.
             // Stop when we encounter an empty or missing configuration (configurations should be consecutive)
@@ -97,23 +98,32 @@ namespace arms_controller_common
             }
             
             // Validate configurations
-            if (home_configs_.empty())
+            bool configs_loaded = !home_configs_.empty();
+            
+            if (configs_loaded)
             {
-                RCLCPP_WARN(logger_,
-                            "No home configurations found, using empty default configuration");
-                home_configs_.emplace_back();
+                // Only set target and flags if configurations were actually loaded
+                current_target_ = home_configs_[0];
+                current_config_index_ = 0;
+                has_multiple_configs_ = home_configs_.size() > 1;
+                
+                RCLCPP_INFO(logger_,
+                            "StateHome initialized with %zu configuration(s)", home_configs_.size());
             }
+            // Note: Warning message is already logged in the loop above when home_1 is not found
+            // No need to log again here to avoid duplicate warnings
             
-            current_target_ = home_configs_[0];
-            current_config_index_ = 0;
-            has_multiple_configs_ = home_configs_.size() > 1;
-            
-            RCLCPP_INFO(logger_,
-                        "StateHome initialized with %zu configuration(s)", home_configs_.size());
+            return configs_loaded;
         }
 
         /**
-         * @brief Set rest pose (alternative to home)
+         * @brief Set rest pose as the second configuration (index 1) in home_configs_
+         * 
+         * Rest pose is now integrated into the home configurations system.
+         * It will be added as the second configuration (index 1) in home_configs_.
+         * If only one home config exists, rest_pos will be added as the second config.
+         * If multiple configs exist, the second config (index 1) will be replaced with rest_pos.
+         * 
          * @param rest_pos Rest position vector
          */
         void setRestPose(const std::vector<double>& rest_pos);
@@ -123,12 +133,6 @@ namespace arms_controller_common
          * @param switch_command_base Base command value (default: 100)
          */
         void setSwitchCommandBase(int32_t switch_command_base) { switch_command_base_ = switch_command_base; }
-
-        /**
-         * @brief Set pose switch command (for home/rest switching)
-         * @param pose_switch_command Command value for pose switching (default: 4)
-         */
-        void setPoseSwitchCommand(int32_t pose_switch_command) { pose_switch_command_ = pose_switch_command; }
 
         void enter() override;
         void run(const rclcpp::Time& time, const rclcpp::Duration& period) override;
@@ -143,20 +147,16 @@ namespace arms_controller_common
 
     private:
         void switchConfiguration();
-        void switchPose();
         void startInterpolation();
 
         rclcpp::Logger logger_;
         std::shared_ptr<GravityCompensation> gravity_compensation_;
 
         // Home configurations
-        std::vector<std::vector<double>> home_configs_;  // Multiple home configurations
-        std::vector<double> rest_pos_;                  // Rest pose (optional)
+        std::vector<std::vector<double>> home_configs_;  // Multiple home configurations (rest pose is index 1)
         std::vector<double> start_pos_;                  // Starting position
         std::vector<double> current_target_;            // Current target configuration
         size_t current_config_index_{0};                // Current configuration index
-        bool has_rest_pose_{false};                     // Whether rest pose is configured
-        bool is_rest_pose_{false};                      // Current pose state (false: home, true: rest)
 
         // Interpolation
         double duration_;                               // Interpolation duration in seconds
@@ -164,7 +164,6 @@ namespace arms_controller_common
 
         // Configuration switching
         int32_t switch_command_base_{100};             // Base command for multi-config switching
-        int32_t pose_switch_command_{4};               // Command for home/rest switching
         int32_t last_command_{0};                      // Last command value for edge detection
         bool has_multiple_configs_{false};             // Whether multiple configurations are available
     };
