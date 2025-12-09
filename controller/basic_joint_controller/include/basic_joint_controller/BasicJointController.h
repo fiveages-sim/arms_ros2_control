@@ -8,10 +8,12 @@
 #include <vector>
 #include <string>
 #include <unordered_map>
+#include <limits>
+#include <algorithm>
 
 #include <controller_interface/controller_interface.hpp>
 #include <arms_ros2_control_msgs/msg/inputs.hpp>
-#include <std_msgs/msg/float64_multi_array.hpp>
+#include <std_msgs/msg/string.hpp>
 #include <hardware_interface/loaned_command_interface.hpp>
 #include <hardware_interface/loaned_state_interface.hpp>
 
@@ -20,6 +22,7 @@
 #include <arms_controller_common/FSM/StateHome.h>
 #include <arms_controller_common/FSM/StateHold.h>
 #include <arms_controller_common/CtrlInterfaces.h>
+#include <arms_controller_common/utils/JointLimitsManager.h>
 
 namespace basic_joint_controller
 {
@@ -97,6 +100,10 @@ namespace basic_joint_controller
 
         // ROS subscriptions
         rclcpp::Subscription<arms_ros2_control_msgs::msg::Inputs>::SharedPtr control_input_subscription_;
+        rclcpp::Subscription<std_msgs::msg::String>::SharedPtr robot_description_subscription_;
+
+        // Joint limits manager (common utility)
+        std::shared_ptr<arms_controller_common::JointLimitsManager> joint_limits_manager_;
     };
 }
 

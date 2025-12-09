@@ -9,6 +9,7 @@
 #include <memory>
 #include <mutex>
 #include <string>
+#include <functional>
 #include <rclcpp/rclcpp.hpp>
 #include <rclcpp_lifecycle/lifecycle_node.hpp>
 #include <std_msgs/msg/float64_multi_array.hpp>
@@ -74,6 +75,22 @@ namespace arms_controller_common
                                const std::string& topic_base_name = "target_joint_position",
                                bool enable_prefix_topics = false);
 
+        /**
+         * @brief Set joint limit checker callback function
+         * 
+         * This callback will be called whenever a target position is set to apply joint limits.
+         * The callback should take the target position vector and return a clamped position vector.
+         * 
+         * Example usage:
+         * - For ocs2_arm_controller: Get limits from Pinocchio model
+         * - For basic_joint_controller: Get limits from URDF parsing
+         * 
+         * @param limit_checker Callback function: std::vector<double>(const std::vector<double>& target_pos)
+         *                       Input: target position vector, Output: clamped position vector
+         *                       If nullptr, joint limit checking is disabled
+         */
+        void setJointLimitChecker(std::function<std::vector<double>(const std::vector<double>&)> limit_checker);
+
     private:
         rclcpp::Logger logger_;
         std::shared_ptr<GravityCompensation> gravity_compensation_;
@@ -103,6 +120,9 @@ namespace arms_controller_common
         rclcpp::Subscription<std_msgs::msg::Float64MultiArray>::SharedPtr target_position_right_subscription_;
         rclcpp::Subscription<std_msgs::msg::Float64MultiArray>::SharedPtr target_position_body_subscription_;
         bool subscriptions_setup_{false};        // Whether subscriptions have been set up
+
+        // Joint limit checking
+        std::function<std::vector<double>(const std::vector<double>&)> joint_limit_checker_;  // Optional joint limit checker callback
         
         /**
          * @brief Initialize joint names from interfaces

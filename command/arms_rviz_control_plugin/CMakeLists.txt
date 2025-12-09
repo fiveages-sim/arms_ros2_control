@@ -12,6 +12,7 @@ find_package(ament_cmake REQUIRED)
 find_package(rclcpp REQUIRED)
 find_package(rviz_common REQUIRED)
 find_package(arms_ros2_control_msgs REQUIRED)
+find_package(arms_controller_common REQUIRED)
 find_package(sensor_msgs REQUIRED)
 find_package(std_msgs REQUIRED)
 find_package(Qt5 COMPONENTS Widgets REQUIRED)
@@ -46,6 +47,7 @@ ament_target_dependencies(${PROJECT_NAME}
   rclcpp
   rviz_common
   arms_ros2_control_msgs
+  arms_controller_common
   sensor_msgs
   std_msgs
 )

@@ -18,7 +18,7 @@
 ## 安装
 
 ```bash
-cd /home/fiveages/ros2_ws
+cd ~/ros2_ws
 colcon build --packages-select arms_rviz_control_plugin
 ```
 

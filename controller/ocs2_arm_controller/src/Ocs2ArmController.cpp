@@ -3,6 +3,7 @@
 //
 
 #include "ocs2_arm_controller/Ocs2ArmController.h"
+#include <algorithm>
 #include "ocs2_arm_controller/FSM/StateHome.h"
 #include "ocs2_arm_controller/FSM/StateOCS2.h"
 #include "ocs2_arm_controller/FSM/StateHold.h"
@@ -102,7 +103,7 @@ namespace ocs2::mobile_manipulator
 
             // Robot parameters - use robot_name to auto-generate package names
             auto_declare<std::string>("robot_name", "cr5");
-            auto_declare<std::string>("robot_type", "");  // Optional robot type/variant
+            auto_declare<std::string>("robot_type", ""); // Optional robot type/variant
             auto_declare<double>("future_time_offset", 1.0);
             auto_declare<std::string>("info_file_name", "task");
 
@@ -114,10 +115,11 @@ namespace ocs2::mobile_manipulator
             // State machine parameters
             home_pos_ = auto_declare<std::vector<double>>("home_pos", home_pos_);
             rest_pos_ = auto_declare<std::vector<double>>("rest_pos", rest_pos_);
-            
+
             // Force control parameters
-            ctrl_interfaces_.default_gains_ = auto_declare<std::vector<double>>("default_gains", ctrl_interfaces_.default_gains_);
-            
+            ctrl_interfaces_.default_gains_ = auto_declare<std::vector<double>>(
+                "default_gains", ctrl_interfaces_.default_gains_);
+
             // PD control parameters (for OCS2 state)
             ctrl_interfaces_.pd_gains_ = auto_declare<std::vector<double>>("pd_gains", ctrl_interfaces_.pd_gains_);
 
@@ -125,11 +127,12 @@ namespace ocs2::mobile_manipulator
             auto_declare<int>("mpc_frequency", 0);
 
             // Hold state parameters
-            auto_declare<double>("hold_position_threshold", 0.1);  // Default: 0.1 rad (~5.7 degrees)
+            auto_declare<double>("hold_position_threshold", 0.1); // Default: 0.1 rad (~5.7 degrees)
 
             // Home state parameters
-            double home_duration = auto_declare<double>("home_duration", 3.0);  // Default: 3.0 seconds
-            int switch_command_base = auto_declare<int>("switch_command_base", 100);  // Default: 100 for multi-home switching
+            double home_duration = auto_declare<double>("home_duration", 3.0); // Default: 3.0 seconds
+            int switch_command_base = auto_declare<int>("switch_command_base", 100);
+            // Default: 100 for multi-home switching
 
             // Create CtrlComponent (auto-initialize interface)
             ctrl_comp_ = std::make_shared<CtrlComponent>(get_node(), ctrl_interfaces_);
@@ -140,7 +143,7 @@ namespace ocs2::mobile_manipulator
             {
                 const auto& pinocchio_model = ctrl_comp_->interface_->getPinocchioInterface().getModel();
                 gravity_compensation = std::make_shared<arms_controller_common::GravityCompensation>(pinocchio_model);
-                RCLCPP_INFO(get_node()->get_logger(), 
+                RCLCPP_INFO(get_node()->get_logger(),
                             "Gravity compensation initialized from OCS2 Pinocchio model");
             }
 
@@ -150,21 +153,22 @@ namespace ocs2::mobile_manipulator
             // Create StateHome using common implementation
             state_list_.home = std::make_shared<StateHome>(
                 ctrl_interfaces_, logger, home_duration, gravity_compensation);
-            
+
             // Try to load multiple home configurations (home_1, home_2, etc.)
             // This supports the new multi-home configuration mechanism
             // init() returns true if at least one configuration (home_1) was loaded
-            bool configs_loaded = state_list_.home->init([this](const std::string& name, const std::vector<double>& default_value)
-            {
-                return this->auto_declare<std::vector<double>>(name, default_value);
-            });
+            bool configs_loaded = state_list_.home->init(
+                [this](const std::string& name, const std::vector<double>& default_value)
+                {
+                    return this->auto_declare<std::vector<double>>(name, default_value);
+                });
 
             state_list_.home->setSwitchCommandBase(switch_command_base);
-            
+
             if (configs_loaded)
             {
                 // Multi-home configuration was loaded successfully
-                RCLCPP_INFO(get_node()->get_logger(), 
+                RCLCPP_INFO(get_node()->get_logger(),
                             "Using multi-home configuration (home_1, home_2, etc.) with switch_command_base=%d",
                             switch_command_base);
             }
@@ -172,46 +176,83 @@ namespace ocs2::mobile_manipulator
             {
                 // Fallback to legacy single home_pos configuration (backward compatibility)
                 state_list_.home->setHomePosition(home_pos_);
-                RCLCPP_INFO(get_node()->get_logger(), 
+                RCLCPP_INFO(get_node()->get_logger(),
                             "Using legacy home_pos configuration with %zu joints (switch_command_base=%d)",
                             home_pos_.size(), switch_command_base);
             }
             else
             {
-                RCLCPP_WARN(get_node()->get_logger(), 
+                RCLCPP_WARN(get_node()->get_logger(),
                             "No home configuration found (neither home_1 nor home_pos)");
             }
-            
+
             // Configure rest pose if available
             if (!rest_pos_.empty())
             {
                 state_list_.home->setRestPose(rest_pos_);
-                RCLCPP_INFO(get_node()->get_logger(), 
+                RCLCPP_INFO(get_node()->get_logger(),
                             "Rest pose configured with %zu joints", rest_pos_.size());
             }
             else
             {
                 RCLCPP_INFO(get_node()->get_logger(), "No rest pose configured, using home pose only");
             }
-            
+
             state_list_.ocs2 = std::make_shared<StateOCS2>(ctrl_interfaces_, get_node(), ctrl_comp_);
-            
+
             // Hold state parameters
             double hold_position_threshold = auto_declare<double>("hold_position_threshold", 0.1);
-            
+
             // Create StateHold using common implementation
             state_list_.hold = std::make_shared<StateHold>(
                 ctrl_interfaces_, logger, hold_position_threshold, gravity_compensation);
 
             // MoveJ state parameters
             double move_duration = auto_declare<double>("move_duration", 3.0);
-            
+
             // Create StateMoveJ using common implementation
             state_list_.movej = std::make_shared<StateMoveJ>(
                 ctrl_interfaces_, logger, move_duration, gravity_compensation);
-            
+
             // Set joint names from controller parameters
             state_list_.movej->setJointNames(joint_names_);
+
+            // Set joint limit checker from Pinocchio model
+            if (ctrl_comp_->interface_)
+            {
+                const auto& pinocchio_model = ctrl_comp_->interface_->getPinocchioInterface().getModel();
+
+                // Get joint limits from Pinocchio model
+                // Note: Pinocchio stores limits for all DOFs, we need to extract only the arm joints
+                // The arm joints typically start after base DOFs
+                int arm_state_dim = ctrl_comp_->interface_->getManipulatorModelInfo().armDim;
+
+                // Extract arm joint limits (tail of the position limits vector)
+                Eigen::VectorXd lower_limits = pinocchio_model.lowerPositionLimit.tail(arm_state_dim);
+                Eigen::VectorXd upper_limits = pinocchio_model.upperPositionLimit.tail(arm_state_dim);
+
+                // Create limit checker callback
+                state_list_.movej->setJointLimitChecker(
+                    [lower_limits, upper_limits, arm_state_dim](
+                    const std::vector<double>& target_pos) -> std::vector<double>
+                    {
+                        std::vector<double> clamped_pos = target_pos;
+
+                        // Clamp each joint position to its limits
+                        for (size_t i = 0; i < clamped_pos.size() && i < static_cast<size_t>(arm_state_dim); ++i)
+                        {
+                            clamped_pos[i] = std::clamp(clamped_pos[i],
+                                                        static_cast<double>(lower_limits(i)),
+                                                        static_cast<double>(upper_limits(i)));
+                        }
+
+                        return clamped_pos;
+                    });
+
+                RCLCPP_INFO(get_node()->get_logger(),
+                            "Joint limit checker initialized from Pinocchio model (arm joints: %d)",
+                            arm_state_dim);
+            }
 
             return CallbackReturn::SUCCESS;
         }
@@ -269,15 +310,17 @@ namespace ocs2::mobile_manipulator
 
         // Auto-detect control mode based on available interfaces
         ctrl_interfaces_.detectAndSetControlMode();
-        
+
         // Log detected control mode
         if (ctrl_interfaces_.control_mode_ == ControlMode::MIX)
         {
-            RCLCPP_INFO(get_node()->get_logger(), "Mixed control mode enabled - detected kp, kd, velocity, effort, position interfaces");
+            RCLCPP_INFO(get_node()->get_logger(),
+                        "Mixed control mode enabled - detected kp, kd, velocity, effort, position interfaces");
         }
         else
         {
-            RCLCPP_INFO(get_node()->get_logger(), "Position control mode enabled - standard position control interfaces detected");
+            RCLCPP_INFO(get_node()->get_logger(),
+                        "Position control mode enabled - standard position control interfaces detected");
         }
 
         // Initialize FSM

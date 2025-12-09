@@ -60,6 +60,18 @@ namespace ocs2::mobile_manipulator
          */
         void resetTargetStateCache();
 
+        /**
+         * 如果有有效的target，更新target trajectory（在enter状态时调用）
+         */
+        void updateTargetTrajectoryIfValid();
+
+        /**
+         * 设置当前状态的末端执行器pose到缓存（在enter状态时调用）
+         * @param left_ee_pose 左臂末端执行器pose（7维：x, y, z, qx, qy, qz, qw）
+         * @param right_ee_pose 右臂末端执行器pose（7维，仅双臂模式需要）
+         */
+        void setCurrentEndEffectorPoses(const vector_t& left_ee_pose, const vector_t& right_ee_pose);
+
     private:
         void leftPoseCallback(geometry_msgs::msg::Pose::SharedPtr msg);
         void rightPoseCallback(geometry_msgs::msg::Pose::SharedPtr msg);
@@ -97,8 +109,6 @@ namespace ocs2::mobile_manipulator
         mutable std::mutex target_state_mutex_;
         vector_t left_target_state_;
         vector_t right_target_state_;
-        bool left_target_valid_;
-        bool right_target_valid_;
     };
 
 } // namespace ocs2::mobile_manipulator

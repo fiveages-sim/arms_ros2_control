@@ -294,6 +294,13 @@ namespace ocs2::mobile_manipulator
                         right_initial_ee_state(3), right_initial_ee_state(4), right_initial_ee_state(5),
                         right_initial_ee_state(6)); // Quaternion w, x, y, z
 
+            // 将当前末端执行器pose设置到PoseBasedReferenceManager缓存
+            if (pose_reference_manager_)
+            {
+                pose_reference_manager_->setCurrentObservation(observation_);
+                pose_reference_manager_->setCurrentEndEffectorPoses(left_initial_ee_state, right_initial_ee_state);
+            }
+
             // Dual arm mode: create target trajectory containing two end effectors
             // 14-dimensional state vector: [left_x, left_y, left_z, left_qw, left_qx, left_qy, left_qz,
             //                               right_x, right_y, right_z, right_qw, right_qx, right_qy, right_qz]
@@ -317,6 +324,14 @@ namespace ocs2::mobile_manipulator
                         initial_ee_state(0), initial_ee_state(1), initial_ee_state(2), // Position x, y, z
                         initial_ee_state(3), initial_ee_state(4), initial_ee_state(5),
                         initial_ee_state(6)); // Quaternion w, x, y, z
+
+            // 将当前末端执行器pose设置到PoseBasedReferenceManager缓存（单臂模式，右臂使用零向量）
+            if (pose_reference_manager_)
+            {
+                pose_reference_manager_->setCurrentObservation(observation_);
+                vector_t zero_pose = vector_t::Zero(7);
+                pose_reference_manager_->setCurrentEndEffectorPoses(initial_ee_state, zero_pose);
+            }
 
             // Initialize TargetTrajectories - use end effector position and orientation
             target_trajectories = TargetTrajectories({observation_.time},

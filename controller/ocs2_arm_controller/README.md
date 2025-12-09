@@ -41,15 +41,9 @@ This controller implements a finite state machine (FSM) for arm control with the
 ## Usage
 
 ### Building
-* OCS2 Arm Controller
 ```bash
 cd ~/ros2_ws
 colcon build --packages-up-to ocs2_arm_controller --symlink-install
-```
-* Dobot CR5 description package with config files
-```bash
-cd ~/ros2_ws
-colcon build --packages-up-to cr5_description --symlink-install
 ```
 
 ### Running

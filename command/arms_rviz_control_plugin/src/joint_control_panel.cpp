@@ -63,6 +63,36 @@ namespace arms_rviz_control_plugin
         // Use RViz display context to get the node instead of creating a new one
         node_ = this->getDisplayContext()->getRosNodeAbstraction().lock()->get_raw_node();
 
+        // Create joint limits manager
+        joint_limits_manager_ = std::make_shared<arms_controller_common::JointLimitsManager>(
+            node_->get_logger());
+
+        // Subscribe to robot_description topic to load joint limits from URDF
+        // Note: joint_names_ will be initialized in onJointStateReceived, so we'll parse limits there
+        robot_description_subscriber_ = node_->create_subscription<std_msgs::msg::String>(
+            "/robot_description", rclcpp::QoS(rclcpp::KeepLast(1)).transient_local(),
+            [this](const std_msgs::msg::String::SharedPtr msg)
+            {
+                // Always cache robot_description
+                robot_description_cache_ = msg->data;
+                robot_description_received_ = true;
+                
+                // If joints are already initialized, parse limits immediately
+                if (joint_limits_manager_ && joints_initialized_ && !joint_names_.empty())
+                {
+                    joint_limits_manager_->parseFromURDF(msg->data, joint_names_);
+                    // Update spinbox ranges after parsing limits
+                    updateSpinboxRanges();
+                    RCLCPP_INFO(node_->get_logger(),
+                               "关节限位已从 /robot_description topic 加载");
+                }
+                else
+                {
+                    RCLCPP_DEBUG(node_->get_logger(),
+                               "robot_description 已缓存，等待关节初始化");
+                }
+            });
+
         // Declare parameter with empty default
         node_->declare_parameter("joint_controllers", std::vector<std::string>());
         
@@ -217,138 +247,7 @@ namespace arms_rviz_control_plugin
         // Initialize joint names and positions on first message
         if (!joints_initialized_ && !msg->name.empty())
         {
-            joint_names_.clear();
-            joint_positions_.clear();
-            joint_name_to_index_.clear();
-            joint_to_category_.clear();
-            category_to_joints_.clear();
-
-            // Filter out gripper joints and classify joints
-            for (size_t i = 0; i < msg->name.size(); ++i)
-            {
-                const std::string& joint_name = msg->name[i];
-                // Skip gripper joints - check for gripper, hand, finger, thumb, etc.
-                std::string joint_name_lower = joint_name;
-                std::transform(joint_name_lower.begin(), joint_name_lower.end(), 
-                              joint_name_lower.begin(), ::tolower);
-                
-                // Filter out gripper-related joints
-                bool is_gripper_joint = 
-                    joint_name_lower.find("gripper") != std::string::npos ||
-                    joint_name_lower.find("hand") != std::string::npos ||
-                    joint_name_lower.find("finger") != std::string::npos ||
-                    joint_name_lower.find("thumb") != std::string::npos ||
-                    joint_name_lower.find("palm") != std::string::npos;
-                
-                if (!is_gripper_joint)
-                {
-                    size_t joint_index = joint_names_.size();
-                    joint_names_.push_back(joint_name);
-                    joint_name_to_index_[joint_name] = joint_index;
-                    
-                    // Classify joint
-                    std::string category = classifyJoint(joint_name);
-                    joint_to_category_[joint_name] = category;
-                    category_to_joints_[category].push_back(joint_index);
-                }
-            }
-
-            if (!joint_names_.empty())
-            {
-                // Create UI elements for each joint
-                joint_row_layouts_.clear();
-                joint_labels_.clear();
-                joint_spinboxes_.clear();
-
-                joint_positions_.resize(joint_names_.size(), 0.0);
-
-                for (size_t i = 0; i < joint_names_.size(); ++i)
-                {
-                    // Create vertical layout for each joint (name on top, spinbox below)
-                    auto row_layout = std::make_unique<QVBoxLayout>();
-                    row_layout->setSpacing(2);
-
-                    // Create label (joint name)
-                    auto label = std::make_unique<QLabel>(QString::fromStdString(joint_names_[i]), joint_control_group_.get());
-                    label->setStyleSheet("QLabel { font-weight: bold; }");
-                    row_layout->addWidget(label.get());
-                    joint_labels_.push_back(std::move(label));
-
-                    // Create spinbox
-                    auto spinbox = std::make_unique<QDoubleSpinBox>(joint_control_group_.get());
-                    spinbox->setRange(-M_PI * 2, M_PI * 2);
-                    spinbox->setSingleStep(0.01);
-                    spinbox->setDecimals(4);
-                    spinbox->setSuffix(" rad");
-                    spinbox->setValue(0.0);
-                    // No automatic trigger - user clicks send button instead
-                    row_layout->addWidget(spinbox.get());
-                    joint_spinboxes_.push_back(std::move(spinbox));
-
-                    joint_layout_->addLayout(row_layout.get());
-                    joint_row_layouts_.push_back(std::move(row_layout));
-                }
-
-                joints_initialized_ = true;
-                
-                // For ocs2_arm_controller, check if we have left/right joints
-                // If yes, add left/right categories; if no, it's a single-arm robot
-                std::string arm_controller;
-                for (const auto& controller : available_controllers_)
-                {
-                    std::string controller_lower = controller;
-                    std::transform(controller_lower.begin(), controller_lower.end(), 
-                                  controller_lower.begin(), ::tolower);
-                    if (controller_lower.find("ocs2_arm_controller") != std::string::npos)
-                    {
-                        arm_controller = controller;
-                        break;
-                    }
-                }
-                
-                // Check if we have left/right joints
-                bool has_left_joints = category_to_joints_.find("left") != category_to_joints_.end() &&
-                                       !category_to_joints_["left"].empty();
-                bool has_right_joints = category_to_joints_.find("right") != category_to_joints_.end() &&
-                                        !category_to_joints_["right"].empty();
-                
-                // If we have ocs2_arm_controller and no left/right joints, it's a single-arm robot
-                // Don't add left/right categories
-                if (!arm_controller.empty() && !has_left_joints && !has_right_joints)
-                {
-                    RCLCPP_INFO(node_->get_logger(), "Detected single-arm robot (no left/right prefixes in joint names)");
-                    // For single-arm, all joints go to the base topic
-                    // No need to add left/right categories
-                    // Update category options to reflect this (remove left/right if they were added earlier)
-                    updateCategoryOptions();
-                }
-                // If we have left/right joints, add categories and mappings
-                else if (!arm_controller.empty() && (has_left_joints || has_right_joints))
-                {
-                    RCLCPP_INFO(node_->get_logger(), "Detected dual-arm robot (found left/right prefixes in joint names)");
-                    if (has_left_joints)
-                    {
-                        available_categories_.insert("left");
-                        category_to_controller_["left"] = arm_controller;
-                    }
-                    if (has_right_joints)
-                    {
-                        available_categories_.insert("right");
-                        category_to_controller_["right"] = arm_controller;
-                    }
-                    // Update category options after adding left/right
-                    updateCategoryOptions();
-                }
-                
-                updateJointVisibility();
-                
-                // Log classification results
-                RCLCPP_INFO(node_->get_logger(), "Initialized %zu joints for control", joint_names_.size());
-                for (const auto& [category, indices] : category_to_joints_)
-                {
-                    RCLCPP_INFO(node_->get_logger(), "  %s: %zu joints", category.c_str(), indices.size());
-                }
-            }
+            initializeJoints(msg->name);
         }
 
         // Update joint positions from joint state
@@ -681,16 +580,17 @@ namespace arms_rviz_control_plugin
             return;
         }
 
-        auto msg = std_msgs::msg::Float64MultiArray();
+        std::vector<double> target_positions;
+        std::vector<std::string> target_joint_names;
         
-        // If "all" category, publish all joints
-        // Otherwise, only publish joints of the current category
+        // Collect target positions and joint names
         if (current_category_ == "all")
         {
-            msg.data.resize(joint_spinboxes_.size());
+            target_positions.resize(joint_spinboxes_.size());
+            target_joint_names = joint_names_;
             for (size_t i = 0; i < joint_spinboxes_.size(); ++i)
             {
-                msg.data[i] = joint_spinboxes_[i]->value();
+                target_positions[i] = joint_spinboxes_[i]->value();
             }
         }
         else
@@ -700,13 +600,15 @@ namespace arms_rviz_control_plugin
             if (it != category_to_joints_.end())
             {
                 const auto& joint_indices = it->second;
-                msg.data.resize(joint_indices.size());
+                target_positions.resize(joint_indices.size());
+                target_joint_names.resize(joint_indices.size());
                 for (size_t i = 0; i < joint_indices.size(); ++i)
                 {
                     size_t joint_idx = joint_indices[i];
-                    if (joint_idx < joint_spinboxes_.size())
+                    if (joint_idx < joint_spinboxes_.size() && joint_idx < joint_names_.size())
                     {
-                        msg.data[i] = joint_spinboxes_[joint_idx]->value();
+                        target_positions[i] = joint_spinboxes_[joint_idx]->value();
+                        target_joint_names[i] = joint_names_[joint_idx];
                     }
                 }
             }
@@ -716,7 +618,221 @@ namespace arms_rviz_control_plugin
             }
         }
 
+        // Apply joint limits if available
+        if (joint_limits_manager_ && joint_limits_manager_->hasAnyLimits())
+        {
+            target_positions = joint_limits_manager_->applyLimits(target_joint_names, target_positions);
+        }
+
+        // Create and publish message
+        auto msg = std_msgs::msg::Float64MultiArray();
+        msg.data = target_positions;
         joint_position_publisher_->publish(msg);
+    }
+
+    void JointControlPanel::updateSpinboxRanges()
+    {
+        if (!joint_limits_manager_ || !joints_initialized_ || joint_spinboxes_.empty())
+        {
+            return;
+        }
+
+        for (size_t i = 0; i < joint_names_.size() && i < joint_spinboxes_.size(); ++i)
+        {
+            const std::string& joint_name = joint_names_[i];
+            auto limits = joint_limits_manager_->getJointLimits(joint_name);
+            
+            if (limits.initialized)
+            {
+                // Set spinbox range to joint limits
+                joint_spinboxes_[i]->setRange(limits.lower, limits.upper);
+                RCLCPP_DEBUG(node_->get_logger(),
+                            "Set range for joint %s: [%.6f, %.6f]",
+                            joint_name.c_str(), limits.lower, limits.upper);
+            }
+            else
+            {
+                // Keep default range if limits not available
+                joint_spinboxes_[i]->setRange(-M_PI * 2, M_PI * 2);
+            }
+        }
+    }
+
+    void JointControlPanel::tryParseLimitsFromCache()
+    {
+        // Try to parse limits from cached robot_description if available
+        if (robot_description_received_ && !robot_description_cache_.empty() &&
+            joint_limits_manager_ && joints_initialized_ && !joint_names_.empty())
+        {
+            size_t parsed_count = joint_limits_manager_->parseFromURDF(robot_description_cache_, joint_names_);
+            if (parsed_count > 0)
+            {
+                // Update spinbox ranges after parsing limits
+                updateSpinboxRanges();
+                RCLCPP_INFO(node_->get_logger(),
+                           "关节限位已从缓存的 robot_description 加载 (%zu 个关节)",
+                           parsed_count);
+            }
+            else
+            {
+                RCLCPP_WARN(node_->get_logger(),
+                           "未能从缓存的 robot_description 中解析关节限位");
+            }
+        }
+    }
+
+    void JointControlPanel::initializeJoints(const std::vector<std::string>& joint_names_source)
+    {
+        if (joints_initialized_ || joint_names_source.empty())
+        {
+            return;
+        }
+
+        joint_names_.clear();
+        joint_positions_.clear();
+        joint_name_to_index_.clear();
+        joint_to_category_.clear();
+        category_to_joints_.clear();
+
+        // Filter out gripper joints and classify joints
+        for (size_t i = 0; i < joint_names_source.size(); ++i)
+        {
+            const std::string& joint_name = joint_names_source[i];
+            // Skip gripper joints - check for gripper, hand, finger, thumb, etc.
+            std::string joint_name_lower = joint_name;
+            std::transform(joint_name_lower.begin(), joint_name_lower.end(), 
+                          joint_name_lower.begin(), ::tolower);
+            
+            // Filter out gripper-related joints
+            bool is_gripper_joint = 
+                joint_name_lower.find("gripper") != std::string::npos ||
+                joint_name_lower.find("hand") != std::string::npos ||
+                joint_name_lower.find("finger") != std::string::npos ||
+                joint_name_lower.find("thumb") != std::string::npos ||
+                joint_name_lower.find("palm") != std::string::npos;
+            
+            if (!is_gripper_joint)
+            {
+                size_t joint_index = joint_names_.size();
+                joint_names_.push_back(joint_name);
+                joint_name_to_index_[joint_name] = joint_index;
+                
+                // Classify joint
+                std::string category = classifyJoint(joint_name);
+                joint_to_category_[joint_name] = category;
+                category_to_joints_[category].push_back(joint_index);
+            }
+        }
+
+        if (joint_names_.empty())
+        {
+            RCLCPP_WARN(node_->get_logger(), "初始化关节列表失败：未找到有效的关节名称");
+            return;
+        }
+
+        // Create UI elements for each joint
+        joint_row_layouts_.clear();
+        joint_labels_.clear();
+        joint_spinboxes_.clear();
+
+        joint_positions_.resize(joint_names_.size(), 0.0);
+
+        for (size_t i = 0; i < joint_names_.size(); ++i)
+        {
+            // Create vertical layout for each joint (name on top, spinbox below)
+            auto row_layout = std::make_unique<QVBoxLayout>();
+            row_layout->setSpacing(2);
+
+            // Create label (joint name)
+            auto label = std::make_unique<QLabel>(QString::fromStdString(joint_names_[i]), joint_control_group_.get());
+            label->setStyleSheet("QLabel { font-weight: bold; }");
+            row_layout->addWidget(label.get());
+            joint_labels_.push_back(std::move(label));
+
+            // Create spinbox
+            auto spinbox = std::make_unique<QDoubleSpinBox>(joint_control_group_.get());
+            // Set default range, will be updated when limits are loaded
+            spinbox->setRange(-M_PI * 2, M_PI * 2);
+            spinbox->setSingleStep(0.01);
+            spinbox->setDecimals(4);
+            spinbox->setSuffix(" rad");
+            spinbox->setValue(0.0);
+            // No automatic trigger - user clicks send button instead
+            row_layout->addWidget(spinbox.get());
+            joint_spinboxes_.push_back(std::move(spinbox));
+
+            joint_layout_->addLayout(row_layout.get());
+            joint_row_layouts_.push_back(std::move(row_layout));
+        }
+
+        joints_initialized_ = true;
+        
+        // Set joint names in limits manager
+        if (joint_limits_manager_)
+        {
+            joint_limits_manager_->setJointNames(joint_names_);
+        }
+        
+        // Try to parse limits from cached robot_description if available
+        tryParseLimitsFromCache();
+        
+        // For ocs2_arm_controller, check if we have left/right joints
+        // If yes, add left/right categories; if no, it's a single-arm robot
+        std::string arm_controller;
+        for (const auto& controller : available_controllers_)
+        {
+            std::string controller_lower = controller;
+            std::transform(controller_lower.begin(), controller_lower.end(), 
+                          controller_lower.begin(), ::tolower);
+            if (controller_lower.find("ocs2_arm_controller") != std::string::npos)
+            {
+                arm_controller = controller;
+                break;
+            }
+        }
+        
+        // Check if we have left/right joints
+        bool has_left_joints = category_to_joints_.find("left") != category_to_joints_.end() &&
+                               !category_to_joints_["left"].empty();
+        bool has_right_joints = category_to_joints_.find("right") != category_to_joints_.end() &&
+                                !category_to_joints_["right"].empty();
+        
+        // If we have ocs2_arm_controller and no left/right joints, it's a single-arm robot
+        // Don't add left/right categories
+        if (!arm_controller.empty() && !has_left_joints && !has_right_joints)
+        {
+            RCLCPP_INFO(node_->get_logger(), "Detected single-arm robot (no left/right prefixes in joint names)");
+            // For single-arm, all joints go to the base topic
+            // No need to add left/right categories
+            // Update category options to reflect this (remove left/right if they were added earlier)
+            updateCategoryOptions();
+        }
+        // If we have left/right joints, add categories and mappings
+        else if (!arm_controller.empty() && (has_left_joints || has_right_joints))
+        {
+            RCLCPP_INFO(node_->get_logger(), "Detected dual-arm robot (found left/right prefixes in joint names)");
+            if (has_left_joints)
+            {
+                available_categories_.insert("left");
+                category_to_controller_["left"] = arm_controller;
+            }
+            if (has_right_joints)
+            {
+                available_categories_.insert("right");
+                category_to_controller_["right"] = arm_controller;
+            }
+            // Update category options after adding left/right
+            updateCategoryOptions();
+        }
+        
+        updateJointVisibility();
+        
+        // Log classification results
+        RCLCPP_INFO(node_->get_logger(), "Initialized %zu joints for control", joint_names_.size());
+        for (const auto& [category, indices] : category_to_joints_)
+        {
+            RCLCPP_INFO(node_->get_logger(), "  %s: %zu joints", category.c_str(), indices.size());
+        }
     }
 
     void JointControlPanel::load(const rviz_common::Config& config)

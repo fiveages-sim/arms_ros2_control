@@ -112,7 +112,6 @@ namespace ocs2::mobile_manipulator
             }
         }
 
-        // Reset MPC
         ctrl_comp_->resetMpc();
 
         // Reset time

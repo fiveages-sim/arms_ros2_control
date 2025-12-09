@@ -130,6 +130,11 @@ namespace basic_joint_controller
             // Set joint names from controller parameters
             state_list_.movej->setJointNames(joint_names_);
 
+            // Create joint limits manager
+            joint_limits_manager_ = std::make_shared<arms_controller_common::JointLimitsManager>(
+                get_node()->get_logger());
+            joint_limits_manager_->setJointNames(joint_names_);
+
             return CallbackReturn::SUCCESS;
         }
         catch (const std::exception& e)
@@ -154,6 +159,54 @@ namespace basic_joint_controller
         if (state_list_.movej)
         {
             state_list_.movej->setupSubscriptions(get_node(), "target_joint_position", false);
+            
+            // Set joint limit checker from joint limits manager
+            if (joint_limits_manager_)
+            {
+                state_list_.movej->setJointLimitChecker(
+                    joint_limits_manager_->createLimitChecker());
+            }
+        }
+
+        // Subscribe to robot_description topic to load joint limits from URDF
+        robot_description_subscription_ = get_node()->create_subscription<std_msgs::msg::String>(
+            "/robot_description", rclcpp::QoS(rclcpp::KeepLast(1)).transient_local(),
+            [this](const std_msgs::msg::String::SharedPtr msg)
+            {
+                if (joint_limits_manager_)
+                {
+                    joint_limits_manager_->parseFromURDF(msg->data, joint_names_);
+                    // Update limit checker after parsing
+                    if (state_list_.movej)
+                    {
+                        state_list_.movej->setJointLimitChecker(
+                            joint_limits_manager_->createLimitChecker());
+                    }
+                }
+            });
+
+        // Also try to get robot_description from parameter server as fallback
+        try
+        {
+            std::string robot_description;
+            if (get_node()->get_parameter("robot_description", robot_description))
+            {
+                if (joint_limits_manager_)
+                {
+                    joint_limits_manager_->parseFromURDF(robot_description, joint_names_);
+                    // Update limit checker after parsing
+                    if (state_list_.movej)
+                    {
+                        state_list_.movej->setJointLimitChecker(
+                            joint_limits_manager_->createLimitChecker());
+                    }
+                }
+            }
+        }
+        catch (const std::exception& e)
+        {
+            RCLCPP_DEBUG(get_node()->get_logger(), 
+                        "Could not get robot_description from parameter server: %s", e.what());
         }
 
         return CallbackReturn::SUCCESS;
@@ -236,6 +289,7 @@ namespace basic_joint_controller
             return state_list_.invalid;
         }
     }
+
 } // namespace basic_joint_controller
 
 #include "pluginlib/class_list_macros.hpp"

@@ -14,6 +14,7 @@ set(TARGET_MANAGER_INCLUDE_DEPENDS
         visualization_msgs
         interactive_markers
         arms_ros2_control_msgs
+        arms_controller_common
         tf2_ros
         tf2_geometry_msgs
         std_msgs
@@ -31,6 +32,8 @@ add_library(${PROJECT_NAME} SHARED
         src/MarkerFactory.cpp
         src/ControlInputHandler.cpp
         src/VRInputHandler.cpp
+        src/marker/HeadMarker.cpp
+        src/marker/ArmMarker.cpp
 )
 
 target_include_directories(${PROJECT_NAME}

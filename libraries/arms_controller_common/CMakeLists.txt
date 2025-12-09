@@ -16,6 +16,9 @@ set(dependencies
         pinocchio
         urdf
         ament_index_cpp
+        tf2_geometry_msgs
+        tf2
+        geometry_msgs
 )
 
 # Find Eigen3 (required by Pinocchio)
@@ -31,6 +34,7 @@ add_library(${PROJECT_NAME} SHARED
         src/FSM/StateHold.cpp
         src/FSM/StateMoveJ.cpp
         src/utils/GravityCompensation.cpp
+        src/utils/JointLimitsManager.cpp
 )
 
 target_include_directories(${PROJECT_NAME}

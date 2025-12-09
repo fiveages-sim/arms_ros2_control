@@ -24,7 +24,10 @@
 #include <tf2_ros/buffer.h>
 #include <std_msgs/msg/float64_multi_array.hpp>
 #include <sensor_msgs/msg/joint_state.hpp>
+#include <std_msgs/msg/string.hpp>
 #include "arms_target_manager/MarkerFactory.h"
+#include "arms_target_manager/marker/HeadMarker.h"
+#include "arms_target_manager/marker/ArmMarker.h"
 
 namespace arms_ros2_control::command
 {
@@ -146,9 +149,9 @@ namespace arms_ros2_control::command
          * 从当前状态构建 interactive marker（适配器函数）
          * 
          * 这是一个适配器函数，内部会自动：
-         * 1. 根据 markerType 获取对应的 pose（left_pose_, right_pose_, head_pose_）
+         * 1. 根据 markerType 获取对应的 marker（left_arm_marker_, right_arm_marker_, head_marker_）
          * 2. 收集当前状态（current_mode_, current_controller_state_）
-         * 3. 调用 MarkerFactory 的具体创建方法（createArmMarker 或 createHeadMarker）
+         * 3. 调用对应的 marker 类的 createMarker 方法
          * 
          * @param name marker名称
          * @param markerType marker类型 ("left_arm", "right_arm", "head", 或其他自定义类型)
@@ -168,21 +171,6 @@ namespace arms_ros2_control::command
             const visualization_msgs::msg::InteractiveMarkerFeedback::ConstSharedPtr& feedback);
 
 
-        /**
-         * 从quaternion提取头部关节角度（yaw和pitch）
-         * @param quaternion 四元数
-         * @return [head_joint1_angle, head_joint2_angle] 关节角度（弧度）
-         */
-        std::vector<double> quaternionToHeadJointAngles(
-            const geometry_msgs::msg::Quaternion& quaternion) const;
-
-        /**
-         * 从头部关节角度转换为quaternion（yaw和pitch）
-         * @param joint_angles [head_joint1_angle, head_joint2_angle] 关节角度（弧度）
-         * @return 四元数
-         */
-        geometry_msgs::msg::Quaternion headJointAnglesToQuaternion(
-            const std::vector<double>& joint_angles) const;
 
 
         /**
@@ -254,7 +242,7 @@ namespace arms_ros2_control::command
         std::shared_ptr<interactive_markers::InteractiveMarkerServer> server_;
 
         // Marker 工厂（用于创建 marker）
-        std::unique_ptr<MarkerFactory> marker_factory_;
+        std::shared_ptr<MarkerFactory> marker_factory_;
 
         // 发布器
         rclcpp::Publisher<geometry_msgs::msg::Pose>::SharedPtr left_pose_publisher_;
@@ -293,11 +281,6 @@ namespace arms_ros2_control::command
         // 状态管理
         MarkerState current_mode_ = MarkerState::SINGLE_SHOT;
 
-        // 当前pose状态
-        geometry_msgs::msg::Pose left_pose_;
-        geometry_msgs::msg::Pose right_pose_;
-        geometry_msgs::msg::Pose head_pose_;
-
         // 状态管理
         mutable std::mutex state_update_mutex_;
         int32_t current_controller_state_ = 2; // 当前控制器状态
@@ -308,15 +291,9 @@ namespace arms_ros2_control::command
         double marker_update_interval_; // 最小更新间隔（秒）
         rclcpp::Time last_publish_time_; // 连续发布模式的最后发布时间
 
-        // 头部控制相关（在 initialize() 中从配置文件读取）
-        bool enable_head_control_ = false; // 是否启用头部控制
-        std::string head_link_name_; // 头部link名称，用于从TF获取实际位置
-        std::array<double, 3> head_marker_position_ = {1.0, 0.0, 1.5}; // marker在base_footprint中的固定位置（仅在TF获取失败时使用）
-        std::map<std::string, size_t> head_joint_indices_; // 头部关节名称到索引的映射（用于快速访问，基于配置的映射构建，在首次收到joint_states时初始化）
-        
-        // 关节到RPY的映射配置（从target_manager.yaml读取）
-        std::map<std::string, std::string> head_joint_to_rpy_mapping_; // 关节名称到RPY角度的映射（如 "head_joint1" -> "head_yaw"）
-        std::vector<std::string> head_joint_send_order_; // 发送时的关节顺序（按照控制器期望的顺序，如 ["head_joint1", "head_joint2"]）
-        std::map<std::string, double> head_rpy_axis_direction_; // RPY旋转轴方向（1或-1，如 "head_yaw" -> 1.0 或 -1.0）
+        // Marker 管理（封装所有 marker 相关逻辑）
+        std::shared_ptr<ArmMarker> left_arm_marker_;
+        std::shared_ptr<ArmMarker> right_arm_marker_;
+        std::shared_ptr<HeadMarker> head_marker_;
     };
 } // namespace arms_ros2_control::command

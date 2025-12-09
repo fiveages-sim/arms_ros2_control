@@ -14,6 +14,7 @@
   <depend>visualization_msgs</depend>
   <depend>interactive_markers</depend>
   <depend>arms_ros2_control_msgs</depend>
+  <depend>arms_controller_common</depend>
   <depend>arms_rviz_control_plugin</depend>
   <depend>tf2_ros</depend>
   <depend>tf2_geometry_msgs</depend>

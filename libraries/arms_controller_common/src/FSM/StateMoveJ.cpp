@@ -4,6 +4,7 @@
 #include "arms_controller_common/FSM/StateMoveJ.h"
 #include <cmath>
 #include <algorithm>
+#include <limits>
 
 namespace arms_controller_common
 {
@@ -14,7 +15,8 @@ namespace arms_controller_common
         : FSMState(FSMStateName::MOVEJ, "movej", ctrl_interfaces),
           logger_(logger),
           gravity_compensation_(gravity_compensation),
-          duration_(duration)
+          duration_(duration),
+          joint_limit_checker_(nullptr)
     {
     }
 
@@ -238,8 +240,32 @@ namespace arms_controller_common
             return;
         }
         
+        // Apply joint limit checking if callback is set
+        std::vector<double> clamped_target_pos = target_pos;
+        if (joint_limit_checker_)
+        {
+            clamped_target_pos = joint_limit_checker_(target_pos);
+            
+            // Check if any values were clamped
+            bool was_clamped = false;
+            for (size_t i = 0; i < target_pos.size() && i < clamped_target_pos.size(); ++i)
+            {
+                if (std::abs(target_pos[i] - clamped_target_pos[i]) > TARGET_EPSILON)
+                {
+                    was_clamped = true;
+                    break;
+                }
+            }
+            
+            if (was_clamped)
+            {
+                RCLCPP_WARN_THROTTLE(logger_, *node_->get_clock(), 1000,
+                                    "Joint limits applied to target position");
+            }
+        }
+        
         // Update target position
-        target_pos_ = target_pos;
+        target_pos_ = clamped_target_pos;
         has_target_ = true;
         
         // Reset interpolation if we're already in the state
@@ -318,6 +344,12 @@ namespace arms_controller_common
                     target_pos_[i] = target_pos[target_idx++];
                 }
             }
+        }
+
+        // Apply joint limit checking if callback is set
+        if (joint_limit_checker_)
+        {
+            target_pos_ = joint_limit_checker_(target_pos_);
         }
         
         has_target_ = true;
@@ -533,6 +565,19 @@ namespace arms_controller_common
         {
             RCLCPP_DEBUG(logger_, 
                         "No left/right/body prefixed joints found, only using default target_joint_position topic");
+        }
+    }
+
+    void StateMoveJ::setJointLimitChecker(std::function<std::vector<double>(const std::vector<double>&)> limit_checker)
+    {
+        joint_limit_checker_ = limit_checker;
+        if (limit_checker)
+        {
+            RCLCPP_INFO(logger_, "Joint limit checker enabled");
+        }
+        else
+        {
+            RCLCPP_DEBUG(logger_, "Joint limit checker disabled");
         }
     }
 } // namespace arms_controller_common

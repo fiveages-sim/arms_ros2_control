@@ -22,6 +22,8 @@
 #include <arms_ros2_control_msgs/msg/inputs.hpp>
 #include <sensor_msgs/msg/joint_state.hpp>
 #include <std_msgs/msg/float64_multi_array.hpp>
+#include <std_msgs/msg/string.hpp>
+#include <arms_controller_common/utils/JointLimitsManager.h>
 
 namespace arms_rviz_control_plugin
 {
@@ -57,12 +59,21 @@ private:
   void updateCategoryOptions();
   bool hasControllerForCategory(const std::string& category);
   bool shouldShowSendButton() const;
+  void updateSpinboxRanges();
+  void tryParseLimitsFromCache();
+  void initializeJoints(const std::vector<std::string>& joint_names_source);
 
   // ROS2
   rclcpp::Node::SharedPtr node_;
   rclcpp::Subscription<arms_ros2_control_msgs::msg::Inputs>::SharedPtr control_input_subscriber_;
   rclcpp::Subscription<sensor_msgs::msg::JointState>::SharedPtr joint_state_subscriber_;
+  rclcpp::Subscription<std_msgs::msg::String>::SharedPtr robot_description_subscriber_;
   rclcpp::Publisher<std_msgs::msg::Float64MultiArray>::SharedPtr joint_position_publisher_;
+
+  // Joint limits manager
+  std::shared_ptr<arms_controller_common::JointLimitsManager> joint_limits_manager_;
+  std::string robot_description_cache_;
+  bool robot_description_received_ = false;
 
   // UI Elements
   std::unique_ptr<QGroupBox> joint_control_group_;

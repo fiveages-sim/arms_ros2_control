@@ -26,8 +26,6 @@ namespace ocs2::mobile_manipulator
         // 初始化target state缓存
         left_target_state_ = vector_t::Zero(7);
         right_target_state_ = vector_t::Zero(7);
-        left_target_valid_ = false;
-        right_target_valid_ = false;
     }
 
     void PoseBasedReferenceManager::subscribe(const rclcpp_lifecycle::LifecycleNode::SharedPtr& node)
@@ -85,44 +83,34 @@ namespace ocs2::mobile_manipulator
 
     void PoseBasedReferenceManager::updateTargetTrajectory()
     {
+        std::lock_guard<std::mutex> lock(target_state_mutex_);
+        
         // 创建合并的target state
         vector_t combined_target_state;
-        bool has_valid_target = false;
 
         if (dual_arm_mode_)
         {
-            if (left_target_valid_ && right_target_valid_)
-            {
-                combined_target_state = vector_t::Zero(14);
-                combined_target_state.segment(0, 7) = left_target_state_;
-                combined_target_state.segment(7, 7) = right_target_state_;
-                has_valid_target = true;
-            }
+            combined_target_state = vector_t::Zero(14);
+            combined_target_state.segment(0, 7) = left_target_state_;
+            combined_target_state.segment(7, 7) = right_target_state_;
         }
         else
         {
-            if (left_target_valid_)
-            {
-                combined_target_state = left_target_state_;
-                has_valid_target = true;
-            }
+            combined_target_state = left_target_state_;
         }
 
-        if (has_valid_target)
-        {
-            // 使用当前系统时间作为目标时间
-            double target_time = current_observation_.time;
+        // 使用当前系统时间作为目标时间
+        double target_time = current_observation_.time;
 
-            // 创建TargetTrajectories - 只使用一个时间点
-            scalar_array_t time_trajectory = {target_time};
-            vector_array_t state_trajectory = {combined_target_state};
-            vector_array_t input_trajectory(1, vector_t::Zero(interface_->getManipulatorModelInfo().inputDim));
+        // 创建TargetTrajectories - 只使用一个时间点
+        scalar_array_t time_trajectory = {target_time};
+        vector_array_t state_trajectory = {combined_target_state};
+        vector_array_t input_trajectory(1, vector_t::Zero(interface_->getManipulatorModelInfo().inputDim));
 
-            TargetTrajectories target_trajectories(time_trajectory, state_trajectory, input_trajectory);
+        TargetTrajectories target_trajectories(time_trajectory, state_trajectory, input_trajectory);
 
-            // 设置到ReferenceManager
-            referenceManagerPtr_->setTargetTrajectories(std::move(target_trajectories));
-        }
+        // 设置到ReferenceManager
+        referenceManagerPtr_->setTargetTrajectories(std::move(target_trajectories));
     }
 
     void PoseBasedReferenceManager::leftPoseCallback(const geometry_msgs::msg::Pose::SharedPtr msg)
@@ -138,8 +126,10 @@ namespace ocs2::mobile_manipulator
         target_state(6) = msg->orientation.w;
 
         // 更新左臂target state缓存
-        left_target_state_ = target_state;
-        left_target_valid_ = true;
+        {
+            std::lock_guard<std::mutex> lock(target_state_mutex_);
+            left_target_state_ = target_state;
+        }
 
         // 更新target trajectory
         updateTargetTrajectory();
@@ -158,8 +148,10 @@ namespace ocs2::mobile_manipulator
         target_state(6) = msg->orientation.w;
 
         // 更新右臂target state缓存
-        right_target_state_ = target_state;
-        right_target_valid_ = true;
+        {
+            std::lock_guard<std::mutex> lock(target_state_mutex_);
+            right_target_state_ = target_state;
+        }
 
         // 更新target trajectory
         updateTargetTrajectory();
@@ -222,12 +214,33 @@ namespace ocs2::mobile_manipulator
     void PoseBasedReferenceManager::resetTargetStateCache()
     {
         // 重置target state缓存
+        std::lock_guard<std::mutex> lock(target_state_mutex_);
         left_target_state_ = vector_t::Zero(7);
         right_target_state_ = vector_t::Zero(7);
-        left_target_valid_ = false;
-        right_target_valid_ = false;
 
         RCLCPP_INFO(logger_,
                     "Target state cache reset - cleared all cached target states");
+    }
+
+    void PoseBasedReferenceManager::updateTargetTrajectoryIfValid()
+    {
+        // 更新target trajectory（缓存中总是有有效的target，因为enter时会设置初始值）
+        updateTargetTrajectory();
+        RCLCPP_INFO(logger_,
+                    "Updated target trajectory from cached targets on state enter");
+    }
+
+    void PoseBasedReferenceManager::setCurrentEndEffectorPoses(const vector_t& left_ee_pose, const vector_t& right_ee_pose)
+    {
+        std::lock_guard<std::mutex> lock(target_state_mutex_);
+        
+        // 设置左臂pose到缓存
+        left_target_state_ = left_ee_pose;
+        
+        // 如果是双臂模式，设置右臂pose到缓存
+        if (dual_arm_mode_)
+        {
+            right_target_state_ = right_ee_pose;
+        }
     }
 } // namespace ocs2::mobile_manipulator
