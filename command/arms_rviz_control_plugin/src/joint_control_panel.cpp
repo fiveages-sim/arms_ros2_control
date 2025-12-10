@@ -167,9 +167,10 @@ namespace arms_rviz_control_plugin
         updateCategoryOptions();
 
         // Create subscribers
-        control_input_subscriber_ = node_->create_subscription<arms_ros2_control_msgs::msg::Inputs>(
-            "/control_input", 10,
-            std::bind(&JointControlPanel::onControlInputReceived, this, std::placeholders::_1));
+        // Subscribe to FSM command (dedicated topic for state transitions)
+        fsm_command_subscriber_ = node_->create_subscription<std_msgs::msg::Int32>(
+            "/fsm_command", 10,
+            std::bind(&JointControlPanel::onFsmCommandReceived, this, std::placeholders::_1));
 
         joint_state_subscriber_ = node_->create_subscription<sensor_msgs::msg::JointState>(
             "/joint_states", rclcpp::SensorDataQoS(),
@@ -194,12 +195,12 @@ namespace arms_rviz_control_plugin
         }
     }
 
-    void JointControlPanel::onControlInputReceived(const arms_ros2_control_msgs::msg::Inputs::SharedPtr msg)
+    void JointControlPanel::onFsmCommandReceived(const std_msgs::msg::Int32::SharedPtr msg)
     {
-        current_command_ = msg->command;
+        current_command_ = msg->data;
         
         // Enable joint control when command is 3 (OCS2) or 4 (MOVEJ)
-        bool should_enable = (msg->command == 3 || msg->command == 4);
+        bool should_enable = (msg->data == 3 || msg->data == 4);
         
         if (should_enable != is_joint_control_enabled_)
         {

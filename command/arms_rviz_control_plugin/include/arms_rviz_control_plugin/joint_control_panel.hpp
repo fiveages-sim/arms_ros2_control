@@ -19,9 +19,9 @@
 
 #include <rviz_common/panel.hpp>
 #include <rclcpp/rclcpp.hpp>
-#include <arms_ros2_control_msgs/msg/inputs.hpp>
 #include <sensor_msgs/msg/joint_state.hpp>
 #include <std_msgs/msg/float64_multi_array.hpp>
+#include <std_msgs/msg/int32.hpp>
 #include <std_msgs/msg/string.hpp>
 #include <arms_controller_common/utils/JointLimitsManager.h>
 
@@ -47,7 +47,7 @@ private Q_SLOTS:
   void onCategoryChanged();
 
 private:
-  void onControlInputReceived(const arms_ros2_control_msgs::msg::Inputs::SharedPtr msg);
+  void onFsmCommandReceived(const std_msgs::msg::Int32::SharedPtr msg);
   void onJointStateReceived(const sensor_msgs::msg::JointState::SharedPtr msg);
   void updatePanelVisibility();
   void publishJointPositions();
@@ -65,7 +65,7 @@ private:
 
   // ROS2
   rclcpp::Node::SharedPtr node_;
-  rclcpp::Subscription<arms_ros2_control_msgs::msg::Inputs>::SharedPtr control_input_subscriber_;
+  rclcpp::Subscription<std_msgs::msg::Int32>::SharedPtr fsm_command_subscriber_;
   rclcpp::Subscription<sensor_msgs::msg::JointState>::SharedPtr joint_state_subscriber_;
   rclcpp::Subscription<std_msgs::msg::String>::SharedPtr robot_description_subscriber_;
   rclcpp::Publisher<std_msgs::msg::Float64MultiArray>::SharedPtr joint_position_publisher_;
