@@ -11,7 +11,6 @@ set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 
 set(dependencies
         hardware_interface
-        arms_ros2_control_msgs
         rclcpp
         pinocchio
         urdf

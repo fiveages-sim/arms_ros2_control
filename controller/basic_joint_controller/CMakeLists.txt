@@ -12,7 +12,6 @@ set(CONTROLLER_INCLUDE_DEPENDS
         pluginlib
         rcpputils
         controller_interface
-        arms_ros2_control_msgs
         std_msgs
         arms_controller_common
 )

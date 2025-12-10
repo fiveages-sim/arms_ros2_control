@@ -7,7 +7,7 @@
 #include <string>
 #include <hardware_interface/loaned_command_interface.hpp>
 #include <hardware_interface/loaned_state_interface.hpp>
-#include <arms_ros2_control_msgs/msg/inputs.hpp>
+#include <std_msgs/msg/int32.hpp>
 
 namespace arms_controller_common
 {
@@ -46,8 +46,9 @@ namespace arms_controller_common
         std::vector<std::reference_wrapper<hardware_interface::LoanedStateInterface>> 
         joint_force_state_interface_;
 
-        // Control input
-        arms_ros2_control_msgs::msg::Inputs control_inputs_;
+        // FSM command (dedicated topic for state transitions)
+        int32_t fsm_command_ = 0;
+        
         int frequency_ = 1000;
 
         // Control mode - automatically detected based on available interfaces

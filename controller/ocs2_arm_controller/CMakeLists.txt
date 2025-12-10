@@ -15,7 +15,6 @@ set(CONTROLLER_INCLUDE_DEPENDS
 
         ocs2_mobile_manipulator
         ocs2_ros_interfaces
-        arms_ros2_control_msgs
         ocs2_self_collision_visualization
         arms_controller_common
         tf2_ros

@@ -8,6 +8,7 @@ using std::placeholders::_1;
 
 JoystickTeleop::JoystickTeleop() : Node("joystick_teleop_node") {
     publisher_ = create_publisher<arms_ros2_control_msgs::msg::Inputs>("control_input", 10);
+    fsm_command_publisher_ = create_publisher<std_msgs::msg::Int32>("/fsm_command", 10);
     gripper_publisher_ = create_publisher<arms_ros2_control_msgs::msg::Gripper>("/gripper_command", rclcpp::QoS(rclcpp::KeepLast(1)).transient_local());
     subscription_ = create_subscription<
         sensor_msgs::msg::Joy>("joy", 10, std::bind(&JoystickTeleop::joy_callback, this, _1));
@@ -55,8 +56,8 @@ JoystickTeleop::JoystickTeleop() : Node("joystick_teleop_node") {
     low_speed_scale_ = this->get_parameter("speed.low_scale").as_double();
     high_speed_scale_ = this->get_parameter("speed.high_scale").as_double();
     
-    // Initialize inputs message
-    inputs_.command = 0;
+    // Initialize inputs message (command field is no longer used, only for incremental control)
+    inputs_.command = 0;  // Always 0, FSM commands go to /fsm_command topic
     inputs_.x = 0.0;
     inputs_.y = 0.0;
     inputs_.z = 0.0;
@@ -163,24 +164,31 @@ void JoystickTeleop::joy_callback(sensor_msgs::msg::Joy::SharedPtr msg) {
 
     // Only process other logic if joystick is enabled
     if (enabled_) {
-        // Original command logic - use configured button mapping
+        // FSM command logic - publish directly to /fsm_command topic
+        int32_t fsm_command = 0;
         if (msg->buttons[button_map_.b_button] && msg->buttons[button_map_.lb_button]) {
-            inputs_.command = 1; // LB + B
+            fsm_command = 1; // LB + B -> HOME
         } else if (msg->buttons[button_map_.a_button] && msg->buttons[button_map_.lb_button]) {
-            inputs_.command = 2; // LB + A
+            fsm_command = 2; // LB + A -> HOLD
         } else if (msg->buttons[button_map_.start_button]) {
-            inputs_.command = 3; // START
+            fsm_command = 3; // START -> OCS2/MOVE
         } else if (msg->buttons[button_map_.y_button] && msg->buttons[button_map_.lb_button]) {
-            inputs_.command = 4; // LB + Y
-        } else {
-            inputs_.command = 0;
-            
-            // Process axes if no command is active
-            processAxes(msg);
+            fsm_command = 4; // LB + Y -> MOVEJ
         }
         
-        // Publish the current state only when enabled
-        publisher_->publish(inputs_);
+        // Publish FSM command if there's a command
+        if (fsm_command != 0) {
+            auto fsm_cmd = std_msgs::msg::Int32();
+            fsm_cmd.data = fsm_command;
+            fsm_command_publisher_->publish(fsm_cmd);
+        } else {
+            // Process axes for incremental control when no FSM command is active
+            processAxes(msg);
+            
+            // Publish incremental control to /control_input (command is always 0)
+            inputs_.command = 0;
+            publisher_->publish(inputs_);
+        }
     }
 }
 

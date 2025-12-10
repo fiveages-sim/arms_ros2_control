@@ -12,6 +12,7 @@
 #include <rviz_common/panel.hpp>
 #include <rclcpp/rclcpp.hpp>
 #include <arms_ros2_control_msgs/msg/inputs.hpp>
+#include <std_msgs/msg/int32.hpp>
 
 namespace arms_rviz_control_plugin
 {
@@ -45,12 +46,12 @@ private:
   void updateStatusDisplay();
   void updateButtonVisibility();
   void setCurrentState(const std::string& state);
-  void onControlInputReceived(const arms_ros2_control_msgs::msg::Inputs::SharedPtr msg);
+  void onFsmCommandReceived(const std_msgs::msg::Int32::SharedPtr msg);
 
   // ROS2
   rclcpp::Node::SharedPtr node_;
-  rclcpp::Publisher<arms_ros2_control_msgs::msg::Inputs>::SharedPtr publisher_;
-  rclcpp::Subscription<arms_ros2_control_msgs::msg::Inputs>::SharedPtr subscriber_;
+  rclcpp::Publisher<std_msgs::msg::Int32>::SharedPtr fsm_command_publisher_;
+  rclcpp::Subscription<std_msgs::msg::Int32>::SharedPtr fsm_command_subscriber_;
 
   // UI Elements
   std::unique_ptr<QPushButton> home_to_hold_btn_;

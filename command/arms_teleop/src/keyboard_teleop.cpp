@@ -6,14 +6,15 @@
 
 KeyboardTeleop::KeyboardTeleop() : Node("keyboard_teleop_node") {
     publisher_ = create_publisher<arms_ros2_control_msgs::msg::Inputs>("control_input", 10);
+    fsm_command_publisher_ = create_publisher<std_msgs::msg::Int32>("/fsm_command", 10);
     gripper_publisher_ = create_publisher<arms_ros2_control_msgs::msg::Gripper>("/gripper_command", 10);
     timer_ = create_wall_timer(std::chrono::microseconds(100), std::bind(&KeyboardTeleop::timer_callback, this));
     
     // Initialize state
     currentTarget_ = 1; // Start with left arm
     
-    // Initialize inputs message
-    inputs_.command = 0;
+    // Initialize inputs message (command field is no longer used, only for incremental control)
+    inputs_.command = 0;  // Always 0, FSM commands go to /fsm_command topic
     inputs_.x = 0.0;
     inputs_.y = 0.0;
     inputs_.z = 0.0;
@@ -35,34 +36,68 @@ KeyboardTeleop::KeyboardTeleop() : Node("keyboard_teleop_node") {
 void KeyboardTeleop::timer_callback() {
     if (kbhit()) {
         char key = getchar();
-        check_command(key);
         
-        // Process movement if no command is active
-        if (inputs_.command == 0) {
-            check_value(key);
-        } else {
-            // Clear movement when command is active
-            inputs_.x = 0;
-            inputs_.y = 0;
-            inputs_.z = 0;
-            inputs_.roll = 0;
-            inputs_.pitch = 0;
-            inputs_.yaw = 0;
-            reset_count_ = 100;
+        // Check for FSM command first
+        int32_t fsm_command = 0;
+        switch (key) {
+            case '1':
+                fsm_command = 1; // HOME
+                break;
+            case '2':
+                fsm_command = 2; // HOLD
+                break;
+            case '3':
+                fsm_command = 3; // OCS2/MOVE
+                break;
+            case '4':
+                fsm_command = 4; // MOVEJ
+                break;
+            case '5':
+                fsm_command = 5;
+                break;
+            case '6':
+                fsm_command = 6;
+                break;
+            case '7':
+                fsm_command = 7;
+                break;
+            case '8':
+                fsm_command = 8;
+                break;
+            case '9':
+                fsm_command = 9;
+                break;
+            case '0':
+                fsm_command = 10;
+                break;
+            default:
+                break;
         }
         
-        // Always publish when there's input
-        publisher_->publish(inputs_);
+        // Publish FSM command if there's a command
+        if (fsm_command != 0) {
+            auto fsm_cmd = std_msgs::msg::Int32();
+            fsm_cmd.data = fsm_command;
+            fsm_command_publisher_->publish(fsm_cmd);
+            reset_count_ = 100;
+        } else {
+            // Process other keys (movement, target arm switch, gripper)
+            check_command(key);
+            
+            // Process movement for incremental control
+            check_value(key);
+            
+            // Publish incremental control to /control_input (command is always 0)
+            inputs_.command = 0;
+            publisher_->publish(inputs_);
+        }
+        
         just_published_ = true;
     } else {
         if (just_published_) {
             reset_count_ -= 1;
             if (reset_count_ == 0) {
                 just_published_ = false;
-                if (inputs_.command != 0) {
-                    inputs_.command = 0;
-                    publisher_->publish(inputs_);
-                }
             }
         }
     }
@@ -78,36 +113,6 @@ void KeyboardTeleop::check_command(const char key) {
             RCLCPP_INFO(get_logger(), "⌨️ Switched target arm to: %s", 
                         (currentTarget_ == 1) ? "LEFT" : "RIGHT");
             break;
-        case '1':
-            inputs_.command = 1; // L2_B
-            break;
-        case '2':
-            inputs_.command = 2; // L2_A
-            break;
-        case '3':
-            inputs_.command = 3; // L2_X
-            break;
-        case '4':
-            inputs_.command = 4; // L2_Y
-            break;
-        case '5':
-            inputs_.command = 5; // L1_A
-            break;
-        case '6':
-            inputs_.command = 6; // L1_B
-            break;
-        case '7':
-            inputs_.command = 7; // L1_X
-            break;
-        case '8':
-            inputs_.command = 8; // L1_Y
-            break;
-        case '9':
-            inputs_.command = 9;
-            break;
-        case '0':
-            inputs_.command = 10;
-            break;
         case ' ':
             // Toggle gripper open/close
             static bool gripper_open = false;
@@ -122,7 +127,7 @@ void KeyboardTeleop::check_command(const char key) {
             }
             break;
         default:
-            inputs_.command = 0;
+            // FSM commands (1-0) are handled in timer_callback, not here
             break;
     }
 }

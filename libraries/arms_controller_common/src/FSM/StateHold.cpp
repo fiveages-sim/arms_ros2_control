@@ -144,8 +144,8 @@ namespace arms_controller_common
 
     FSMStateName StateHold::checkChange()
     {
-        // Check control inputs for state transition
-        switch (ctrl_interfaces_.control_inputs_.command)
+        // Check FSM command for state transition
+        switch (ctrl_interfaces_.fsm_command_)
         {
         case 1:
             return FSMStateName::HOME;

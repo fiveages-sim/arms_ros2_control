@@ -12,8 +12,8 @@
 #include <algorithm>
 
 #include <controller_interface/controller_interface.hpp>
-#include <arms_ros2_control_msgs/msg/inputs.hpp>
 #include <std_msgs/msg/string.hpp>
+#include <std_msgs/msg/int32.hpp>
 #include <hardware_interface/loaned_command_interface.hpp>
 #include <hardware_interface/loaned_state_interface.hpp>
 
@@ -99,7 +99,7 @@ namespace basic_joint_controller
         };
 
         // ROS subscriptions
-        rclcpp::Subscription<arms_ros2_control_msgs::msg::Inputs>::SharedPtr control_input_subscription_;
+        rclcpp::Subscription<std_msgs::msg::Int32>::SharedPtr fsm_command_subscription_;
         rclcpp::Subscription<std_msgs::msg::String>::SharedPtr robot_description_subscription_;
 
         // Joint limits manager (common utility)

@@ -192,8 +192,8 @@ namespace ocs2::mobile_manipulator
 
     FSMStateName StateOCS2::checkChange()
     {
-        // Check control inputs for state transition
-        switch (ctrl_interfaces_.control_inputs_.command)
+        // Check FSM command for state transition
+        switch (ctrl_interfaces_.fsm_command_)
         {
         case 2: return FSMStateName::HOLD;
         default: return FSMStateName::OCS2;

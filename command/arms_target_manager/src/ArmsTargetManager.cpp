@@ -468,9 +468,9 @@ namespace arms_ros2_control::command
     }
 
 
-    void ArmsTargetManager::controlInputCallback(const arms_ros2_control_msgs::msg::Inputs::ConstSharedPtr msg)
+    void ArmsTargetManager::fsmCommandCallback(std_msgs::msg::Int32::ConstSharedPtr msg)
     {
-        int32_t new_state = msg->command;
+        int32_t new_state = msg->data;
 
         if (new_state == 0)
         {
@@ -550,7 +550,7 @@ namespace arms_ros2_control::command
 
         // 使用 HeadMarker 更新
         geometry_msgs::msg::Pose updated_pose = head_marker_->updateFromJointState(
-            joint_msg, current_controller_state_, isStateDisabled(current_controller_state_));
+            joint_msg, isStateDisabled(current_controller_state_));
 
         // 更新 marker
         server_->setPose("head_target", updated_pose);

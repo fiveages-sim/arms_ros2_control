@@ -141,7 +141,7 @@ namespace arms_controller_common
 
     void StateHome::run(const rclcpp::Time& /*time*/, const rclcpp::Duration& /*period*/)
     {
-        int32_t current_command = ctrl_interfaces_.control_inputs_.command;
+        int32_t current_command = ctrl_interfaces_.fsm_command_;
         bool command_changed = (current_command != last_command_);
 
         // Handle multi-configuration switching (command >= switch_command_base_)
@@ -162,8 +162,8 @@ namespace arms_controller_common
                     selectConfiguration(target_index);
                 }
             }
-            // Reset command after processing
-            ctrl_interfaces_.control_inputs_.command = 0;
+            // Note: fsm_command_ is read-only from topic, so we don't reset it here
+            // The command will be cleared by the publisher when needed
         }
 
         // Rest pose is now part of home_configs_ (as index 1), so it's handled by the multi-config switching above
@@ -218,7 +218,7 @@ namespace arms_controller_common
 
     FSMStateName StateHome::checkChange()
     {
-        switch (ctrl_interfaces_.control_inputs_.command)
+        switch (ctrl_interfaces_.fsm_command_)
         {
         case 2:
         case 3:

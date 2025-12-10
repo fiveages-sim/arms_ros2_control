@@ -23,6 +23,7 @@
 #include <tf2_ros/transform_listener.h>
 #include <tf2_ros/buffer.h>
 #include <std_msgs/msg/float64_multi_array.hpp>
+#include <std_msgs/msg/int32.hpp>
 #include <sensor_msgs/msg/joint_state.hpp>
 #include <std_msgs/msg/string.hpp>
 #include "arms_target_manager/MarkerFactory.h"
@@ -139,10 +140,10 @@ namespace arms_ros2_control::command
         bool shouldThrottle(rclcpp::Time& last_time, double interval);
 
         /**
-         * 控制输入回调函数
-         * @param msg 控制输入消息
+         * FSM 命令回调函数（用于状态切换和 marker 形态更新）
+         * @param msg FSM 命令消息
          */
-        void controlInputCallback(arms_ros2_control_msgs::msg::Inputs::ConstSharedPtr msg);
+        void fsmCommandCallback(std_msgs::msg::Int32::ConstSharedPtr msg);
 
     private:
         /**

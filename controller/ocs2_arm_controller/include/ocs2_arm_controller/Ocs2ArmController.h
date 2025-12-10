@@ -14,7 +14,7 @@
 #include <controller_interface/controller_interface.hpp>
 #include <std_msgs/msg/string.hpp>
 #include <std_msgs/msg/float64_multi_array.hpp>
-#include <arms_ros2_control_msgs/msg/inputs.hpp>
+#include <std_msgs/msg/int32.hpp>
 #include <hardware_interface/loaned_command_interface.hpp>
 #include <hardware_interface/loaned_state_interface.hpp>
 #include "ocs2_arm_controller/control/CtrlComponent.h"
@@ -113,7 +113,7 @@ namespace ocs2::mobile_manipulator
         };
 
         // ROS subscriptions
-        rclcpp::Subscription<arms_ros2_control_msgs::msg::Inputs>::SharedPtr control_input_subscription_;
+        rclcpp::Subscription<std_msgs::msg::Int32>::SharedPtr fsm_command_subscription_;
         
         // CtrlComponent for OCS2 interface access
         std::shared_ptr<CtrlComponent> ctrl_comp_;

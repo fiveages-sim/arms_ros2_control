@@ -147,11 +147,11 @@ namespace basic_joint_controller
     controller_interface::CallbackReturn BasicJointController::on_configure(
         const rclcpp_lifecycle::State& /*previous_state*/)
     {
-        // Subscribe to control input
-        control_input_subscription_ = get_node()->create_subscription<arms_ros2_control_msgs::msg::Inputs>(
-            "/control_input", 10, [this](const arms_ros2_control_msgs::msg::Inputs::SharedPtr msg)
+        // Subscribe to FSM command (dedicated topic for state transitions)
+        fsm_command_subscription_ = get_node()->create_subscription<std_msgs::msg::Int32>(
+            "/fsm_command", 10, [this](const std_msgs::msg::Int32::SharedPtr msg)
             {
-                ctrl_interfaces_.control_inputs_ = *msg;
+                ctrl_interfaces_.fsm_command_ = msg->data;
             });
 
         // Setup subscriptions for target positions in StateMoveJ

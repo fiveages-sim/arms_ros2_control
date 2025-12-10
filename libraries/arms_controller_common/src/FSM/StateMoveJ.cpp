@@ -184,10 +184,10 @@ namespace arms_controller_common
 
     FSMStateName StateMoveJ::checkChange()
     {
-        // Check control input to determine state transition
+        // Check FSM command to determine state transition
         // Default implementation: can transition to HOME or HOLD
         // Derived classes or controllers can override this behavior
-        switch (ctrl_interfaces_.control_inputs_.command)
+        switch (ctrl_interfaces_.fsm_command_)
         {
         case 1:
             return FSMStateName::HOME;

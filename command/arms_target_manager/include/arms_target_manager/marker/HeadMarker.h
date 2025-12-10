@@ -95,13 +95,11 @@ namespace arms_ros2_control::command
         /**
          * @brief 从关节状态更新 marker
          * @param joint_msg 关节状态消息
-         * @param current_controller_state 当前控制器状态
          * @param is_state_disabled 状态是否禁用自动更新
          * @return 更新后的 pose（用于更新 marker 位置）
          */
         geometry_msgs::msg::Pose updateFromJointState(
             const sensor_msgs::msg::JointState::ConstSharedPtr& joint_msg,
-            int32_t current_controller_state,
             bool is_state_disabled);
 
         /**

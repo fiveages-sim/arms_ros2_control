@@ -9,6 +9,7 @@
 #include <sensor_msgs/msg/joy.hpp>
 #include <arms_ros2_control_msgs/msg/inputs.hpp>
 #include <arms_ros2_control_msgs/msg/gripper.hpp>
+#include <std_msgs/msg/int32.hpp>
 
 class JoystickTeleop final : public rclcpp::Node {
 public:
@@ -28,6 +29,7 @@ private:
 
     arms_ros2_control_msgs::msg::Inputs inputs_;
     rclcpp::Publisher<arms_ros2_control_msgs::msg::Inputs>::SharedPtr publisher_;
+    rclcpp::Publisher<std_msgs::msg::Int32>::SharedPtr fsm_command_publisher_;
     rclcpp::Publisher<arms_ros2_control_msgs::msg::Gripper>::SharedPtr gripper_publisher_;
     rclcpp::Subscription<sensor_msgs::msg::Joy>::SharedPtr subscription_;
     rclcpp::Subscription<arms_ros2_control_msgs::msg::Gripper>::SharedPtr gripper_command_subscription_;

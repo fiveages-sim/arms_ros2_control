@@ -7,9 +7,9 @@ namespace ocs2::mobile_manipulator
 {
     arms_controller_common::FSMStateName StateMoveJ::checkChange()
     {
-        // Check control inputs for state transition
+        // Check FSM command for state transition
         // Supports: MOVEJ -> HOME (command 1), MOVEJ -> HOLD (command 2)
-        switch (ctrl_interfaces_.control_inputs_.command)
+        switch (ctrl_interfaces_.fsm_command_)
         {
         case 1:
             return arms_controller_common::FSMStateName::HOME;

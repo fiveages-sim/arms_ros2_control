@@ -387,7 +387,6 @@ namespace arms_ros2_control::command
 
     geometry_msgs::msg::Pose HeadMarker::updateFromJointState(
         const sensor_msgs::msg::JointState::ConstSharedPtr& joint_msg,
-        int32_t current_controller_state,
         bool is_state_disabled)
     {
         // 初始化关节索引（如果需要）

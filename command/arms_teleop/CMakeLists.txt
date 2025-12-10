@@ -11,6 +11,7 @@ set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 find_package(ament_cmake REQUIRED)
 find_package(rclcpp REQUIRED)
 find_package(sensor_msgs REQUIRED)
+find_package(std_msgs REQUIRED)
 find_package(arms_ros2_control_msgs REQUIRED)
 find_package(control_msgs REQUIRED)
 find_package(rclcpp_action REQUIRED)
@@ -25,6 +26,7 @@ ament_target_dependencies(
         joystick_teleop PUBLIC
         rclcpp
         sensor_msgs
+        std_msgs
         arms_ros2_control_msgs
         control_msgs
         rclcpp_action
@@ -39,6 +41,7 @@ target_include_directories(keyboard_teleop
 ament_target_dependencies(
         keyboard_teleop PUBLIC
         rclcpp
+        std_msgs
         arms_ros2_control_msgs
 )
 

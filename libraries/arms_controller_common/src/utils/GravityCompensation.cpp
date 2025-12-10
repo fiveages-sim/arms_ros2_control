@@ -45,7 +45,7 @@ namespace arms_controller_common
         {
             RCLCPP_WARN(rclcpp::get_logger("GravityCompensation"),
                        "Joint positions size (%zu) doesn't match model size (%zu)",
-                       joint_positions.size(), model_.nq);
+                       joint_positions.size(), static_cast<size_t>(model_.nq));
             return std::vector<double>(model_.nq, 0.0);
         }
 
@@ -68,11 +68,11 @@ namespace arms_controller_common
     Eigen::VectorXd GravityCompensation::calculateStaticTorquesEigen(
         const Eigen::VectorXd& joint_positions) const
     {
-        if (joint_positions.size() != model_.nq)
+        if (joint_positions.size() != static_cast<size_t>(model_.nq))
         {
             RCLCPP_WARN(rclcpp::get_logger("GravityCompensation"),
                        "Joint positions size (%zu) doesn't match model size (%zu)",
-                       joint_positions.size(), model_.nq);
+                       joint_positions.size(), static_cast<size_t>(model_.nq));
             return Eigen::VectorXd::Zero(model_.nq);
         }
 

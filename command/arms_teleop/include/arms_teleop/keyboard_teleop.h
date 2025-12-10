@@ -8,6 +8,7 @@
 #include <rclcpp/rclcpp.hpp>
 #include <arms_ros2_control_msgs/msg/inputs.hpp>
 #include <arms_ros2_control_msgs/msg/gripper.hpp>
+#include <std_msgs/msg/int32.hpp>
 #include <termios.h>
 
 template <typename T1, typename T2>
@@ -39,6 +40,7 @@ private:
 
     arms_ros2_control_msgs::msg::Inputs inputs_;
     rclcpp::Publisher<arms_ros2_control_msgs::msg::Inputs>::SharedPtr publisher_;
+    rclcpp::Publisher<std_msgs::msg::Int32>::SharedPtr fsm_command_publisher_;
     rclcpp::Publisher<arms_ros2_control_msgs::msg::Gripper>::SharedPtr gripper_publisher_;
     rclcpp::TimerBase::SharedPtr timer_;
 

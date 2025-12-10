@@ -3,6 +3,7 @@
 //
 
 #include <rclcpp/rclcpp.hpp>
+#include <std_msgs/msg/int32.hpp>
 #include "arms_target_manager/ArmsTargetManager.h"
 #include "arms_target_manager/ControlInputHandler.h"
 #include "arms_target_manager/VRInputHandler.h"
@@ -63,21 +64,29 @@ int main(int argc, char** argv)
                 node, target_manager.get(), vr_update_rate);
         }
 
-        // 创建control input订阅器，同时处理两个回调
+        // 创建 control input 订阅器（用于增量控制）
         auto control_subscription = node->create_subscription<arms_ros2_control_msgs::msg::Inputs>(
             "control_input", 10,
-            [control_handler_ptr = control_handler.get(), target_manager_ptr = target_manager.get()](
+            [control_handler_ptr = control_handler.get()](
             const arms_ros2_control_msgs::msg::Inputs::ConstSharedPtr msg)
             {
-                // 先处理ControlInputHandler
+                // 处理增量控制
                 if (control_handler_ptr)
                 {
                     control_handler_ptr->processControlInput(msg);
                 }
-                // 再处理ArmsTargetManager的状态更新
+            });
+
+        // 创建 FSM 命令订阅器（用于状态切换和 marker 形态更新）
+        auto fsm_command_subscription = node->create_subscription<std_msgs::msg::Int32>(
+            "/fsm_command", 10,
+            [target_manager_ptr = target_manager.get()](
+            const std_msgs::msg::Int32::ConstSharedPtr msg)
+            {
+                // 处理 FSM 状态切换
                 if (target_manager_ptr)
                 {
-                    target_manager_ptr->controlInputCallback(msg);
+                    target_manager_ptr->fsmCommandCallback(msg);
                 }
             });
 

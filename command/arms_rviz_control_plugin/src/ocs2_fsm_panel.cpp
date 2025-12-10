@@ -108,16 +108,16 @@ namespace arms_rviz_control_plugin
         // Use RViz display context to get the node instead of creating a new one
         node_ = this->getDisplayContext()->getRosNodeAbstraction().lock()->get_raw_node();
 
-        // Create publisher
-        publisher_ = node_->create_publisher<arms_ros2_control_msgs::msg::Inputs>(
-            "/control_input", 10);
+        // Create FSM command publisher (dedicated topic for state transitions)
+        fsm_command_publisher_ = node_->create_publisher<std_msgs::msg::Int32>(
+            "/fsm_command", 10);
 
-        // Create subscriber to listen for control input changes
-        subscriber_ = node_->create_subscription<arms_ros2_control_msgs::msg::Inputs>(
-            "/control_input", 10,
-            std::bind(&OCS2FSMPanel::onControlInputReceived, this, std::placeholders::_1));
+        // Create subscriber to listen for FSM command changes
+        fsm_command_subscriber_ = node_->create_subscription<std_msgs::msg::Int32>(
+            "/fsm_command", 10,
+            std::bind(&OCS2FSMPanel::onFsmCommandReceived, this, std::placeholders::_1));
 
-        RCLCPP_INFO(node_->get_logger(), "OCS2 FSM Panel initialized");
+        RCLCPP_INFO(node_->get_logger(), "OCS2 FSM Panel initialized with /fsm_command topic");
     }
 
     void OCS2FSMPanel::onHomeToHold()
@@ -160,7 +160,6 @@ namespace arms_rviz_control_plugin
     {
         if (!switch_pose_pressed_)
         {
-            // 按下：发送command=4来触发姿态切换
             publishCommand(100);
             switch_pose_pressed_ = true;
 
@@ -178,20 +177,13 @@ namespace arms_rviz_control_plugin
 
     void OCS2FSMPanel::publishCommand(int32_t command)
     {
-        auto msg = arms_ros2_control_msgs::msg::Inputs();
-        msg.command = command;
-        msg.x = 0.0;
-        msg.y = 0.0;
-        msg.z = 0.0;
-        msg.roll = 0.0;
-        msg.pitch = 0.0;
-        msg.yaw = 0.0;
-        msg.target = 1; // 默认左臂
+        auto msg = std_msgs::msg::Int32();
+        msg.data = command;
 
-        publisher_->publish(msg);
+        fsm_command_publisher_->publish(msg);
         current_command_ = command;
 
-        RCLCPP_INFO(node_->get_logger(), "Published command: %d", command);
+        RCLCPP_INFO(node_->get_logger(), "Published FSM command: %d", command);
     }
 
     void OCS2FSMPanel::updateStatusDisplay()
@@ -285,13 +277,13 @@ namespace arms_rviz_control_plugin
         Panel::save(config);
     }
 
-    void OCS2FSMPanel::onControlInputReceived(const arms_ros2_control_msgs::msg::Inputs::SharedPtr msg)
+    void OCS2FSMPanel::onFsmCommandReceived(const std_msgs::msg::Int32::SharedPtr msg)
     {
         // 根据当前状态和命令，检查状态转换是否有效
         bool valid_transition = false;
         std::string new_state = current_state_;
         
-        switch (msg->command)
+        switch (msg->data)
         {
             case 1: // HOLD → HOME
                 if (current_state_ == "HOLD")
@@ -328,7 +320,7 @@ namespace arms_rviz_control_plugin
         if (valid_transition)
         {
             setCurrentState(new_state);
-            current_command_ = msg->command;
+            current_command_ = msg->data;
         }
     }
 } // namespace arms_rviz_control_plugin
