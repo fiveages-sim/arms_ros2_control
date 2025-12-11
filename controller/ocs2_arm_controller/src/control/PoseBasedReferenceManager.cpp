@@ -6,6 +6,7 @@
 #include <rclcpp/rclcpp.hpp>
 #include <geometry_msgs/msg/pose_stamped.hpp>
 #include <tf2/exceptions.h>
+#include <tf2_geometry_msgs/tf2_geometry_msgs.hpp>
 
 namespace ocs2::mobile_manipulator
 {
