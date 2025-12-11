@@ -8,10 +8,7 @@
 #include <Eigen/Geometry>
 #include <tf2_geometry_msgs/tf2_geometry_msgs.hpp>
 #include <tf2/exceptions.h>
-#include <std_msgs/msg/float64_multi_array.hpp>
 #include <cmath>
-#include <set>
-#include <map>
 #include <algorithm>
 #include <utility>
 
@@ -47,17 +44,41 @@ namespace arms_ros2_control::command
         tf_buffer_ = std::make_shared<tf2_ros::Buffer>(node_->get_clock());
         tf_listener_ = std::make_shared<tf2_ros::TransformListener>(*tf_buffer_);
 
-        // 创建左臂 Marker
+        // 创建左臂 Marker（带更新回调）
         left_arm_marker_ = std::make_shared<ArmMarker>(
             node_, marker_factory_, tf_buffer_, marker_fixed_frame_, control_base_frame_,
-            ArmType::LEFT, std::array<double, 3>{0.0, 0.5, 1.0});
+            ArmType::LEFT, std::array<double, 3>{0.0, 0.5, 1.0}, "left_target", "left_current_pose",
+            publish_rate_,
+            [this](const std::string& marker_name, const geometry_msgs::msg::Pose& pose)
+            {
+                if (isStateDisabled(current_controller_state_))
+                {
+                    server_->setPose(marker_name, pose);
+                    if (shouldThrottle(last_marker_update_time_, marker_update_interval_))
+                    {
+                        server_->applyChanges();
+                    }
+                }
+            });
 
-        // 创建右臂 Marker（如果是双臂模式）
+        // 创建右臂 Marker（如果是双臂模式，带更新回调）
         if (dual_arm_mode_)
         {
             right_arm_marker_ = std::make_shared<ArmMarker>(
                 node_, marker_factory_, tf_buffer_, marker_fixed_frame_, control_base_frame_,
-                ArmType::RIGHT, std::array<double, 3>{0.0, -0.5, 1.0});
+                ArmType::RIGHT, std::array<double, 3>{0.0, -0.5, 1.0}, "right_target", "right_current_pose",
+                publish_rate_,
+                [this](const std::string& marker_name, const geometry_msgs::msg::Pose& pose)
+                {
+                    if (isStateDisabled(current_controller_state_))
+                    {
+                        server_->setPose(marker_name, pose);
+                        if (shouldThrottle(last_marker_update_time_, marker_update_interval_))
+                        {
+                            server_->applyChanges();
+                        }
+                    }
+                });
         }
 
         // 创建 HeadMarker 实例并初始化
@@ -188,8 +209,8 @@ namespace arms_ros2_control::command
 
             if (current_mode_ == MarkerState::CONTINUOUS)
             {
-                // 在连续发布模式下，只发送左臂目标位姿（使用 publish_rate_ 节流）
-                left_arm_marker_->publishTargetPose(left_pose_publisher_, publish_rate_, last_publish_time_);
+                // 在连续发布模式下，只发送左臂目标位姿（使用内部节流）
+                left_arm_marker_->publishTargetPose();
             }
         }
         else if (marker_name == "right_arm_target" && right_arm_marker_)
@@ -200,8 +221,8 @@ namespace arms_ros2_control::command
 
             if (current_mode_ == MarkerState::CONTINUOUS)
             {
-                // 在连续发布模式下，只发送右臂目标位姿（使用 publish_rate_ 节流）
-                right_arm_marker_->publishTargetPose(right_pose_publisher_, publish_rate_, last_publish_time_);
+                // 在连续发布模式下，只发送右臂目标位姿（使用内部节流）
+                right_arm_marker_->publishTargetPose();
             }
         }
         else if (marker_name == "head_target")
@@ -266,23 +287,30 @@ namespace arms_ros2_control::command
         // 根据marker类型执行不同的发送操作
         if (marker_type == "head")
         {
-            if (head_marker_ && head_marker_->isEnabled() && head_joint_publisher_)
+            if (head_marker_ && head_marker_->isEnabled())
             {
-                head_marker_->publishTargetJointAngles(head_joint_publisher_, head_marker_->getPose());
+                head_marker_->publishTargetJointAngles();
             }
             return;
         }
         // 单次模式下，只发送对应的手臂
         // 连续模式下，如果是双臂模式，拖动时会同时发送两个手臂（在 handleMarkerFeedback 中处理）
-        if (marker_type == "left_arm" && left_arm_marker_ && left_pose_publisher_)
+        if (marker_type == "left_arm" && left_arm_marker_)
         {
-            left_arm_marker_->publishTargetPose(left_pose_publisher_, publish_rate_, last_publish_time_);
+            left_arm_marker_->publishTargetPose();
             return;
         }
-        if (marker_type == "right_arm" && right_arm_marker_ && right_pose_publisher_)
+        if (marker_type == "right_arm" && right_arm_marker_)
         {
-            right_arm_marker_->publishTargetPose(right_pose_publisher_, publish_rate_, last_publish_time_);
+            right_arm_marker_->publishTargetPose();
         }
+    }
+
+    void ArmsTargetManager::sendDualArmTargetPose()
+    {
+        // 同时发送左臂和右臂的目标位姿（每个 marker 独立管理节流和发布频率）
+        left_arm_marker_->publishTargetPose();
+        right_arm_marker_->publishTargetPose();
     }
 
 
@@ -314,6 +342,24 @@ namespace arms_ros2_control::command
         toggle_handle = menu_handler->insert(toggleText, menuToggleCallback);
     }
 
+    void ArmsTargetManager::setupDualArmMenu(
+        std::shared_ptr<interactive_markers::MenuHandler>& menu_handler,
+        interactive_markers::MenuHandler::EntryHandle& both_handle)
+    {
+        if (!dual_arm_mode_ || !menu_handler)
+        {
+            return;
+        }
+
+        auto menuBothCallback = [this](
+            const visualization_msgs::msg::InteractiveMarkerFeedback::ConstSharedPtr& /*feedback*/)
+        {
+            sendDualArmTargetPose();
+        };
+
+        both_handle = menu_handler->insert("发送双臂", menuBothCallback);
+    }
+
     void ArmsTargetManager::setupMenu()
     {
         // 为左臂设置菜单
@@ -323,6 +369,12 @@ namespace arms_ros2_control::command
             left_toggle_handle_,
             [this]() { sendTargetPose("left_arm"); });
 
+        // 为左臂添加"发送双臂"按钮（如果是双臂模式）
+        if (dual_arm_mode_)
+        {
+            setupDualArmMenu(left_menu_handler_, left_both_handle_);
+        }
+
         // 为右臂设置菜单（如果是双臂模式）
         if (dual_arm_mode_)
         {
@@ -331,6 +383,9 @@ namespace arms_ros2_control::command
                 right_send_handle_,
                 right_toggle_handle_,
                 [this]() { sendTargetPose("right_arm"); });
+            
+            // 为右臂添加"发送双臂"按钮
+            setupDualArmMenu(right_menu_handler_, right_both_handle_);
         }
 
         // 为头部设置菜单（如果启用头部控制）
@@ -399,6 +454,9 @@ namespace arms_ros2_control::command
             if (dual_arm_mode_)
             {
                 right_menu_handler_->setVisible(right_send_handle_, false);
+                // 在连续模式下，"发送双臂"按钮也隐藏
+                left_menu_handler_->setVisible(left_both_handle_, false);
+                right_menu_handler_->setVisible(right_both_handle_, false);
             }
             // 更新头部菜单可见性
             if (head_marker_ && head_marker_->isEnabled())
@@ -412,6 +470,9 @@ namespace arms_ros2_control::command
             if (dual_arm_mode_)
             {
                 right_menu_handler_->setVisible(right_send_handle_, true);
+                // 在单次模式下，"发送双臂"按钮显示
+                left_menu_handler_->setVisible(left_both_handle_, true);
+                right_menu_handler_->setVisible(right_both_handle_, true);
             }
             // 更新头部菜单可见性
             if (head_marker_ && head_marker_->isEnabled())
@@ -435,30 +496,10 @@ namespace arms_ros2_control::command
 
     void ArmsTargetManager::createPublishersAndSubscribers()
     {
-        // 创建左臂发布器和订阅器
-        left_pose_publisher_ = node_->create_publisher<geometry_msgs::msg::Pose>("left_target", 1);
-        left_end_effector_pose_subscription_ = node_->create_subscription<geometry_msgs::msg::PoseStamped>(
-            "left_current_pose", 10, [this](const geometry_msgs::msg::PoseStamped::ConstSharedPtr msg)
-            {
-                updateArmMarkerFromTopic(msg, "left_arm");
-            });
-
-        // 创建右臂发布器和订阅器（如果是双臂模式）
-        if (dual_arm_mode_)
-        {
-            right_pose_publisher_ = node_->create_publisher<geometry_msgs::msg::Pose>("right_target", 1);
-            right_end_effector_pose_subscription_ = node_->create_subscription<geometry_msgs::msg::PoseStamped>(
-                "right_current_pose", 10, [this](const geometry_msgs::msg::PoseStamped::ConstSharedPtr msg)
-                {
-                    updateArmMarkerFromTopic(msg, "right_arm");
-                });
-        }
-
-        // 创建头部发布器和订阅器（如果启用头部控制）
+        // 订阅器现在都在各自的 marker 类内部管理
+        // 只需要创建头部订阅器（如果启用头部控制）
         if (head_marker_ && head_marker_->isEnabled())
         {
-            std::string head_topic = "/head_joint_controller/target_joint_position";
-            head_joint_publisher_ = head_marker_->createJointPublisher(head_topic);
             head_joint_state_subscription_ = node_->create_subscription<sensor_msgs::msg::JointState>(
                 "/joint_states", 10, [this](const sensor_msgs::msg::JointState::ConstSharedPtr msg)
                 {
@@ -487,58 +528,7 @@ namespace arms_ros2_control::command
         }
     }
 
-    void ArmsTargetManager::updateArmMarkerFromTopic(
-        const geometry_msgs::msg::PoseStamped::ConstSharedPtr& pose_msg,
-        const std::string& marker_type)
-    {
-        if (isStateDisabled(current_controller_state_))
-        {
-            return;
-        }
-
-        // 根据marker类型更新对应的marker
-        std::shared_ptr<ArmMarker> arm_marker = nullptr;
-        std::string marker_name;
-
-        if (marker_type == "left_arm" && left_arm_marker_)
-        {
-            arm_marker = left_arm_marker_;
-            marker_name = "left_arm_target";
-        }
-        else if (marker_type == "right_arm" && right_arm_marker_)
-        {
-            if (!dual_arm_mode_)
-            {
-                return;
-            }
-            arm_marker = right_arm_marker_;
-            marker_name = "right_arm_target";
-        }
-        else
-        {
-            RCLCPP_WARN(node_->get_logger(),
-                        "Unknown marker type in updateArmMarkerFromTopic: '%s'",
-                        marker_type.c_str());
-            return;
-        }
-
-        if (!arm_marker)
-        {
-            return;
-        }
-
-        // 使用 ArmMarker 更新 pose
-        std::string source_frame_id = pose_msg->header.frame_id;
-        arm_marker->updateFromTopic(pose_msg, source_frame_id);
-
-        // 更新 marker 显示
-        server_->setPose(marker_name, arm_marker->getPose());
-
-        if (shouldThrottle(last_marker_update_time_, marker_update_interval_))
-        {
-            server_->applyChanges();
-        }
-    }
+    // updateArmMarkerFromTopic 已移除，现在由 ArmMarker 内部的订阅器直接处理
 
     void ArmsTargetManager::updateHeadMarkerFromTopic(
         const sensor_msgs::msg::JointState::ConstSharedPtr& joint_msg)
@@ -654,17 +644,14 @@ namespace arms_ros2_control::command
         const geometry_msgs::msg::Quaternion& orientation)
     {
         std::shared_ptr<ArmMarker> arm_marker = nullptr;
-        rclcpp::Publisher<geometry_msgs::msg::Pose>::SharedPtr publisher = nullptr;
 
         if (armType == "left" && left_arm_marker_)
         {
             arm_marker = left_arm_marker_;
-            publisher = left_pose_publisher_;
         }
         else if (armType == "right" && dual_arm_mode_ && right_arm_marker_)
         {
             arm_marker = right_arm_marker_;
-            publisher = right_pose_publisher_;
         }
         else
         {
@@ -687,10 +674,10 @@ namespace arms_ros2_control::command
             }
         }
 
-        // 在连续发布模式下，自动发送目标位姿到控制器（使用 publish_rate_ 节流）
-        if (current_mode_ == MarkerState::CONTINUOUS && publisher)
+        // 在连续发布模式下，自动发送目标位姿到控制器（使用内部节流）
+        if (current_mode_ == MarkerState::CONTINUOUS)
         {
-            arm_marker->publishTargetPose(publisher, publish_rate_, last_publish_time_);
+            arm_marker->publishTargetPose();
         }
     }
 
@@ -734,17 +721,14 @@ namespace arms_ros2_control::command
         }
 
         std::shared_ptr<ArmMarker> arm_marker = nullptr;
-        rclcpp::Publisher<geometry_msgs::msg::Pose>::SharedPtr publisher = nullptr;
 
         if (armType == "left" && left_arm_marker_)
         {
             arm_marker = left_arm_marker_;
-            publisher = left_pose_publisher_;
         }
         else if (armType == "right" && dual_arm_mode_ && right_arm_marker_)
         {
             arm_marker = right_arm_marker_;
-            publisher = right_pose_publisher_;
         }
         else
         {
@@ -804,10 +788,10 @@ namespace arms_ros2_control::command
             }
         }
 
-        // 在连续发布模式下，自动发送目标位姿到控制器（使用 publish_rate_ 节流）
-        if (current_mode_ == MarkerState::CONTINUOUS && publisher)
+        // 在连续发布模式下，自动发送目标位姿到控制器（使用内部节流）
+        if (current_mode_ == MarkerState::CONTINUOUS)
         {
-            arm_marker->publishTargetPose(publisher, publish_rate_, last_publish_time_);
+            arm_marker->publishTargetPose();
         }
     }
 

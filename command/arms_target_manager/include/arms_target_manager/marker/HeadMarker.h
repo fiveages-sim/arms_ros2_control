@@ -46,12 +46,14 @@ namespace arms_ros2_control::command
          * @param marker_factory Marker 工厂（用于创建 marker）
          * @param tf_buffer TF 缓冲区（用于坐标转换）
          * @param frame_id Marker 所在的坐标系ID
+         * @param target_topic 目标关节角度发布的 topic 名称（默认从参数读取，如果参数不存在则使用默认值）
          */
         HeadMarker(
             rclcpp::Node::SharedPtr node,
             std::shared_ptr<MarkerFactory> marker_factory,
             std::shared_ptr<tf2_ros::Buffer> tf_buffer,
-            const std::string& frame_id);
+            const std::string& frame_id,
+            const std::string& target_topic = "/head_joint_controller/target_joint_position");
 
         /**
          * @brief 初始化头部配置
@@ -115,21 +117,10 @@ namespace arms_ros2_control::command
         void setPose(const geometry_msgs::msg::Pose& pose) { head_pose_ = pose; }
 
         /**
-         * @brief 创建关节角度发布器
-         * @param topic_name Topic 名称
-         * @return 发布器指针
+         * @brief 发布目标关节角度（使用内部管理的发布器）
+         * @param pose 目标 pose（可选，如果为空则使用当前 pose）
          */
-        rclcpp::Publisher<std_msgs::msg::Float64MultiArray>::SharedPtr
-        createJointPublisher(const std::string& topic_name);
-
-        /**
-         * @brief 发布目标关节角度
-         * @param publisher 发布器
-         * @param pose 目标 pose
-         */
-        void publishTargetJointAngles(
-            rclcpp::Publisher<std_msgs::msg::Float64MultiArray>::SharedPtr publisher,
-            const geometry_msgs::msg::Pose& pose) const;
+        void publishTargetJointAngles(const geometry_msgs::msg::Pose& pose = geometry_msgs::msg::Pose()) const;
 
         /**
          * @brief 获取头部 link 名称
@@ -187,6 +178,9 @@ namespace arms_ros2_control::command
 
         // 状态
         geometry_msgs::msg::Pose head_pose_;
+
+        // 发布器
+        rclcpp::Publisher<std_msgs::msg::Float64MultiArray>::SharedPtr joint_publisher_;
 
         // 上一次的 RPY 角度（用于避免角度跳变）
         mutable std::array<double, 3> last_head_rpy_ = {0.0, 0.0, 0.0};

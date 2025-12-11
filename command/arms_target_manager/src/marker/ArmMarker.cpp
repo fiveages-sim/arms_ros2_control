@@ -17,7 +17,11 @@ namespace arms_ros2_control::command
         const std::string& frame_id,
         const std::string& control_base_frame,
         ArmType arm_type,
-        const std::array<double, 3>& initial_position)
+        const std::array<double, 3>& initial_position,
+        const std::string& target_topic,
+        const std::string& current_pose_topic,
+        double publish_rate,
+        UpdateCallback update_callback)
         : node_(std::move(node))
           , marker_factory_(std::move(marker_factory))
           , tf_buffer_(std::move(tf_buffer))
@@ -25,6 +29,10 @@ namespace arms_ros2_control::command
           , control_base_frame_(control_base_frame)
           , arm_type_(arm_type)
           , initial_position_(initial_position)
+          , publish_rate_(publish_rate)
+          , target_publisher_(node_->create_publisher<geometry_msgs::msg::Pose>(target_topic, 1))
+          , update_callback_(std::move(update_callback))
+          , last_publish_time_(node_->now())
     {
         // 初始化默认 pose
         pose_.position.x = initial_position_[0];
@@ -34,6 +42,14 @@ namespace arms_ros2_control::command
         pose_.orientation.x = 0.0;
         pose_.orientation.y = 0.0;
         pose_.orientation.z = 0.0;
+
+        // 创建当前 pose 订阅器
+        current_pose_subscription_ = node_->create_subscription<geometry_msgs::msg::PoseStamped>(
+            current_pose_topic, 10,
+            [this](const geometry_msgs::msg::PoseStamped::ConstSharedPtr msg)
+            {
+                updateFromTopic(msg);
+            });
     }
 
     visualization_msgs::msg::InteractiveMarker ArmMarker::createMarker(
@@ -57,25 +73,33 @@ namespace arms_ros2_control::command
     }
 
     void ArmMarker::updateFromTopic(
-        const geometry_msgs::msg::PoseStamped::ConstSharedPtr& pose_msg,
-        const std::string& source_frame_id)
+        const geometry_msgs::msg::PoseStamped::ConstSharedPtr& pose_msg)
     {
         // 转换 pose 到目标 frame
+        std::string source_frame_id = pose_msg->header.frame_id;
         pose_ = transformPose(pose_msg->pose, source_frame_id, frame_id_);
+
+        // 调用更新回调，通知外部更新可视化
+        if (update_callback_)
+        {
+            update_callback_(getMarkerName(), pose_);
+        }
     }
 
-    bool ArmMarker::publishTargetPose(
-        rclcpp::Publisher<geometry_msgs::msg::Pose>::SharedPtr publisher,
-        double publish_rate,
-        rclcpp::Time& last_publish_time) const
+    void ArmMarker::setUpdateCallback(UpdateCallback callback)
     {
-        if (!publisher)
+        update_callback_ = std::move(callback);
+    }
+
+    bool ArmMarker::publishTargetPose()
+    {
+        if (!target_publisher_)
         {
             return false;
         }
 
-        // 检查是否需要节流
-        if (!shouldThrottle(last_publish_time, 1.0 / publish_rate))
+        // 检查是否需要节流（使用内部管理的节流时间和发布频率）
+        if (!shouldThrottle(1.0 / publish_rate_))
         {
             return false;
         }
@@ -84,7 +108,7 @@ namespace arms_ros2_control::command
         geometry_msgs::msg::Pose transformed_pose = transformPose(
             pose_, frame_id_, control_base_frame_);
 
-        publisher->publish(transformed_pose);
+        target_publisher_->publish(transformed_pose);
         return true;
     }
 
@@ -140,14 +164,14 @@ namespace arms_ros2_control::command
         }
     }
 
-    bool ArmMarker::shouldThrottle(rclcpp::Time& last_time, double interval) const
+    bool ArmMarker::shouldThrottle(double interval)
     {
         auto now = node_->now();
-        auto time_since_last = (now - last_time).seconds();
+        auto time_since_last = (now - last_publish_time_).seconds();
 
         if (time_since_last >= interval)
         {
-            last_time = now;
+            last_publish_time_ = now;
             return true;
         }
         return false;

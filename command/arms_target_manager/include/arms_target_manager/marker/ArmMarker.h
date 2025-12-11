@@ -42,6 +42,13 @@ namespace arms_ros2_control::command
     {
     public:
         /**
+         * @brief 更新回调函数类型（用于通知外部更新可视化）
+         * @param marker_name marker 名称
+         * @param pose 更新后的 pose
+         */
+        using UpdateCallback = std::function<void(const std::string& marker_name, const geometry_msgs::msg::Pose& pose)>;
+
+        /**
          * @brief 构造函数
          * @param node ROS 节点指针
          * @param marker_factory Marker 工厂（用于创建 marker）
@@ -50,6 +57,10 @@ namespace arms_ros2_control::command
          * @param control_base_frame 控制基坐标系（目标 pose 会转换到此坐标系发布）
          * @param arm_type 手臂类型（LEFT 或 RIGHT）
          * @param initial_position 初始位置 [x, y, z]
+         * @param target_topic 目标 pose 发布的 topic 名称
+         * @param current_pose_topic 当前 pose 订阅的 topic 名称
+         * @param publish_rate 发布频率（Hz，用于节流）
+         * @param update_callback 更新回调函数（可选，用于通知外部更新可视化）
          */
         ArmMarker(
             rclcpp::Node::SharedPtr node,
@@ -58,7 +69,11 @@ namespace arms_ros2_control::command
             const std::string& frame_id,
             const std::string& control_base_frame,
             ArmType arm_type,
-            const std::array<double, 3>& initial_position);
+            const std::array<double, 3>& initial_position,
+            const std::string& target_topic,
+            const std::string& current_pose_topic,
+            double publish_rate = 20.0,
+            UpdateCallback update_callback = nullptr);
 
         /**
          * @brief 创建 marker
@@ -83,25 +98,23 @@ namespace arms_ros2_control::command
             const std::string& source_frame_id) const;
 
         /**
-         * @brief 从 topic 更新 marker pose
+         * @brief 从 topic 更新 marker pose（内部使用）
          * @param pose_msg PoseStamped 消息
-         * @param source_frame_id 源坐标系ID
          */
         void updateFromTopic(
-            const geometry_msgs::msg::PoseStamped::ConstSharedPtr& pose_msg,
-            const std::string& source_frame_id);
+            const geometry_msgs::msg::PoseStamped::ConstSharedPtr& pose_msg);
 
         /**
-         * @brief 发布目标 pose
-         * @param publisher 发布器
-         * @param publish_rate 发布频率（用于节流）
-         * @param last_publish_time 上次发布时间（会被更新）
+         * @brief 设置更新回调函数
+         * @param callback 更新回调函数
+         */
+        void setUpdateCallback(UpdateCallback callback);
+
+        /**
+         * @brief 发布目标 pose（带内部节流管理）
          * @return 是否成功发布
          */
-        bool publishTargetPose(
-            rclcpp::Publisher<geometry_msgs::msg::Pose>::SharedPtr publisher,
-            double publish_rate,
-            rclcpp::Time& last_publish_time) const;
+        bool publishTargetPose();
 
         /**
          * @brief 获取当前 pose
@@ -153,12 +166,11 @@ namespace arms_ros2_control::command
             const std::string& target_frame_id) const;
 
         /**
-         * @brief 检查是否应该节流发布
-         * @param last_time 上次执行时间（会被更新）
+         * @brief 检查是否应该节流发布（内部使用）
          * @param interval 最小间隔（秒）
          * @return 如果应该执行返回 true
          */
-        bool shouldThrottle(rclcpp::Time& last_time, double interval) const;
+        bool shouldThrottle(double interval);
 
         // ROS 节点和工具
         rclcpp::Node::SharedPtr node_;
@@ -173,6 +185,19 @@ namespace arms_ros2_control::command
 
         // 状态
         geometry_msgs::msg::Pose pose_;
+        
+        // 发布配置
+        double publish_rate_;  // 发布频率（Hz）
+        rclcpp::Publisher<geometry_msgs::msg::Pose>::SharedPtr target_publisher_;  // 目标 pose 发布器
+        
+        // 订阅器
+        rclcpp::Subscription<geometry_msgs::msg::PoseStamped>::SharedPtr current_pose_subscription_;  // 当前 pose 订阅器
+        
+        // 更新回调（用于通知外部更新可视化）
+        UpdateCallback update_callback_;
+        
+        // 节流管理（每个 marker 独立管理）
+        mutable rclcpp::Time last_publish_time_;
     };
 } // namespace arms_ros2_control::command
 

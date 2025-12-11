@@ -31,9 +31,6 @@ namespace ocs2::mobile_manipulator
         node_->declare_parameter("hardware_latency", 0.2);
         
         loadParameters();
-        // cached_ob_state_ = true;
-        // joint_speed_threshold_ = 0.1;
-        // hardware_latency_ = 0.2;
 
         const std::string info_file_name = node_->get_parameter("info_file_name").as_string();
 

@@ -125,6 +125,11 @@ namespace arms_ros2_control::command
         void sendTargetPose(const std::string& marker_type = "arm");
 
         /**
+         * 同时发送双臂目标位姿（仅双臂模式）
+         */
+        void sendDualArmTargetPose();
+
+        /**
          * 检查指定状态是否在禁用列表中
          * @param state 要检查的状态值
          * @return 如果状态在禁用列表中返回true
@@ -193,6 +198,15 @@ namespace arms_ros2_control::command
             std::function<void()> sendCallback);
 
         /**
+         * 为双臂模式添加"发送双臂"菜单项
+         * @param menu_handler 菜单处理器（必须已初始化）
+         * @param both_handle 发送双臂菜单项句柄（输出参数）
+         */
+        void setupDualArmMenu(
+            std::shared_ptr<interactive_markers::MenuHandler>& menu_handler,
+            interactive_markers::MenuHandler::EntryHandle& both_handle);
+
+        /**
          * 更新marker形状（统一管理左臂、右臂和头部marker）
          */
         void updateMarkerShape();
@@ -204,18 +218,9 @@ namespace arms_ros2_control::command
 
         /**
          * 创建所有发布器和订阅器（根据配置统一创建）
+         * 注意：左臂和右臂的订阅器现在在 ArmMarker 内部管理
          */
         void createPublishersAndSubscribers();
-
-
-        /**
-         * 手臂的 marker 自动更新回调函数
-         * @param msg PoseStamped 消息（用于左臂和右臂）
-         * @param marker_type marker类型 ("left_arm", "right_arm")
-         */
-        void updateArmMarkerFromTopic(
-            const geometry_msgs::msg::PoseStamped::ConstSharedPtr& pose_msg,
-            const std::string& marker_type);
 
         /**
          * 头部的 marker 自动更新回调函数（头部专用）
@@ -245,15 +250,8 @@ namespace arms_ros2_control::command
         // Marker 工厂（用于创建 marker）
         std::shared_ptr<MarkerFactory> marker_factory_;
 
-        // 发布器
-        rclcpp::Publisher<geometry_msgs::msg::Pose>::SharedPtr left_pose_publisher_;
-        rclcpp::Publisher<geometry_msgs::msg::Pose>::SharedPtr right_pose_publisher_;
-        rclcpp::Publisher<std_msgs::msg::Float64MultiArray>::SharedPtr head_joint_publisher_;
-
-        // 订阅器
+        // 订阅器（注意：左臂和右臂的订阅器现在在 ArmMarker 内部管理）
         rclcpp::Subscription<arms_ros2_control_msgs::msg::Inputs>::SharedPtr control_input_subscription_;
-        rclcpp::Subscription<geometry_msgs::msg::PoseStamped>::SharedPtr left_end_effector_pose_subscription_;
-        rclcpp::Subscription<geometry_msgs::msg::PoseStamped>::SharedPtr right_end_effector_pose_subscription_;
         rclcpp::Subscription<sensor_msgs::msg::JointState>::SharedPtr head_joint_state_subscription_;
 
         // 菜单系统
@@ -264,8 +262,10 @@ namespace arms_ros2_control::command
         // 菜单句柄
         interactive_markers::MenuHandler::EntryHandle left_send_handle_{};
         interactive_markers::MenuHandler::EntryHandle left_toggle_handle_{};
+        interactive_markers::MenuHandler::EntryHandle left_both_handle_{};  // 发送双臂按钮（仅双臂模式）
         interactive_markers::MenuHandler::EntryHandle right_send_handle_{};
         interactive_markers::MenuHandler::EntryHandle right_toggle_handle_{};
+        interactive_markers::MenuHandler::EntryHandle right_both_handle_{};  // 发送双臂按钮（仅双臂模式）
         interactive_markers::MenuHandler::EntryHandle head_send_handle_{};
         interactive_markers::MenuHandler::EntryHandle head_toggle_handle_{};
 

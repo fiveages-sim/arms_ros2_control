@@ -1,13 +1,10 @@
 //
 // Created for OCS2 Arm Controller - PoseBasedReferenceManager
 //
-
-#ifndef POSE_BASED_REFERENCE_MANAGER_H
-#define POSE_BASED_REFERENCE_MANAGER_H
+#pragma once
 
 #include <memory>
 #include <string>
-#include <mutex>
 #include <functional>
 #include <rclcpp/rclcpp.hpp>
 #include <rclcpp_lifecycle/lifecycle_node.hpp>
@@ -15,7 +12,6 @@
 #include <geometry_msgs/msg/pose_stamped.hpp>
 #include <tf2_ros/transform_listener.h>
 #include <tf2_ros/buffer.h>
-#include <tf2_geometry_msgs/tf2_geometry_msgs.hpp>
 #include <ocs2_oc/synchronized_module/ReferenceManagerDecorator.h>
 #include <ocs2_mobile_manipulator/MobileManipulatorInterface.h>
 #include <ocs2_mpc/SystemObservation.h>
@@ -61,11 +57,6 @@ namespace ocs2::mobile_manipulator
         void resetTargetStateCache();
 
         /**
-         * 如果有有效的target，更新target trajectory（在enter状态时调用）
-         */
-        void updateTargetTrajectoryIfValid();
-
-        /**
          * 设置当前状态的末端执行器pose到缓存（在enter状态时调用）
          * @param left_ee_pose 左臂末端执行器pose（7维：x, y, z, qx, qy, qz, qw）
          * @param right_ee_pose 右臂末端执行器pose（7维，仅双臂模式需要）
@@ -83,6 +74,9 @@ namespace ocs2::mobile_manipulator
         void processPoseStamped(
             const geometry_msgs::msg::PoseStamped::SharedPtr& msg,
             std::function<void(geometry_msgs::msg::Pose::SharedPtr)> callback);
+        
+        // 发布当前目标
+        void publishCurrentTargets();
 
         const std::string topic_prefix_;
         std::shared_ptr<MobileManipulatorInterface> interface_;
@@ -93,24 +87,25 @@ namespace ocs2::mobile_manipulator
         rclcpp::Subscription<geometry_msgs::msg::PoseStamped>::SharedPtr left_pose_stamped_subscriber_;
         rclcpp::Subscription<geometry_msgs::msg::PoseStamped>::SharedPtr right_pose_stamped_subscriber_;
         
+        // 发布器：发布当前目标
+        rclcpp::Publisher<geometry_msgs::msg::PoseStamped>::SharedPtr left_target_publisher_;
+        rclcpp::Publisher<geometry_msgs::msg::PoseStamped>::SharedPtr right_target_publisher_;
+        
         // TF2相关
         std::shared_ptr<tf2_ros::Buffer> tf_buffer_;
         std::shared_ptr<tf2_ros::TransformListener> tf_listener_;
+        std::shared_ptr<rclcpp::Clock> clock_;
         std::string base_frame_;
         
         // Logger（从node获取，用于日志输出）
         rclcpp::Logger logger_;
         
-        // 当前系统观测（线程安全）
-        mutable std::mutex observation_mutex_;
+        // 当前系统观测
         SystemObservation current_observation_;
         
-        // 双臂target state缓存（线程安全）
-        mutable std::mutex target_state_mutex_;
+        // 双臂target state缓存
         vector_t left_target_state_;
         vector_t right_target_state_;
     };
 
 } // namespace ocs2::mobile_manipulator
-
-#endif // POSE_BASED_REFERENCE_MANAGER_H

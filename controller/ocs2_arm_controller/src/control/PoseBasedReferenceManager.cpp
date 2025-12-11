@@ -33,6 +33,9 @@ namespace ocs2::mobile_manipulator
         // 保存node的logger用于后续日志输出
         logger_ = node->get_logger();
         
+        // 保存clock用于时间戳
+        clock_ = node->get_clock();
+        
         // 初始化TF2 buffer和listener
         tf_buffer_ = std::make_shared<tf2_ros::Buffer>(node->get_clock());
         tf_listener_ = std::make_shared<tf2_ros::TransformListener>(*tf_buffer_);
@@ -74,6 +77,16 @@ namespace ocs2::mobile_manipulator
             right_pose_stamped_subscriber_ = node->create_subscription<geometry_msgs::msg::PoseStamped>(
                 "right_target/stamped", 1, rightStampedCallback);
         }
+        
+        // 初始化发布器：发布当前目标
+        left_target_publisher_ = node->create_publisher<geometry_msgs::msg::PoseStamped>(
+            "left_current_target", 1);
+        
+        if (dual_arm_mode_)
+        {
+            right_target_publisher_ = node->create_publisher<geometry_msgs::msg::PoseStamped>(
+                "right_current_target", 1);
+        }
     }
 
     void PoseBasedReferenceManager::setCurrentObservation(const SystemObservation& observation)
@@ -83,8 +96,6 @@ namespace ocs2::mobile_manipulator
 
     void PoseBasedReferenceManager::updateTargetTrajectory()
     {
-        std::lock_guard<std::mutex> lock(target_state_mutex_);
-        
         // 创建合并的target state
         vector_t combined_target_state;
 
@@ -126,13 +137,13 @@ namespace ocs2::mobile_manipulator
         target_state(6) = msg->orientation.w;
 
         // 更新左臂target state缓存
-        {
-            std::lock_guard<std::mutex> lock(target_state_mutex_);
-            left_target_state_ = target_state;
-        }
+        left_target_state_ = target_state;
 
         // 更新target trajectory
         updateTargetTrajectory();
+        
+        // 发布当前目标
+        publishCurrentTargets();
     }
 
     void PoseBasedReferenceManager::rightPoseCallback(const geometry_msgs::msg::Pose::SharedPtr msg)
@@ -148,13 +159,13 @@ namespace ocs2::mobile_manipulator
         target_state(6) = msg->orientation.w;
 
         // 更新右臂target state缓存
-        {
-            std::lock_guard<std::mutex> lock(target_state_mutex_);
-            right_target_state_ = target_state;
-        }
+        right_target_state_ = target_state;
 
         // 更新target trajectory
         updateTargetTrajectory();
+        
+        // 发布当前目标
+        publishCurrentTargets();
     }
 
     void PoseBasedReferenceManager::processPoseStamped(
@@ -214,7 +225,6 @@ namespace ocs2::mobile_manipulator
     void PoseBasedReferenceManager::resetTargetStateCache()
     {
         // 重置target state缓存
-        std::lock_guard<std::mutex> lock(target_state_mutex_);
         left_target_state_ = vector_t::Zero(7);
         right_target_state_ = vector_t::Zero(7);
 
@@ -222,18 +232,8 @@ namespace ocs2::mobile_manipulator
                     "Target state cache reset - cleared all cached target states");
     }
 
-    void PoseBasedReferenceManager::updateTargetTrajectoryIfValid()
-    {
-        // 更新target trajectory（缓存中总是有有效的target，因为enter时会设置初始值）
-        updateTargetTrajectory();
-        RCLCPP_INFO(logger_,
-                    "Updated target trajectory from cached targets on state enter");
-    }
-
     void PoseBasedReferenceManager::setCurrentEndEffectorPoses(const vector_t& left_ee_pose, const vector_t& right_ee_pose)
     {
-        std::lock_guard<std::mutex> lock(target_state_mutex_);
-        
         // 设置左臂pose到缓存
         left_target_state_ = left_ee_pose;
         
@@ -241,6 +241,41 @@ namespace ocs2::mobile_manipulator
         if (dual_arm_mode_)
         {
             right_target_state_ = right_ee_pose;
+        }
+        
+        // 发布当前目标
+        publishCurrentTargets();
+    }
+
+    void PoseBasedReferenceManager::publishCurrentTargets()
+    {
+        // 发布左臂当前目标
+        geometry_msgs::msg::PoseStamped left_target_msg;
+        left_target_msg.header.stamp = clock_->now();
+        left_target_msg.header.frame_id = base_frame_;
+        left_target_msg.pose.position.x = left_target_state_(0);
+        left_target_msg.pose.position.y = left_target_state_(1);
+        left_target_msg.pose.position.z = left_target_state_(2);
+        left_target_msg.pose.orientation.x = left_target_state_(3);
+        left_target_msg.pose.orientation.y = left_target_state_(4);
+        left_target_msg.pose.orientation.z = left_target_state_(5);
+        left_target_msg.pose.orientation.w = left_target_state_(6);
+        left_target_publisher_->publish(left_target_msg);
+        
+        // 发布右臂当前目标（仅双臂模式）
+        if (dual_arm_mode_)
+        {
+            geometry_msgs::msg::PoseStamped right_target_msg;
+            right_target_msg.header.stamp = clock_->now();
+            right_target_msg.header.frame_id = base_frame_;
+            right_target_msg.pose.position.x = right_target_state_(0);
+            right_target_msg.pose.position.y = right_target_state_(1);
+            right_target_msg.pose.position.z = right_target_state_(2);
+            right_target_msg.pose.orientation.x = right_target_state_(3);
+            right_target_msg.pose.orientation.y = right_target_state_(4);
+            right_target_msg.pose.orientation.z = right_target_state_(5);
+            right_target_msg.pose.orientation.w = right_target_state_(6);
+            right_target_publisher_->publish(right_target_msg);
         }
     }
 } // namespace ocs2::mobile_manipulator

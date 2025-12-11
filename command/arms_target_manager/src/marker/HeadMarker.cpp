@@ -16,7 +16,8 @@ namespace arms_ros2_control::command
         rclcpp::Node::SharedPtr node,
         std::shared_ptr<MarkerFactory> marker_factory,
         std::shared_ptr<tf2_ros::Buffer> tf_buffer,
-        const std::string& frame_id)
+        const std::string& frame_id,
+        const std::string& target_topic)
         : node_(std::move(node))
           , marker_factory_(std::move(marker_factory))
           , tf_buffer_(std::move(tf_buffer))
@@ -30,6 +31,9 @@ namespace arms_ros2_control::command
         head_pose_.orientation.x = 0.0;
         head_pose_.orientation.y = 0.0;
         head_pose_.orientation.z = 0.0;
+
+        // 创建发布器（在构造函数中创建，topic 名称在 initialize 时可能会从参数读取）
+        joint_publisher_ = node_->create_publisher<std_msgs::msg::Float64MultiArray>(target_topic, 1);
     }
 
     void HeadMarker::initialize()
@@ -463,18 +467,24 @@ namespace arms_ros2_control::command
         return head_pose_;
     }
 
-    rclcpp::Publisher<std_msgs::msg::Float64MultiArray>::SharedPtr
-    HeadMarker::createJointPublisher(const std::string& topic_name)
+    void HeadMarker::publishTargetJointAngles(const geometry_msgs::msg::Pose& pose) const
     {
-        return node_->create_publisher<std_msgs::msg::Float64MultiArray>(topic_name, 1);
-    }
+        if (!joint_publisher_)
+        {
+            return;
+        }
 
-    void HeadMarker::publishTargetJointAngles(
-        rclcpp::Publisher<std_msgs::msg::Float64MultiArray>::SharedPtr publisher,
-        const geometry_msgs::msg::Pose& pose) const
-    {
+        // 使用传入的 pose 或当前 pose
+        geometry_msgs::msg::Pose target_pose = pose;
+        if (target_pose.orientation.w == 0.0 && target_pose.orientation.x == 0.0 &&
+            target_pose.orientation.y == 0.0 && target_pose.orientation.z == 0.0)
+        {
+            // 如果 pose 为空（默认值），使用当前 pose
+            target_pose = head_pose_;
+        }
+
         // 从四元数提取关节角度
-        std::vector<double> joint_angles = quaternionToJointAngles(pose.orientation);
+        std::vector<double> joint_angles = quaternionToJointAngles(target_pose.orientation);
 
         // 应用关节限位
         if (head_limits_manager_)
@@ -484,7 +494,7 @@ namespace arms_ros2_control::command
 
         std_msgs::msg::Float64MultiArray msg;
         msg.data = joint_angles;
-        publisher->publish(msg);
+        joint_publisher_->publish(msg);
     }
 
     void HeadMarker::initializeJointIndices(const sensor_msgs::msg::JointState::ConstSharedPtr& joint_msg)
