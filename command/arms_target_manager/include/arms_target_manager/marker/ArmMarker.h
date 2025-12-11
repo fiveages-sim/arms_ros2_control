@@ -49,6 +49,12 @@ namespace arms_ros2_control::command
         using UpdateCallback = std::function<void(const std::string& marker_name, const geometry_msgs::msg::Pose& pose)>;
 
         /**
+         * @brief 状态检查回调函数类型（用于检查是否允许自动更新）
+         * @return 如果允许自动更新返回 true
+         */
+        using StateCheckCallback = std::function<bool()>;
+
+        /**
          * @brief 构造函数
          * @param node ROS 节点指针
          * @param marker_factory Marker 工厂（用于创建 marker）
@@ -111,10 +117,17 @@ namespace arms_ros2_control::command
         void setUpdateCallback(UpdateCallback callback);
 
         /**
+         * @brief 设置状态检查回调函数（用于检查是否允许自动更新）
+         * @param callback 状态检查回调函数
+         */
+        void setStateCheckCallback(StateCheckCallback callback);
+
+        /**
          * @brief 发布目标 pose（带内部节流管理）
+         * @param force 是否强制发送（忽略节流限制，用于单次发布模式）
          * @return 是否成功发布
          */
-        bool publishTargetPose();
+        bool publishTargetPose(bool force = false);
 
         /**
          * @brief 获取当前 pose
@@ -195,6 +208,9 @@ namespace arms_ros2_control::command
         
         // 更新回调（用于通知外部更新可视化）
         UpdateCallback update_callback_;
+        
+        // 状态检查回调（用于检查是否允许自动更新）
+        StateCheckCallback state_check_callback_;
         
         // 节流管理（每个 marker 独立管理）
         mutable rclcpp::Time last_publish_time_;

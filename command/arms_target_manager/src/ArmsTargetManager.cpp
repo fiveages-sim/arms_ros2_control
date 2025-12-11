@@ -44,14 +44,15 @@ namespace arms_ros2_control::command
         tf_buffer_ = std::make_shared<tf2_ros::Buffer>(node_->get_clock());
         tf_listener_ = std::make_shared<tf2_ros::TransformListener>(*tf_buffer_);
 
-        // 创建左臂 Marker（带更新回调）
+        // 创建左臂 Marker（带更新回调和状态检查回调）
         left_arm_marker_ = std::make_shared<ArmMarker>(
             node_, marker_factory_, tf_buffer_, marker_fixed_frame_, control_base_frame_,
             ArmType::LEFT, std::array<double, 3>{0.0, 0.5, 1.0}, "left_target", "left_current_pose",
             publish_rate_,
             [this](const std::string& marker_name, const geometry_msgs::msg::Pose& pose)
             {
-                if (isStateDisabled(current_controller_state_))
+                // 只有在非禁用状态下才更新 marker（与原来的逻辑一致）
+                if (!isStateDisabled(current_controller_state_))
                 {
                     server_->setPose(marker_name, pose);
                     if (shouldThrottle(last_marker_update_time_, marker_update_interval_))
@@ -60,8 +61,12 @@ namespace arms_ros2_control::command
                     }
                 }
             });
+        
+        // 设置状态检查回调（用于控制是否允许 current_pose 更新 marker 的 pose_）
+        left_arm_marker_->setStateCheckCallback(
+            [this]() { return !isStateDisabled(current_controller_state_); });
 
-        // 创建右臂 Marker（如果是双臂模式，带更新回调）
+        // 创建右臂 Marker（如果是双臂模式，带更新回调和状态检查回调）
         if (dual_arm_mode_)
         {
             right_arm_marker_ = std::make_shared<ArmMarker>(
@@ -70,7 +75,8 @@ namespace arms_ros2_control::command
                 publish_rate_,
                 [this](const std::string& marker_name, const geometry_msgs::msg::Pose& pose)
                 {
-                    if (isStateDisabled(current_controller_state_))
+                    // 只有在非禁用状态下才更新 marker（与原来的逻辑一致）
+                    if (!isStateDisabled(current_controller_state_))
                     {
                         server_->setPose(marker_name, pose);
                         if (shouldThrottle(last_marker_update_time_, marker_update_interval_))
@@ -79,6 +85,10 @@ namespace arms_ros2_control::command
                         }
                     }
                 });
+            
+            // 设置状态检查回调（用于控制是否允许 current_pose 更新 marker 的 pose_）
+            right_arm_marker_->setStateCheckCallback(
+                [this]() { return !isStateDisabled(current_controller_state_); });
         }
 
         // 创建 HeadMarker 实例并初始化
@@ -293,24 +303,24 @@ namespace arms_ros2_control::command
             }
             return;
         }
-        // 单次模式下，只发送对应的手臂
+        // 单次模式下，只发送对应的手臂（强制发送，忽略节流）
         // 连续模式下，如果是双臂模式，拖动时会同时发送两个手臂（在 handleMarkerFeedback 中处理）
         if (marker_type == "left_arm" && left_arm_marker_)
         {
-            left_arm_marker_->publishTargetPose();
+            left_arm_marker_->publishTargetPose(true);  // 强制发送，忽略节流
             return;
         }
         if (marker_type == "right_arm" && right_arm_marker_)
         {
-            right_arm_marker_->publishTargetPose();
+            right_arm_marker_->publishTargetPose(true);  // 强制发送，忽略节流
         }
     }
 
     void ArmsTargetManager::sendDualArmTargetPose()
     {
-        // 同时发送左臂和右臂的目标位姿（每个 marker 独立管理节流和发布频率）
-        left_arm_marker_->publishTargetPose();
-        right_arm_marker_->publishTargetPose();
+        // 同时发送左臂和右臂的目标位姿（强制发送，忽略节流）
+        left_arm_marker_->publishTargetPose(true);
+        right_arm_marker_->publishTargetPose(true);
     }
 
 

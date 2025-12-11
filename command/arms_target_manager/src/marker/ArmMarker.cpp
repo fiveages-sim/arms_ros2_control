@@ -75,6 +75,13 @@ namespace arms_ros2_control::command
     void ArmMarker::updateFromTopic(
         const geometry_msgs::msg::PoseStamped::ConstSharedPtr& pose_msg)
     {
+        // 检查是否允许自动更新（只有在非禁用状态下才更新 pose_）
+        if (state_check_callback_ && !state_check_callback_())
+        {
+            // 状态不允许自动更新，直接返回，不覆盖用户拖动的位置
+            return;
+        }
+
         // 转换 pose 到目标 frame
         std::string source_frame_id = pose_msg->header.frame_id;
         pose_ = transformPose(pose_msg->pose, source_frame_id, frame_id_);
@@ -91,17 +98,25 @@ namespace arms_ros2_control::command
         update_callback_ = std::move(callback);
     }
 
-    bool ArmMarker::publishTargetPose()
+    void ArmMarker::setStateCheckCallback(StateCheckCallback callback)
+    {
+        state_check_callback_ = std::move(callback);
+    }
+
+    bool ArmMarker::publishTargetPose(bool force)
     {
         if (!target_publisher_)
         {
             return false;
         }
 
-        // 检查是否需要节流（使用内部管理的节流时间和发布频率）
-        if (!shouldThrottle(1.0 / publish_rate_))
+        // 如果不是强制发送，检查是否需要节流（用于连续发布模式）
+        if (!force)
         {
-            return false;
+            if (!shouldThrottle(1.0 / publish_rate_))
+            {
+                return false;
+            }
         }
 
         // 转换坐标系：从 marker_fixed_frame_ 转换到 control_base_frame_
@@ -109,6 +124,13 @@ namespace arms_ros2_control::command
             pose_, frame_id_, control_base_frame_);
 
         target_publisher_->publish(transformed_pose);
+        
+        // 即使强制发送，也更新节流时间，避免连续强制发送过于频繁
+        if (force)
+        {
+            last_publish_time_ = node_->now();
+        }
+        
         return true;
     }
 
