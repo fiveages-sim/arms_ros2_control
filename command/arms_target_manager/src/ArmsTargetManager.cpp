@@ -93,7 +93,7 @@ namespace arms_ros2_control::command
 
         // 创建 HeadMarker 实例并初始化
         head_marker_ = std::make_shared<HeadMarker>(
-            node_, marker_factory_, tf_buffer_, marker_fixed_frame_);
+            node_, marker_factory_, tf_buffer_, marker_fixed_frame_, publish_rate_);
         head_marker_->initialize();
 
         // 创建 InteractiveMarkerServer
@@ -253,11 +253,8 @@ namespace arms_ros2_control::command
 
                 if (current_mode_ == MarkerState::CONTINUOUS)
                 {
-                    // 在连续发布模式下，发送头部目标关节位置（使用 publish_rate_ 节流）
-                    if (shouldThrottle(last_publish_time_, 1.0 / publish_rate_))
-                    {
-                        sendTargetPose("head");
-                    }
+                    // 在连续发布模式下，发送头部目标关节位置（使用内部节流）
+                    head_marker_->publishTargetJointAngles();
                 }
             }
         }
@@ -299,7 +296,8 @@ namespace arms_ros2_control::command
         {
             if (head_marker_ && head_marker_->isEnabled())
             {
-                head_marker_->publishTargetJointAngles();
+                // 单次模式下，强制发送，忽略节流
+                head_marker_->publishTargetJointAngles(true);
             }
             return;
         }

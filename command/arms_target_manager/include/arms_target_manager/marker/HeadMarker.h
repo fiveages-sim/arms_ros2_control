@@ -46,6 +46,7 @@ namespace arms_ros2_control::command
          * @param marker_factory Marker 工厂（用于创建 marker）
          * @param tf_buffer TF 缓冲区（用于坐标转换）
          * @param frame_id Marker 所在的坐标系ID
+         * @param publish_rate 发布频率（Hz，用于节流）
          * @param target_topic 目标关节角度发布的 topic 名称（默认从参数读取，如果参数不存在则使用默认值）
          */
         HeadMarker(
@@ -53,6 +54,7 @@ namespace arms_ros2_control::command
             std::shared_ptr<MarkerFactory> marker_factory,
             std::shared_ptr<tf2_ros::Buffer> tf_buffer,
             const std::string& frame_id,
+            double publish_rate = 20.0,
             const std::string& target_topic = "/head_joint_controller/target_joint_position");
 
         /**
@@ -117,10 +119,11 @@ namespace arms_ros2_control::command
         void setPose(const geometry_msgs::msg::Pose& pose) { head_pose_ = pose; }
 
         /**
-         * @brief 发布目标关节角度（使用内部管理的发布器）
-         * @param pose 目标 pose（可选，如果为空则使用当前 pose）
+         * @brief 发布目标关节角度（带内部节流管理）
+         * @param force 是否强制发送（忽略节流限制，用于单次发布模式）
+         * @return 是否成功发布
          */
-        void publishTargetJointAngles(const geometry_msgs::msg::Pose& pose = geometry_msgs::msg::Pose()) const;
+        bool publishTargetJointAngles(bool force = false) const;
 
         /**
          * @brief 获取头部 link 名称
@@ -155,6 +158,13 @@ namespace arms_ros2_control::command
             double& head_pitch,
             double& head_yaw) const;
 
+        /**
+         * @brief 检查是否应该节流发布（内部使用）
+         * @param interval 最小间隔（秒）
+         * @return 如果应该执行返回 true
+         */
+        bool shouldThrottle(double interval) const;
+
         // ROS 节点和工具
         rclcpp::Node::SharedPtr node_;
         std::shared_ptr<MarkerFactory> marker_factory_;
@@ -179,8 +189,12 @@ namespace arms_ros2_control::command
         // 状态
         geometry_msgs::msg::Pose head_pose_;
 
-        // 发布器
+        // 发布配置
+        double publish_rate_;  // 发布频率（Hz）
         rclcpp::Publisher<std_msgs::msg::Float64MultiArray>::SharedPtr joint_publisher_;
+
+        // 节流管理（每个 marker 独立管理）
+        mutable rclcpp::Time last_publish_time_;
 
         // 上一次的 RPY 角度（用于避免角度跳变）
         mutable std::array<double, 3> last_head_rpy_ = {0.0, 0.0, 0.0};

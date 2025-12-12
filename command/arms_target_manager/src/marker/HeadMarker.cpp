@@ -17,11 +17,14 @@ namespace arms_ros2_control::command
         std::shared_ptr<MarkerFactory> marker_factory,
         std::shared_ptr<tf2_ros::Buffer> tf_buffer,
         const std::string& frame_id,
+        double publish_rate,
         const std::string& target_topic)
         : node_(std::move(node))
           , marker_factory_(std::move(marker_factory))
           , tf_buffer_(std::move(tf_buffer))
           , frame_id_(frame_id)
+          , publish_rate_(publish_rate)
+          , last_publish_time_(node_->now())
     {
         // 初始化默认 pose
         head_pose_.position.x = 1.0;
@@ -467,24 +470,25 @@ namespace arms_ros2_control::command
         return head_pose_;
     }
 
-    void HeadMarker::publishTargetJointAngles(const geometry_msgs::msg::Pose& pose) const
+    bool HeadMarker::publishTargetJointAngles(bool force) const
     {
         if (!joint_publisher_)
         {
-            return;
+            return false;
         }
 
-        // 使用传入的 pose 或当前 pose
-        geometry_msgs::msg::Pose target_pose = pose;
-        if (target_pose.orientation.w == 0.0 && target_pose.orientation.x == 0.0 &&
-            target_pose.orientation.y == 0.0 && target_pose.orientation.z == 0.0)
+        // 如果不是强制发送，检查是否需要节流（用于连续发布模式）
+        if (!force)
         {
-            // 如果 pose 为空（默认值），使用当前 pose
-            target_pose = head_pose_;
+            if (!shouldThrottle(1.0 / publish_rate_))
+            {
+                return false;
+            }
         }
 
+        // 使用内部管理的 pose（与 ArmMarker 保持一致）
         // 从四元数提取关节角度
-        std::vector<double> joint_angles = quaternionToJointAngles(target_pose.orientation);
+        std::vector<double> joint_angles = quaternionToJointAngles(head_pose_.orientation);
 
         // 应用关节限位
         if (head_limits_manager_)
@@ -495,6 +499,14 @@ namespace arms_ros2_control::command
         std_msgs::msg::Float64MultiArray msg;
         msg.data = joint_angles;
         joint_publisher_->publish(msg);
+
+        // 即使强制发送，也更新节流时间，避免连续强制发送过于频繁
+        if (force)
+        {
+            last_publish_time_ = node_->now();
+        }
+
+        return true;
     }
 
     void HeadMarker::initializeJointIndices(const sensor_msgs::msg::JointState::ConstSharedPtr& joint_msg)
@@ -597,6 +609,19 @@ namespace arms_ros2_control::command
         }
 
         return true;
+    }
+
+    bool HeadMarker::shouldThrottle(double interval) const
+    {
+        auto now = node_->now();
+        auto time_since_last = (now - last_publish_time_).seconds();
+
+        if (time_since_last >= interval)
+        {
+            last_publish_time_ = now;
+            return true;
+        }
+        return false;
     }
 } // namespace arms_ros2_control::command
 
