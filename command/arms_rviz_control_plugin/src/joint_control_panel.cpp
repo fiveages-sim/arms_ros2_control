@@ -2,6 +2,7 @@
 
 #include <rviz_common/display_context.hpp>
 #include <rclcpp/rclcpp.hpp>
+#include <geometry_msgs/msg/pose_stamped.hpp>
 #include <QFrame>
 #include <algorithm>
 #include <cmath>
@@ -197,6 +198,7 @@ namespace arms_rviz_control_plugin
 
     void JointControlPanel::onFsmCommandReceived(const std_msgs::msg::Int32::SharedPtr msg)
     {
+        int32_t old_command = current_command_;
         current_command_ = msg->data;
         
         // Enable joint control when command is 3 (OCS2) or 4 (MOVEJ)
@@ -205,6 +207,11 @@ namespace arms_rviz_control_plugin
         if (should_enable != is_joint_control_enabled_)
         {
             is_joint_control_enabled_ = should_enable;
+            updatePanelVisibility();
+        }
+        else if (old_command != current_command_ && is_joint_control_enabled_)
+        {
+            // Command changed but control is still enabled, update button text
             updatePanelVisibility();
         }
     }
@@ -303,27 +310,10 @@ namespace arms_rviz_control_plugin
             return false;
         }
         
-        // When command is 3 (OCS2), hide button for arm categories (left/right) and body (if using ocs2_wbc_controller)
+        // When command is 3 (OCS2), hide button for body (if using ocs2_wbc_controller)
+        // But show button for left/right with different text
         if (current_command_ == 3)
         {
-            // Hide button for left/right when using ocs2 controllers
-            if (current_category_ == "left" || current_category_ == "right")
-            {
-                auto it = category_to_controller_.find(current_category_);
-                if (it != category_to_controller_.end())
-                {
-                    std::string controller_lower = it->second;
-                    std::transform(controller_lower.begin(), controller_lower.end(), 
-                                  controller_lower.begin(), ::tolower);
-                    
-                    if (controller_lower.find("ocs2_wbc_controller") != std::string::npos ||
-                        controller_lower.find("ocs2_arm_controller") != std::string::npos)
-                    {
-                        return false;
-                    }
-                }
-            }
-            
             // Hide button for body when using ocs2_wbc_controller
             if (current_category_ == "body")
             {
@@ -339,6 +329,15 @@ namespace arms_rviz_control_plugin
                         return false;
                     }
                 }
+            }
+        }
+        
+        // When command is 4 (MOVEJ), hide button for left/right categories
+        if (current_command_ == 4)
+        {
+            if (current_category_ == "left" || current_category_ == "right")
+            {
+                return false;
             }
         }
         
@@ -364,10 +363,24 @@ namespace arms_rviz_control_plugin
             }
         }
         
-        // Show/hide send button
+        // Show/hide send button and update text
         if (send_button_)
         {
-            send_button_->setVisible(shouldShowSendButton());
+            bool should_show = shouldShowSendButton();
+            send_button_->setVisible(should_show);
+            
+            // Update button text based on command and category
+            if (should_show)
+            {
+                if (current_command_ == 3 && (current_category_ == "left" || current_category_ == "right"))
+                {
+                    send_button_->setText("发送末端位置");
+                }
+                else
+                {
+                    send_button_->setText("发送关节位置");
+                }
+            }
         }
         
         // Hide status label when joint control is enabled
@@ -459,17 +472,33 @@ namespace arms_rviz_control_plugin
 
     void JointControlPanel::updatePublisher()
     {
-        // getControllerNameForCategory now returns the full topic name
-        std::string topic_name = getControllerNameForCategory(current_category_);
-        
-        // Reset publisher
+        // Reset all publishers
         joint_position_publisher_.reset();
+        left_target_publisher_.reset();
+        right_target_publisher_.reset();
         
-        // Create new publisher
-        joint_position_publisher_ = node_->create_publisher<std_msgs::msg::Float64MultiArray>(
-            topic_name, 10);
-        
-        RCLCPP_INFO(node_->get_logger(), "Updated publisher to topic: %s", topic_name.c_str());
+        if (current_category_ == "left")
+        {
+            // Create PoseStamped publisher for left arm
+            left_target_publisher_ = node_->create_publisher<geometry_msgs::msg::PoseStamped>(
+                "left_target/stamped", 10);
+            RCLCPP_INFO(node_->get_logger(), "Updated publisher to topic: left_target/stamped");
+        }
+        else if (current_category_ == "right")
+        {
+            // Create PoseStamped publisher for right arm
+            right_target_publisher_ = node_->create_publisher<geometry_msgs::msg::PoseStamped>(
+                "right_target/stamped", 10);
+            RCLCPP_INFO(node_->get_logger(), "Updated publisher to topic: right_target/stamped");
+        }
+        else
+        {
+            // For other categories, use joint position publisher
+            std::string topic_name = getControllerNameForCategory(current_category_);
+            joint_position_publisher_ = node_->create_publisher<std_msgs::msg::Float64MultiArray>(
+                topic_name, 10);
+            RCLCPP_INFO(node_->get_logger(), "Updated publisher to topic: %s", topic_name.c_str());
+        }
     }
 
     void JointControlPanel::updateCategoryOptions()
@@ -631,7 +660,67 @@ namespace arms_rviz_control_plugin
 
     void JointControlPanel::publishJointPositions()
     {
-        if (!joints_initialized_ || joint_spinboxes_.empty() || !joint_position_publisher_)
+        if (!joints_initialized_)
+        {
+            return;
+        }
+
+        // Handle left arm: publish PoseStamped with xyz and quaternion
+        if (current_category_ == "left")
+        {
+            if (!left_target_publisher_ || left_arm_spinboxes_.empty())
+            {
+                return;
+            }
+
+            auto msg = geometry_msgs::msg::PoseStamped();
+            msg.header.stamp = node_->now();
+            msg.header.frame_id = "left_eef";
+            
+            // Set position (x, y, z)
+            msg.pose.position.x = left_arm_spinboxes_[0]->value();
+            msg.pose.position.y = left_arm_spinboxes_[1]->value();
+            msg.pose.position.z = left_arm_spinboxes_[2]->value();
+            
+            // Set orientation (qx, qy, qz, qw)
+            msg.pose.orientation.x = left_arm_spinboxes_[3]->value();
+            msg.pose.orientation.y = left_arm_spinboxes_[4]->value();
+            msg.pose.orientation.z = left_arm_spinboxes_[5]->value();
+            msg.pose.orientation.w = left_arm_spinboxes_[6]->value();
+            
+            left_target_publisher_->publish(msg);
+            return;
+        }
+
+        // Handle right arm: publish PoseStamped with xyz and quaternion
+        if (current_category_ == "right")
+        {
+            if (!right_target_publisher_ || right_arm_spinboxes_.empty())
+            {
+                return;
+            }
+
+            auto msg = geometry_msgs::msg::PoseStamped();
+            msg.header.stamp = node_->now();
+            msg.header.frame_id = "right_eef";
+            
+            // Set position (x, y, z)
+            msg.pose.position.x = right_arm_spinboxes_[0]->value();
+            msg.pose.position.y = right_arm_spinboxes_[1]->value();
+            msg.pose.position.z = right_arm_spinboxes_[2]->value();
+            
+            // Set orientation (qx, qy, qz, qw)
+            msg.pose.orientation.x = right_arm_spinboxes_[3]->value();
+            msg.pose.orientation.y = right_arm_spinboxes_[4]->value();
+            msg.pose.orientation.z = right_arm_spinboxes_[5]->value();
+            msg.pose.orientation.w = right_arm_spinboxes_[6]->value();
+            
+            right_target_publisher_->publish(msg);
+            return;
+        }
+
+        // Handle other categories: publish joint positions as Float64MultiArray
+        if (joint_spinboxes_.empty() || !joint_position_publisher_)
         {
             return;
         }
@@ -836,12 +925,18 @@ namespace arms_rviz_control_plugin
                     if (i < 3)
                     {
                         spinbox->setSuffix(" m");  // x, y, z in meters
+                        spinbox->setValue(0.0);
+                    }
+                    else if (i == 6)
+                    {
+                        spinbox->setSuffix("");  // quaternion w
+                        spinbox->setValue(1.0);  // Valid quaternion: w=1.0 for no rotation
                     }
                     else
                     {
-                        spinbox->setSuffix("");  // quaternion has no unit
+                        spinbox->setSuffix("");  // quaternion x, y, z
+                        spinbox->setValue(0.0);
                     }
-                    spinbox->setValue(0.0);
                     row_layout->addWidget(spinbox.get());
                     left_arm_spinboxes_.push_back(std::move(spinbox));
 
@@ -873,12 +968,18 @@ namespace arms_rviz_control_plugin
                     if (i < 3)
                     {
                         spinbox->setSuffix(" m");  // x, y, z in meters
+                        spinbox->setValue(0.0);
+                    }
+                    else if (i == 6)
+                    {
+                        spinbox->setSuffix("");  // quaternion w
+                        spinbox->setValue(1.0);  // Valid quaternion: w=1.0 for no rotation
                     }
                     else
                     {
-                        spinbox->setSuffix("");  // quaternion has no unit
+                        spinbox->setSuffix("");  // quaternion x, y, z
+                        spinbox->setValue(0.0);
                     }
-                    spinbox->setValue(0.0);
                     row_layout->addWidget(spinbox.get());
                     right_arm_spinboxes_.push_back(std::move(spinbox));
 

@@ -23,6 +23,7 @@
 #include <std_msgs/msg/float64_multi_array.hpp>
 #include <std_msgs/msg/int32.hpp>
 #include <std_msgs/msg/string.hpp>
+#include <geometry_msgs/msg/pose_stamped.hpp>
 #include <arms_controller_common/utils/JointLimitsManager.h>
 
 namespace arms_rviz_control_plugin
@@ -69,6 +70,8 @@ private:
   rclcpp::Subscription<sensor_msgs::msg::JointState>::SharedPtr joint_state_subscriber_;
   rclcpp::Subscription<std_msgs::msg::String>::SharedPtr robot_description_subscriber_;
   rclcpp::Publisher<std_msgs::msg::Float64MultiArray>::SharedPtr joint_position_publisher_;
+  rclcpp::Publisher<geometry_msgs::msg::PoseStamped>::SharedPtr left_target_publisher_;
+  rclcpp::Publisher<geometry_msgs::msg::PoseStamped>::SharedPtr right_target_publisher_;
 
   // Joint limits manager
   std::shared_ptr<arms_controller_common::JointLimitsManager> joint_limits_manager_;
