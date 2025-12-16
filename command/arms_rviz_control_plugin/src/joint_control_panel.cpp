@@ -533,6 +533,53 @@ namespace arms_rviz_control_plugin
             return;
         }
 
+        // Check if dual-arm mode
+        bool has_left_joints = category_to_joints_.find("left") != category_to_joints_.end() &&
+                               !category_to_joints_["left"].empty();
+        bool has_right_joints = category_to_joints_.find("right") != category_to_joints_.end() &&
+                                !category_to_joints_["right"].empty();
+        bool is_dual_arm_mode = has_left_joints || has_right_joints;
+
+        if (is_dual_arm_mode)
+        {
+            // Dual-arm mode: Show/hide left and right arm UI elements (7 row layouts)
+            bool show_left = (current_category_ == "left");
+            bool show_right = (current_category_ == "right");
+
+            // Show/hide left arm UI elements (7 row layouts)
+            for (size_t i = 0; i < left_arm_row_layouts_.size(); ++i)
+            {
+                if (left_arm_row_layouts_[i])
+                {
+                    for (int j = 0; j < left_arm_row_layouts_[i]->count(); ++j)
+                    {
+                        QLayoutItem* item = left_arm_row_layouts_[i]->itemAt(j);
+                        if (item && item->widget())
+                        {
+                            item->widget()->setVisible(show_left);
+                        }
+                    }
+                }
+            }
+
+            // Show/hide right arm UI elements (7 row layouts)
+            for (size_t i = 0; i < right_arm_row_layouts_.size(); ++i)
+            {
+                if (right_arm_row_layouts_[i])
+                {
+                    for (int j = 0; j < right_arm_row_layouts_[i]->count(); ++j)
+                    {
+                        QLayoutItem* item = right_arm_row_layouts_[i]->itemAt(j);
+                        if (item && item->widget())
+                        {
+                            item->widget()->setVisible(show_right);
+                        }
+                    }
+                }
+            }
+        }
+
+        // Show/hide joint-based UI elements (for all joints, both single-arm and dual-arm mode)
         for (size_t i = 0; i < joint_names_.size(); ++i)
         {
             bool visible = false;
@@ -546,7 +593,15 @@ namespace arms_rviz_control_plugin
                 auto it = joint_to_category_.find(joint_names_[i]);
                 if (it != joint_to_category_.end() && it->second == current_category_)
                 {
-                    visible = true;
+                    // Hide joints if category is left or right
+                    if (it->second == "left" || it->second == "right")
+                    {
+                        visible = false;
+                    }
+                    else
+                    {
+                        visible = true;
+                    }
                 }
             }
             
@@ -731,13 +786,109 @@ namespace arms_rviz_control_plugin
             return;
         }
 
+        // Check if dual-arm mode (has left and right joints)
+        bool has_left_joints = category_to_joints_.find("left") != category_to_joints_.end() &&
+                               !category_to_joints_["left"].empty();
+        bool has_right_joints = category_to_joints_.find("right") != category_to_joints_.end() &&
+                                !category_to_joints_["right"].empty();
+        bool is_dual_arm_mode = has_left_joints || has_right_joints;
+
         // Create UI elements for each joint
         joint_row_layouts_.clear();
         joint_labels_.clear();
         joint_spinboxes_.clear();
+        
+        // Clear dual-arm mode UI elements
+        left_arm_row_layouts_.clear();
+        left_arm_labels_.clear();
+        left_arm_spinboxes_.clear();
+        right_arm_row_layouts_.clear();
+        right_arm_labels_.clear();
+        right_arm_spinboxes_.clear();
 
         joint_positions_.resize(joint_names_.size(), 0.0);
 
+        // Dual-arm mode: Create 7 fixed row layouts for xyz and quaternion for each arm
+        if (is_dual_arm_mode)
+        {
+            const std::vector<std::string> param_names = {"x", "y", "z", "qx", "qy", "qz", "qw"};
+            
+            // Create left arm UI elements (7 row layouts)
+            if (has_left_joints)
+            {
+                for (size_t i = 0; i < 7; ++i)
+                {
+                    auto row_layout = std::make_unique<QVBoxLayout>();
+                    row_layout->setSpacing(2);
+
+                    // Create label
+                    std::string label_text = "Left " + param_names[i];
+                    auto label = std::make_unique<QLabel>(QString::fromStdString(label_text), joint_control_group_.get());
+                    label->setStyleSheet("QLabel { font-weight: bold; }");
+                    row_layout->addWidget(label.get());
+                    left_arm_labels_.push_back(std::move(label));
+
+                    // Create spinbox
+                    auto spinbox = std::make_unique<QDoubleSpinBox>(joint_control_group_.get());
+                    spinbox->setRange(-1000.0, 1000.0);  // Wide range for position and quaternion
+                    spinbox->setSingleStep(0.01);
+                    spinbox->setDecimals(6);
+                    if (i < 3)
+                    {
+                        spinbox->setSuffix(" m");  // x, y, z in meters
+                    }
+                    else
+                    {
+                        spinbox->setSuffix("");  // quaternion has no unit
+                    }
+                    spinbox->setValue(0.0);
+                    row_layout->addWidget(spinbox.get());
+                    left_arm_spinboxes_.push_back(std::move(spinbox));
+
+                    joint_layout_->addLayout(row_layout.get());
+                    left_arm_row_layouts_.push_back(std::move(row_layout));
+                }
+            }
+
+            // Create right arm UI elements (7 row layouts)
+            if (has_right_joints)
+            {
+                for (size_t i = 0; i < 7; ++i)
+                {
+                    auto row_layout = std::make_unique<QVBoxLayout>();
+                    row_layout->setSpacing(2);
+
+                    // Create label
+                    std::string label_text = "Right " + param_names[i];
+                    auto label = std::make_unique<QLabel>(QString::fromStdString(label_text), joint_control_group_.get());
+                    label->setStyleSheet("QLabel { font-weight: bold; }");
+                    row_layout->addWidget(label.get());
+                    right_arm_labels_.push_back(std::move(label));
+
+                    // Create spinbox
+                    auto spinbox = std::make_unique<QDoubleSpinBox>(joint_control_group_.get());
+                    spinbox->setRange(-1000.0, 1000.0);  // Wide range for position and quaternion
+                    spinbox->setSingleStep(0.01);
+                    spinbox->setDecimals(6);
+                    if (i < 3)
+                    {
+                        spinbox->setSuffix(" m");  // x, y, z in meters
+                    }
+                    else
+                    {
+                        spinbox->setSuffix("");  // quaternion has no unit
+                    }
+                    spinbox->setValue(0.0);
+                    row_layout->addWidget(spinbox.get());
+                    right_arm_spinboxes_.push_back(std::move(spinbox));
+
+                    joint_layout_->addLayout(row_layout.get());
+                    right_arm_row_layouts_.push_back(std::move(row_layout));
+                }
+            }
+        }
+
+        // Create UI elements for each joint (both single-arm and dual-arm mode)
         for (size_t i = 0; i < joint_names_.size(); ++i)
         {
             // Create vertical layout for each joint (name on top, spinbox below)
@@ -792,11 +943,7 @@ namespace arms_rviz_control_plugin
             }
         }
         
-        // Check if we have left/right joints
-        bool has_left_joints = category_to_joints_.find("left") != category_to_joints_.end() &&
-                               !category_to_joints_["left"].empty();
-        bool has_right_joints = category_to_joints_.find("right") != category_to_joints_.end() &&
-                                !category_to_joints_["right"].empty();
+        // Use the has_left_joints and has_right_joints already declared above
         
         // If we have ocs2_arm_controller and no left/right joints, it's a single-arm robot
         // Don't add left/right categories

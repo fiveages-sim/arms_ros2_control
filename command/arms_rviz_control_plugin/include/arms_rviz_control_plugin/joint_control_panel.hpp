@@ -86,6 +86,14 @@ private:
   std::vector<std::unique_ptr<QVBoxLayout>> joint_row_layouts_;
   std::vector<std::unique_ptr<QLabel>> joint_labels_;
   std::vector<std::unique_ptr<QDoubleSpinBox>> joint_spinboxes_;
+  
+  // Dual-arm mode: fixed 7 row layouts for xyz and quaternion (left and right)
+  std::vector<std::unique_ptr<QVBoxLayout>> left_arm_row_layouts_;   // 7 layouts for left arm
+  std::vector<std::unique_ptr<QLabel>> left_arm_labels_;              // 7 labels (x, y, z, qx, qy, qz, qw)
+  std::vector<std::unique_ptr<QDoubleSpinBox>> left_arm_spinboxes_;  // 7 spinboxes
+  std::vector<std::unique_ptr<QVBoxLayout>> right_arm_row_layouts_;   // 7 layouts for right arm
+  std::vector<std::unique_ptr<QLabel>> right_arm_labels_;             // 7 labels (x, y, z, qx, qy, qz, qw)
+  std::vector<std::unique_ptr<QDoubleSpinBox>> right_arm_spinboxes_;  // 7 spinboxes
 
   // Joint information
   std::vector<std::string> joint_names_;
