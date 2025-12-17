@@ -3,8 +3,10 @@
 //
 
 #include "ocs2_arm_controller/control/PoseBasedReferenceManager.h"
+#include <algorithm>
 #include <rclcpp/rclcpp.hpp>
 #include <geometry_msgs/msg/pose_stamped.hpp>
+#include <Eigen/Geometry>
 #include <tf2/exceptions.h>
 #include <tf2_geometry_msgs/tf2_geometry_msgs.hpp>
 
@@ -125,6 +127,108 @@ namespace ocs2::mobile_manipulator
         referenceManagerPtr_->setTargetTrajectories(std::move(target_trajectories));
     }
 
+    void PoseBasedReferenceManager::updateTrajectory(const vector_t& previous_left_target_state,
+                                                     const vector_t& previous_right_target_state)
+    {
+        constexpr double kTrajectoryDurationSec = 2.0;
+        constexpr size_t kNumSamples = 51; // 2s / 0.04s = 50 intervals
+        static_assert(kNumSamples >= 2, "kNumSamples must be >= 2");
+
+        // 起始/终止时间
+        const double t0 = current_observation_.time;
+        const double t1 = t0 + kTrajectoryDurationSec;
+        const double dt = (t1 - t0) / static_cast<double>(kNumSamples - 1);
+
+        // 组装 start / goal 的合并 state
+        vector_t start_state;
+        vector_t goal_state;
+        if (dual_arm_mode_)
+        {
+            start_state = vector_t::Zero(14);
+            goal_state = vector_t::Zero(14);
+            start_state.segment(0, 7) = previous_left_target_state;
+            start_state.segment(7, 7) = previous_right_target_state;
+            goal_state.segment(0, 7) = left_target_state_;
+            goal_state.segment(7, 7) = right_target_state_;
+        }
+        else
+        {
+            start_state = previous_left_target_state;
+            goal_state = left_target_state_;
+        }
+
+        auto interpolatePose7 = [](const vector_t& s0, const vector_t& s1, double alpha) -> vector_t
+        {
+            vector_t out = vector_t::Zero(7);
+            // position
+            out.segment<3>(0) = (1.0 - alpha) * s0.segment<3>(0) + alpha * s1.segment<3>(0);
+
+            // quaternion stored as [qx, qy, qz, qw]
+            Eigen::Quaterniond q0(s0(6), s0(3), s0(4), s0(5));
+            Eigen::Quaterniond q1(s1(6), s1(3), s1(4), s1(5));
+            if (q0.norm() < 1e-9)
+            {
+                q0 = Eigen::Quaterniond::Identity();
+            }
+            else
+            {
+                q0.normalize();
+            }
+            if (q1.norm() < 1e-9)
+            {
+                q1 = q0;
+            }
+            else
+            {
+                q1.normalize();
+            }
+
+            // 保证走最短弧（避免四元数符号翻转导致绕远）
+            if (q0.dot(q1) < 0.0)
+            {
+                q1.coeffs() *= -1.0;
+            }
+            Eigen::Quaterniond q = q0.slerp(alpha, q1);
+            q.normalize();
+
+            out(3) = q.x();
+            out(4) = q.y();
+            out(5) = q.z();
+            out(6) = q.w();
+            return out;
+        };
+
+        scalar_array_t time_trajectory;
+        time_trajectory.reserve(kNumSamples);
+        vector_array_t state_trajectory;
+        state_trajectory.reserve(kNumSamples);
+
+        for (size_t i = 0; i < kNumSamples; ++i)
+        {
+            const double t = t0 + static_cast<double>(i) * dt;
+            const double alpha = std::clamp(static_cast<double>(i) / static_cast<double>(kNumSamples - 1), 0.0, 1.0);
+
+            vector_t xt;
+            if (dual_arm_mode_)
+            {
+                xt = vector_t::Zero(14);
+                xt.segment(0, 7) = interpolatePose7(start_state.segment(0, 7), goal_state.segment(0, 7), alpha);
+                xt.segment(7, 7) = interpolatePose7(start_state.segment(7, 7), goal_state.segment(7, 7), alpha);
+            }
+            else
+            {
+                xt = interpolatePose7(start_state, goal_state, alpha);
+            }
+
+            time_trajectory.push_back(t);
+            state_trajectory.push_back(std::move(xt));
+        }
+
+        vector_array_t input_trajectory(kNumSamples, vector_t::Zero(interface_->getManipulatorModelInfo().inputDim));
+        TargetTrajectories target_trajectories(time_trajectory, state_trajectory, input_trajectory);
+        referenceManagerPtr_->setTargetTrajectories(std::move(target_trajectories));
+    }
+
     void PoseBasedReferenceManager::leftPoseCallback(const geometry_msgs::msg::Pose::SharedPtr msg)
     {
         // 转换pose到状态向量（单臂和双臂模式都使用前7维）
@@ -165,6 +269,54 @@ namespace ocs2::mobile_manipulator
         // 更新target trajectory
         updateTargetTrajectory();
         
+        // 发布当前目标
+        publishCurrentTargets();
+    }
+
+    void PoseBasedReferenceManager::leftPoseStampedPoseCallback(const geometry_msgs::msg::Pose::SharedPtr msg)
+    {
+        // 保存上一帧缓存（用于插值起点）
+        const vector_t previous_left_target_state = left_target_state_;
+        const vector_t previous_right_target_state = right_target_state_;
+
+        // 更新缓存到新目标
+        vector_t target_state = vector_t::Zero(7);
+        target_state(0) = msg->position.x;
+        target_state(1) = msg->position.y;
+        target_state(2) = msg->position.z;
+        target_state(3) = msg->orientation.x;
+        target_state(4) = msg->orientation.y;
+        target_state(5) = msg->orientation.z;
+        target_state(6) = msg->orientation.w;
+        left_target_state_ = target_state;
+
+        // 生成固定 2 秒插值轨迹并更新 ReferenceManager
+        updateTrajectory(previous_left_target_state, previous_right_target_state);
+
+        // 发布当前目标
+        publishCurrentTargets();
+    }
+
+    void PoseBasedReferenceManager::rightPoseStampedPoseCallback(const geometry_msgs::msg::Pose::SharedPtr msg)
+    {
+        // 保存上一帧缓存（用于插值起点）
+        const vector_t previous_left_target_state = left_target_state_;
+        const vector_t previous_right_target_state = right_target_state_;
+
+        // 更新缓存到新目标
+        vector_t target_state = vector_t::Zero(7);
+        target_state(0) = msg->position.x;
+        target_state(1) = msg->position.y;
+        target_state(2) = msg->position.z;
+        target_state(3) = msg->orientation.x;
+        target_state(4) = msg->orientation.y;
+        target_state(5) = msg->orientation.z;
+        target_state(6) = msg->orientation.w;
+        right_target_state_ = target_state;
+
+        // 生成固定 2 秒插值轨迹并更新 ReferenceManager
+        updateTrajectory(previous_left_target_state, previous_right_target_state);
+
         // 发布当前目标
         publishCurrentTargets();
     }
@@ -212,14 +364,14 @@ namespace ocs2::mobile_manipulator
     void PoseBasedReferenceManager::leftPoseStampedCallback(const geometry_msgs::msg::PoseStamped::SharedPtr msg)
     {
         processPoseStamped(msg, [this](geometry_msgs::msg::Pose::SharedPtr pose_msg) {
-            leftPoseCallback(pose_msg);
+            leftPoseStampedPoseCallback(pose_msg);
         });
     }
 
     void PoseBasedReferenceManager::rightPoseStampedCallback(const geometry_msgs::msg::PoseStamped::SharedPtr msg)
     {
         processPoseStamped(msg, [this](geometry_msgs::msg::Pose::SharedPtr pose_msg) {
-            rightPoseCallback(pose_msg);
+            rightPoseStampedPoseCallback(pose_msg);
         });
     }
 

@@ -69,6 +69,16 @@ namespace ocs2::mobile_manipulator
         void leftPoseStampedCallback(geometry_msgs::msg::PoseStamped::SharedPtr msg);
         void rightPoseStampedCallback(geometry_msgs::msg::PoseStamped::SharedPtr msg);
         void updateTargetTrajectory();
+        /**
+         * 使用“上一帧缓存目标 -> 当前新目标缓存”生成固定 2 秒时长的插值轨迹并写入 ReferenceManager。
+         * 仅用于 PoseStamped 相关回调（支持 TF 转换后的目标）。
+         */
+        void updateTrajectory(const vector_t& previous_left_target_state,
+                              const vector_t& previous_right_target_state);
+
+        // PoseStamped 经过 TF 转换后的 Pose 处理（与 Pose 回调分开，便于区分旧/新接口）
+        void leftPoseStampedPoseCallback(geometry_msgs::msg::Pose::SharedPtr msg);
+        void rightPoseStampedPoseCallback(geometry_msgs::msg::Pose::SharedPtr msg);
         
         // 通用的PoseStamped处理函数：转换到base frame并调用指定的回调
         void processPoseStamped(
