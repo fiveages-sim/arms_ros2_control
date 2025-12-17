@@ -53,14 +53,39 @@ namespace arms_ros2_control::command
                 updateFromTopic(msg);
             });
 
-        // 创建当前目标订阅器（用于获取 frame_id）
+        // 创建当前目标订阅器（用于获取 frame_id 和更新 marker 位置）
         std::string current_target_topic = (arm_type == ArmType::LEFT) ? "left_current_target" : "right_current_target";
         current_target_subscription_ = node_->create_subscription<geometry_msgs::msg::PoseStamped>(
             current_target_topic, 10,
             [this](const geometry_msgs::msg::PoseStamped::ConstSharedPtr msg)
             {
-                std::lock_guard<std::mutex> lock(frame_id_mutex_);
-                current_target_frame_id_ = msg->header.frame_id;
+                // 更新 frame_id
+                {
+                    std::lock_guard<std::mutex> lock(frame_id_mutex_);
+                    current_target_frame_id_ = msg->header.frame_id;
+                }
+
+                // 获取消息的 frame_id
+                std::string source_frame_id = msg->header.frame_id;
+                
+                // 如果 frame_id 为空，跳过更新
+                if (source_frame_id.empty())
+                {
+                    return;
+                }
+
+                // 转换 pose 到 marker 的坐标系（frame_id_）
+                geometry_msgs::msg::Pose transformed_pose = transformPose(
+                    msg->pose, source_frame_id, frame_id_);
+
+                // 更新内部 pose 存储
+                pose_ = transformed_pose;
+
+                // 调用更新回调，通知外部更新可视化
+                if (update_callback_)
+                {
+                    update_callback_(getMarkerName(), pose_);
+                }
             });
     }
 

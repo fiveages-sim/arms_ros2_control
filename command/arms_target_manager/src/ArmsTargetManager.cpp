@@ -51,15 +51,13 @@ namespace arms_ros2_control::command
             publish_rate_,
             [this](const std::string& marker_name, const geometry_msgs::msg::Pose& pose)
             {
-                // 只有在非禁用状态下才更新 marker（与原来的逻辑一致）
-                if (!isStateDisabled(current_controller_state_))
+               
+                server_->setPose(marker_name, pose);
+                if (shouldThrottle(last_marker_update_time_, marker_update_interval_))
                 {
-                    server_->setPose(marker_name, pose);
-                    if (shouldThrottle(last_marker_update_time_, marker_update_interval_))
-                    {
-                        server_->applyChanges();
-                    }
+                    server_->applyChanges();
                 }
+                
             });
         
         // 设置状态检查回调（用于控制是否允许 current_pose 更新 marker 的 pose_）
@@ -75,15 +73,13 @@ namespace arms_ros2_control::command
                 publish_rate_,
                 [this](const std::string& marker_name, const geometry_msgs::msg::Pose& pose)
                 {
-                    // 只有在非禁用状态下才更新 marker（与原来的逻辑一致）
-                    if (!isStateDisabled(current_controller_state_))
+                    
+                    server_->setPose(marker_name, pose);
+                    if (shouldThrottle(last_marker_update_time_, marker_update_interval_))
                     {
-                        server_->setPose(marker_name, pose);
-                        if (shouldThrottle(last_marker_update_time_, marker_update_interval_))
-                        {
-                            server_->applyChanges();
-                        }
+                        server_->applyChanges();
                     }
+                    
                 });
             
             // 设置状态检查回调（用于控制是否允许 current_pose 更新 marker 的 pose_）
