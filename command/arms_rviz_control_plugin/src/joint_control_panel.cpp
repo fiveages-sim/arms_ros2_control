@@ -3,6 +3,7 @@
 #include <rviz_common/display_context.hpp>
 #include <rclcpp/rclcpp.hpp>
 #include <geometry_msgs/msg/pose_stamped.hpp>
+#include <geometry_msgs/msg/pose.hpp>
 #include <QFrame>
 #include <algorithm>
 #include <cmath>
@@ -177,6 +178,15 @@ namespace arms_rviz_control_plugin
             "/joint_states", rclcpp::SensorDataQoS(),
             std::bind(&JointControlPanel::onJointStateReceived, this, std::placeholders::_1));
 
+        // Subscribe to current target topics (to update spinboxes when target changes)
+        left_current_target_subscriber_ = node_->create_subscription<geometry_msgs::msg::PoseStamped>(
+            "left_current_target", 10,
+            std::bind(&JointControlPanel::onLeftCurrentTargetReceived, this, std::placeholders::_1));
+        
+        right_current_target_subscriber_ = node_->create_subscription<geometry_msgs::msg::PoseStamped>(
+            "right_current_target", 10,
+            std::bind(&JointControlPanel::onRightCurrentTargetReceived, this, std::placeholders::_1));
+
         // Initialize publisher (will be updated when category changes)
         updatePublisher();
 
@@ -294,6 +304,84 @@ namespace arms_rviz_control_plugin
     void JointControlPanel::updateJointValuesFromState()
     {
         // This function is kept for compatibility but actual update is done in onJointStateReceived
+    }
+
+    void JointControlPanel::onLeftCurrentTargetReceived(const geometry_msgs::msg::PoseStamped::SharedPtr msg)
+    {
+        // 只在 left 类别且 left_arm_spinboxes_ 已初始化时更新
+        if (current_category_ != "left" || left_arm_spinboxes_.empty() || left_arm_spinboxes_.size() < 7)
+        {
+            return;
+        }
+
+        // 直接使用消息中的位姿值（在 base_frame_ 坐标系下）
+        // 更新 spinbox 值（阻止信号避免触发发布）
+        bool was_blocked_0 = left_arm_spinboxes_[0]->blockSignals(true);
+        bool was_blocked_1 = left_arm_spinboxes_[1]->blockSignals(true);
+        bool was_blocked_2 = left_arm_spinboxes_[2]->blockSignals(true);
+        bool was_blocked_3 = left_arm_spinboxes_[3]->blockSignals(true);
+        bool was_blocked_4 = left_arm_spinboxes_[4]->blockSignals(true);
+        bool was_blocked_5 = left_arm_spinboxes_[5]->blockSignals(true);
+        bool was_blocked_6 = left_arm_spinboxes_[6]->blockSignals(true);
+
+        // 更新位置 (x, y, z) - 直接使用消息中的值
+        left_arm_spinboxes_[0]->setValue(msg->pose.position.x);
+        left_arm_spinboxes_[1]->setValue(msg->pose.position.y);
+        left_arm_spinboxes_[2]->setValue(msg->pose.position.z);
+
+        // 更新姿态 (qx, qy, qz, qw) - 直接使用消息中的值
+        left_arm_spinboxes_[3]->setValue(msg->pose.orientation.x);
+        left_arm_spinboxes_[4]->setValue(msg->pose.orientation.y);
+        left_arm_spinboxes_[5]->setValue(msg->pose.orientation.z);
+        left_arm_spinboxes_[6]->setValue(msg->pose.orientation.w);
+
+        // 恢复信号
+        left_arm_spinboxes_[0]->blockSignals(was_blocked_0);
+        left_arm_spinboxes_[1]->blockSignals(was_blocked_1);
+        left_arm_spinboxes_[2]->blockSignals(was_blocked_2);
+        left_arm_spinboxes_[3]->blockSignals(was_blocked_3);
+        left_arm_spinboxes_[4]->blockSignals(was_blocked_4);
+        left_arm_spinboxes_[5]->blockSignals(was_blocked_5);
+        left_arm_spinboxes_[6]->blockSignals(was_blocked_6);
+    }
+
+    void JointControlPanel::onRightCurrentTargetReceived(const geometry_msgs::msg::PoseStamped::SharedPtr msg)
+    {
+        // 只在 right 类别且 right_arm_spinboxes_ 已初始化时更新
+        if (current_category_ != "right" || right_arm_spinboxes_.empty() || right_arm_spinboxes_.size() < 7)
+        {
+            return;
+        }
+
+        // 直接使用消息中的位姿值（在 base_frame_ 坐标系下）
+        // 更新 spinbox 值（阻止信号避免触发发布）
+        bool was_blocked_0 = right_arm_spinboxes_[0]->blockSignals(true);
+        bool was_blocked_1 = right_arm_spinboxes_[1]->blockSignals(true);
+        bool was_blocked_2 = right_arm_spinboxes_[2]->blockSignals(true);
+        bool was_blocked_3 = right_arm_spinboxes_[3]->blockSignals(true);
+        bool was_blocked_4 = right_arm_spinboxes_[4]->blockSignals(true);
+        bool was_blocked_5 = right_arm_spinboxes_[5]->blockSignals(true);
+        bool was_blocked_6 = right_arm_spinboxes_[6]->blockSignals(true);
+
+        // 更新位置 (x, y, z) - 直接使用消息中的值
+        right_arm_spinboxes_[0]->setValue(msg->pose.position.x);
+        right_arm_spinboxes_[1]->setValue(msg->pose.position.y);
+        right_arm_spinboxes_[2]->setValue(msg->pose.position.z);
+
+        // 更新姿态 (qx, qy, qz, qw) - 直接使用消息中的值
+        right_arm_spinboxes_[3]->setValue(msg->pose.orientation.x);
+        right_arm_spinboxes_[4]->setValue(msg->pose.orientation.y);
+        right_arm_spinboxes_[5]->setValue(msg->pose.orientation.z);
+        right_arm_spinboxes_[6]->setValue(msg->pose.orientation.w);
+
+        // 恢复信号
+        right_arm_spinboxes_[0]->blockSignals(was_blocked_0);
+        right_arm_spinboxes_[1]->blockSignals(was_blocked_1);
+        right_arm_spinboxes_[2]->blockSignals(was_blocked_2);
+        right_arm_spinboxes_[3]->blockSignals(was_blocked_3);
+        right_arm_spinboxes_[4]->blockSignals(was_blocked_4);
+        right_arm_spinboxes_[5]->blockSignals(was_blocked_5);
+        right_arm_spinboxes_[6]->blockSignals(was_blocked_6);
     }
 
     bool JointControlPanel::shouldShowSendButton() const
@@ -479,17 +567,17 @@ namespace arms_rviz_control_plugin
         
         if (current_category_ == "left")
         {
-            // Create PoseStamped publisher for left arm
-            left_target_publisher_ = node_->create_publisher<geometry_msgs::msg::PoseStamped>(
-                "left_target/stamped", 10);
-            RCLCPP_INFO(node_->get_logger(), "Updated publisher to topic: left_target/stamped");
+            // Create Pose publisher for left arm
+            left_target_publisher_ = node_->create_publisher<geometry_msgs::msg::Pose>(
+                "left_target", 10);
+            RCLCPP_INFO(node_->get_logger(), "Updated publisher to topic: left_target");
         }
         else if (current_category_ == "right")
         {
-            // Create PoseStamped publisher for right arm
-            right_target_publisher_ = node_->create_publisher<geometry_msgs::msg::PoseStamped>(
-                "right_target/stamped", 10);
-            RCLCPP_INFO(node_->get_logger(), "Updated publisher to topic: right_target/stamped");
+            // Create Pose publisher for right arm
+            right_target_publisher_ = node_->create_publisher<geometry_msgs::msg::Pose>(
+                "right_target", 10);
+            RCLCPP_INFO(node_->get_logger(), "Updated publisher to topic: right_target");
         }
         else
         {
@@ -665,7 +753,7 @@ namespace arms_rviz_control_plugin
             return;
         }
 
-        // Handle left arm: publish PoseStamped with xyz and quaternion
+        // Handle left arm: publish Pose with xyz and quaternion
         if (current_category_ == "left")
         {
             if (!left_target_publisher_ || left_arm_spinboxes_.empty())
@@ -673,26 +761,24 @@ namespace arms_rviz_control_plugin
                 return;
             }
 
-            auto msg = geometry_msgs::msg::PoseStamped();
-            msg.header.stamp = node_->now();
-            msg.header.frame_id = "left_eef";
+            auto msg = geometry_msgs::msg::Pose();
             
             // Set position (x, y, z)
-            msg.pose.position.x = left_arm_spinboxes_[0]->value();
-            msg.pose.position.y = left_arm_spinboxes_[1]->value();
-            msg.pose.position.z = left_arm_spinboxes_[2]->value();
+            msg.position.x = left_arm_spinboxes_[0]->value();
+            msg.position.y = left_arm_spinboxes_[1]->value();
+            msg.position.z = left_arm_spinboxes_[2]->value();
             
             // Set orientation (qx, qy, qz, qw)
-            msg.pose.orientation.x = left_arm_spinboxes_[3]->value();
-            msg.pose.orientation.y = left_arm_spinboxes_[4]->value();
-            msg.pose.orientation.z = left_arm_spinboxes_[5]->value();
-            msg.pose.orientation.w = left_arm_spinboxes_[6]->value();
+            msg.orientation.x = left_arm_spinboxes_[3]->value();
+            msg.orientation.y = left_arm_spinboxes_[4]->value();
+            msg.orientation.z = left_arm_spinboxes_[5]->value();
+            msg.orientation.w = left_arm_spinboxes_[6]->value();
             
             left_target_publisher_->publish(msg);
             return;
         }
 
-        // Handle right arm: publish PoseStamped with xyz and quaternion
+        // Handle right arm: publish Pose with xyz and quaternion
         if (current_category_ == "right")
         {
             if (!right_target_publisher_ || right_arm_spinboxes_.empty())
@@ -700,20 +786,18 @@ namespace arms_rviz_control_plugin
                 return;
             }
 
-            auto msg = geometry_msgs::msg::PoseStamped();
-            msg.header.stamp = node_->now();
-            msg.header.frame_id = "right_eef";
+            auto msg = geometry_msgs::msg::Pose();
             
             // Set position (x, y, z)
-            msg.pose.position.x = right_arm_spinboxes_[0]->value();
-            msg.pose.position.y = right_arm_spinboxes_[1]->value();
-            msg.pose.position.z = right_arm_spinboxes_[2]->value();
+            msg.position.x = right_arm_spinboxes_[0]->value();
+            msg.position.y = right_arm_spinboxes_[1]->value();
+            msg.position.z = right_arm_spinboxes_[2]->value();
             
             // Set orientation (qx, qy, qz, qw)
-            msg.pose.orientation.x = right_arm_spinboxes_[3]->value();
-            msg.pose.orientation.y = right_arm_spinboxes_[4]->value();
-            msg.pose.orientation.z = right_arm_spinboxes_[5]->value();
-            msg.pose.orientation.w = right_arm_spinboxes_[6]->value();
+            msg.orientation.x = right_arm_spinboxes_[3]->value();
+            msg.orientation.y = right_arm_spinboxes_[4]->value();
+            msg.orientation.z = right_arm_spinboxes_[5]->value();
+            msg.orientation.w = right_arm_spinboxes_[6]->value();
             
             right_target_publisher_->publish(msg);
             return;
@@ -762,13 +846,13 @@ namespace arms_rviz_control_plugin
                 return;  // No joints in this category
             }
         }
-
+        
         // Apply joint limits if available
         if (joint_limits_manager_ && joint_limits_manager_->hasAnyLimits())
         {
             target_positions = joint_limits_manager_->applyLimits(target_joint_names, target_positions);
         }
-
+        
         // Create and publish message
         auto msg = std_msgs::msg::Float64MultiArray();
         msg.data = target_positions;
@@ -1099,5 +1183,3 @@ namespace arms_rviz_control_plugin
 
 #include <pluginlib/class_list_macros.hpp>
 PLUGINLIB_EXPORT_CLASS(arms_rviz_control_plugin::JointControlPanel, rviz_common::Panel)
-
-

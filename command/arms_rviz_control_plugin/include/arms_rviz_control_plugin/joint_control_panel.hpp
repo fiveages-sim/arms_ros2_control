@@ -24,6 +24,7 @@
 #include <std_msgs/msg/int32.hpp>
 #include <std_msgs/msg/string.hpp>
 #include <geometry_msgs/msg/pose_stamped.hpp>
+#include <geometry_msgs/msg/pose.hpp>
 #include <arms_controller_common/utils/JointLimitsManager.h>
 
 namespace arms_rviz_control_plugin
@@ -50,6 +51,8 @@ private Q_SLOTS:
 private:
   void onFsmCommandReceived(const std_msgs::msg::Int32::SharedPtr msg);
   void onJointStateReceived(const sensor_msgs::msg::JointState::SharedPtr msg);
+  void onLeftCurrentTargetReceived(const geometry_msgs::msg::PoseStamped::SharedPtr msg);
+  void onRightCurrentTargetReceived(const geometry_msgs::msg::PoseStamped::SharedPtr msg);
   void updatePanelVisibility();
   void publishJointPositions();
   void updateJointValuesFromState();
@@ -70,8 +73,10 @@ private:
   rclcpp::Subscription<sensor_msgs::msg::JointState>::SharedPtr joint_state_subscriber_;
   rclcpp::Subscription<std_msgs::msg::String>::SharedPtr robot_description_subscriber_;
   rclcpp::Publisher<std_msgs::msg::Float64MultiArray>::SharedPtr joint_position_publisher_;
-  rclcpp::Publisher<geometry_msgs::msg::PoseStamped>::SharedPtr left_target_publisher_;
-  rclcpp::Publisher<geometry_msgs::msg::PoseStamped>::SharedPtr right_target_publisher_;
+  rclcpp::Publisher<geometry_msgs::msg::Pose>::SharedPtr left_target_publisher_;
+  rclcpp::Publisher<geometry_msgs::msg::Pose>::SharedPtr right_target_publisher_;
+  rclcpp::Subscription<geometry_msgs::msg::PoseStamped>::SharedPtr left_current_target_subscriber_;
+  rclcpp::Subscription<geometry_msgs::msg::PoseStamped>::SharedPtr right_current_target_subscriber_;
 
   // Joint limits manager
   std::shared_ptr<arms_controller_common::JointLimitsManager> joint_limits_manager_;
@@ -120,4 +125,3 @@ private:
 } // namespace arms_rviz_control_plugin
 
 #endif // ARMS_RVIZ_CONTROL_PLUGIN_JOINT_CONTROL_PANEL_HPP
-

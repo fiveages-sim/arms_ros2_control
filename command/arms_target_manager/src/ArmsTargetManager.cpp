@@ -302,23 +302,25 @@ namespace arms_ros2_control::command
             return;
         }
         // 单次模式下，只发送对应的手臂（强制发送，忽略节流）
+        // 单次发布时使用 stamped 话题，转换到 left_current_target 的 frame_id
         // 连续模式下，如果是双臂模式，拖动时会同时发送两个手臂（在 handleMarkerFeedback 中处理）
         if (marker_type == "left_arm" && left_arm_marker_)
         {
-            left_arm_marker_->publishTargetPose(true);  // 强制发送，忽略节流
+            left_arm_marker_->publishTargetPose(true, true);  // 强制发送，使用 stamped 话题
             return;
         }
         if (marker_type == "right_arm" && right_arm_marker_)
         {
-            right_arm_marker_->publishTargetPose(true);  // 强制发送，忽略节流
+            right_arm_marker_->publishTargetPose(true, true);  // 强制发送，使用 stamped 话题
         }
     }
 
     void ArmsTargetManager::sendDualArmTargetPose()
     {
         // 同时发送左臂和右臂的目标位姿（强制发送，忽略节流）
-        left_arm_marker_->publishTargetPose(true);
-        right_arm_marker_->publishTargetPose(true);
+        // 单次发布时使用 stamped 话题，转换到 current_target 的 frame_id
+        left_arm_marker_->publishTargetPose(true, true);  // 强制发送，使用 stamped 话题
+        right_arm_marker_->publishTargetPose(true, true);  // 强制发送，使用 stamped 话题
     }
 
 
