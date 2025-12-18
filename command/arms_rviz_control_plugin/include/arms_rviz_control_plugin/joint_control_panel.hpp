@@ -16,6 +16,7 @@
 #include <map>
 #include <set>
 #include <memory>
+#include <mutex>
 
 #include <rviz_common/panel.hpp>
 #include <rclcpp/rclcpp.hpp>
@@ -73,10 +74,15 @@ private:
   rclcpp::Subscription<sensor_msgs::msg::JointState>::SharedPtr joint_state_subscriber_;
   rclcpp::Subscription<std_msgs::msg::String>::SharedPtr robot_description_subscriber_;
   rclcpp::Publisher<std_msgs::msg::Float64MultiArray>::SharedPtr joint_position_publisher_;
-  rclcpp::Publisher<geometry_msgs::msg::Pose>::SharedPtr left_target_publisher_;
-  rclcpp::Publisher<geometry_msgs::msg::Pose>::SharedPtr right_target_publisher_;
+  rclcpp::Publisher<geometry_msgs::msg::PoseStamped>::SharedPtr left_target_publisher_;
+  rclcpp::Publisher<geometry_msgs::msg::PoseStamped>::SharedPtr right_target_publisher_;
   rclcpp::Subscription<geometry_msgs::msg::PoseStamped>::SharedPtr left_current_target_subscriber_;
   rclcpp::Subscription<geometry_msgs::msg::PoseStamped>::SharedPtr right_current_target_subscriber_;
+  
+  // Frame IDs from current_target topics
+  std::string left_target_frame_id_;
+  std::string right_target_frame_id_;
+  std::mutex frame_id_mutex_;
 
   // Joint limits manager
   std::shared_ptr<arms_controller_common::JointLimitsManager> joint_limits_manager_;

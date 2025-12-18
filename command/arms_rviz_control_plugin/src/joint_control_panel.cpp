@@ -308,6 +308,12 @@ namespace arms_rviz_control_plugin
 
     void JointControlPanel::onLeftCurrentTargetReceived(const geometry_msgs::msg::PoseStamped::SharedPtr msg)
     {
+        // 保存 frame_id
+        {
+            std::lock_guard<std::mutex> lock(frame_id_mutex_);
+            left_target_frame_id_ = msg->header.frame_id;
+        }
+
         // 只在 left 类别且 left_arm_spinboxes_ 已初始化时更新
         if (current_category_ != "left" || left_arm_spinboxes_.empty() || left_arm_spinboxes_.size() < 7)
         {
@@ -347,6 +353,12 @@ namespace arms_rviz_control_plugin
 
     void JointControlPanel::onRightCurrentTargetReceived(const geometry_msgs::msg::PoseStamped::SharedPtr msg)
     {
+        // 保存 frame_id
+        {
+            std::lock_guard<std::mutex> lock(frame_id_mutex_);
+            right_target_frame_id_ = msg->header.frame_id;
+        }
+
         // 只在 right 类别且 right_arm_spinboxes_ 已初始化时更新
         if (current_category_ != "right" || right_arm_spinboxes_.empty() || right_arm_spinboxes_.size() < 7)
         {
@@ -567,17 +579,17 @@ namespace arms_rviz_control_plugin
         
         if (current_category_ == "left")
         {
-            // Create Pose publisher for left arm
-            left_target_publisher_ = node_->create_publisher<geometry_msgs::msg::Pose>(
-                "left_target", 10);
-            RCLCPP_INFO(node_->get_logger(), "Updated publisher to topic: left_target");
+            // Create PoseStamped publisher for left arm (publish to left_target/stamped)
+            left_target_publisher_ = node_->create_publisher<geometry_msgs::msg::PoseStamped>(
+                "left_target/stamped", 10);
+            RCLCPP_INFO(node_->get_logger(), "Updated publisher to topic: left_target/stamped");
         }
         else if (current_category_ == "right")
         {
-            // Create Pose publisher for right arm
-            right_target_publisher_ = node_->create_publisher<geometry_msgs::msg::Pose>(
-                "right_target", 10);
-            RCLCPP_INFO(node_->get_logger(), "Updated publisher to topic: right_target");
+            // Create PoseStamped publisher for right arm (publish to right_target/stamped)
+            right_target_publisher_ = node_->create_publisher<geometry_msgs::msg::PoseStamped>(
+                "right_target/stamped", 10);
+            RCLCPP_INFO(node_->get_logger(), "Updated publisher to topic: right_target/stamped");
         }
         else
         {
@@ -753,7 +765,7 @@ namespace arms_rviz_control_plugin
             return;
         }
 
-        // Handle left arm: publish Pose with xyz and quaternion
+        // Handle left arm: publish PoseStamped with xyz and quaternion
         if (current_category_ == "left")
         {
             if (!left_target_publisher_ || left_arm_spinboxes_.empty())
@@ -761,24 +773,31 @@ namespace arms_rviz_control_plugin
                 return;
             }
 
-            auto msg = geometry_msgs::msg::Pose();
+            auto msg = geometry_msgs::msg::PoseStamped();
+            
+            // Get frame_id from saved value (use default if not set)
+            {
+                std::lock_guard<std::mutex> lock(frame_id_mutex_);
+                msg.header.frame_id = left_target_frame_id_.empty() ? "base_link" : left_target_frame_id_;
+            }
+            msg.header.stamp = node_->get_clock()->now();
             
             // Set position (x, y, z)
-            msg.position.x = left_arm_spinboxes_[0]->value();
-            msg.position.y = left_arm_spinboxes_[1]->value();
-            msg.position.z = left_arm_spinboxes_[2]->value();
+            msg.pose.position.x = left_arm_spinboxes_[0]->value();
+            msg.pose.position.y = left_arm_spinboxes_[1]->value();
+            msg.pose.position.z = left_arm_spinboxes_[2]->value();
             
             // Set orientation (qx, qy, qz, qw)
-            msg.orientation.x = left_arm_spinboxes_[3]->value();
-            msg.orientation.y = left_arm_spinboxes_[4]->value();
-            msg.orientation.z = left_arm_spinboxes_[5]->value();
-            msg.orientation.w = left_arm_spinboxes_[6]->value();
+            msg.pose.orientation.x = left_arm_spinboxes_[3]->value();
+            msg.pose.orientation.y = left_arm_spinboxes_[4]->value();
+            msg.pose.orientation.z = left_arm_spinboxes_[5]->value();
+            msg.pose.orientation.w = left_arm_spinboxes_[6]->value();
             
             left_target_publisher_->publish(msg);
             return;
         }
 
-        // Handle right arm: publish Pose with xyz and quaternion
+        // Handle right arm: publish PoseStamped with xyz and quaternion
         if (current_category_ == "right")
         {
             if (!right_target_publisher_ || right_arm_spinboxes_.empty())
@@ -786,18 +805,25 @@ namespace arms_rviz_control_plugin
                 return;
             }
 
-            auto msg = geometry_msgs::msg::Pose();
+            auto msg = geometry_msgs::msg::PoseStamped();
+            
+            // Get frame_id from saved value (use default if not set)
+            {
+                std::lock_guard<std::mutex> lock(frame_id_mutex_);
+                msg.header.frame_id = right_target_frame_id_.empty() ? "base_link" : right_target_frame_id_;
+            }
+            msg.header.stamp = node_->get_clock()->now();
             
             // Set position (x, y, z)
-            msg.position.x = right_arm_spinboxes_[0]->value();
-            msg.position.y = right_arm_spinboxes_[1]->value();
-            msg.position.z = right_arm_spinboxes_[2]->value();
+            msg.pose.position.x = right_arm_spinboxes_[0]->value();
+            msg.pose.position.y = right_arm_spinboxes_[1]->value();
+            msg.pose.position.z = right_arm_spinboxes_[2]->value();
             
             // Set orientation (qx, qy, qz, qw)
-            msg.orientation.x = right_arm_spinboxes_[3]->value();
-            msg.orientation.y = right_arm_spinboxes_[4]->value();
-            msg.orientation.z = right_arm_spinboxes_[5]->value();
-            msg.orientation.w = right_arm_spinboxes_[6]->value();
+            msg.pose.orientation.x = right_arm_spinboxes_[3]->value();
+            msg.pose.orientation.y = right_arm_spinboxes_[4]->value();
+            msg.pose.orientation.z = right_arm_spinboxes_[5]->value();
+            msg.pose.orientation.w = right_arm_spinboxes_[6]->value();
             
             right_target_publisher_->publish(msg);
             return;
