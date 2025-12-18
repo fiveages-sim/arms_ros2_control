@@ -25,6 +25,7 @@ namespace arms_ros2_control::command
           , frame_id_(frame_id)
           , publish_rate_(publish_rate)
           , last_publish_time_(node_->now())
+          , last_subscription_update_time_(node_->now())
     {
         // 初始化默认 pose
         head_pose_.position.x = 1.0;
@@ -396,15 +397,15 @@ namespace arms_ros2_control::command
         const sensor_msgs::msg::JointState::ConstSharedPtr& joint_msg,
         bool is_state_disabled)
     {
-        // 初始化关节索引（如果需要）
-        if (head_joint_indices_.empty() && !head_joint_to_rpy_mapping_.empty())
-        {
-            initializeJointIndices(joint_msg);
-        }
-
-        // 如果状态禁用，只更新位置
+        // 先检查状态：如果状态禁用，只更新位置（不进行节流检查，因为位置更新是必要的）
         if (is_state_disabled)
         {
+            // 初始化关节索引（如果需要）
+            if (head_joint_indices_.empty() && !head_joint_to_rpy_mapping_.empty())
+            {
+                initializeJointIndices(joint_msg);
+            }
+
             try
             {
                 geometry_msgs::msg::TransformStamped transform = tf_buffer_->lookupTransform(
@@ -421,6 +422,21 @@ namespace arms_ros2_control::command
                              head_link_name_.c_str(), ex.what());
             }
             return head_pose_;
+        }
+
+        // 节流检查：限制更新频率为最多30Hz（1/30秒间隔）
+        auto now = node_->now();
+        auto time_since_last = (now - last_subscription_update_time_).seconds();
+        if (time_since_last < 1.0 / 30.0)  // 30Hz = 1/30秒
+        {
+            return head_pose_;  // 跳过此次更新，返回当前pose
+        }
+        last_subscription_update_time_ = now;
+
+        // 初始化关节索引（如果需要）
+        if (head_joint_indices_.empty() && !head_joint_to_rpy_mapping_.empty())
+        {
+            initializeJointIndices(joint_msg);
         }
 
         // 从 TF 获取头部 link 的实际位置

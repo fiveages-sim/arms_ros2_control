@@ -32,9 +32,10 @@ namespace arms_ros2_control::command
           , publish_rate_(publish_rate)
           , target_publisher_(node_->create_publisher<geometry_msgs::msg::Pose>(target_topic, 1))
           , target_stamped_publisher_(node_->create_publisher<geometry_msgs::msg::PoseStamped>(target_topic + "/stamped", 1))
+          , current_target_frame_id_(control_base_frame)  // 默认使用 control_base_frame
           , update_callback_(std::move(update_callback))
           , last_publish_time_(node_->now())
-          , current_target_frame_id_(control_base_frame)  // 默认使用 control_base_frame
+          , last_subscription_update_time_(node_->now())
     {
         // 初始化默认 pose
         pose_.position.x = initial_position_[0];
@@ -112,12 +113,21 @@ namespace arms_ros2_control::command
     void ArmMarker::updateFromTopic(
         const geometry_msgs::msg::PoseStamped::ConstSharedPtr& pose_msg)
     {
-        // 检查是否允许自动更新（只有在非禁用状态下才更新 pose_）
+        // 先检查是否允许自动更新（只有在非禁用状态下才更新 pose_）
         if (state_check_callback_ && !state_check_callback_())
         {
             // 状态不允许自动更新，直接返回，不覆盖用户拖动的位置
             return;
         }
+
+        // 节流检查：限制更新频率为最多30Hz（1/30秒间隔）
+        auto now = node_->now();
+        auto time_since_last = (now - last_subscription_update_time_).seconds();
+        if (time_since_last < 1.0 / 30.0)  // 30Hz = 1/30秒
+        {
+            return;  // 跳过此次更新
+        }
+        last_subscription_update_time_ = now;
 
         // 转换 pose 到目标 frame
         std::string source_frame_id = pose_msg->header.frame_id;
