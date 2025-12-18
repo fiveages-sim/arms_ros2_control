@@ -154,6 +154,12 @@ namespace ocs2::mobile_manipulator
             state_list_.home = std::make_shared<StateHome>(
                 ctrl_interfaces_, logger, home_duration, gravity_compensation);
 
+            // Home interpolation parameters
+            std::string home_interpolation_type = auto_declare<std::string>("home_interpolation_type", "tanh");
+            double home_tanh_scale = auto_declare<double>("home_tanh_scale", 3.0);
+            state_list_.home->setInterpolationType(home_interpolation_type);
+            state_list_.home->setTanhScale(home_tanh_scale);
+
             // Try to load multiple home configurations (home_1, home_2, etc.)
             // This supports the new multi-home configuration mechanism
             // init() returns true if at least one configuration (home_1) was loaded
@@ -209,10 +215,16 @@ namespace ocs2::mobile_manipulator
 
             // MoveJ state parameters
             double move_duration = auto_declare<double>("move_duration", 3.0);
+            std::string movej_interpolation_type = auto_declare<std::string>("movej_interpolation_type", "tanh");
+            double movej_tanh_scale = auto_declare<double>("movej_tanh_scale", 3.0);
 
             // Create StateMoveJ using common implementation
             state_list_.movej = std::make_shared<StateMoveJ>(
                 ctrl_interfaces_, logger, move_duration, gravity_compensation);
+
+            // Configure interpolation type/shape
+            state_list_.movej->setInterpolationType(movej_interpolation_type);
+            state_list_.movej->setTanhScale(movej_tanh_scale);
 
             // Set joint names from controller parameters
             state_list_.movej->setJointNames(joint_names_);

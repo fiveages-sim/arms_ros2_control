@@ -4,6 +4,7 @@
 #pragma once
 
 #include "arms_controller_common/FSM/FSMState.h"
+#include "arms_controller_common/utils/Interpolation.h"
 #include "arms_controller_common/utils/GravityCompensation.h"
 #include <vector>
 #include <memory>
@@ -91,6 +92,18 @@ namespace arms_controller_common
          */
         void setJointLimitChecker(std::function<std::vector<double>(const std::vector<double>&)> limit_checker);
 
+        /**
+         * @brief Select interpolation type used to compute phase from percent.
+         * @param type "tanh" or "linear" (case-insensitive). Unknown values fall back to "tanh".
+         */
+        void setInterpolationType(const std::string& type);
+
+        /**
+         * @brief Set tanh scale used when interpolation type is TANH.
+         * @note Larger values => faster start, slower tail. Must be > 0, otherwise it will be clamped to a default.
+         */
+        void setTanhScale(double scale);
+
     private:
         rclcpp::Logger logger_;
         std::shared_ptr<GravityCompensation> gravity_compensation_;
@@ -123,6 +136,10 @@ namespace arms_controller_common
 
         // Joint limit checking
         std::function<std::vector<double>(const std::vector<double>&)> joint_limit_checker_;  // Optional joint limit checker callback
+
+        // Interpolation configuration
+        InterpolationType interpolation_type_{InterpolationType::TANH};
+        double tanh_scale_{3.0};
         
         /**
          * @brief Initialize joint names from interfaces

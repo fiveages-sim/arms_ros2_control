@@ -32,6 +32,10 @@ basic_joint_controller:
     # Can continue adding home_4, home_5, ... up to 10 configurations
     home_duration: 3.0  # Home state interpolation duration (seconds)
     move_duration: 3.0  # Move state interpolation duration (seconds)
+    home_interpolation_type: "tanh"  # "tanh" (default) or "linear"
+    home_tanh_scale: 3.0  # Only used when home_interpolation_type == "tanh"
+    movej_interpolation_type: "tanh"  # "tanh" (default) or "linear"
+    movej_tanh_scale: 3.0  # Only used when movej_interpolation_type == "tanh"
     hold_position_threshold: 0.1  # Hold state position threshold (radians)
     switch_command_base: 100  # Base command value for configuration switching (default: 100, can be set to 4 for backward compatibility)
 ```
@@ -120,7 +124,7 @@ ros2 topic pub /waist_joint_controller/target_joint_position std_msgs/msg/Float6
 
 ### 6.2 Interpolation Algorithm
 
-The Home and Move states use the `tanh` function for smooth interpolation:
+The Home state uses the `tanh` function for smooth interpolation. The MoveJ state supports configurable interpolation.
 
 ```cpp
 double phase = std::tanh(percent_ * 3.0);
@@ -128,6 +132,11 @@ double interpolated_value = phase * target_pos[i] + (1.0 - phase) * start_pos[i]
 ```
 
 This ensures smooth acceleration and deceleration.
+
+#### MoveJ interpolation parameters
+
+- **`movej_interpolation_type`**: `"tanh"` (default) or `"linear"`
+- **`movej_tanh_scale`**: tanh scale (default `3.0`), only used when `movej_interpolation_type="tanh"`
 
 ### 6.3 Thread Safety
 

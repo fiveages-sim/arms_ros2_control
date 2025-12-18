@@ -135,8 +135,10 @@ namespace arms_controller_common
         }
 
         RCLCPP_INFO(logger_,
-                    "Starting linear interpolation to home configuration %zu over %.1f seconds",
-                    current_config_index_, duration_);
+                    "Starting interpolation to home configuration %zu over %.1f seconds (type=%s)",
+                    current_config_index_,
+                    duration_,
+                    toString(interpolation_type_));
     }
 
     void StateHome::run(const rclcpp::Time& /*time*/, const rclcpp::Duration& /*period*/)
@@ -173,11 +175,33 @@ namespace arms_controller_common
 
         // Update interpolation progress
         double controller_frequency = ctrl_interfaces_.frequency_;
-        percent_ += 1.0 / (duration_ * controller_frequency);
+        if (duration_ <= 0.0 || controller_frequency <= 0.0)
+        {
+            // Invalid timing configuration: jump directly to target
+            percent_ = 1.0;
+        }
+        else
+        {
+            percent_ += 1.0 / (duration_ * controller_frequency);
+        }
         percent_ = std::min(percent_, 1.0);
 
-        // Calculate interpolation phase using tanh
-        double phase = std::tanh(percent_ * 3.0);
+        // Calculate interpolation phase
+        double phase = 0.0;
+        if (percent_ >= 1.0)
+        {
+            phase = 1.0;
+        }
+        else if (interpolation_type_ == InterpolationType::LINEAR)
+        {
+            phase = percent_;
+        }
+        else
+        {
+            const double scale = (tanh_scale_ > 0.0) ? tanh_scale_ : 3.0;
+            phase = std::tanh(percent_ * scale);
+        }
+        phase = std::clamp(phase, 0.0, 1.0);
 
         // Apply interpolated position to joints
         for (size_t i = 0; i < ctrl_interfaces_.joint_position_command_interface_.size() &&
@@ -214,6 +238,26 @@ namespace arms_controller_common
     void StateHome::exit()
     {
         percent_ = 0.0;
+    }
+
+    void StateHome::setInterpolationType(const std::string& type)
+    {
+        const std::string t = toLowerCopy(type);
+        if (t != "linear" && t != "tanh")
+        {
+            RCLCPP_WARN(logger_, "Unknown home interpolation type '%s', falling back to 'tanh'", type.c_str());
+        }
+        interpolation_type_ = parseInterpolationType(type, InterpolationType::TANH);
+    }
+
+    void StateHome::setTanhScale(double scale)
+    {
+        if (scale <= 0.0 || !std::isfinite(scale))
+        {
+            RCLCPP_WARN(logger_, "Invalid home tanh scale %.3f, keeping %.3f", scale, tanh_scale_);
+            return;
+        }
+        tanh_scale_ = scale;
     }
 
     FSMStateName StateHome::checkChange()
