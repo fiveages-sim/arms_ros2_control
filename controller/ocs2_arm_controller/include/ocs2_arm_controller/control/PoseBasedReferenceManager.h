@@ -10,6 +10,7 @@
 #include <rclcpp_lifecycle/lifecycle_node.hpp>
 #include <geometry_msgs/msg/pose.hpp>
 #include <geometry_msgs/msg/pose_stamped.hpp>
+#include <nav_msgs/msg/path.hpp>
 #include <tf2_ros/transform_listener.h>
 #include <tf2_ros/buffer.h>
 #include <ocs2_oc/synchronized_module/ReferenceManagerDecorator.h>
@@ -68,6 +69,7 @@ namespace ocs2::mobile_manipulator
         void rightPoseCallback(geometry_msgs::msg::Pose::SharedPtr msg);
         void leftPoseStampedCallback(geometry_msgs::msg::PoseStamped::SharedPtr msg);
         void rightPoseStampedCallback(geometry_msgs::msg::PoseStamped::SharedPtr msg);
+        void pathCallback(nav_msgs::msg::Path::SharedPtr msg);
         void updateTargetTrajectory();
         /**
          * 使用“上一帧缓存目标 -> 当前新目标缓存”生成固定 2 秒时长的插值轨迹并写入 ReferenceManager。
@@ -96,6 +98,7 @@ namespace ocs2::mobile_manipulator
         rclcpp::Subscription<geometry_msgs::msg::Pose>::SharedPtr right_pose_subscriber_;
         rclcpp::Subscription<geometry_msgs::msg::PoseStamped>::SharedPtr left_pose_stamped_subscriber_;
         rclcpp::Subscription<geometry_msgs::msg::PoseStamped>::SharedPtr right_pose_stamped_subscriber_;
+        rclcpp::Subscription<nav_msgs::msg::Path>::SharedPtr path_subscriber_;
         
         // 发布器：发布当前目标
         rclcpp::Publisher<geometry_msgs::msg::PoseStamped>::SharedPtr left_target_publisher_;
