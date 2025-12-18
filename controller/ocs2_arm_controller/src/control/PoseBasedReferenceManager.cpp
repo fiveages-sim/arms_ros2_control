@@ -4,6 +4,7 @@
 
 #include "ocs2_arm_controller/control/PoseBasedReferenceManager.h"
 #include <algorithm>
+#include <cmath>
 #include <rclcpp/rclcpp.hpp>
 #include <geometry_msgs/msg/pose_stamped.hpp>
 #include <nav_msgs/msg/path.hpp>
@@ -16,11 +17,13 @@ namespace ocs2::mobile_manipulator
     PoseBasedReferenceManager::PoseBasedReferenceManager(
         std::string topicPrefix,
         std::shared_ptr<ReferenceManagerInterface> referenceManagerPtr,
-        std::shared_ptr<MobileManipulatorInterface> interfacePtr)
+        std::shared_ptr<MobileManipulatorInterface> interfacePtr,
+        double trajectoryDurationSec)
         : ReferenceManagerDecorator(std::move(referenceManagerPtr)),
           topic_prefix_(std::move(topicPrefix)),
           interface_(std::move(interfacePtr)),
-          logger_(rclcpp::get_logger("PoseBasedReferenceManager"))
+          logger_(rclcpp::get_logger("PoseBasedReferenceManager")),
+          trajectory_duration_sec_(trajectoryDurationSec)
     {
         dual_arm_mode_ = interface_->dual_arm_;
 
@@ -142,13 +145,18 @@ namespace ocs2::mobile_manipulator
     void PoseBasedReferenceManager::updateTrajectory(const vector_t& previous_left_target_state,
                                                      const vector_t& previous_right_target_state)
     {
-        constexpr double kTrajectoryDurationSec = 2.0;
-        constexpr size_t kNumSamples = 51; // 2s / 0.04s = 50 intervals
-        static_assert(kNumSamples >= 2, "kNumSamples must be >= 2");
+        // 采样间隔（秒）
+        constexpr double kSampleInterval = 0.04;  // 0.04秒一个采样点（25Hz）
+        
+        // 根据时间长度动态计算采样点数量
+        const size_t kNumSamples = std::max(
+            static_cast<size_t>(std::ceil(trajectory_duration_sec_ / kSampleInterval)) + 1,
+            static_cast<size_t>(2)  // 至少2个采样点
+        );
 
         // 起始/终止时间
         const double t0 = current_observation_.time;
-        const double t1 = t0 + kTrajectoryDurationSec;
+        const double t1 = t0 + trajectory_duration_sec_;
         const double dt = (t1 - t0) / static_cast<double>(kNumSamples - 1);
 
         // 组装 start / goal 的合并 state
@@ -481,11 +489,18 @@ namespace ocs2::mobile_manipulator
             right_arm_waypoints.push_back(right_target_state_);
         }
 
-        // 为每个臂生成2秒的插值轨迹
-        constexpr double kTrajectoryDurationSec = 2.0;
-        constexpr size_t kNumSamples = 51;  // 2s / 0.04s = 50 intervals
+        // 为每个臂生成插值轨迹
+        // 采样间隔（秒）
+        constexpr double kSampleInterval = 0.04;  // 0.04秒一个采样点（25Hz）
+        
+        // 根据时间长度动态计算采样点数量
+        const size_t kNumSamples = std::max(
+            static_cast<size_t>(std::ceil(trajectory_duration_sec_ / kSampleInterval)) + 1,
+            static_cast<size_t>(2)  // 至少2个采样点
+        );
+        
         const double t0 = current_observation_.time;
-        const double t1 = t0 + kTrajectoryDurationSec;
+        const double t1 = t0 + trajectory_duration_sec_;
         const double dt = (t1 - t0) / static_cast<double>(kNumSamples - 1);
 
         // 插值函数（复用现有的interpolatePose7逻辑）

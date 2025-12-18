@@ -112,9 +112,14 @@ namespace ocs2::mobile_manipulator
 
     void CtrlComponent::setupMpcComponents()
     {
+        // Get trajectory duration parameter from yaml config (default: 2.0 seconds)
+        node_->declare_parameter("trajectory_duration_sec", 2.0);
+        double trajectory_duration_sec = node_->get_parameter("trajectory_duration_sec").as_double();
+        RCLCPP_INFO(node_->get_logger(), "Trajectory duration: %.2f seconds", trajectory_duration_sec);
+        
         // Create PoseBasedReferenceManager and subscribe to ROS topics
         pose_reference_manager_ = std::make_shared<PoseBasedReferenceManager>(
-            robot_name_, interface_->getReferenceManagerPtr(), interface_);
+            robot_name_, interface_->getReferenceManagerPtr(), interface_, trajectory_duration_sec);
         pose_reference_manager_->subscribe(node_);
 
         // Create MPC solver
