@@ -17,53 +17,6 @@
 
 namespace ocs2::mobile_manipulator
 {
-    CtrlComponent::CtrlComponent(const std::shared_ptr<rclcpp_lifecycle::LifecycleNode>& node,
-                                 CtrlInterfaces& ctrl_interfaces)
-        : node_(node), ctrl_interfaces_(ctrl_interfaces)
-    {
-        robot_name_ = node_->get_parameter("robot_name").as_string();
-        robot_type_ = node_->get_parameter("robot_type").as_string();
-        future_time_offset_ = node_->get_parameter("future_time_offset").as_double();
-        joint_names_ = node_->get_parameter("joints").as_string_array();
-        // Declare parameters with defaults
-        node_->declare_parameter("cached_ob_state", true);
-        node_->declare_parameter("joint_speed_threshold", 0.1);
-        node_->declare_parameter("hardware_latency", 0.2);
-        
-        loadParameters();
-
-        const std::string info_file_name = node_->get_parameter("info_file_name").as_string();
-
-        // Automatically build file paths and initialize interface
-        const std::string robot_pkg = robot_name_ + "_description";
-        const std::string config_path = ament_index_cpp::get_package_share_directory(robot_pkg);
-        const std::string task_file = config_path + "/config/ocs2/" + info_file_name + ".info";
-        const std::string lib_folder = config_path + "/ocs2";
-
-        // Generate URDF file path
-        const std::string urdf_file = generateUrdfPath(robot_name_, robot_type_, config_path);
-
-        // Initialize interface
-        setupInterface(task_file, lib_folder, urdf_file);
-
-        // Detect if dual arm mode is enabled
-        dual_arm_mode_ = interface_->dual_arm_;
-
-        // Initialize MPC components
-        setupMpcComponents();
-
-        // Initialize publishers
-        setupPublisher();
-
-        // Initialize visualization component
-        visualizer_ = std::make_unique<Visualizer>(node_, interface_, robot_name_);
-        visualizer_->initialize();
-        RCLCPP_INFO(node_->get_logger(), "Future time offset: %.2f seconds", future_time_offset_);
-        // Initialize cached state
-        last_execute_time_ = node_->now();
-        cached_last_action_ = observation_.state;
-
-    }
 
     rcl_interfaces::msg::SetParametersResult CtrlComponent::on_parameter_change(
         const std::vector<rclcpp::Parameter> &parameters)
@@ -85,13 +38,6 @@ namespace ocs2::mobile_manipulator
     }
 
 
-    void CtrlComponent::loadParameters()
-    {
-        joint_speed_threshold_ = node_->get_parameter("joint_speed_threshold").as_double();
-        cached_ob_state_ = node_->get_parameter("cached_ob_state").as_bool();
-        hardware_latency_ = node_->get_parameter("hardware_latency").as_double();
-    }
-
     void CtrlComponent::setupInterface(const std::string& task_file,
                                        const std::string& lib_folder,
                                        const std::string& urdf_file)
@@ -108,37 +54,6 @@ namespace ocs2::mobile_manipulator
         // Initialize MPC observation publisher
         mpc_observation_publisher_ = node_->create_publisher<ocs2_msgs::msg::MpcObservation>(
             robot_name_ + "_mpc_observation", 1);
-    }
-
-    void CtrlComponent::setupMpcComponents()
-    {
-        // Get trajectory duration parameter from yaml config (default: 2.0 seconds)
-        node_->declare_parameter("trajectory_duration_sec", 2.0);
-        double trajectory_duration_sec = node_->get_parameter("trajectory_duration_sec").as_double();
-        RCLCPP_INFO(node_->get_logger(), "Trajectory duration: %.2f seconds", trajectory_duration_sec);
-        
-        // Create PoseBasedReferenceManager and subscribe to ROS topics
-        pose_reference_manager_ = std::make_shared<PoseBasedReferenceManager>(
-            robot_name_, interface_->getReferenceManagerPtr(), interface_, trajectory_duration_sec);
-        pose_reference_manager_->subscribe(node_);
-
-        // Create MPC solver
-        mpc_ = std::make_unique<GaussNewtonDDP_MPC>(
-            interface_->mpcSettings(),
-            interface_->ddpSettings(),
-            interface_->getRollout(),
-            interface_->getOptimalControlProblem(),
-            interface_->getInitializer());
-
-        // Create unified MPC_MRT_Interface using PoseBasedReferenceManager
-        mpc_mrt_interface_ = std::make_unique<MPC_MRT_Interface>(*mpc_);
-
-        // Important: Set PoseBasedReferenceManager to MPC solver
-        mpc_->getSolverPtr()->setReferenceManager(pose_reference_manager_);
-
-        observation_.state = interface_->getInitialState();
-        observation_.input = vector_t::Zero(interface_->getManipulatorModelInfo().inputDim);
-        observation_.time = 0.0;
     }
 
     void CtrlComponent::updateObservation(const rclcpp::Time& time)

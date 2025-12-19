@@ -36,13 +36,15 @@ namespace ocs2::mobile_manipulator
          * @param topicPrefix Topic前缀
          * @param referenceManagerPtr 参考管理器指针
          * @param interfacePtr 移动操作器接口指针
-         * @param trajectoryDurationSec 插值轨迹持续时间（秒），默认2.0秒
+         * @param trajectoryDuration 插值轨迹持续时间（秒），默认2.0秒
+         * @param moveLDuration moveL 插值轨迹持续时间（秒），默认2.0秒
          */
         PoseBasedReferenceManager(
             std::string topicPrefix,
             std::shared_ptr<ReferenceManagerInterface> referenceManagerPtr,
             std::shared_ptr<MobileManipulatorInterface> interfacePtr,
-            double trajectoryDurationSec = 2.0);
+            double trajectoryDuration = 2.0,
+            double moveLDuration = 2.0);
 
         ~PoseBasedReferenceManager() override = default;
 
@@ -78,7 +80,7 @@ namespace ocs2::mobile_manipulator
         void updateTargetTrajectory();
         /**
          * 使用"上一帧缓存目标 -> 当前新目标缓存"生成插值轨迹并写入 ReferenceManager。
-         * 轨迹时长由 trajectory_duration_sec_ 参数决定（默认2.0秒）。
+         * 轨迹时长由 moveL_duration_ 参数决定。
          * 仅用于 PoseStamped 相关回调（支持 TF 转换后的目标）。
          */
         void updateTrajectory(const vector_t& previous_left_target_state,
@@ -127,7 +129,10 @@ namespace ocs2::mobile_manipulator
         vector_t right_target_state_;
         
         // 插值轨迹持续时间（秒）
-        double trajectory_duration_sec_;
+        double trajectory_duration_;
+        
+        // moveL 插值轨迹持续时间（秒）
+        double moveL_duration_;
     };
 
 } // namespace ocs2::mobile_manipulator

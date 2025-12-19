@@ -101,12 +101,6 @@ namespace ocs2::mobile_manipulator
             state_interface_types_ =
                 auto_declare<std::vector<std::string>>("state_interfaces", state_interface_types_);
 
-            // Robot parameters - use robot_name to auto-generate package names
-            auto_declare<std::string>("robot_name", "cr5");
-            auto_declare<std::string>("robot_type", ""); // Optional robot type/variant
-            auto_declare<double>("future_time_offset", 1.0);
-            auto_declare<std::string>("info_file_name", "task");
-
             // Control input parameters
             control_input_name_ = auto_declare<std::string>("control_input_name", control_input_name_);
             control_input_interface_types_ =
@@ -135,7 +129,12 @@ namespace ocs2::mobile_manipulator
             // Default: 100 for multi-home switching
 
             // Create CtrlComponent (auto-initialize interface)
-            ctrl_comp_ = std::make_shared<CtrlComponent>(get_node(), ctrl_interfaces_);
+            // Pass auto_declare function to CtrlComponent so it can declare its own parameters
+            auto auto_declare_func = [this](const std::string& name, const auto& default_value) {
+                using T = std::decay_t<decltype(default_value)>;
+                return this->auto_declare<T>(name, default_value);
+            };
+            ctrl_comp_ = std::make_shared<CtrlComponent>(get_node(), ctrl_interfaces_, auto_declare_func);
 
             // Create GravityCompensation from CtrlComponent's Pinocchio model
             std::shared_ptr<arms_controller_common::GravityCompensation> gravity_compensation = nullptr;

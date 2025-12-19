@@ -18,12 +18,14 @@ namespace ocs2::mobile_manipulator
         std::string topicPrefix,
         std::shared_ptr<ReferenceManagerInterface> referenceManagerPtr,
         std::shared_ptr<MobileManipulatorInterface> interfacePtr,
-        double trajectoryDurationSec)
+        double trajectoryDuration,
+        double moveLDuration)
         : ReferenceManagerDecorator(std::move(referenceManagerPtr)),
           topic_prefix_(std::move(topicPrefix)),
           interface_(std::move(interfacePtr)),
           logger_(rclcpp::get_logger("PoseBasedReferenceManager")),
-          trajectory_duration_sec_(trajectoryDurationSec)
+          trajectory_duration_(trajectoryDuration),
+          moveL_duration_(moveLDuration)
     {
         dual_arm_mode_ = interface_->dual_arm_;
 
@@ -145,18 +147,21 @@ namespace ocs2::mobile_manipulator
     void PoseBasedReferenceManager::updateTrajectory(const vector_t& previous_left_target_state,
                                                      const vector_t& previous_right_target_state)
     {
+        // 使用 moveL_duration_ 作为插值时间
+        const double actual_duration = moveL_duration_;
+        
         // 采样间隔（秒）
         constexpr double kSampleInterval = 0.04;  // 0.04秒一个采样点（25Hz）
         
         // 根据时间长度动态计算采样点数量
         const size_t kNumSamples = std::max(
-            static_cast<size_t>(std::ceil(trajectory_duration_sec_ / kSampleInterval)) + 1,
+            static_cast<size_t>(std::ceil(actual_duration / kSampleInterval)) + 1,
             static_cast<size_t>(2)  // 至少2个采样点
         );
 
         // 起始/终止时间
         const double t0 = current_observation_.time;
-        const double t1 = t0 + trajectory_duration_sec_;
+        const double t1 = t0 + actual_duration;
         const double dt = (t1 - t0) / static_cast<double>(kNumSamples - 1);
 
         // 组装 start / goal 的合并 state
@@ -412,7 +417,7 @@ namespace ocs2::mobile_manipulator
         // 将路径点分成两半：前半段给左臂，后半段给右臂
         const size_t total_points = msg->poses.size();
         const size_t left_points = (total_points + 1) / 2;  // 前半段（向上取整）
-        const size_t right_points = total_points - left_points;  // 后半段
+        // right_points 会在循环中计算，不需要单独声明
 
         // 转换路径点到状态向量
         auto poseToState = [](const geometry_msgs::msg::PoseStamped& pose_stamped) -> vector_t
@@ -491,16 +496,16 @@ namespace ocs2::mobile_manipulator
 
         // 为每个臂生成插值轨迹
         // 采样间隔（秒）
-        constexpr double kSampleInterval = 0.04;  // 0.04秒一个采样点（25Hz）
+        constexpr double kSampleInterval = 0.01;  // 0.04秒一个采样点（25Hz）
         
         // 根据时间长度动态计算采样点数量
         const size_t kNumSamples = std::max(
-            static_cast<size_t>(std::ceil(trajectory_duration_sec_ / kSampleInterval)) + 1,
+            static_cast<size_t>(std::ceil(trajectory_duration_ / kSampleInterval)) + 1,
             static_cast<size_t>(2)  // 至少2个采样点
         );
         
         const double t0 = current_observation_.time;
-        const double t1 = t0 + trajectory_duration_sec_;
+        const double t1 = t0 + trajectory_duration_;
         const double dt = (t1 - t0) / static_cast<double>(kNumSamples - 1);
 
         // 插值函数（复用现有的interpolatePose7逻辑）
