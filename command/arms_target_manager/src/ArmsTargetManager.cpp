@@ -608,9 +608,7 @@ namespace arms_ros2_control::command
         }
         catch (const tf2::TransformException& ex)
         {
-            RCLCPP_WARN(node_->get_logger(),
-                        "无法将pose从 %s 转换到 %s: %s，使用原始pose",
-                        sourceFrameId.c_str(), targetFrameId.c_str(), ex.what());
+            // 转换失败时直接使用原始pose，不输出警告
             return pose;
         }
     }
