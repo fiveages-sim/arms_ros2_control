@@ -31,8 +31,11 @@ namespace arms_ros2_control::command
           , initial_position_(initial_position)
           , publish_rate_(publish_rate)
           , target_publisher_(node_->create_publisher<geometry_msgs::msg::Pose>(target_topic, 1))
+          , target_stamped_publisher_(node_->create_publisher<geometry_msgs::msg::PoseStamped>(target_topic + "/stamped", 1))
+          , current_target_frame_id_(control_base_frame)  // 默认使用 control_base_frame
           , update_callback_(std::move(update_callback))
           , last_publish_time_(node_->now())
+          , last_subscription_update_time_(node_->now())
     {
         // 初始化默认 pose
         pose_.position.x = initial_position_[0];
@@ -49,6 +52,41 @@ namespace arms_ros2_control::command
             [this](const geometry_msgs::msg::PoseStamped::ConstSharedPtr msg)
             {
                 updateFromTopic(msg);
+            });
+
+        // 创建当前目标订阅器（用于获取 frame_id 和更新 marker 位置）
+        std::string current_target_topic = (arm_type == ArmType::LEFT) ? "left_current_target" : "right_current_target";
+        current_target_subscription_ = node_->create_subscription<geometry_msgs::msg::PoseStamped>(
+            current_target_topic, 10,
+            [this](const geometry_msgs::msg::PoseStamped::ConstSharedPtr msg)
+            {
+                // 更新 frame_id
+                {
+                    std::lock_guard<std::mutex> lock(frame_id_mutex_);
+                    current_target_frame_id_ = msg->header.frame_id;
+                }
+
+                // 获取消息的 frame_id
+                std::string source_frame_id = msg->header.frame_id;
+                
+                // 如果 frame_id 为空，跳过更新
+                if (source_frame_id.empty())
+                {
+                    return;
+                }
+
+                // 转换 pose 到 marker 的坐标系（frame_id_）
+                geometry_msgs::msg::Pose transformed_pose = transformPose(
+                    msg->pose, source_frame_id, frame_id_);
+
+                // 更新内部 pose 存储
+                pose_ = transformed_pose;
+
+                // 调用更新回调，通知外部更新可视化
+                if (update_callback_)
+                {
+                    update_callback_(getMarkerName(), pose_);
+                }
             });
     }
 
@@ -75,12 +113,21 @@ namespace arms_ros2_control::command
     void ArmMarker::updateFromTopic(
         const geometry_msgs::msg::PoseStamped::ConstSharedPtr& pose_msg)
     {
-        // 检查是否允许自动更新（只有在非禁用状态下才更新 pose_）
+        // 先检查是否允许自动更新（只有在非禁用状态下才更新 pose_）
         if (state_check_callback_ && !state_check_callback_())
         {
             // 状态不允许自动更新，直接返回，不覆盖用户拖动的位置
             return;
         }
+
+        // 节流检查：限制更新频率为最多30Hz（1/30秒间隔）
+        auto now = node_->now();
+        auto time_since_last = (now - last_subscription_update_time_).seconds();
+        if (time_since_last < 1.0 / 30.0)  // 30Hz = 1/30秒
+        {
+            return;  // 跳过此次更新
+        }
+        last_subscription_update_time_ = now;
 
         // 转换 pose 到目标 frame
         std::string source_frame_id = pose_msg->header.frame_id;
@@ -103,8 +150,48 @@ namespace arms_ros2_control::command
         state_check_callback_ = std::move(callback);
     }
 
-    bool ArmMarker::publishTargetPose(bool force)
+    bool ArmMarker::publishTargetPose(bool force, bool use_stamped)
     {
+        // 如果是单次发布且使用 stamped，发布到 left_target/stamped
+        if (force && use_stamped)
+        {
+            if (!target_stamped_publisher_)
+            {
+                return false;
+            }
+
+            // 获取当前目标的 frame_id（从 left_current_target 或 right_current_target）
+            std::string target_frame_id;
+            {
+                std::lock_guard<std::mutex> lock(frame_id_mutex_);
+                target_frame_id = current_target_frame_id_;
+            }
+
+            // 如果 frame_id 为空，使用默认的 control_base_frame
+            if (target_frame_id.empty())
+            {
+                target_frame_id = control_base_frame_;
+            }
+
+            // 转换坐标系：从 marker_fixed_frame_ 转换到 target_frame_id
+            geometry_msgs::msg::Pose transformed_pose = transformPose(
+                pose_, frame_id_, target_frame_id);
+
+            // 创建 PoseStamped 消息
+            geometry_msgs::msg::PoseStamped pose_stamped;
+            pose_stamped.header.frame_id = target_frame_id;
+            pose_stamped.header.stamp = node_->get_clock()->now();
+            pose_stamped.pose = transformed_pose;
+
+            target_stamped_publisher_->publish(pose_stamped);
+            
+            // 更新节流时间
+            last_publish_time_ = node_->now();
+            
+            return true;
+        }
+
+        // 连续发布模式：发布到 left_target（原逻辑）
         if (!target_publisher_)
         {
             return false;
@@ -179,9 +266,7 @@ namespace arms_ros2_control::command
         }
         catch (const tf2::TransformException& ex)
         {
-            RCLCPP_WARN(node_->get_logger(),
-                        "无法将pose从 %s 转换到 %s: %s，使用原始pose",
-                        source_frame_id.c_str(), target_frame_id.c_str(), ex.what());
+            // 转换失败时直接使用原始pose，不输出警告
             return pose;
         }
     }

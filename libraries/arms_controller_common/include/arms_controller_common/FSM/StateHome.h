@@ -4,6 +4,7 @@
 #pragma once
 
 #include "arms_controller_common/FSM/FSMState.h"
+#include "arms_controller_common/utils/Interpolation.h"
 #include "arms_controller_common/utils/GravityCompensation.h"
 #include <vector>
 #include <memory>
@@ -145,6 +146,18 @@ namespace arms_controller_common
          */
         void selectConfiguration(size_t config_index);
 
+        /**
+         * @brief Select interpolation type used to compute phase from percent.
+         * @param type "tanh" or "linear" (case-insensitive). Unknown values fall back to "tanh".
+         */
+        void setInterpolationType(const std::string& type);
+
+        /**
+         * @brief Set tanh scale used when interpolation type is TANH.
+         * @note Larger values => faster start, slower tail. Must be > 0, otherwise it will be clamped to a default.
+         */
+        void setTanhScale(double scale);
+
     private:
         void switchConfiguration();
         void startInterpolation();
@@ -161,6 +174,8 @@ namespace arms_controller_common
         // Interpolation
         double duration_;                               // Interpolation duration in seconds
         double percent_{0.0};                          // Interpolation progress (0.0 to 1.0)
+        InterpolationType interpolation_type_{InterpolationType::TANH};
+        double tanh_scale_{3.0};
 
         // Configuration switching
         int32_t switch_command_base_{100};             // Base command for multi-config switching

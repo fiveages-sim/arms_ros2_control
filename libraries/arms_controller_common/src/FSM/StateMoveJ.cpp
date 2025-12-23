@@ -58,7 +58,9 @@ namespace arms_controller_common
         {
             interpolation_active_ = true;
             RCLCPP_INFO(logger_,
-                       "Starting linear interpolation to target position over %.1f seconds", duration_);
+                       "Starting interpolation to target position over %.1f seconds (type=%s)",
+                       duration_,
+                       toString(interpolation_type_));
         }
         else
         {
@@ -100,7 +102,15 @@ namespace arms_controller_common
 
         // Update interpolation progress based on actual controller frequency
         double controller_frequency = ctrl_interfaces_.frequency_;
-        percent_ += 1.0 / (duration_ * controller_frequency);
+        if (duration_ <= 0.0 || controller_frequency <= 0.0)
+        {
+            // Invalid timing configuration: jump directly to target
+            percent_ = 1.0;
+        }
+        else
+        {
+            percent_ += 1.0 / (duration_ * controller_frequency);
+        }
 
         // Clamp percent to [0, 1]
         if (percent_ > 1.0)
@@ -108,8 +118,26 @@ namespace arms_controller_common
             percent_ = 1.0;
         }
 
-        // Calculate interpolation phase using tanh for smooth transition
-        double phase = std::tanh(percent_ * 3.0); // Scale for faster convergence
+        // Calculate interpolation phase
+        double phase = 0.0;
+        if (percent_ >= 1.0)
+        {
+            // Ensure exact convergence to target at the end
+            phase = 1.0;
+        }
+        else if (interpolation_type_ == InterpolationType::LINEAR)
+        {
+            phase = percent_;
+        }
+        else
+        {
+            // TANH (legacy behavior): smooth transition
+            const double scale = (tanh_scale_ > 0.0) ? tanh_scale_ : 3.0;
+            phase = std::tanh(percent_ * scale);
+        }
+
+        // Safety clamp
+        phase = std::clamp(phase, 0.0, 1.0);
 
         // Apply interpolated position to joints
         for (size_t i = 0; i < ctrl_interfaces_.joint_position_command_interface_.size() &&
@@ -180,6 +208,26 @@ namespace arms_controller_common
         joint_mask_.clear();
         
         RCLCPP_DEBUG(logger_, "StateMoveJ exited, all state variables reset");
+    }
+
+    void StateMoveJ::setInterpolationType(const std::string& type)
+    {
+        const std::string t = toLowerCopy(type);
+        if (t != "linear" && t != "tanh")
+        {
+            RCLCPP_WARN(logger_, "Unknown movej interpolation type '%s', falling back to 'tanh'", type.c_str());
+        }
+        interpolation_type_ = parseInterpolationType(type, InterpolationType::TANH);
+    }
+
+    void StateMoveJ::setTanhScale(double scale)
+    {
+        if (scale <= 0.0 || !std::isfinite(scale))
+        {
+            RCLCPP_WARN(logger_, "Invalid movej tanh scale %.3f, keeping %.3f", scale, tanh_scale_);
+            return;
+        }
+        tanh_scale_ = scale;
     }
 
     FSMStateName StateMoveJ::checkChange()

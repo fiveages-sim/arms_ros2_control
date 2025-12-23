@@ -32,6 +32,10 @@ basic_joint_controller:
     # 可以继续添加 home_4, home_5, ... 最多支持 10 个配置
     home_duration: 3.0  # Home 状态插值持续时间（秒）
     move_duration: 3.0  # Move 状态插值持续时间（秒）
+    home_interpolation_type: "tanh"  # "tanh"（默认）或 "linear"
+    home_tanh_scale: 3.0  # 仅在 home_interpolation_type == "tanh" 时生效
+    movej_interpolation_type: "tanh"  # "tanh"（默认）或 "linear"
+    movej_tanh_scale: 3.0  # 仅在 movej_interpolation_type == "tanh" 时生效
     hold_position_threshold: 0.1  # Hold 状态位置阈值（弧度）
     switch_command_base: 100  # 配置切换命令的基础值（默认 100，可设置为 4 以兼容旧代码）
 ```
@@ -120,7 +124,7 @@ ros2 topic pub /waist_joint_controller/target_joint_position std_msgs/msg/Float6
 
 ### 6.2 插值算法
 
-Home 和 Move 状态使用 `tanh` 函数进行平滑插值：
+Home 状态使用 `tanh` 函数进行平滑插值。MoveJ 状态支持可配置插值方式。
 
 ```cpp
 double phase = std::tanh(percent_ * 3.0);
@@ -128,6 +132,11 @@ double interpolated_value = phase * target_pos[i] + (1.0 - phase) * start_pos[i]
 ```
 
 这样可以确保平滑的加速和减速。
+
+#### MoveJ 插值参数
+
+- **`movej_interpolation_type`**：`"tanh"`（默认）或 `"linear"`
+- **`movej_tanh_scale`**：tanh 缩放系数（默认 `3.0`），仅在 `movej_interpolation_type="tanh"` 时生效
 
 ### 6.3 线程安全
 

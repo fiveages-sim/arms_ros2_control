@@ -195,6 +195,7 @@ namespace arms_ros2_control::command
 
         // 节流管理（每个 marker 独立管理）
         mutable rclcpp::Time last_publish_time_;
+        mutable rclcpp::Time last_subscription_update_time_;  // 订阅更新的节流时间戳（限制为30Hz）
 
         // 上一次的 RPY 角度（用于避免角度跳变）
         mutable std::array<double, 3> last_head_rpy_ = {0.0, 0.0, 0.0};

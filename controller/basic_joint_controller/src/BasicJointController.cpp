@@ -98,6 +98,10 @@ namespace basic_joint_controller
             // State machine parameters
             home_duration_ = auto_declare<double>("home_duration", 3.0);
             move_duration_ = auto_declare<double>("move_duration", 3.0);
+            std::string home_interpolation_type = auto_declare<std::string>("home_interpolation_type", "tanh");
+            double home_tanh_scale = auto_declare<double>("home_tanh_scale", 3.0);
+            std::string movej_interpolation_type = auto_declare<std::string>("movej_interpolation_type", "tanh");
+            double movej_tanh_scale = auto_declare<double>("movej_tanh_scale", 3.0);
             hold_position_threshold_ = auto_declare<double>("hold_position_threshold", 0.1);
             long switch_command_base = auto_declare<long>("switch_command_base", 100);
 
@@ -108,6 +112,10 @@ namespace basic_joint_controller
             // StateHome - configurations will be loaded via init() method using auto_declare
             state_list_.home = std::make_shared<arms_controller_common::StateHome>(
                 ctrl_interfaces_, logger, home_duration_);
+
+            // Configure interpolation type/shape
+            state_list_.home->setInterpolationType(home_interpolation_type);
+            state_list_.home->setTanhScale(home_tanh_scale);
             
             // Initialize StateHome with configurations from parameters (home_1, home_2, home_3, etc.)
             // Pass auto_declare as a lambda to allow StateHome to use it
@@ -126,6 +134,10 @@ namespace basic_joint_controller
             // StateMoveJ - extends common StateMoveJ for basic_joint_controller
             state_list_.movej = std::make_shared<StateMoveJ>(
                 ctrl_interfaces_, logger, move_duration_);
+
+            // Configure interpolation type/shape
+            state_list_.movej->setInterpolationType(movej_interpolation_type);
+            state_list_.movej->setTanhScale(movej_tanh_scale);
             
             // Set joint names from controller parameters
             state_list_.movej->setJointNames(joint_names_);

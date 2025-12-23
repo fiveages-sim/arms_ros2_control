@@ -7,6 +7,7 @@
 #include <memory>
 #include <string>
 #include <array>
+#include <mutex>
 #include <rclcpp/rclcpp.hpp>
 #include <geometry_msgs/msg/pose.hpp>
 #include <geometry_msgs/msg/pose_stamped.hpp>
@@ -125,9 +126,10 @@ namespace arms_ros2_control::command
         /**
          * @brief 发布目标 pose（带内部节流管理）
          * @param force 是否强制发送（忽略节流限制，用于单次发布模式）
+         * @param use_stamped 是否发布到 stamped 话题（单次发布时使用，需要 frame_id）
          * @return 是否成功发布
          */
-        bool publishTargetPose(bool force = false);
+        bool publishTargetPose(bool force = false, bool use_stamped = false);
 
         /**
          * @brief 获取当前 pose
@@ -201,10 +203,16 @@ namespace arms_ros2_control::command
         
         // 发布配置
         double publish_rate_;  // 发布频率（Hz）
-        rclcpp::Publisher<geometry_msgs::msg::Pose>::SharedPtr target_publisher_;  // 目标 pose 发布器
+        rclcpp::Publisher<geometry_msgs::msg::Pose>::SharedPtr target_publisher_;  // 目标 pose 发布器（连续发布用）
+        rclcpp::Publisher<geometry_msgs::msg::PoseStamped>::SharedPtr target_stamped_publisher_;  // 目标 pose 发布器（单次发布用）
         
         // 订阅器
         rclcpp::Subscription<geometry_msgs::msg::PoseStamped>::SharedPtr current_pose_subscription_;  // 当前 pose 订阅器
+        rclcpp::Subscription<geometry_msgs::msg::PoseStamped>::SharedPtr current_target_subscription_;  // 当前目标订阅器（用于获取 frame_id）
+        
+        // 当前目标的 frame_id（从 left_current_target 或 right_current_target 获取）
+        std::string current_target_frame_id_;
+        mutable std::mutex frame_id_mutex_;  // 保护 frame_id 的互斥锁
         
         // 更新回调（用于通知外部更新可视化）
         UpdateCallback update_callback_;
@@ -214,6 +222,7 @@ namespace arms_ros2_control::command
         
         // 节流管理（每个 marker 独立管理）
         mutable rclcpp::Time last_publish_time_;
+        mutable rclcpp::Time last_subscription_update_time_;  // 订阅更新的节流时间戳（限制为30Hz）
     };
 } // namespace arms_ros2_control::command
 

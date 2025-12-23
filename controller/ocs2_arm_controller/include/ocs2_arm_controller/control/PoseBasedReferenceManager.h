@@ -10,6 +10,7 @@
 #include <rclcpp_lifecycle/lifecycle_node.hpp>
 #include <geometry_msgs/msg/pose.hpp>
 #include <geometry_msgs/msg/pose_stamped.hpp>
+#include <nav_msgs/msg/path.hpp>
 #include <tf2_ros/transform_listener.h>
 #include <tf2_ros/buffer.h>
 #include <ocs2_oc/synchronized_module/ReferenceManagerDecorator.h>
@@ -32,11 +33,18 @@ namespace ocs2::mobile_manipulator
     public:
         /**
          * 构造函数
+         * @param topicPrefix Topic前缀
+         * @param referenceManagerPtr 参考管理器指针
+         * @param interfacePtr 移动操作器接口指针
+         * @param trajectoryDuration 插值轨迹持续时间（秒），默认2.0秒
+         * @param moveLDuration moveL 插值轨迹持续时间（秒），默认2.0秒
          */
         PoseBasedReferenceManager(
             std::string topicPrefix,
             std::shared_ptr<ReferenceManagerInterface> referenceManagerPtr,
-            std::shared_ptr<MobileManipulatorInterface> interfacePtr);
+            std::shared_ptr<MobileManipulatorInterface> interfacePtr,
+            double trajectoryDuration = 2.0,
+            double moveLDuration = 2.0);
 
         ~PoseBasedReferenceManager() override = default;
 
@@ -68,7 +76,26 @@ namespace ocs2::mobile_manipulator
         void rightPoseCallback(geometry_msgs::msg::Pose::SharedPtr msg);
         void leftPoseStampedCallback(geometry_msgs::msg::PoseStamped::SharedPtr msg);
         void rightPoseStampedCallback(geometry_msgs::msg::PoseStamped::SharedPtr msg);
+        void dualTargetStampedCallback(nav_msgs::msg::Path::SharedPtr msg);
+        void pathCallback(nav_msgs::msg::Path::SharedPtr msg);
         void updateTargetTrajectory();
+        /**
+         * 使用"上一帧缓存目标 -> 当前新目标缓存"生成插值轨迹并写入 ReferenceManager。
+         * 轨迹时长由 moveL_duration_ 参数决定。
+         * 仅用于 PoseStamped 相关回调（支持 TF 转换后的目标）。
+         * 
+         * 在双臂模式下，总是同时更新两个臂的轨迹。
+         * 在单臂模式下，previous_right_target_state 参数不会被使用（可以传递零向量）。
+         * 
+         * @param previous_left_target_state 左臂上一帧目标状态
+         * @param previous_right_target_state 右臂上一帧目标状态（单臂模式下不使用）
+         */
+        void updateTrajectory(const vector_t& previous_left_target_state,
+                              const vector_t& previous_right_target_state);
+
+        // PoseStamped 经过 TF 转换后的 Pose 处理（与 Pose 回调分开，便于区分旧/新接口）
+        void leftPoseStampedPoseCallback(geometry_msgs::msg::Pose::SharedPtr msg);
+        void rightPoseStampedPoseCallback(geometry_msgs::msg::Pose::SharedPtr msg);
         
         // 通用的PoseStamped处理函数：转换到base frame并调用指定的回调
         void processPoseStamped(
@@ -76,7 +103,8 @@ namespace ocs2::mobile_manipulator
             std::function<void(geometry_msgs::msg::Pose::SharedPtr)> callback);
         
         // 发布当前目标
-        void publishCurrentTargets();
+        // @param arm_type 指定发布哪个臂的目标："left" 只发布左臂，"right" 只发布右臂，空字符串或"both" 发布两个臂（仅双臂模式）
+        void publishCurrentTargets(const std::string& arm_type = "");
 
         const std::string topic_prefix_;
         std::shared_ptr<MobileManipulatorInterface> interface_;
@@ -86,6 +114,8 @@ namespace ocs2::mobile_manipulator
         rclcpp::Subscription<geometry_msgs::msg::Pose>::SharedPtr right_pose_subscriber_;
         rclcpp::Subscription<geometry_msgs::msg::PoseStamped>::SharedPtr left_pose_stamped_subscriber_;
         rclcpp::Subscription<geometry_msgs::msg::PoseStamped>::SharedPtr right_pose_stamped_subscriber_;
+        rclcpp::Subscription<nav_msgs::msg::Path>::SharedPtr dual_target_stamped_subscriber_;
+        rclcpp::Subscription<nav_msgs::msg::Path>::SharedPtr path_subscriber_;
         
         // 发布器：发布当前目标
         rclcpp::Publisher<geometry_msgs::msg::PoseStamped>::SharedPtr left_target_publisher_;
@@ -106,6 +136,12 @@ namespace ocs2::mobile_manipulator
         // 双臂target state缓存
         vector_t left_target_state_;
         vector_t right_target_state_;
+        
+        // 插值轨迹持续时间（秒）
+        double trajectory_duration_;
+        
+        // moveL 插值轨迹持续时间（秒）
+        double moveL_duration_;
     };
 
 } // namespace ocs2::mobile_manipulator

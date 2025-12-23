@@ -9,6 +9,7 @@
 #include <atomic>
 #include <rclcpp/rclcpp.hpp>
 #include <geometry_msgs/msg/pose_stamped.hpp>
+#include <geometry_msgs/msg/pose.hpp>
 #include <geometry_msgs/msg/point.hpp>
 #include <std_msgs/msg/bool.hpp>
 #include <Eigen/Core>
@@ -137,7 +138,7 @@ namespace arms_ros2_control::command
         void rightGripCallback(std_msgs::msg::Bool::SharedPtr msg);
 
         /**
-         * 更新marker位置
+         * 更新marker位置（已废弃，保留用于兼容）
          * @param armType 手臂类型 ("left" 或 "right")
          * @param position 位置
          * @param orientation 方向
@@ -145,6 +146,16 @@ namespace arms_ros2_control::command
         void updateMarkerPose(const std::string& armType,
                               const Eigen::Vector3d& position,
                               const Eigen::Quaterniond& orientation);
+
+        /**
+         * 直接发布目标位姿到left_target/right_target话题（解耦模式，无坐标转换）
+         * @param armType 手臂类型 ("left" 或 "right")
+         * @param position 位置（已在目标坐标系下）
+         * @param orientation 方向
+         */
+        void publishTargetPoseDirect(const std::string& armType,
+                                     const Eigen::Vector3d& position,
+                                     const Eigen::Quaterniond& orientation);
 
         /**
          * 将PoseStamped消息转换为Eigen::Matrix4d
@@ -199,6 +210,10 @@ namespace arms_ros2_control::command
         // ROS组件
         rclcpp::Node::SharedPtr node_;
         ArmsTargetManager* target_manager_;
+
+        // 发布器（用于直接发布到left_target/right_target）
+        rclcpp::Publisher<geometry_msgs::msg::Pose>::SharedPtr pub_left_target_;
+        rclcpp::Publisher<geometry_msgs::msg::Pose>::SharedPtr pub_right_target_;
 
         // 订阅器
         rclcpp::Subscription<geometry_msgs::msg::PoseStamped>::SharedPtr sub_left_;

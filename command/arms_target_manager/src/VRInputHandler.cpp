@@ -6,6 +6,7 @@
 #include "arms_target_manager/ArmsTargetManager.h"
 #include <rclcpp/rclcpp.hpp>
 #include <geometry_msgs/msg/pose_stamped.hpp>
+#include <geometry_msgs/msg/pose.hpp>
 #include <geometry_msgs/msg/point.hpp>
 #include <std_msgs/msg/bool.hpp>
 #include <Eigen/Core>
@@ -40,6 +41,10 @@ namespace arms_ros2_control::command
           , current_position_(0.0, 0.0, 1.0)
           , current_orientation_(1.0, 0.0, 0.0, 0.0)
     {
+        // 创建目标位姿发布器（直接发布到left_target/right_target）
+        pub_left_target_ = node_->create_publisher<geometry_msgs::msg::Pose>("left_target", 10);
+        pub_right_target_ = node_->create_publisher<geometry_msgs::msg::Pose>("right_target", 10);
+
         // 创建VR订阅器
         auto vrLeftCallback = [this](const geometry_msgs::msg::PoseStamped::SharedPtr msg)
         {
@@ -168,6 +173,13 @@ namespace arms_ros2_control::command
         // 检测上升沿（按钮按下）
         if (currentThumbstickState && !lastState)
         {
+            // 确保切换到连续发布模式（更稳健，防止用户手动切换回单次模式）
+            if (target_manager_ && target_manager_->getCurrentMode() != MarkerState::CONTINUOUS)
+            {
+                target_manager_->togglePublishMode();
+                RCLCPP_INFO(node_->get_logger(), "🕹️🕶️🕹️ ArmsTargetManager switched to CONTINUOUS mode for VR control");
+            }
+
             if (!is_update_mode_.load())
             {
                 // 切换到更新模式 - 存储当前poses作为base poses
@@ -337,8 +349,8 @@ namespace arms_ros2_control::command
                     RCLCPP_DEBUG(node_->get_logger(), "🕹️🕶️🕹️ Left Calculated: [%.3f, %.3f, %.3f]",
                                  calculatedPos.x(), calculatedPos.y(), calculatedPos.z());
 
-                    // 使用计算的pose更新左臂
-                    updateMarkerPose("left", calculatedPos, calculatedOri);
+                    // 直接发布目标位姿到left_target话题（无坐标转换）
+                    publishTargetPoseDirect("left", calculatedPos, calculatedOri);
 
                     // 更新之前计算的pose
                     prev_calculated_left_position_ = calculatedPos;
@@ -403,8 +415,8 @@ namespace arms_ros2_control::command
                     RCLCPP_DEBUG(node_->get_logger(), "🕹️🕶️🕹️ Right Calculated: [%.3f, %.3f, %.3f]",
                                  calculatedPos.x(), calculatedPos.y(), calculatedPos.z());
 
-                    // 使用计算的pose更新右臂
-                    updateMarkerPose("right", calculatedPos, calculatedOri);
+                    // 直接发布目标位姿到right_target话题（无坐标转换）
+                    publishTargetPoseDirect("right", calculatedPos, calculatedOri);
 
                     // 更新之前计算的pose
                     prev_calculated_right_position_ = calculatedPos;
@@ -445,6 +457,39 @@ namespace arms_ros2_control::command
             // 输出调试信息
             RCLCPP_INFO(node_->get_logger(), "🕹️🕶️🕹️ Updated %s arm marker position: [%.3f, %.3f, %.3f]",
                         armType.c_str(), position.x(), position.y(), position.z());
+        }
+    }
+
+    void VRInputHandler::publishTargetPoseDirect(const std::string& armType,
+                                                const Eigen::Vector3d& position,
+                                                const Eigen::Quaterniond& orientation)
+    {
+        // 转换为geometry_msgs格式
+        geometry_msgs::msg::Pose pose;
+        pose.position.x = position.x();
+        pose.position.y = position.y();
+        pose.position.z = position.z();
+        pose.orientation.w = orientation.w();
+        pose.orientation.x = orientation.x();
+        pose.orientation.y = orientation.y();
+        pose.orientation.z = orientation.z();
+
+        // 直接发布到对应的话题（无坐标转换）
+        if (armType == "left" && pub_left_target_)
+        {
+            pub_left_target_->publish(pose);
+            RCLCPP_DEBUG(node_->get_logger(), "🕹️🕶️🕹️ Published left_target: [%.3f, %.3f, %.3f]",
+                        pose.position.x, pose.position.y, pose.position.z);
+        }
+        else if (armType == "right" && pub_right_target_)
+        {
+            pub_right_target_->publish(pose);
+            RCLCPP_DEBUG(node_->get_logger(), "🕹️🕶️🕹️ Published right_target: [%.3f, %.3f, %.3f]",
+                        pose.position.x, pose.position.y, pose.position.z);
+        }
+        else
+        {
+            RCLCPP_WARN(node_->get_logger(), "🕹️🕶️🕹️ Invalid armType or publisher not initialized: %s", armType.c_str());
         }
     }
 
