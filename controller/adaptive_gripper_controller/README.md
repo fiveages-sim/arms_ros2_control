@@ -15,7 +15,7 @@
 ### 编译
 ```bash
 cd ~/ros2_ws
-colcon build --packages-up-to adaptive_gripper_controller
+colcon build --packages-up-to adaptive_gripper_controller --symlink-install
 ```
 
 ## 配置

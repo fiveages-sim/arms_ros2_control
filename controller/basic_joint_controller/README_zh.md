@@ -6,7 +6,7 @@
 
 ```bash
 cd ~/ros2_ws
-colcon build --packages-up-to basic_joint_controller
+colcon build --packages-up-to basic_joint_controller --symlink-install
 ```
 
 ## 2. 功能特性

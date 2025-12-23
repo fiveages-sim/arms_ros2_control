@@ -1006,6 +1006,21 @@ namespace arms_rviz_control_plugin
         joint_to_category_.clear();
         category_to_joints_.clear();
 
+        // 如果存在 hand / gripper 控制器，则不要过滤掉手部关节
+        bool has_hand_controller = false;
+        for (const auto& controller : available_controllers_)
+        {
+            std::string controller_lower = controller;
+            std::transform(controller_lower.begin(), controller_lower.end(),
+                           controller_lower.begin(), ::tolower);
+            if (controller_lower.find("hand") != std::string::npos ||
+                controller_lower.find("gripper") != std::string::npos)
+            {
+                has_hand_controller = true;
+                break;
+            }
+        }
+
         // Filter out gripper joints and classify joints
         for (size_t i = 0; i < joint_names_source.size(); ++i)
         {
@@ -1022,7 +1037,12 @@ namespace arms_rviz_control_plugin
                 joint_name_lower.find("finger") != std::string::npos ||
                 joint_name_lower.find("thumb") != std::string::npos ||
                 joint_name_lower.find("palm") != std::string::npos;
-            
+            // 如果有 hand/gripper 控制器，则不过滤手部关节
+            if (has_hand_controller)
+            {
+                is_gripper_joint = false;
+            }
+
             if (!is_gripper_joint)
             {
                 size_t joint_index = joint_names_.size();
