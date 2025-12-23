@@ -103,7 +103,8 @@ namespace ocs2::mobile_manipulator
             std::function<void(geometry_msgs::msg::Pose::SharedPtr)> callback);
         
         // 发布当前目标
-        void publishCurrentTargets();
+        // @param arm_type 指定发布哪个臂的目标："left" 只发布左臂，"right" 只发布右臂，空字符串或"both" 发布两个臂（仅双臂模式）
+        void publishCurrentTargets(const std::string& arm_type = "");
 
         const std::string topic_prefix_;
         std::shared_ptr<MobileManipulatorInterface> interface_;

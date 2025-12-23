@@ -341,8 +341,8 @@ namespace ocs2::mobile_manipulator
             updateTrajectory(previous_left_target_state, vector_t::Zero(7));
         }
 
-        // 发布当前目标
-        publishCurrentTargets();
+        // 发布当前目标（只发布左臂）
+        publishCurrentTargets("left");
     }
 
     void PoseBasedReferenceManager::rightPoseStampedPoseCallback(const geometry_msgs::msg::Pose::SharedPtr msg)
@@ -365,8 +365,8 @@ namespace ocs2::mobile_manipulator
         // 生成轨迹（在双臂模式下，同时更新两个臂）
         updateTrajectory(previous_left_target_state, previous_right_target_state);
 
-        // 发布当前目标
-        publishCurrentTargets();
+        // 发布当前目标（只发布右臂）
+        publishCurrentTargets("right");
     }
 
     void PoseBasedReferenceManager::processPoseStamped(
@@ -807,23 +807,30 @@ namespace ocs2::mobile_manipulator
         publishCurrentTargets();
     }
 
-    void PoseBasedReferenceManager::publishCurrentTargets()
+    void PoseBasedReferenceManager::publishCurrentTargets(const std::string& arm_type)
     {
+        // 根据 arm_type 决定发布哪个臂的目标
+        bool publish_left = (arm_type.empty() || arm_type == "both" || arm_type == "left");
+        bool publish_right = (arm_type.empty() || arm_type == "both" || arm_type == "right");
+        
         // 发布左臂当前目标
-        geometry_msgs::msg::PoseStamped left_target_msg;
-        left_target_msg.header.stamp = clock_->now();
-        left_target_msg.header.frame_id = base_frame_;
-        left_target_msg.pose.position.x = left_target_state_(0);
-        left_target_msg.pose.position.y = left_target_state_(1);
-        left_target_msg.pose.position.z = left_target_state_(2);
-        left_target_msg.pose.orientation.x = left_target_state_(3);
-        left_target_msg.pose.orientation.y = left_target_state_(4);
-        left_target_msg.pose.orientation.z = left_target_state_(5);
-        left_target_msg.pose.orientation.w = left_target_state_(6);
-        left_target_publisher_->publish(left_target_msg);
+        if (publish_left)
+        {
+            geometry_msgs::msg::PoseStamped left_target_msg;
+            left_target_msg.header.stamp = clock_->now();
+            left_target_msg.header.frame_id = base_frame_;
+            left_target_msg.pose.position.x = left_target_state_(0);
+            left_target_msg.pose.position.y = left_target_state_(1);
+            left_target_msg.pose.position.z = left_target_state_(2);
+            left_target_msg.pose.orientation.x = left_target_state_(3);
+            left_target_msg.pose.orientation.y = left_target_state_(4);
+            left_target_msg.pose.orientation.z = left_target_state_(5);
+            left_target_msg.pose.orientation.w = left_target_state_(6);
+            left_target_publisher_->publish(left_target_msg);
+        }
         
         // 发布右臂当前目标（仅双臂模式）
-        if (dual_arm_mode_)
+        if (dual_arm_mode_ && publish_right)
         {
             geometry_msgs::msg::PoseStamped right_target_msg;
             right_target_msg.header.stamp = clock_->now();
