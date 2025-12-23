@@ -26,6 +26,7 @@
 #include <std_msgs/msg/int32.hpp>
 #include <sensor_msgs/msg/joint_state.hpp>
 #include <std_msgs/msg/string.hpp>
+#include <nav_msgs/msg/path.hpp>
 #include "arms_target_manager/MarkerFactory.h"
 #include "arms_target_manager/marker/HeadMarker.h"
 #include "arms_target_manager/marker/ArmMarker.h"
@@ -253,6 +254,9 @@ namespace arms_ros2_control::command
         // 订阅器（注意：左臂和右臂的订阅器现在在 ArmMarker 内部管理）
         rclcpp::Subscription<arms_ros2_control_msgs::msg::Inputs>::SharedPtr control_input_subscription_;
         rclcpp::Subscription<sensor_msgs::msg::JointState>::SharedPtr head_joint_state_subscription_;
+        
+        // 发布器：双臂目标（仅双臂模式）
+        rclcpp::Publisher<nav_msgs::msg::Path>::SharedPtr dual_target_stamped_publisher_;
 
         // 菜单系统
         std::shared_ptr<interactive_markers::MenuHandler> left_menu_handler_;

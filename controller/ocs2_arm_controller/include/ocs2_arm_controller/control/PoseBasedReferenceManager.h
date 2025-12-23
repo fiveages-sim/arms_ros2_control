@@ -76,12 +76,19 @@ namespace ocs2::mobile_manipulator
         void rightPoseCallback(geometry_msgs::msg::Pose::SharedPtr msg);
         void leftPoseStampedCallback(geometry_msgs::msg::PoseStamped::SharedPtr msg);
         void rightPoseStampedCallback(geometry_msgs::msg::PoseStamped::SharedPtr msg);
+        void dualTargetStampedCallback(nav_msgs::msg::Path::SharedPtr msg);
         void pathCallback(nav_msgs::msg::Path::SharedPtr msg);
         void updateTargetTrajectory();
         /**
          * 使用"上一帧缓存目标 -> 当前新目标缓存"生成插值轨迹并写入 ReferenceManager。
          * 轨迹时长由 moveL_duration_ 参数决定。
          * 仅用于 PoseStamped 相关回调（支持 TF 转换后的目标）。
+         * 
+         * 在双臂模式下，总是同时更新两个臂的轨迹。
+         * 在单臂模式下，previous_right_target_state 参数不会被使用（可以传递零向量）。
+         * 
+         * @param previous_left_target_state 左臂上一帧目标状态
+         * @param previous_right_target_state 右臂上一帧目标状态（单臂模式下不使用）
          */
         void updateTrajectory(const vector_t& previous_left_target_state,
                               const vector_t& previous_right_target_state);
@@ -106,6 +113,7 @@ namespace ocs2::mobile_manipulator
         rclcpp::Subscription<geometry_msgs::msg::Pose>::SharedPtr right_pose_subscriber_;
         rclcpp::Subscription<geometry_msgs::msg::PoseStamped>::SharedPtr left_pose_stamped_subscriber_;
         rclcpp::Subscription<geometry_msgs::msg::PoseStamped>::SharedPtr right_pose_stamped_subscriber_;
+        rclcpp::Subscription<nav_msgs::msg::Path>::SharedPtr dual_target_stamped_subscriber_;
         rclcpp::Subscription<nav_msgs::msg::Path>::SharedPtr path_subscriber_;
         
         // 发布器：发布当前目标

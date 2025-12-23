@@ -18,6 +18,7 @@ set(TARGET_MANAGER_INCLUDE_DEPENDS
         tf2_ros
         tf2_geometry_msgs
         std_msgs
+        nav_msgs
         Eigen3
 )
 
