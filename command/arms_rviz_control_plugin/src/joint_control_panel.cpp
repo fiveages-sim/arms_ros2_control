@@ -321,8 +321,8 @@ namespace arms_rviz_control_plugin
             left_target_frame_id_ = msg->header.frame_id;
         }
 
-        // 只在 left 类别且 left_arm_spinboxes_ 已初始化时更新
-        if (current_category_ != "left" || left_arm_spinboxes_.empty() || left_arm_spinboxes_.size() < 7)
+        // 只要 left_arm_spinboxes_ 已初始化就更新（无论当前 category）
+        if (left_arm_spinboxes_.empty() || left_arm_spinboxes_.size() < 7)
         {
             return;
         }
@@ -366,8 +366,8 @@ namespace arms_rviz_control_plugin
             right_target_frame_id_ = msg->header.frame_id;
         }
 
-        // 只在 right 类别且 right_arm_spinboxes_ 已初始化时更新
-        if (current_category_ != "right" || right_arm_spinboxes_.empty() || right_arm_spinboxes_.size() < 7)
+        // 只要 right_arm_spinboxes_ 已初始化就更新（无论当前 category）
+        if (right_arm_spinboxes_.empty() || right_arm_spinboxes_.size() < 7)
         {
             return;
         }
