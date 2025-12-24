@@ -293,6 +293,7 @@ namespace arms_ros2_control::command
 
         // 更新节流
         rclcpp::Time last_marker_update_time_;
+        rclcpp::Time last_head_marker_update_time_;  // 头部marker独立的节流时间戳
         double marker_update_interval_; // 最小更新间隔（秒）
         rclcpp::Time last_publish_time_; // 连续发布模式的最后发布时间
 
