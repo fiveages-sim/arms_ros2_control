@@ -3,6 +3,8 @@
 //
 #pragma once
 
+
+#include "gripper_hardware_common/utils/PositionConverter.h"
 #include <vector>
 #include <cstdint>
 
