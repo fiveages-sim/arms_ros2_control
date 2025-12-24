@@ -7,11 +7,15 @@
 
 #include <memory>
 #include <string>
+#include <functional>
+#include <rclcpp/rclcpp.hpp>
 #include <rclcpp_lifecycle/lifecycle_node.hpp>
+#include <ament_index_cpp/get_package_share_directory.hpp>
 #include <ocs2_mobile_manipulator/MobileManipulatorInterface.h>
 #include <ocs2_core/Types.h>
 #include <ocs2_mpc/MPC_MRT_Interface.h>
 #include <ocs2_mpc/MPC_BASE.h>
+#include <ocs2_ddp/GaussNewtonDDP_MPC.h>
 #include "ocs2_arm_controller/control/PoseBasedReferenceManager.h"
 #include <ocs2_msgs/msg/mpc_observation.hpp>
 #include "ocs2_arm_controller/control/Visualizer.h"
@@ -26,11 +30,85 @@ namespace ocs2::mobile_manipulator
     class CtrlComponent
     {
     public:
+        template<typename AutoDeclareFunc>
         explicit CtrlComponent(const std::shared_ptr<rclcpp_lifecycle::LifecycleNode>& node,
-                               CtrlInterfaces& ctrl_interfaces);
+                               CtrlInterfaces& ctrl_interfaces,
+                               AutoDeclareFunc auto_declare)
+            : node_(node), ctrl_interfaces_(ctrl_interfaces)
+        {
+            // Declare and load CtrlComponent parameters using auto_declare
+            cached_ob_state_ = auto_declare("cached_ob_state", true);
+            joint_speed_threshold_ = auto_declare("joint_speed_threshold", 0.1);
+            hardware_latency_ = auto_declare("hardware_latency", 0.2);
 
-        // MPC management
-        void setupMpcComponents();
+            // Robot parameters (only used in CtrlComponent)
+            robot_name_ = auto_declare("robot_name", std::string("cr5"));
+            robot_type_ = auto_declare("robot_type", std::string(""));
+            future_time_offset_ = auto_declare("future_time_offset", 1.0);
+            const std::string info_file_name = auto_declare("info_file_name", std::string("task"));
+            
+            // Get joint_names from node (already declared in Ocs2ArmController for interface configuration)
+            joint_names_ = node_->get_parameter("joints").as_string_array();
+
+            // Automatically build file paths and initialize interface
+            const std::string robot_pkg = robot_name_ + "_description";
+            const std::string config_path = ament_index_cpp::get_package_share_directory(robot_pkg);
+            const std::string task_file = config_path + "/config/ocs2/" + info_file_name + ".info";
+            const std::string lib_folder = config_path + "/ocs2";
+
+            // Generate URDF file path
+            const std::string urdf_file = generateUrdfPath(robot_name_, robot_type_, config_path);
+
+            // Initialize interface
+            setupInterface(task_file, lib_folder, urdf_file);
+
+            // Detect if dual arm mode is enabled
+            dual_arm_mode_ = interface_->dual_arm_;
+
+            // Initialize publishers
+            setupPublisher();
+
+            // Initialize visualization component
+            visualizer_ = std::make_unique<Visualizer>(node_, interface_, robot_name_);
+            visualizer_->initialize();
+            RCLCPP_INFO(node_->get_logger(), "Future time offset: %.2f seconds", future_time_offset_);
+            
+            // Setup MPC components
+            // Declare and load MPC trajectory duration parameters using auto_declare
+            double trajectory_duration = auto_declare("trajectory_duration", 2.0);
+            double moveL_duration = auto_declare("moveL_duration", 2.0);
+            
+            RCLCPP_INFO(node_->get_logger(), "Trajectory duration: %.2f seconds", trajectory_duration);
+            RCLCPP_INFO(node_->get_logger(), "MoveL duration: %.2f seconds", moveL_duration);
+            
+            // Create PoseBasedReferenceManager and subscribe to ROS topics
+            pose_reference_manager_ = std::make_shared<PoseBasedReferenceManager>(
+                robot_name_, interface_->getReferenceManagerPtr(), interface_, trajectory_duration, moveL_duration);
+            pose_reference_manager_->subscribe(node_);
+            
+            // Create MPC solver
+            mpc_ = std::make_unique<GaussNewtonDDP_MPC>(
+                interface_->mpcSettings(),
+                interface_->ddpSettings(),
+                interface_->getRollout(),
+                interface_->getOptimalControlProblem(),
+                interface_->getInitializer());
+
+            // Create unified MPC_MRT_Interface using PoseBasedReferenceManager
+            mpc_mrt_interface_ = std::make_unique<MPC_MRT_Interface>(*mpc_);
+
+            // Important: Set PoseBasedReferenceManager to MPC solver
+            mpc_->getSolverPtr()->setReferenceManager(pose_reference_manager_);
+
+            observation_.state = interface_->getInitialState();
+            observation_.input = vector_t::Zero(interface_->getManipulatorModelInfo().inputDim);
+            observation_.time = 0.0;
+            
+            // Initialize cached state
+            last_execute_time_ = node_->now();
+            cached_last_action_ = observation_.state;
+        }
+
         void updateObservation(const rclcpp::Time& time);
         void evaluatePolicy(const rclcpp::Time& time);
         void resetMpc();
@@ -63,7 +141,6 @@ namespace ocs2::mobile_manipulator
                             const std::string& lib_folder,
                             const std::string& urdf_file);
         void setupPublisher();
-        void loadParameters();
 
         // URDF path generation helper
         std::string generateUrdfPath(const std::string& robot_name, 

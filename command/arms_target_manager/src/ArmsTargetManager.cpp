@@ -51,6 +51,12 @@ namespace arms_ros2_control::command
             publish_rate_,
             [this](const std::string& marker_name, const geometry_msgs::msg::Pose& pose)
             {
+                // 单次模式下：只在非禁用状态下更新（HOME/HOLD/MOVEJ），OCS2状态下不更新
+                // 连续模式下：所有状态下都更新（包括OCS2）
+                if (current_mode_ == MarkerState::SINGLE_SHOT && isStateDisabled(current_controller_state_))
+                {
+                    return;  // 单次模式下，OCS2 等禁用状态下不更新
+                }
                
                 server_->setPose(marker_name, pose);
                 if (shouldThrottle(last_marker_update_time_, marker_update_interval_))
@@ -73,6 +79,12 @@ namespace arms_ros2_control::command
                 publish_rate_,
                 [this](const std::string& marker_name, const geometry_msgs::msg::Pose& pose)
                 {
+                    // 单次模式下：只在非禁用状态下更新（HOME/HOLD/MOVEJ），OCS2状态下不更新
+                    // 连续模式下：所有状态下都更新（包括OCS2）
+                    if (current_mode_ == MarkerState::SINGLE_SHOT && isStateDisabled(current_controller_state_))
+                    {
+                        return;  // 单次模式下，OCS2 等禁用状态下不更新
+                    }
                     
                     server_->setPose(marker_name, pose);
                     if (shouldThrottle(last_marker_update_time_, marker_update_interval_))
@@ -313,10 +325,42 @@ namespace arms_ros2_control::command
 
     void ArmsTargetManager::sendDualArmTargetPose()
     {
-        // 同时发送左臂和右臂的目标位姿（强制发送，忽略节流）
-        // 单次发布时使用 stamped 话题，转换到 current_target 的 frame_id
-        left_arm_marker_->publishTargetPose(true, true);  // 强制发送，使用 stamped 话题
-        right_arm_marker_->publishTargetPose(true, true);  // 强制发送，使用 stamped 话题
+        // 使用新的双臂接口：发布到 dual_target/stamped topic
+        // Path 包含2个 pose：第一个是左臂，第二个是右臂
+        if (!dual_arm_mode_ || !dual_target_stamped_publisher_ || !left_arm_marker_ || !right_arm_marker_)
+        {
+            RCLCPP_WARN(node_->get_logger(), "Cannot send dual arm target pose: dual arm mode not enabled or publishers not initialized");
+            return;
+        }
+
+        // 获取左臂和右臂的 pose（在 marker_fixed_frame_ 坐标系下）
+        geometry_msgs::msg::Pose left_pose = left_arm_marker_->getPose();
+        geometry_msgs::msg::Pose right_pose = right_arm_marker_->getPose();
+
+        // 转换到 control_base_frame_ 坐标系
+        geometry_msgs::msg::Pose left_transformed = transformPose(
+            left_pose, marker_fixed_frame_, control_base_frame_);
+        geometry_msgs::msg::Pose right_transformed = transformPose(
+            right_pose, marker_fixed_frame_, control_base_frame_);
+
+        // 创建 Path 消息
+        nav_msgs::msg::Path dual_path;
+        dual_path.header.stamp = node_->get_clock()->now();
+        dual_path.header.frame_id = control_base_frame_;
+        dual_path.poses.resize(2);
+
+        // 第一个 pose：左臂
+        dual_path.poses[0].header.stamp = dual_path.header.stamp;
+        dual_path.poses[0].header.frame_id = control_base_frame_;
+        dual_path.poses[0].pose = left_transformed;
+
+        // 第二个 pose：右臂
+        dual_path.poses[1].header.stamp = dual_path.header.stamp;
+        dual_path.poses[1].header.frame_id = control_base_frame_;
+        dual_path.poses[1].pose = right_transformed;
+
+        // 发布
+        dual_target_stamped_publisher_->publish(dual_path);
     }
 
 
@@ -512,6 +556,13 @@ namespace arms_ros2_control::command
                     updateHeadMarkerFromTopic(msg);
                 });
         }
+        
+        // 创建双臂目标发布器（仅双臂模式）
+        if (dual_arm_mode_)
+        {
+            dual_target_stamped_publisher_ = node_->create_publisher<nav_msgs::msg::Path>(
+                "dual_target/stamped", 1);
+        }
     }
 
 
@@ -608,9 +659,7 @@ namespace arms_ros2_control::command
         }
         catch (const tf2::TransformException& ex)
         {
-            RCLCPP_WARN(node_->get_logger(),
-                        "无法将pose从 %s 转换到 %s: %s，使用原始pose",
-                        sourceFrameId.c_str(), targetFrameId.c_str(), ex.what());
+            // 转换失败时直接使用原始pose，不输出警告
             return pose;
         }
     }

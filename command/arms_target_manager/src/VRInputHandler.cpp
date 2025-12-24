@@ -173,6 +173,13 @@ namespace arms_ros2_control::command
         // 检测上升沿（按钮按下）
         if (currentThumbstickState && !lastState)
         {
+            // 确保切换到连续发布模式（更稳健，防止用户手动切换回单次模式）
+            if (target_manager_ && target_manager_->getCurrentMode() != MarkerState::CONTINUOUS)
+            {
+                target_manager_->togglePublishMode();
+                RCLCPP_INFO(node_->get_logger(), "🕹️🕶️🕹️ ArmsTargetManager switched to CONTINUOUS mode for VR control");
+            }
+
             if (!is_update_mode_.load())
             {
                 // 切换到更新模式 - 存储当前poses作为base poses

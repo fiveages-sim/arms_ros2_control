@@ -217,6 +217,18 @@ namespace arms_rviz_control_plugin
         if (should_enable != is_joint_control_enabled_)
         {
             is_joint_control_enabled_ = should_enable;
+            // Update publisher when enabling/disabling (left/right category uses different publishers in different modes)
+            if (is_joint_control_enabled_)
+            {
+                updatePublisher();
+            }
+            updatePanelVisibility();
+        }
+        else if (old_command != current_command_ && is_joint_control_enabled_)
+        {
+            // Command changed but control is still enabled, update publisher and button text
+            // Left/right category uses different publishers in OCS2 vs MOVEJ mode
+            updatePublisher();
             updatePanelVisibility();
         }
         else if (old_command != current_command_ && is_joint_control_enabled_)
@@ -314,8 +326,8 @@ namespace arms_rviz_control_plugin
             left_target_frame_id_ = msg->header.frame_id;
         }
 
-        // 只在 left 类别且 left_arm_spinboxes_ 已初始化时更新
-        if (current_category_ != "left" || left_arm_spinboxes_.empty() || left_arm_spinboxes_.size() < 7)
+        // 只要 left_arm_spinboxes_ 已初始化就更新（无论当前 category）
+        if (left_arm_spinboxes_.empty() || left_arm_spinboxes_.size() < 7)
         {
             return;
         }
@@ -359,8 +371,8 @@ namespace arms_rviz_control_plugin
             right_target_frame_id_ = msg->header.frame_id;
         }
 
-        // 只在 right 类别且 right_arm_spinboxes_ 已初始化时更新
-        if (current_category_ != "right" || right_arm_spinboxes_.empty() || right_arm_spinboxes_.size() < 7)
+        // 只要 right_arm_spinboxes_ 已初始化就更新（无论当前 category）
+        if (right_arm_spinboxes_.empty() || right_arm_spinboxes_.size() < 7)
         {
             return;
         }
@@ -433,13 +445,14 @@ namespace arms_rviz_control_plugin
         }
         
         // When command is 4 (MOVEJ), hide button for left/right categories
-        if (current_command_ == 4)
-        {
-            if (current_category_ == "left" || current_category_ == "right")
-            {
-                return false;
-            }
-        }
+        // NOTE: Now enabled - button will show in MOVEJ mode for left/right categories
+        // if (current_command_ == 4)
+        // {
+        //     if (current_category_ == "left" || current_category_ == "right")
+        //     {
+        //         return false;
+        //     }
+        // }
         
         return true;
     }
@@ -577,19 +590,44 @@ namespace arms_rviz_control_plugin
         left_target_publisher_.reset();
         right_target_publisher_.reset();
         
+        // For left/right category:
+        // - OCS2 mode (command == 3): use PoseStamped publisher (end-effector pose)
+        // - MOVEJ mode (command == 4): use joint position publisher
         if (current_category_ == "left")
         {
-            // Create PoseStamped publisher for left arm (publish to left_target/stamped)
-            left_target_publisher_ = node_->create_publisher<geometry_msgs::msg::PoseStamped>(
-                "left_target/stamped", 10);
-            RCLCPP_INFO(node_->get_logger(), "Updated publisher to topic: left_target/stamped");
+            if (current_command_ == 3)
+            {
+                // Create PoseStamped publisher for left arm (publish to left_target/stamped)
+                left_target_publisher_ = node_->create_publisher<geometry_msgs::msg::PoseStamped>(
+                    "left_target/stamped", 10);
+                RCLCPP_INFO(node_->get_logger(), "Updated publisher to topic: left_target/stamped");
+            }
+            else
+            {
+                // Use joint position publisher for MOVEJ mode
+                std::string topic_name = getControllerNameForCategory(current_category_);
+                joint_position_publisher_ = node_->create_publisher<std_msgs::msg::Float64MultiArray>(
+                    topic_name, 10);
+                RCLCPP_INFO(node_->get_logger(), "Updated publisher to topic: %s", topic_name.c_str());
+            }
         }
         else if (current_category_ == "right")
         {
-            // Create PoseStamped publisher for right arm (publish to right_target/stamped)
-            right_target_publisher_ = node_->create_publisher<geometry_msgs::msg::PoseStamped>(
-                "right_target/stamped", 10);
-            RCLCPP_INFO(node_->get_logger(), "Updated publisher to topic: right_target/stamped");
+            if (current_command_ == 3)
+            {
+                // Create PoseStamped publisher for right arm (publish to right_target/stamped)
+                right_target_publisher_ = node_->create_publisher<geometry_msgs::msg::PoseStamped>(
+                    "right_target/stamped", 10);
+                RCLCPP_INFO(node_->get_logger(), "Updated publisher to topic: right_target/stamped");
+            }
+            else
+            {
+                // Use joint position publisher for MOVEJ mode
+                std::string topic_name = getControllerNameForCategory(current_category_);
+                joint_position_publisher_ = node_->create_publisher<std_msgs::msg::Float64MultiArray>(
+                    topic_name, 10);
+                RCLCPP_INFO(node_->get_logger(), "Updated publisher to topic: %s", topic_name.c_str());
+            }
         }
         else
         {
@@ -672,8 +710,10 @@ namespace arms_rviz_control_plugin
         if (is_dual_arm_mode)
         {
             // Dual-arm mode: Show/hide left and right arm UI elements (7 row layouts)
-            bool show_left = (current_category_ == "left");
-            bool show_right = (current_category_ == "right");
+            // Show xyz and quaternion only in OCS2 mode (command == 3)
+            // Hide in MOVEJ mode (command == 4)
+            bool show_left = (current_category_ == "left" && current_command_ == 3);
+            bool show_right = (current_category_ == "right" && current_command_ == 3);
 
             // Show/hide left arm UI elements (7 row layouts)
             for (size_t i = 0; i < left_arm_row_layouts_.size(); ++i)
@@ -722,10 +762,12 @@ namespace arms_rviz_control_plugin
                 auto it = joint_to_category_.find(joint_names_[i]);
                 if (it != joint_to_category_.end() && it->second == current_category_)
                 {
-                    // Hide joints if category is left or right
+                    // For left/right category:
+                    // - OCS2 mode (command == 3): hide joints (show xyz/quaternion instead)
+                    // - MOVEJ mode (command == 4): show joints (hide xyz/quaternion)
                     if (it->second == "left" || it->second == "right")
                     {
-                        visible = false;
+                        visible = (current_command_ == 4);  // Show joints only in MOVEJ mode
                     }
                     else
                     {
@@ -765,68 +807,88 @@ namespace arms_rviz_control_plugin
             return;
         }
 
-        // Handle left arm: publish PoseStamped with xyz and quaternion
+        // Handle left arm:
+        // - OCS2 mode (command == 3): publish PoseStamped with xyz and quaternion
+        // - MOVEJ mode (command == 4): publish joint positions
         if (current_category_ == "left")
         {
-            if (!left_target_publisher_ || left_arm_spinboxes_.empty())
+            if (current_command_ == 3)
             {
+                // OCS2 mode: publish PoseStamped
+                if (!left_target_publisher_ || left_arm_spinboxes_.empty())
+                {
+                    return;
+                }
+
+                auto msg = geometry_msgs::msg::PoseStamped();
+                
+                // Get frame_id from saved value (use default if not set)
+                {
+                    std::lock_guard<std::mutex> lock(frame_id_mutex_);
+                    msg.header.frame_id = left_target_frame_id_.empty() ? "base_link" : left_target_frame_id_;
+                }
+                msg.header.stamp = node_->get_clock()->now();
+                
+                // Set position (x, y, z)
+                msg.pose.position.x = left_arm_spinboxes_[0]->value();
+                msg.pose.position.y = left_arm_spinboxes_[1]->value();
+                msg.pose.position.z = left_arm_spinboxes_[2]->value();
+                
+                // Set orientation (qx, qy, qz, qw)
+                msg.pose.orientation.x = left_arm_spinboxes_[3]->value();
+                msg.pose.orientation.y = left_arm_spinboxes_[4]->value();
+                msg.pose.orientation.z = left_arm_spinboxes_[5]->value();
+                msg.pose.orientation.w = left_arm_spinboxes_[6]->value();
+                
+                left_target_publisher_->publish(msg);
                 return;
             }
-
-            auto msg = geometry_msgs::msg::PoseStamped();
-            
-            // Get frame_id from saved value (use default if not set)
+            else
             {
-                std::lock_guard<std::mutex> lock(frame_id_mutex_);
-                msg.header.frame_id = left_target_frame_id_.empty() ? "base_link" : left_target_frame_id_;
+                // MOVEJ mode: publish joint positions (fall through to joint position publishing logic)
             }
-            msg.header.stamp = node_->get_clock()->now();
-            
-            // Set position (x, y, z)
-            msg.pose.position.x = left_arm_spinboxes_[0]->value();
-            msg.pose.position.y = left_arm_spinboxes_[1]->value();
-            msg.pose.position.z = left_arm_spinboxes_[2]->value();
-            
-            // Set orientation (qx, qy, qz, qw)
-            msg.pose.orientation.x = left_arm_spinboxes_[3]->value();
-            msg.pose.orientation.y = left_arm_spinboxes_[4]->value();
-            msg.pose.orientation.z = left_arm_spinboxes_[5]->value();
-            msg.pose.orientation.w = left_arm_spinboxes_[6]->value();
-            
-            left_target_publisher_->publish(msg);
-            return;
         }
 
-        // Handle right arm: publish PoseStamped with xyz and quaternion
+        // Handle right arm:
+        // - OCS2 mode (command == 3): publish PoseStamped with xyz and quaternion
+        // - MOVEJ mode (command == 4): publish joint positions
         if (current_category_ == "right")
         {
-            if (!right_target_publisher_ || right_arm_spinboxes_.empty())
+            if (current_command_ == 3)
             {
+                // OCS2 mode: publish PoseStamped
+                if (!right_target_publisher_ || right_arm_spinboxes_.empty())
+                {
+                    return;
+                }
+
+                auto msg = geometry_msgs::msg::PoseStamped();
+                
+                // Get frame_id from saved value (use default if not set)
+                {
+                    std::lock_guard<std::mutex> lock(frame_id_mutex_);
+                    msg.header.frame_id = right_target_frame_id_.empty() ? "base_link" : right_target_frame_id_;
+                }
+                msg.header.stamp = node_->get_clock()->now();
+                
+                // Set position (x, y, z)
+                msg.pose.position.x = right_arm_spinboxes_[0]->value();
+                msg.pose.position.y = right_arm_spinboxes_[1]->value();
+                msg.pose.position.z = right_arm_spinboxes_[2]->value();
+                
+                // Set orientation (qx, qy, qz, qw)
+                msg.pose.orientation.x = right_arm_spinboxes_[3]->value();
+                msg.pose.orientation.y = right_arm_spinboxes_[4]->value();
+                msg.pose.orientation.z = right_arm_spinboxes_[5]->value();
+                msg.pose.orientation.w = right_arm_spinboxes_[6]->value();
+                
+                right_target_publisher_->publish(msg);
                 return;
             }
-
-            auto msg = geometry_msgs::msg::PoseStamped();
-            
-            // Get frame_id from saved value (use default if not set)
+            else
             {
-                std::lock_guard<std::mutex> lock(frame_id_mutex_);
-                msg.header.frame_id = right_target_frame_id_.empty() ? "base_link" : right_target_frame_id_;
+                // MOVEJ mode: publish joint positions (fall through to joint position publishing logic)
             }
-            msg.header.stamp = node_->get_clock()->now();
-            
-            // Set position (x, y, z)
-            msg.pose.position.x = right_arm_spinboxes_[0]->value();
-            msg.pose.position.y = right_arm_spinboxes_[1]->value();
-            msg.pose.position.z = right_arm_spinboxes_[2]->value();
-            
-            // Set orientation (qx, qy, qz, qw)
-            msg.pose.orientation.x = right_arm_spinboxes_[3]->value();
-            msg.pose.orientation.y = right_arm_spinboxes_[4]->value();
-            msg.pose.orientation.z = right_arm_spinboxes_[5]->value();
-            msg.pose.orientation.w = right_arm_spinboxes_[6]->value();
-            
-            right_target_publisher_->publish(msg);
-            return;
         }
 
         // Handle other categories: publish joint positions as Float64MultiArray
@@ -949,6 +1011,21 @@ namespace arms_rviz_control_plugin
         joint_to_category_.clear();
         category_to_joints_.clear();
 
+        // 如果存在 hand / gripper 控制器，则不要过滤掉手部关节
+        bool has_hand_controller = false;
+        for (const auto& controller : available_controllers_)
+        {
+            std::string controller_lower = controller;
+            std::transform(controller_lower.begin(), controller_lower.end(),
+                           controller_lower.begin(), ::tolower);
+            if (controller_lower.find("hand") != std::string::npos ||
+                controller_lower.find("gripper") != std::string::npos)
+            {
+                has_hand_controller = true;
+                break;
+            }
+        }
+
         // Filter out gripper joints and classify joints
         for (size_t i = 0; i < joint_names_source.size(); ++i)
         {
@@ -965,7 +1042,12 @@ namespace arms_rviz_control_plugin
                 joint_name_lower.find("finger") != std::string::npos ||
                 joint_name_lower.find("thumb") != std::string::npos ||
                 joint_name_lower.find("palm") != std::string::npos;
-            
+            // 如果有 hand/gripper 控制器，则不过滤手部关节
+            if (has_hand_controller)
+            {
+                is_gripper_joint = false;
+            }
+
             if (!is_gripper_joint)
             {
                 size_t joint_index = joint_names_.size();
