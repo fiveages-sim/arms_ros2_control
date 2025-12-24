@@ -200,6 +200,10 @@ namespace arms_ros2_control::command
         // 上一次的 RPY 角度（用于避免角度跳变）
         mutable std::array<double, 3> last_head_rpy_ = {0.0, 0.0, 0.0};
         mutable bool last_head_rpy_initialized_ = false;
+
+        // 上一次的位置（用于判断位置变化量，仅在禁用模式下使用）
+        mutable geometry_msgs::msg::Point last_position_;
+        mutable bool last_position_initialized_ = false;
     };
 } // namespace arms_ros2_control::command
 

@@ -248,16 +248,8 @@ namespace arms_ros2_control::command
             // 头部 marker 处理
             if (head_marker_ && head_marker_->isEnabled())
             {
-                geometry_msgs::msg::Pose clamped_pose = transformed_pose;
-                bool was_clamped = head_marker_->clampPoseRotation(clamped_pose);
-                head_marker_->setPose(clamped_pose);
-
-                // 如果被限制，更新 marker 位置，让用户看到限制效果
-                if (was_clamped && server_)
-                {
-                    server_->setPose(marker_name, clamped_pose);
-                    server_->applyChanges();
-                }
+                // 禁用clamp功能，直接setpose
+                head_marker_->setPose(transformed_pose);
 
                 if (current_mode_ == MarkerState::CONTINUOUS)
                 {

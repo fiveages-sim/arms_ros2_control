@@ -397,7 +397,17 @@ namespace arms_ros2_control::command
         const sensor_msgs::msg::JointState::ConstSharedPtr& joint_msg,
         bool is_state_disabled)
     {
-        // 先检查状态：如果状态禁用，只更新位置（不进行节流检查，因为位置更新是必要的）
+
+        // 节流检查：限制更新频率为最多30Hz（1/30秒间隔）
+        auto now = node_->now();
+        auto time_since_last = (now - last_subscription_update_time_).seconds();
+        if (time_since_last < 1.0 / 30.0)  // 30Hz = 1/30秒
+        {
+            return head_pose_;  // 跳过此次更新，返回当前pose
+        }
+        last_subscription_update_time_ = now;
+        
+        // 先检查状态：如果状态禁用，根据xyz位置变化来判断是否更新四元数
         if (is_state_disabled)
         {
             // 初始化关节索引（如果需要）
@@ -411,27 +421,59 @@ namespace arms_ros2_control::command
                 geometry_msgs::msg::TransformStamped transform = tf_buffer_->lookupTransform(
                     frame_id_, head_link_name_, tf2::TimePointZero);
 
+                // 计算位置变化量
+                double position_change = 0.0;
+                if (last_position_initialized_)
+                {
+                    double dx = transform.transform.translation.x - last_position_.x;
+                    double dy = transform.transform.translation.y - last_position_.y;
+                    double dz = transform.transform.translation.z - last_position_.z;
+                    position_change = std::sqrt(dx * dx + dy * dy + dz * dz);
+                }
+
+                // 更新位置
                 head_pose_.position.x = transform.transform.translation.x;
                 head_pose_.position.y = transform.transform.translation.y;
                 head_pose_.position.z = transform.transform.translation.z;
+
+                // 只有当位置变化较大时才更新四元数（阈值：0.01米 = 1厘米）
+                const double position_change_threshold = 0.001;
+                bool should_update_orientation = !last_position_initialized_ || position_change > position_change_threshold;
+
+                // 保存当前位置
+                last_position_.x = head_pose_.position.x;
+                last_position_.y = head_pose_.position.y;
+                last_position_.z = head_pose_.position.z;
+                last_position_initialized_ = true;
+
+                if (should_update_orientation)
+                {
+                    // 从 TF 获取四元数方向（与 head_link2 完全重合）
+                    head_pose_.orientation = transform.transform.rotation;
+
+                    // 从四元数提取 RPY 角度，用于保持角度连续性
+                    tf2::Quaternion tf_quat;
+                    tf2::fromMsg(transform.transform.rotation, tf_quat);
+                    double roll, pitch, yaw;
+                    tf2::Matrix3x3(tf_quat).getRPY(roll, pitch, yaw);
+                    arms_controller_common::AngleUtils::unwrapRPY(
+                        roll, pitch, yaw, last_head_rpy_, last_head_rpy_initialized_);
+                    last_head_rpy_[0] = roll;
+                    last_head_rpy_[1] = pitch;
+                    last_head_rpy_[2] = yaw;
+                    last_head_rpy_initialized_ = true;
+                }
+                // 如果位置变化不大，保持原有的 orientation 不变
             }
             catch (const tf2::TransformException& ex)
             {
                 RCLCPP_DEBUG(node_->get_logger(),
-                             "无法从 TF 获取头部 link %s 的位置: %s",
+                             "无法从 TF 获取头部 link %s 的位置和方向: %s",
                              head_link_name_.c_str(), ex.what());
             }
             return head_pose_;
         }
 
-        // 节流检查：限制更新频率为最多30Hz（1/30秒间隔）
-        auto now = node_->now();
-        auto time_since_last = (now - last_subscription_update_time_).seconds();
-        if (time_since_last < 1.0 / 30.0)  // 30Hz = 1/30秒
-        {
-            return head_pose_;  // 跳过此次更新，返回当前pose
-        }
-        last_subscription_update_time_ = now;
 
         // 初始化关节索引（如果需要）
         if (head_joint_indices_.empty() && !head_joint_to_rpy_mapping_.empty())
@@ -439,7 +481,7 @@ namespace arms_ros2_control::command
             initializeJointIndices(joint_msg);
         }
 
-        // 从 TF 获取头部 link 的实际位置
+        // 从 TF 获取头部 link 的实际位置和方向
         try
         {
             geometry_msgs::msg::TransformStamped transform = tf_buffer_->lookupTransform(
@@ -448,39 +490,27 @@ namespace arms_ros2_control::command
             head_pose_.position.x = transform.transform.translation.x;
             head_pose_.position.y = transform.transform.translation.y;
             head_pose_.position.z = transform.transform.translation.z;
+
+            // 直接从 TF 获取四元数方向（与 head_link2 完全重合）
+            head_pose_.orientation = transform.transform.rotation;
+
+            // 从四元数提取 RPY 角度，用于保持角度连续性
+            tf2::Quaternion tf_quat;
+            tf2::fromMsg(transform.transform.rotation, tf_quat);
+            double roll, pitch, yaw;
+            tf2::Matrix3x3(tf_quat).getRPY(roll, pitch, yaw);
+            arms_controller_common::AngleUtils::unwrapRPY(
+                roll, pitch, yaw, last_head_rpy_, last_head_rpy_initialized_);
+            last_head_rpy_[0] = roll;
+            last_head_rpy_[1] = pitch;
+            last_head_rpy_[2] = yaw;
+            last_head_rpy_initialized_ = true;
         }
         catch (const tf2::TransformException& ex)
         {
             RCLCPP_DEBUG(node_->get_logger(),
-                         "无法从 TF 获取头部 link %s 的位置: %s，保持当前位置",
+                         "无法从 TF 获取头部 link %s 的位置和方向: %s，保持当前位置",
                          head_link_name_.c_str(), ex.what());
-        }
-
-        // 从关节状态提取 RPY 角度
-        double head_roll = 0.0;
-        double head_pitch = 0.0;
-        double head_yaw = 0.0;
-
-        if (extractRPYFromJointState(joint_msg, head_roll, head_pitch, head_yaw))
-        {
-            // 更新上一次的 RPY 值
-            last_head_rpy_[0] = head_roll;
-            last_head_rpy_[1] = head_pitch;
-            last_head_rpy_[2] = head_yaw;
-            last_head_rpy_initialized_ = true;
-
-            // 从 RPY 创建四元数
-            tf2::Quaternion tf_quat;
-            tf_quat.setRPY(head_roll, head_pitch, head_yaw);
-            tf_quat.normalize();
-
-            geometry_msgs::msg::Quaternion quat;
-            quat.w = tf_quat.w();
-            quat.x = tf_quat.x();
-            quat.y = tf_quat.y();
-            quat.z = tf_quat.z();
-
-            head_pose_.orientation = quat;
         }
 
         return head_pose_;
