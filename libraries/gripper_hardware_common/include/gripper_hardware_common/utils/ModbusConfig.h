@@ -105,6 +105,7 @@ namespace gripper_hardware_common
 
             // Position range
             static constexpr int MAX_POSITION = 255;                // Maximum position value
+            static constexpr double MAX_OPENING_DISTANCE = 0.038372;  // Maximum opening distance (meters) for RG75
 
             // Function codes
             static constexpr uint8_t READ_FUNCTION = 0x04;         // Read Input Registers
@@ -118,7 +119,7 @@ namespace gripper_hardware_common
             static constexpr uint16_t TRIGGER_VALUE = 0x09;        // Trigger value for movement command
 
             // Status register format
-            // Register 0: Status bits (bit 3 = stopped f192.168.1.190lag)
+            // Register 0: Status bits (bit 3 = stopped flag)
             // Register 1: Position (high byte) and error code (low byte)
             // Register 2: Force (high byte) and velocity (low byte)
             static constexpr int STATUS_REG_COUNT = 3;              // Number of status registers to read
