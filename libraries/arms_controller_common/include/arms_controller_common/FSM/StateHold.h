@@ -26,7 +26,7 @@ namespace arms_controller_common
          * @brief Constructor
          * @param ctrl_interfaces Control interfaces
          * @param logger ROS logger
-         * @param position_threshold Position difference threshold (radians)
+         * @param position_threshold Position difference threshold (radians). If <= 0, threshold checking is automatically disabled.
          * @param gravity_compensation Optional gravity compensation utility (nullptr if not needed)
          */
         StateHold(CtrlInterfaces& ctrl_interfaces,
@@ -43,7 +43,7 @@ namespace arms_controller_common
         rclcpp::Logger logger_;
         std::shared_ptr<GravityCompensation> gravity_compensation_;
         std::vector<double> hold_positions_;           // Positions recorded when entering
-        double joint_position_threshold_;              // Threshold for joint position difference (radians)
+        double joint_position_threshold_;              // Threshold for joint position difference (radians). If <= 0, checking is disabled.
     };
 } // namespace arms_controller_common
 
