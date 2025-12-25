@@ -73,6 +73,7 @@ namespace gripper_hardware_common
         {
         public:
             static constexpr int MAX_POSITION = 255;  // Maximum position value
+            static constexpr double MAX_OPENING_DISTANCE = 0.038372;  // Maximum opening distance (meters) for RG75
 
             /**
              * @brief Convert normalized position (0.0-1.0) to Jodell position (0-255)
@@ -115,6 +116,30 @@ namespace gripper_hardware_common
             {
                 int pos_now_get = status_reg_high;
                 return jodellToNormalized(pos_now_get);
+            }
+
+            /**
+             * @brief Convert physical position (meters) to normalized position (0.0-1.0)
+             * @param physical_pos Physical position in meters (0.0=closed, MAX_OPENING_DISTANCE=open)
+             * @return Normalized position (0.0=closed, 1.0=open)
+             */
+            static double physicalToNormalized(double physical_pos)
+            {
+                // Limit to valid range
+                physical_pos = std::max(0.0, std::min(MAX_OPENING_DISTANCE, physical_pos));
+                return physical_pos / MAX_OPENING_DISTANCE;
+            }
+
+            /**
+             * @brief Convert normalized position (0.0-1.0) to physical position (meters)
+             * @param normalized Normalized position (0.0=closed, 1.0=open)
+             * @return Physical position in meters (0.0=closed, MAX_OPENING_DISTANCE=open)
+             */
+            static double normalizedToPhysical(double normalized)
+            {
+                // Limit to valid range
+                normalized = std::max(0.0, std::min(1.0, normalized));
+                return normalized * MAX_OPENING_DISTANCE;
             }
         };
     };
