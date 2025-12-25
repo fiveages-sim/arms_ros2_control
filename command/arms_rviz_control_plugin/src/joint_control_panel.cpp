@@ -231,11 +231,6 @@ namespace arms_rviz_control_plugin
             updatePublisher();
             updatePanelVisibility();
         }
-        else if (old_command != current_command_ && is_joint_control_enabled_)
-        {
-            // Command changed but control is still enabled, update button text
-            updatePanelVisibility();
-        }
     }
 
     std::string JointControlPanel::classifyJoint(const std::string& joint_name)
