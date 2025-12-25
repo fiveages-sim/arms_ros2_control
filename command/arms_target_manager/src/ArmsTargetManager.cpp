@@ -29,7 +29,6 @@ namespace arms_ros2_control::command
           , publish_rate_(publishRate)
           , disable_auto_update_states_(disableAutoUpdateStates)
           , last_marker_update_time_(node_->now())
-          , last_head_marker_update_time_(node_->now())
           , marker_update_interval_(markerUpdateInterval)
           , last_publish_time_(node_->now())
     {
@@ -595,7 +594,7 @@ namespace arms_ros2_control::command
         // 更新 marker（与其他marker保持一致的模式）
         server_->setPose("head_target", updated_pose);
         // 使用独立的节流时间戳，避免与手部marker的更新冲突
-        if (shouldThrottle(last_head_marker_update_time_, marker_update_interval_))
+        if (shouldThrottle(last_marker_update_time_, marker_update_interval_))
         {
             server_->applyChanges();
         }
