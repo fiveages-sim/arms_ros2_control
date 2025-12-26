@@ -7,7 +7,6 @@
 #include "arms_controller_common/utils/Interpolation.h"
 #include "arms_controller_common/utils/GravityCompensation.h"
 #include "lina_planning/planning/path_planner/movej.h"
-#include "lina_planning/planning/velocity_planner/doubles_with_zero_boundary_of_vel_and_acc.h"
 #include <vector>
 #include <memory>
 #include <functional>

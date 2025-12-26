@@ -6,6 +6,7 @@
 #include "arms_controller_common/FSM/FSMState.h"
 #include "arms_controller_common/utils/Interpolation.h"
 #include "arms_controller_common/utils/GravityCompensation.h"
+#include "lina_planning/planning/path_planner/movej.h"
 #include <vector>
 #include <memory>
 #include <mutex>
@@ -104,6 +105,7 @@ namespace arms_controller_common
          */
         void setTanhScale(double scale);
 
+        void initMoveJPlanner();
     private:
         rclcpp::Logger logger_;
         std::shared_ptr<GravityCompensation> gravity_compensation_;
@@ -153,6 +155,7 @@ namespace arms_controller_common
         void updateJointMask(const std::string& prefix);
         
         static constexpr double TARGET_EPSILON = 1e-6;  // Tolerance for comparing target positions
+        planning::moveJ movej_planner;                 //Joint interpolation planner
     };
 } // namespace arms_controller_common
 
