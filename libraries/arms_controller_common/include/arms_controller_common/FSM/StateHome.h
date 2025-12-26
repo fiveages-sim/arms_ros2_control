@@ -6,6 +6,8 @@
 #include "arms_controller_common/FSM/FSMState.h"
 #include "arms_controller_common/utils/Interpolation.h"
 #include "arms_controller_common/utils/GravityCompensation.h"
+#include "lina_planning/planning/path_planner/movej.h"
+#include "lina_planning/planning/velocity_planner/doubles_with_zero_boundary_of_vel_and_acc.h"
 #include <vector>
 #include <memory>
 #include <functional>
@@ -158,6 +160,7 @@ namespace arms_controller_common
          */
         void setTanhScale(double scale);
 
+        void initMoveJPlanner();
     private:
         void switchConfiguration();
         void startInterpolation();
@@ -181,6 +184,7 @@ namespace arms_controller_common
         int32_t switch_command_base_{100};             // Base command for multi-config switching
         int32_t last_command_{0};                      // Last command value for edge detection
         bool has_multiple_configs_{false};             // Whether multiple configurations are available
+        planning::moveJ movej_planner;                 //Joint interpolation planner
     };
 } // namespace arms_controller_common
 

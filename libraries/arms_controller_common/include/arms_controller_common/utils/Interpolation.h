@@ -12,7 +12,8 @@ namespace arms_controller_common
     enum class InterpolationType
     {
         TANH,
-        LINEAR
+        LINEAR,
+        DOUBLES
     };
 
     inline std::string toLowerCopy(std::string s)
@@ -28,6 +29,8 @@ namespace arms_controller_common
         {
         case InterpolationType::LINEAR:
             return "linear";
+        case InterpolationType::DOUBLES:
+            return "doubles";
         case InterpolationType::TANH:
         default:
             return "tanh";
@@ -50,6 +53,10 @@ namespace arms_controller_common
         if (t == "tanh")
         {
             return InterpolationType::TANH;
+        }
+        if (t == "doubles")
+        {
+            return InterpolationType::DOUBLES;
         }
         return fallback;
     }

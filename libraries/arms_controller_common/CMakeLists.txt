@@ -20,10 +20,11 @@ set(dependencies
         geometry_msgs
 )
 
+find_package(ament_cmake REQUIRED)
+find_package(lina_planning REQUIRED)
 # Find Eigen3 (required by Pinocchio)
 find_package(Eigen3 REQUIRED)
 
-find_package(ament_cmake REQUIRED)
 foreach (Dependency IN ITEMS ${dependencies})
     find_package(${Dependency} REQUIRED)
 endforeach ()
@@ -42,6 +43,8 @@ target_include_directories(${PROJECT_NAME}
         "$<INSTALL_INTERFACE:include/${PROJECT_NAME}>"
         PRIVATE
         src)
+
+target_link_libraries(${PROJECT_NAME} PUBLIC lina_planning::lina_planning)
 
 ament_target_dependencies(
         ${PROJECT_NAME} PUBLIC
@@ -65,6 +68,7 @@ install(
 )
 
 ament_export_dependencies(${dependencies})
+ament_export_dependencies(lina_planning)
 ament_export_targets(export_${PROJECT_NAME} HAS_LIBRARY_TARGET)
 
 ament_package()

@@ -4,6 +4,8 @@
 #include "arms_controller_common/FSM/StateHome.h"
 #include <cmath>
 #include <algorithm>
+#include <iostream>
+#include <iomanip>
 
 namespace arms_controller_common
 {
@@ -115,6 +117,10 @@ namespace arms_controller_common
 
         // Reset interpolation progress
         percent_ = 0.0;
+        if (interpolation_type_==InterpolationType::DOUBLES)
+        {
+            initMoveJPlanner();
+        }
 
         // Set kp and kd gains for force control if available
         if (ctrl_interfaces_.control_mode_ == ControlMode::MIX &&
@@ -173,44 +179,70 @@ namespace arms_controller_common
 
         last_command_ = current_command;
 
-        // Update interpolation progress
-        double controller_frequency = ctrl_interfaces_.frequency_;
-        if (duration_ <= 0.0 || controller_frequency <= 0.0)
+        if (interpolation_type_==InterpolationType::DOUBLES)
         {
-            // Invalid timing configuration: jump directly to target
-            percent_ = 1.0;
+            planning::TrajectPoint movej_point = movej_planner.run();
+            // Apply interpolated position to joints
+            for (size_t i = 0; i < ctrl_interfaces_.joint_position_command_interface_.size() &&
+                 i < current_target_.size() && i < start_pos_.size(); ++i)
+            {
+                std::ignore = ctrl_interfaces_.joint_position_command_interface_[i].get().set_value(
+                    movej_point.joint_pos(i));
+            }
+            //Save data
+            // std::ofstream file("/home/lina/lina/data/statehome_movej.csv", std::ios::app);
+            // file << std::fixed << std::setprecision(12);
+            // for (size_t i = 0; i < movej_point.joint_pos.getJointSize(); ++i)
+            // {
+            //     file << movej_point.joint_pos(i);
+            //     if (i < movej_point.joint_pos.getJointSize())
+            //     {
+            //         file << ",";
+            //     }
+            // }
+            // file << std::endl;
+            // file.close();
         }
         else
         {
-            percent_ += 1.0 / (duration_ * controller_frequency);
-        }
-        percent_ = std::min(percent_, 1.0);
+            // Update interpolation progress
+            double controller_frequency = ctrl_interfaces_.frequency_;
+            if (duration_ <= 0.0 || controller_frequency <= 0.0)
+            {
+                // Invalid timing configuration: jump directly to target
+                percent_ = 1.0;
+            }
+            else
+            {
+                percent_ += 1.0 / (duration_ * controller_frequency);
+            }
+            percent_ = std::min(percent_, 1.0);
 
-        // Calculate interpolation phase
-        double phase = 0.0;
-        if (percent_ >= 1.0)
-        {
-            phase = 1.0;
-        }
-        else if (interpolation_type_ == InterpolationType::LINEAR)
-        {
-            phase = percent_;
-        }
-        else
-        {
-            const double scale = (tanh_scale_ > 0.0) ? tanh_scale_ : 3.0;
-            phase = std::tanh(percent_ * scale);
-        }
-        phase = std::clamp(phase, 0.0, 1.0);
+            // Calculate interpolation phase
+            double phase = 0.0;
+            if (percent_ >= 1.0)
+            {
+                phase = 1.0;
+            }
+            else if (interpolation_type_ == InterpolationType::LINEAR)
+            {
+                phase = percent_;
+            }
+            else
+            {
+                const double scale = (tanh_scale_ > 0.0) ? tanh_scale_ : 3.0;
+                phase = std::tanh(percent_ * scale);
+            }
+            phase = std::clamp(phase, 0.0, 1.0);
 
-        // Apply interpolated position to joints
-        for (size_t i = 0; i < ctrl_interfaces_.joint_position_command_interface_.size() &&
-             i < current_target_.size() && i < start_pos_.size(); ++i)
-        {
-            double interpolated_value = phase * current_target_[i] + (1.0 - phase) * start_pos_[i];
-            std::ignore = ctrl_interfaces_.joint_position_command_interface_[i].get().set_value(interpolated_value);
+            // Apply interpolated position to joints
+            for (size_t i = 0; i < ctrl_interfaces_.joint_position_command_interface_.size() &&
+                 i < current_target_.size() && i < start_pos_.size(); ++i)
+            {
+                double interpolated_value = phase * current_target_[i] + (1.0 - phase) * start_pos_[i];
+                std::ignore = ctrl_interfaces_.joint_position_command_interface_[i].get().set_value(interpolated_value);
+            }
         }
-
         // In force control mode, calculate static torques
         if (ctrl_interfaces_.control_mode_ == ControlMode::MIX && gravity_compensation_)
         {
@@ -243,7 +275,7 @@ namespace arms_controller_common
     void StateHome::setInterpolationType(const std::string& type)
     {
         const std::string t = toLowerCopy(type);
-        if (t != "linear" && t != "tanh")
+        if (t != "linear" && t != "tanh" && t != "doubles")
         {
             RCLCPP_WARN(logger_, "Unknown home interpolation type '%s', falling back to 'tanh'", type.c_str());
         }
@@ -325,5 +357,27 @@ namespace arms_controller_common
         RCLCPP_INFO(logger_,
                     "Starting interpolation to configuration %zu over %.1f seconds",
                     current_config_index_, duration_);
+
+        //movej init
+        if (interpolation_type_==InterpolationType::DOUBLES)
+        {
+            initMoveJPlanner();
+        }
     }
+    void StateHome::initMoveJPlanner()
+    {
+        size_t nr_of_joints = start_pos_.size();
+        planning::TrajectPoint start_joint_point(nr_of_joints);
+        planning::TrajectPoint end_joint_point(nr_of_joints);
+        planning::TrajectoryParameter traj_param(duration_, nr_of_joints);
+        for (size_t i = 0; i < nr_of_joints; i++)
+        {
+            start_joint_point.joint_pos(i) = start_pos_[i];
+            end_joint_point.joint_pos(i) = current_target_[i];
+        }
+        planning::TrajectoryInitParameters movej_init_para(start_joint_point, end_joint_point, traj_param,
+                                                           1.0 / ctrl_interfaces_.frequency_);
+        movej_planner.init(movej_init_para);
+        movej_planner.setStartTime(0.0);
+    };
 } // namespace arms_controller_common
