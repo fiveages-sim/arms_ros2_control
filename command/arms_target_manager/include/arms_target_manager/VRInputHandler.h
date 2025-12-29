@@ -14,6 +14,7 @@
 #include <std_msgs/msg/bool.hpp>
 #include <Eigen/Core>
 #include <Eigen/Geometry>
+#include <std_msgs/msg/int32.hpp>
 #include "arms_target_manager/ArmsTargetManager.h"
 
 namespace arms_ros2_control::command
@@ -138,6 +139,24 @@ namespace arms_ros2_control::command
         void rightGripCallback(std_msgs::msg::Bool::SharedPtr msg);
 
         /**
+         * 左Y按键回调函数（用于设置左臂基准位姿）
+         * @param msg Y按键状态消息
+         */
+        void leftYButtonCallback(std_msgs::msg::Bool::SharedPtr msg);
+
+        /**
+         * 右B按键回调函数（用于设置右臂基准位姿）
+         * @param msg B按键状态消息
+         */
+        void rightBButtonCallback(std_msgs::msg::Bool::SharedPtr msg);
+
+        /**
+         * FSM命令回调函数（用于跟踪FSM状态）
+         * @param msg FSM命令消息
+         */
+         void fsmCommandCallback(std_msgs::msg::Int32::SharedPtr msg);
+
+        /**
          * 更新marker位置（已废弃，保留用于兼容）
          * @param armType 手臂类型 ("left" 或 "right")
          * @param position 位置
@@ -224,8 +243,11 @@ namespace arms_ros2_control::command
         rclcpp::Subscription<geometry_msgs::msg::Point>::SharedPtr sub_right_thumbstick_axes_;
         rclcpp::Subscription<std_msgs::msg::Bool>::SharedPtr sub_left_grip_;
         rclcpp::Subscription<std_msgs::msg::Bool>::SharedPtr sub_right_grip_;
+        rclcpp::Subscription<std_msgs::msg::Bool>::SharedPtr sub_left_y_button_;
+        rclcpp::Subscription<std_msgs::msg::Bool>::SharedPtr sub_right_b_button_;
         rclcpp::Subscription<geometry_msgs::msg::PoseStamped>::SharedPtr sub_robot_left_pose_;
         rclcpp::Subscription<geometry_msgs::msg::PoseStamped>::SharedPtr sub_robot_right_pose_;
+        rclcpp::Subscription<std_msgs::msg::Int32>::SharedPtr sub_fsm_command_;
 
         // VR pose参数
         Eigen::Matrix4d left_ee_pose_ = Eigen::Matrix4d::Identity();
@@ -257,9 +279,14 @@ namespace arms_ros2_control::command
         std::atomic<bool> last_left_thumbstick_state_;
         std::atomic<bool> last_left_grip_state_; // 左握把按钮上次状态
         std::atomic<bool> last_right_grip_state_; // 右握把按钮上次状态
+        std::atomic<bool> last_left_y_button_state_; // 左Y按键上次状态
+        std::atomic<bool> last_right_b_button_state_; // 右B按键上次状态
+        std::atomic<bool> left_arm_paused_; // 左臂是否暂停更新（Y按键控制）
+        std::atomic<bool> right_arm_paused_; // 右臂是否暂停更新（B按键控制）
         std::atomic<bool> left_grip_mode_; // 左摇杆控制模式：false=XY平移, true=Z轴+Yaw
         std::atomic<bool> right_grip_mode_; // 右摇杆控制模式：false=XY平移, true=Z轴+Yaw
         std::mutex state_mutex_;
+        std::atomic<int32_t> current_fsm_state_; // 当前FSM状态：1=HOME, 2=HOLD, 3=OCS2, 100=REST
 
         // 时间控制
         rclcpp::Time last_update_time_;
