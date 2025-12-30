@@ -83,6 +83,7 @@ def launch_setup(context, *args, **kwargs):
         parameters=[
             controllers_config_path,
             {'use_sim_time': use_sim_time},
+            {'robot_description': robot_description},  # 传递 robot_description 参数
         ],
         remappings=[
             ("/controller_manager/robot_description", "/robot_description"),
@@ -185,7 +186,7 @@ def generate_launch_description():
     hardware_arg = DeclareLaunchArgument(
         "hardware",
         default_value="mock_components",
-        description="Hardware type: 'gz' for Gazebo simulation, 'isaac' for Isaac simulation, 'mock_components' for mock components"
+        description="Hardware type: 'gz' for Gazebo simulation, 'isaac' for Isaac simulation, 'mock_components' for mock components, 'real' for real hardware with Modbus"
     )
 
     world_arg = DeclareLaunchArgument(
