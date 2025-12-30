@@ -196,6 +196,12 @@ namespace arms_ros2_control::command
 
     void VRInputHandler::rightThumbstickCallback(const std_msgs::msg::Bool::SharedPtr msg)
     {
+        // 只在OCS2状态下执行（状态值为3）
+        if (current_fsm_state_.load() != 3)
+        {
+            return;
+        }
+
         bool currentThumbstickState = msg->data;
         bool lastState = last_thumbstick_state_.load();
 
@@ -254,6 +260,12 @@ namespace arms_ros2_control::command
 
     void VRInputHandler::leftThumbstickCallback(const std_msgs::msg::Bool::SharedPtr msg)
     {
+        // 只在OCS2状态下执行（状态值为3）
+        if (current_fsm_state_.load() != 3)
+        {
+            return;
+        }
+
         bool currentThumbstickState = msg->data;
         bool lastState = last_left_thumbstick_state_.load();
 
@@ -670,6 +682,12 @@ namespace arms_ros2_control::command
 
     void VRInputHandler::leftYButtonCallback(std_msgs::msg::Bool::SharedPtr msg)
     {
+        // 只在UPDATE模式下启用（右手摇杆按钮按下后进入UPDATE模式）
+        if (!is_update_mode_.load())
+        {
+            return;
+        }
+
         bool currentYButtonState = msg->data;
         bool lastState = last_left_y_button_state_.load();
 
@@ -713,6 +731,12 @@ namespace arms_ros2_control::command
 
     void VRInputHandler::rightBButtonCallback(std_msgs::msg::Bool::SharedPtr msg)
     {
+        // 只在UPDATE模式下启用（右手摇杆按钮按下后进入UPDATE模式）
+        if (!is_update_mode_.load())
+        {
+            return;
+        }
+
         bool currentBButtonState = msg->data;
         bool lastState = last_right_b_button_state_.load();
 
