@@ -234,6 +234,20 @@ namespace arms_ros2_control::command
                 left_thumbstick_yaw_offset_ = 0.0;
                 right_thumbstick_yaw_offset_ = 0.0;
 
+                // 重置暂停状态，确保切换到 UPDATE 模式时恢复更新
+                bool left_was_paused = left_arm_paused_.load();
+                bool right_was_paused = right_arm_paused_.load();
+                if (left_was_paused)
+                {
+                    left_arm_paused_.store(false);
+                    RCLCPP_INFO(node_->get_logger(), "🟡 左臂暂停状态已重置 - 恢复更新！");
+                }
+                if (right_was_paused)
+                {
+                    right_arm_paused_.store(false);
+                    RCLCPP_INFO(node_->get_logger(), "🔵 右臂暂停状态已重置 - 恢复更新！");
+                }
+
                 is_update_mode_.store(true);
                 RCLCPP_INFO(node_->get_logger(), "🕹️🕶️🕹️ Switched to UPDATE mode - Base poses stored!");
                 RCLCPP_INFO(node_->get_logger(),
@@ -695,17 +709,10 @@ namespace arms_ros2_control::command
         if (currentYButtonState && !lastState)
         {
             // 切换左臂暂停状态
-            bool was_paused = left_arm_paused_.load();
-            left_arm_paused_.store(!was_paused);
-
-            if (!was_paused)
+            if (left_arm_paused_.load())
             {
-                // 暂停更新：停止更新，不存储基准位姿
-                RCLCPP_INFO(node_->get_logger(), "🟡 左Y按键按下 - 左臂更新已暂停！");
-            }
-            else
-            {
-                // 恢复更新：存储基准位姿并重置偏移，以便基于新基准继续计算
+                // 当前是暂停状态，执行恢复操作
+                // 存储基准位姿并重置偏移，以便基于新基准继续计算
                 vr_base_left_position_ = left_position_;
                 vr_base_left_orientation_ = left_orientation_;
                 robot_base_left_position_ = robot_current_left_position_;
@@ -715,6 +722,9 @@ namespace arms_ros2_control::command
                 left_thumbstick_offset_ = Eigen::Vector3d::Zero();
                 left_thumbstick_yaw_offset_ = 0.0;
 
+                // 切换状态为运行
+                left_arm_paused_.store(false);
+
                 RCLCPP_INFO(node_->get_logger(), "🟡 左Y按键按下 - 左臂更新已恢复！");
                 RCLCPP_INFO(node_->get_logger(),
                             "🟡 VR Base Position: [%.3f, %.3f, %.3f]",
@@ -723,6 +733,14 @@ namespace arms_ros2_control::command
                             "🟡 Robot Base Position: [%.3f, %.3f, %.3f]",
                             robot_base_left_position_.x(), robot_base_left_position_.y(), robot_base_left_position_.z());
                 RCLCPP_INFO(node_->get_logger(), "🟡 左摇杆偏移已重置！");
+            }
+            else
+            {
+                // 当前是运行状态，执行暂停操作
+                // 切换状态为暂停
+                left_arm_paused_.store(true);
+                
+                RCLCPP_INFO(node_->get_logger(), "🟡 左Y按键按下 - 左臂更新已暂停！");
             }
         }
 
@@ -744,17 +762,10 @@ namespace arms_ros2_control::command
         if (currentBButtonState && !lastState)
         {
             // 切换右臂暂停状态
-            bool was_paused = right_arm_paused_.load();
-            right_arm_paused_.store(!was_paused);
-
-            if (!was_paused)
+            if (right_arm_paused_.load())
             {
-                // 暂停更新：停止更新，不存储基准位姿
-                RCLCPP_INFO(node_->get_logger(), "🔵 右B按键按下 - 右臂更新已暂停！");
-            }
-            else
-            {
-                // 恢复更新：存储基准位姿并重置偏移，以便基于新基准继续计算
+                // 当前是暂停状态，执行恢复操作
+                // 存储基准位姿并重置偏移，以便基于新基准继续计算
                 vr_base_right_position_ = right_position_;
                 vr_base_right_orientation_ = right_orientation_;
                 robot_base_right_position_ = robot_current_right_position_;
@@ -764,6 +775,9 @@ namespace arms_ros2_control::command
                 right_thumbstick_offset_ = Eigen::Vector3d::Zero();
                 right_thumbstick_yaw_offset_ = 0.0;
 
+                // 切换状态为运行
+                right_arm_paused_.store(false);
+
                 RCLCPP_INFO(node_->get_logger(), "🔵 右B按键按下 - 右臂更新已恢复！");
                 RCLCPP_INFO(node_->get_logger(),
                             "🔵 VR Base Position: [%.3f, %.3f, %.3f]",
@@ -772,6 +786,14 @@ namespace arms_ros2_control::command
                             "🔵 Robot Base Position: [%.3f, %.3f, %.3f]",
                             robot_base_right_position_.x(), robot_base_right_position_.y(), robot_base_right_position_.z());
                 RCLCPP_INFO(node_->get_logger(), "🔵 右摇杆偏移已重置！");
+            }
+            else
+            {
+                // 当前是运行状态，执行暂停操作
+                // 切换状态为暂停
+                right_arm_paused_.store(true);
+                
+                RCLCPP_INFO(node_->get_logger(), "🔵 右B按键按下 - 右臂更新已暂停！");
             }
         }
 
