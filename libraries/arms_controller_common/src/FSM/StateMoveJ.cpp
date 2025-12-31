@@ -215,9 +215,9 @@ namespace arms_controller_common
         const std::string t = toLowerCopy(type);
         if (t != "linear" && t != "tanh")
         {
-            RCLCPP_WARN(logger_, "Unknown movej interpolation type '%s', falling back to 'tanh'", type.c_str());
+            RCLCPP_WARN(logger_, "Unknown movej interpolation type '%s', falling back to 'linear'", type.c_str());
         }
-        interpolation_type_ = parseInterpolationType(type, InterpolationType::TANH);
+        interpolation_type_ = parseInterpolationType(type, InterpolationType::LINEAR);
     }
 
     void StateMoveJ::setTanhScale(double scale)
