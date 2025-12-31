@@ -378,6 +378,6 @@ namespace arms_controller_common
         planning::TrajectoryInitParameters movej_init_para(start_joint_point, end_joint_point, traj_param,
                                                            1.0 / ctrl_interfaces_.frequency_);
         movej_planner.init(movej_init_para);
-        movej_planner.setStartTime(0.0);
+        movej_planner.setRealStartTime(0.0);
     };
 } // namespace arms_controller_common
