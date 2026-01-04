@@ -6,6 +6,9 @@ from launch.actions import DeclareLaunchArgument, OpaqueFunction
 from launch_ros.actions import Node
 import xacro
 
+# Import robot_common_launch utilities
+from robot_common_launch import load_robot_config
+
 
 def launch_setup(context, *args, **kwargs):
     """Launch setup function using OpaqueFunction"""
@@ -70,20 +73,38 @@ def launch_setup(context, *args, **kwargs):
     )
 
     # Controller Manager Node
-    # 加载控制器配置文件
-    controllers_config_path = os.path.join(hand_pkg_path, 'config', 'ros2_control', 'ros2_controllers.yaml')
+    # 使用 load_robot_config 根据 type 动态匹配控制器配置文件
+    # 支持渐进匹配：如果提供了 type，会依次尝试 {type}.yaml, 缩短后的类型, 最后回退到 ros2_controllers.yaml
+    ros2_controllers_config, ros2_controllers_path = load_robot_config(hand_name, "ros2_control", hand_type)
     
-    if not os.path.exists(controllers_config_path):
-        print(f"[ERROR] Controllers config file not found: {controllers_config_path}")
+    if ros2_controllers_path is None:
+        print(f"[ERROR] Controllers config file not found for hand '{hand_name}'")
         return []
+    
+    # 利用 load_robot_config 已经处理过的结果来判断是否使用了 type-specific 配置
+    # load_robot_config 已经处理了回退逻辑，返回的路径就是最终使用的配置文件路径
+    # 只要不是默认配置文件名（ros2_controllers.yaml），就说明使用了 type-specific 配置
+    config_filename = os.path.basename(ros2_controllers_path)
+    default_config_filename = "ros2_controllers.yaml"
+    is_type_specific_config = (config_filename != default_config_filename)
+    
+    # 构建参数列表
+    node_parameters = [
+        ros2_controllers_path,
+        {'use_sim_time': use_sim_time},
+    ]
+    
+    # 如果使用了 type-specific 配置，可以在这里添加额外的参数处理逻辑
+    # 例如，如果配置文件中没有 type 参数，可以传递 launch 参数中的 type
+    if is_type_specific_config:
+        print(f"[INFO] Using type-specific config file: {config_filename}")
+    else:
+        print(f"[INFO] Using default config file: {config_filename}")
     
     ros2_control_node = Node(
         package="controller_manager",
         executable="ros2_control_node",
-        parameters=[
-            controllers_config_path,
-            {'use_sim_time': use_sim_time},
-        ],
+        parameters=node_parameters,
         remappings=[
             ("/controller_manager/robot_description", "/robot_description"),
         ],
