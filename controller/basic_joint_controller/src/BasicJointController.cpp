@@ -98,9 +98,9 @@ namespace basic_joint_controller
             // State machine parameters
             home_duration_ = auto_declare<double>("home_duration", 3.0);
             move_duration_ = auto_declare<double>("move_duration", 3.0);
-            std::string home_interpolation_type = auto_declare<std::string>("home_interpolation_type", "tanh");
+            std::string home_interpolation_type = auto_declare<std::string>("home_interpolation_type", "linear");
             double home_tanh_scale = auto_declare<double>("home_tanh_scale", 3.0);
-            std::string movej_interpolation_type = auto_declare<std::string>("movej_interpolation_type", "tanh");
+            std::string movej_interpolation_type = auto_declare<std::string>("movej_interpolation_type", "linear");
             double movej_tanh_scale = auto_declare<double>("movej_tanh_scale", 3.0);
             hold_position_threshold_ = auto_declare<double>("hold_position_threshold", 0.1);
             long switch_command_base = auto_declare<long>("switch_command_base", 100);

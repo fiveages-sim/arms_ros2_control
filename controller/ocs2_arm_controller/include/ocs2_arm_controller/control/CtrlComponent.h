@@ -18,6 +18,7 @@
 #include <ocs2_ddp/GaussNewtonDDP_MPC.h>
 #include "ocs2_arm_controller/control/PoseBasedReferenceManager.h"
 #include <ocs2_msgs/msg/mpc_observation.hpp>
+#include <std_msgs/msg/int32.hpp>
 #include "ocs2_arm_controller/control/Visualizer.h"
 
 #include <arms_controller_common/CtrlInterfaces.h>
@@ -120,6 +121,14 @@ namespace ocs2::mobile_manipulator
         // Torque calculation for force control
         vector_t calculateStaticTorques() const;
 
+        // Collision detection (uses cached values from visualization, no extra computation)
+        // @param threshold: Distance threshold to consider as collision (default 0.0 = actual penetration)
+        bool isCollisionDetected(scalar_t threshold = 0.0) const;
+
+        // Publish FSM command to stop all controllers
+        // @param command: FSM command value (typically 2 for HOLD)
+        void publishFsmCommand(int32_t command) const;
+
         // Get node reference
         std::shared_ptr<rclcpp_lifecycle::LifecycleNode> getNode() const { return node_; }
 
@@ -151,6 +160,7 @@ namespace ocs2::mobile_manipulator
         CtrlInterfaces& ctrl_interfaces_;
         
         rclcpp::Publisher<ocs2_msgs::msg::MpcObservation>::SharedPtr mpc_observation_publisher_;
+        rclcpp::Publisher<std_msgs::msg::Int32>::SharedPtr fsm_command_publisher_;
 
         // Visualization component
         std::unique_ptr<Visualizer> visualizer_;

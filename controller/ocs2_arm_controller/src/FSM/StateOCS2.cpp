@@ -75,6 +75,21 @@ namespace ocs2::mobile_manipulator
         RCLCPP_INFO(node_->get_logger(), "Thread sleep duration: %d ms (based on controller frequency: %.1f Hz)",
                     thread_sleep_duration_ms_, controller_frequency);
 
+        // Check if self-collision is enabled in config file
+        const bool selfCollisionEnabled = ctrl_comp_->interface_->isSelfCollisionEnabled();
+        if (selfCollisionEnabled)
+        {
+            // Get minimum distance from interface (same as in info file)
+            const scalar_t minimumDistance = ctrl_comp_->interface_->getSelfCollisionMinimumDistance();
+            RCLCPP_INFO(node_->get_logger(), 
+                "Self-collision enabled: will switch to HOLD when distance <= %.4f m (minimumDistance from config)", 
+                minimumDistance);
+        }
+        else
+        {
+            RCLCPP_INFO(node_->get_logger(), "Self-collision disabled in config, collision detection not active");
+        }
+
         RCLCPP_INFO(node_->get_logger(), "StateOCS2 initialized successfully");
     }
 
@@ -114,6 +129,9 @@ namespace ocs2::mobile_manipulator
 
         ctrl_comp_->resetMpc();
 
+        // Reset collision detection flag
+        collision_detected_ = false;
+
         // Reset time
         last_mpc_time_ = node_->now();
 
@@ -125,6 +143,20 @@ namespace ocs2::mobile_manipulator
 
     void StateOCS2::run(const rclcpp::Time& time, const rclcpp::Duration& /* period */)
     {
+        // Check for collision if self-collision is enabled in config (uses cached value from visualization, no extra computation)
+        if (ctrl_comp_->interface_->isSelfCollisionEnabled() && !collision_detected_)
+        {
+            // Use minimumDistance from config file as threshold (same as selfCollision.minimumDistance)
+            const scalar_t minimumDistance = ctrl_comp_->interface_->getSelfCollisionMinimumDistance();
+            if (ctrl_comp_->isCollisionDetected(minimumDistance))
+            {
+                collision_detected_ = true;
+                RCLCPP_WARN(node_->get_logger(), 
+                    "Collision detected! Distance <= minimumDistance: %.4f m. Will switch to HOLD state.",
+                    minimumDistance);
+            }
+        }
+
         // Check if MPC update is needed
         if ((time - last_mpc_time_).seconds() >= mpc_period_)
         {
@@ -133,7 +165,7 @@ namespace ocs2::mobile_manipulator
             last_mpc_time_ = time;
         }
 
-        // Execute policy evaluation
+        // Execute policy evaluation (continue even during collision detection for smooth transition)
         ctrl_comp_->evaluatePolicy(time);
     }
 
@@ -192,6 +224,15 @@ namespace ocs2::mobile_manipulator
 
     FSMStateName StateOCS2::checkChange()
     {
+        // Check if collision was detected - switch to HOLD for safety
+        if (collision_detected_)
+        {
+            // Publish fsm_command=2 to stop all other controllers
+            ctrl_comp_->publishFsmCommand(2);
+            RCLCPP_WARN(node_->get_logger(), "Published fsm_command=2 to stop all controllers");
+            return FSMStateName::HOLD;
+        }
+
         // Check FSM command for state transition
         switch (ctrl_interfaces_.fsm_command_)
         {

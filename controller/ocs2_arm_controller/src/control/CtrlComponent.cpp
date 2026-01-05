@@ -54,6 +54,9 @@ namespace ocs2::mobile_manipulator
         // Initialize MPC observation publisher
         mpc_observation_publisher_ = node_->create_publisher<ocs2_msgs::msg::MpcObservation>(
             robot_name_ + "_mpc_observation", 1);
+        
+        // Initialize FSM command publisher (for stopping all controllers)
+        fsm_command_publisher_ = node_->create_publisher<std_msgs::msg::Int32>("/fsm_command", 10);
     }
 
     void CtrlComponent::updateObservation(const rclcpp::Time& time)
@@ -317,5 +320,21 @@ namespace ocs2::mobile_manipulator
         return pinocchio::rnea(pinocchio_model, pinocchio_data, q,
                                Eigen::VectorXd::Zero(pinocchio_model.nv),
                                Eigen::VectorXd::Zero(pinocchio_model.nv));
+    }
+
+    bool CtrlComponent::isCollisionDetected(scalar_t threshold) const
+    {
+        // Reuse the cached value from visualization (no extra computation)
+        return visualizer_->isCollisionDetected(threshold);
+    }
+
+    void CtrlComponent::publishFsmCommand(int32_t command) const
+    {
+        if (fsm_command_publisher_)
+        {
+            std_msgs::msg::Int32 fsm_cmd;
+            fsm_cmd.data = command;
+            fsm_command_publisher_->publish(fsm_cmd);
+        }
     }
 } // namespace ocs2::mobile_manipulator

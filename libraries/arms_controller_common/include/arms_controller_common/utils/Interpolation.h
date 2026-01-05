@@ -40,7 +40,7 @@ namespace arms_controller_common
      * @param fallback Returned when type is unknown
      */
     inline InterpolationType parseInterpolationType(const std::string& type,
-                                                    InterpolationType fallback = InterpolationType::TANH)
+                                                    InterpolationType fallback = InterpolationType::LINEAR)
     {
         const std::string t = toLowerCopy(type);
         if (t == "linear")
