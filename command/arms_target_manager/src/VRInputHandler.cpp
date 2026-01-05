@@ -34,8 +34,13 @@ namespace arms_ros2_control::command
           , last_left_thumbstick_state_(false)
           , last_left_grip_state_(false)
           , last_right_grip_state_(false)
+          , last_left_y_button_state_(false)
+          , last_right_b_button_state_(false)
+          , left_arm_paused_(false)
+          , right_arm_paused_(false)
           , left_grip_mode_(false)
           , right_grip_mode_(false)
+          , current_fsm_state_(2)  // 默认HOLD状态
           , last_update_time_(node_->now())
           , update_rate_(updateRate)
           , current_position_(0.0, 0.0, 1.0)
@@ -121,6 +126,30 @@ namespace arms_ros2_control::command
         sub_right_grip_ = node_->create_subscription<std_msgs::msg::Bool>(
             "xr_right_grip", 10, rightGripCallback);
 
+        // 创建Y按键订阅器
+        auto leftYButtonCallback = [this](const std_msgs::msg::Bool::SharedPtr msg)
+        {
+            this->leftYButtonCallback(msg);
+        };
+        sub_left_y_button_ = node_->create_subscription<std_msgs::msg::Bool>(
+            "xr_left_y_button", 10, leftYButtonCallback);
+
+        auto rightBButtonCallback = [this](const std_msgs::msg::Bool::SharedPtr msg)
+        {
+            this->rightBButtonCallback(msg);
+        };
+        sub_right_b_button_ = node_->create_subscription<std_msgs::msg::Bool>(
+            "xr_right_b_button", 10, rightBButtonCallback);
+
+        // 创建FSM命令订阅器（用于跟踪FSM状态）
+        auto fsmCommandCallback = [this](const std_msgs::msg::Int32::SharedPtr msg)
+        {
+            this->fsmCommandCallback(msg);
+        };
+        sub_fsm_command_ = node_->create_subscription<std_msgs::msg::Int32>(
+            "/fsm_command", 10, fsmCommandCallback);
+        
+
         RCLCPP_INFO(node_->get_logger(), "🕹️🕶️🕹️ VRInputHandler created");
         RCLCPP_INFO(node_->get_logger(), "🕹️🕶️🕹️ Thumbstick scaling: linear=%.3f, angular=%.3f", LINEAR_SCALE,
                     ANGULAR_SCALE);
@@ -167,6 +196,12 @@ namespace arms_ros2_control::command
 
     void VRInputHandler::rightThumbstickCallback(const std_msgs::msg::Bool::SharedPtr msg)
     {
+        // 只在OCS2状态下执行（状态值为3）
+        if (current_fsm_state_.load() != 3)
+        {
+            return;
+        }
+
         bool currentThumbstickState = msg->data;
         bool lastState = last_thumbstick_state_.load();
 
@@ -199,6 +234,20 @@ namespace arms_ros2_control::command
                 left_thumbstick_yaw_offset_ = 0.0;
                 right_thumbstick_yaw_offset_ = 0.0;
 
+                // 重置暂停状态，确保切换到 UPDATE 模式时恢复更新
+                bool left_was_paused = left_arm_paused_.load();
+                bool right_was_paused = right_arm_paused_.load();
+                if (left_was_paused)
+                {
+                    left_arm_paused_.store(false);
+                    RCLCPP_INFO(node_->get_logger(), "🟡 左臂暂停状态已重置 - 恢复更新！");
+                }
+                if (right_was_paused)
+                {
+                    right_arm_paused_.store(false);
+                    RCLCPP_INFO(node_->get_logger(), "🔵 右臂暂停状态已重置 - 恢复更新！");
+                }
+
                 is_update_mode_.store(true);
                 RCLCPP_INFO(node_->get_logger(), "🕹️🕶️🕹️ Switched to UPDATE mode - Base poses stored!");
                 RCLCPP_INFO(node_->get_logger(),
@@ -225,6 +274,12 @@ namespace arms_ros2_control::command
 
     void VRInputHandler::leftThumbstickCallback(const std_msgs::msg::Bool::SharedPtr msg)
     {
+        // 只在OCS2状态下执行（状态值为3）
+        if (current_fsm_state_.load() != 3)
+        {
+            return;
+        }
+
         bool currentThumbstickState = msg->data;
         bool lastState = last_left_thumbstick_state_.load();
 
@@ -309,6 +364,13 @@ namespace arms_ros2_control::command
 
         if (enabled_.load())
         {
+            // 检查左臂是否暂停更新
+            if (left_arm_paused_.load())
+            {
+                // 暂停更新：不计算和发布目标位姿，直接返回
+                return;
+            }
+
             if (is_update_mode_.load())
             {
                 // 更新模式：基于差值计算pose并更新marker
@@ -360,9 +422,7 @@ namespace arms_ros2_control::command
             else
             {
                 // 存储模式：只存储VR pose，不更新marker
-                // 更新之前VR pose用于变化检测（无marker更新）
-                prev_vr_left_position_ = left_position_;
-                prev_vr_left_orientation_ = left_orientation_;
+                // 不计算和发布目标位姿
             }
         }
     }
@@ -374,6 +434,13 @@ namespace arms_ros2_control::command
 
         if (enabled_.load())
         {
+            // 检查右臂是否暂停更新
+            if (right_arm_paused_.load())
+            {
+                // 暂停更新：不计算和发布目标位姿，直接返回
+                return;
+            }
+
             if (is_update_mode_.load())
             {
                 // 更新模式：基于差值计算pose并更新marker
@@ -426,9 +493,7 @@ namespace arms_ros2_control::command
             else
             {
                 // 存储模式：只存储VR pose，不更新marker
-                // 更新之前VR pose用于变化检测（无marker更新）
-                prev_vr_right_position_ = right_position_;
-                prev_vr_right_orientation_ = right_orientation_;
+                // 不计算和发布目标位姿
             }
         }
     }
@@ -629,6 +694,112 @@ namespace arms_ros2_control::command
         last_right_grip_state_.store(currentGripState);
     }
 
+    void VRInputHandler::leftYButtonCallback(std_msgs::msg::Bool::SharedPtr msg)
+    {
+        // 只在UPDATE模式下启用（右手摇杆按钮按下后进入UPDATE模式）
+        if (!is_update_mode_.load())
+        {
+            return;
+        }
+
+        bool currentYButtonState = msg->data;
+        bool lastState = last_left_y_button_state_.load();
+
+        // 检测上升沿（按键按下）
+        if (currentYButtonState && !lastState)
+        {
+            // 切换左臂暂停状态
+            if (left_arm_paused_.load())
+            {
+                // 当前是暂停状态，执行恢复操作
+                // 存储基准位姿并重置偏移，以便基于新基准继续计算
+                vr_base_left_position_ = left_position_;
+                vr_base_left_orientation_ = left_orientation_;
+                robot_base_left_position_ = robot_current_left_position_;
+                robot_base_left_orientation_ = robot_current_left_orientation_;
+
+                // 重置左摇杆累积偏移
+                left_thumbstick_offset_ = Eigen::Vector3d::Zero();
+                left_thumbstick_yaw_offset_ = 0.0;
+
+                // 切换状态为运行
+                left_arm_paused_.store(false);
+
+                RCLCPP_INFO(node_->get_logger(), "🟡 左Y按键按下 - 左臂更新已恢复！");
+                RCLCPP_INFO(node_->get_logger(),
+                            "🟡 VR Base Position: [%.3f, %.3f, %.3f]",
+                            vr_base_left_position_.x(), vr_base_left_position_.y(), vr_base_left_position_.z());
+                RCLCPP_INFO(node_->get_logger(),
+                            "🟡 Robot Base Position: [%.3f, %.3f, %.3f]",
+                            robot_base_left_position_.x(), robot_base_left_position_.y(), robot_base_left_position_.z());
+                RCLCPP_INFO(node_->get_logger(), "🟡 左摇杆偏移已重置！");
+            }
+            else
+            {
+                // 当前是运行状态，执行暂停操作
+                // 切换状态为暂停
+                left_arm_paused_.store(true);
+                
+                RCLCPP_INFO(node_->get_logger(), "🟡 左Y按键按下 - 左臂更新已暂停！");
+            }
+        }
+
+        last_left_y_button_state_.store(currentYButtonState);
+    }
+
+    void VRInputHandler::rightBButtonCallback(std_msgs::msg::Bool::SharedPtr msg)
+    {
+        // 只在UPDATE模式下启用（右手摇杆按钮按下后进入UPDATE模式）
+        if (!is_update_mode_.load())
+        {
+            return;
+        }
+
+        bool currentBButtonState = msg->data;
+        bool lastState = last_right_b_button_state_.load();
+
+        // 检测上升沿（按键按下）
+        if (currentBButtonState && !lastState)
+        {
+            // 切换右臂暂停状态
+            if (right_arm_paused_.load())
+            {
+                // 当前是暂停状态，执行恢复操作
+                // 存储基准位姿并重置偏移，以便基于新基准继续计算
+                vr_base_right_position_ = right_position_;
+                vr_base_right_orientation_ = right_orientation_;
+                robot_base_right_position_ = robot_current_right_position_;
+                robot_base_right_orientation_ = robot_current_right_orientation_;
+
+                // 重置右摇杆累积偏移
+                right_thumbstick_offset_ = Eigen::Vector3d::Zero();
+                right_thumbstick_yaw_offset_ = 0.0;
+
+                // 切换状态为运行
+                right_arm_paused_.store(false);
+
+                RCLCPP_INFO(node_->get_logger(), "🔵 右B按键按下 - 右臂更新已恢复！");
+                RCLCPP_INFO(node_->get_logger(),
+                            "🔵 VR Base Position: [%.3f, %.3f, %.3f]",
+                            vr_base_right_position_.x(), vr_base_right_position_.y(), vr_base_right_position_.z());
+                RCLCPP_INFO(node_->get_logger(),
+                            "🔵 Robot Base Position: [%.3f, %.3f, %.3f]",
+                            robot_base_right_position_.x(), robot_base_right_position_.y(), robot_base_right_position_.z());
+                RCLCPP_INFO(node_->get_logger(), "🔵 右摇杆偏移已重置！");
+            }
+            else
+            {
+                // 当前是运行状态，执行暂停操作
+                // 切换状态为暂停
+                right_arm_paused_.store(true);
+                
+                RCLCPP_INFO(node_->get_logger(), "🔵 右B按键按下 - 右臂更新已暂停！");
+            }
+        }
+
+        last_right_b_button_state_.store(currentBButtonState);
+    }
+
     void VRInputHandler::leftThumbstickAxesCallback(const geometry_msgs::msg::Point::SharedPtr msg)
     {
         // 存储左摇杆轴值
@@ -711,6 +882,65 @@ namespace arms_ros2_control::command
                 RCLCPP_DEBUG(node_->get_logger(), "🕹️ Right thumbstick (XY): Y=%.3f→ΔX=%.4f, X=%.3f→ΔY=%.4f",
                              right_thumbstick_axes_.y(), delta_x,
                              right_thumbstick_axes_.x(), delta_y);
+            }
+        }
+    }
+
+
+    void VRInputHandler::fsmCommandCallback(std_msgs::msg::Int32::SharedPtr msg)
+    {
+        int32_t command = msg->data;
+        
+        // 忽略重置命令（command=0）
+        if (command == 0)
+        {
+            return;
+        }
+
+        // 更新FSM状态
+        int32_t old_state = current_fsm_state_.load();
+        
+        // 根据command推断新状态
+        int32_t new_state = old_state;
+        if (command == 1)
+        {
+            new_state = 1; // HOME
+        }
+        else if (command == 2)
+        {
+            new_state = 2; // HOLD
+        }
+        else if (command == 3)
+        {
+            new_state = 3; // OCS2
+        }
+        else if (command == 100)
+        {
+            // REST姿态切换命令（不改变状态，只切换姿态）
+            // 状态保持为HOME，不需要更新状态
+            return;
+        }
+
+        // 更新状态
+        if (new_state != old_state)
+        {
+            current_fsm_state_.store(new_state);
+            
+            // 如果当前状态不是OCS2，自动切换到存储模式
+            if (new_state != 3)  // 3 = OCS2
+            {
+                if (is_update_mode_.load())
+                {
+                    is_update_mode_.store(false);
+                    // 重置摇杆累积偏移
+                    left_thumbstick_offset_ = Eigen::Vector3d::Zero();
+                    right_thumbstick_offset_ = Eigen::Vector3d::Zero();
+                    left_thumbstick_yaw_offset_ = 0.0;
+                    right_thumbstick_yaw_offset_ = 0.0;
+                    RCLCPP_INFO(node_->get_logger(), 
+                                "🕹️🕶️🕹️ FSM状态不是OCS2，自动切换到STORAGE模式 (状态=%d)", new_state);
+                    RCLCPP_INFO(node_->get_logger(), "🕹️🕶️🕹️ Thumbstick offsets reset!");
+                }
             }
         }
     }
