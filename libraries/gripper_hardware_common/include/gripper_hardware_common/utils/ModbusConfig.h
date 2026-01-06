@@ -122,7 +122,7 @@ namespace gripper_hardware_common
             // Register 0: Status bits (bit 3 = stopped flag)
             // Register 1: Position (high byte) and error code (low byte)
             // Register 2: Force (high byte) and velocity (low byte)
-            static constexpr int STATUS_REG_COUNT = 3;              // Number of status registers to read
+            static constexpr int STATUS_REG_COUNT = 2;              // Number of status registers to read
 
             /// initialize gripper
             static constexpr uint16_t INIT_REGISTER = 0x03E8;
