@@ -188,7 +188,12 @@ namespace arms_controller_common
 
         // Calculate interpolation phase
         double phase = 0.0;
-        if (percent_ >= 1.0)
+        if (interpolation_type_ == InterpolationType::NONE)
+        {
+            // NONE type: directly set target position without interpolation
+            phase = 1.0;
+        }
+        else if (percent_ >= 1.0)
         {
             phase = 1.0;
         }
@@ -286,6 +291,19 @@ namespace arms_controller_common
         current_config_index_ = config_index;
         current_target_ = home_configs_[config_index];
         startInterpolation();
+    }
+
+    std::vector<double> StateHome::getConfiguration(size_t config_index) const
+    {
+        if (config_index >= home_configs_.size())
+        {
+            RCLCPP_WARN(logger_,
+                        "Invalid configuration index %zu (max: %zu), returning empty vector",
+                        config_index, home_configs_.size() - 1);
+            return std::vector<double>();
+        }
+
+        return home_configs_[config_index];
     }
 
     void StateHome::switchConfiguration()
