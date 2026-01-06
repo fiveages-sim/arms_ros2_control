@@ -98,9 +98,18 @@ namespace basic_joint_controller
             {"velocity", &ctrl_interfaces_.joint_velocity_state_interface_}
         };
 
+        // Controller name
+        std::string controller_name_;
+
+        // Target command parameters
+        bool target_command_enabled_{false};
+        int32_t target_command_close_config_{1};
+        int32_t target_command_open_config_{0};
+
         // ROS subscriptions
         rclcpp::Subscription<std_msgs::msg::Int32>::SharedPtr fsm_command_subscription_;
         rclcpp::Subscription<std_msgs::msg::String>::SharedPtr robot_description_subscription_;
+        rclcpp::Subscription<std_msgs::msg::Int32>::SharedPtr target_command_subscription_;
 
         // Joint limits manager (common utility)
         std::shared_ptr<arms_controller_common::JointLimitsManager> joint_limits_manager_;

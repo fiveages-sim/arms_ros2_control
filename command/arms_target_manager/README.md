@@ -20,18 +20,16 @@ colcon build --packages-up-to arms_target_manager
 
 ### 2. 启动节点
 
-通常通过 OCS2 控制器 launch 文件启动（会自动包含 ArmsTargetManager）：
+通过 OCS2 控制器 launch 文件启动（会自动包含 ArmsTargetManager）：
 
 ```bash
-ros2 launch ocs2_arm_controller full_body.launch.py robot:=cr5
+ros2 launch ocs2_arm_controller demo.launch.py robot:=cr5
 ```
 
-或者直接使用 OCS2 专用的 launch 文件：
-
-```bash
-ros2 launch arms_target_manager ocs2_arm_target_manager.launch.py \
-    task_file:=/path/to/task.info
-```
+ArmsTargetManager 的参数处理逻辑已集成到 `robot_common_launch` 中，会在启动时自动：
+- 解析 task.info 文件检测 dual_arm_mode 和 control_base_frame
+- 自动检测 hand_controllers（如果启用 gripper）
+- 查找并加载配置文件
 
 ### 3. 在RViz中查看
 
@@ -42,9 +40,12 @@ ros2 launch arms_target_manager ocs2_arm_target_manager.launch.py \
 
 ## 参数说明
 
-### Launch 参数
-- `task_file`：task.info 文件路径（必需，用于自动检测 dual_arm_mode 和 control_base_frame）
+### 节点参数
+参数通过 OCS2 控制器 launch 文件自动配置，包括：
+- `dual_arm_mode`：是否双臂模式（从 task.info 自动检测）
+- `control_base_frame`：控制基坐标系（从 task.info 自动检测）
 - `marker_fixed_frame`：Marker 固定坐标系，默认为 "base_link"
+- `hand_controllers`：手部/夹爪控制器名称列表（从控制器配置自动检测）
 
 ### 配置文件查找逻辑
 配置文件会自动按以下优先级查找：

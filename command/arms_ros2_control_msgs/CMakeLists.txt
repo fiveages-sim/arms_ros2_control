@@ -4,7 +4,6 @@ project(arms_ros2_control_msgs)
 find_package(rosidl_default_generators REQUIRED)
 rosidl_generate_interfaces(${PROJECT_NAME}
         "msg/Inputs.msg"
-        "msg/Gripper.msg"
 )
 
 ament_package()

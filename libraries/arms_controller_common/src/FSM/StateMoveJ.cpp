@@ -120,7 +120,12 @@ namespace arms_controller_common
 
         // Calculate interpolation phase
         double phase = 0.0;
-        if (percent_ >= 1.0)
+        if (interpolation_type_ == InterpolationType::NONE)
+        {
+            // NONE type: directly set target position without interpolation
+            phase = 1.0;
+        }
+        else if (percent_ >= 1.0)
         {
             // Ensure exact convergence to target at the end
             phase = 1.0;

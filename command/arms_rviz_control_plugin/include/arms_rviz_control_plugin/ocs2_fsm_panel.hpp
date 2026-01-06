@@ -11,7 +11,6 @@
 
 #include <rviz_common/panel.hpp>
 #include <rclcpp/rclcpp.hpp>
-#include <arms_ros2_control_msgs/msg/inputs.hpp>
 #include <std_msgs/msg/int32.hpp>
 
 namespace arms_rviz_control_plugin

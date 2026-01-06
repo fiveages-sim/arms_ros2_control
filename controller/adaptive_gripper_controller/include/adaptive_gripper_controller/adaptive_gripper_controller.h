@@ -18,9 +18,9 @@
 #include <memory>
 #include <string>
 
-#include "arms_ros2_control_msgs/msg/gripper.hpp"
 #include "std_msgs/msg/string.hpp"
 #include "std_msgs/msg/float64.hpp"
+#include "std_msgs/msg/int32.hpp"
 #include "controller_interface/controller_interface.hpp"
 #include "hardware_interface/loaned_command_interface.hpp"
 #include "hardware_interface/loaned_state_interface.hpp"
@@ -77,13 +77,15 @@ namespace adaptive_gripper_controller
     private:
         // 夹爪关节名称
         std::string joint_name_ = "gripper_joint";
+        
+        // 控制器名称（用于话题命名）
+        std::string controller_name_;
 
         // 目标位置
         double target_position_ = 0.0;
 
         // 夹爪状态
         int32_t gripper_target_ = 0;
-        int32_t gripper_direction_ = 0;
 
         // 关节限制
         double joint_upper_limit_ = 0.1;
@@ -145,12 +147,9 @@ namespace adaptive_gripper_controller
         int32_t arm_id_ = 1;  // 默认为左臂
 
         // ROS订阅器
-        rclcpp::Subscription<arms_ros2_control_msgs::msg::Gripper>::SharedPtr gripper_subscription_;
         rclcpp::Subscription<std_msgs::msg::String>::SharedPtr robot_description_subscription_;
         rclcpp::Subscription<std_msgs::msg::Float64>::SharedPtr direct_position_subscription_;
-
-                 // 处理夹爪命令
-         void process_gripper_command();
+        rclcpp::Subscription<std_msgs::msg::Int32>::SharedPtr target_command_subscription_;
 
         // 解析robot description获取关节限制
         void parse_joint_limits(const std::string& robot_description);

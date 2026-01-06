@@ -6,6 +6,7 @@
 #include <QHBoxLayout>
 #include <memory>
 #include <functional>
+#include <arms_controller_common/utils/FSMStateTransitionValidator.h>
 
 namespace arms_rviz_control_plugin
 {
@@ -279,43 +280,10 @@ namespace arms_rviz_control_plugin
 
     void OCS2FSMPanel::onFsmCommandReceived(const std_msgs::msg::Int32::SharedPtr msg)
     {
-        // 根据当前状态和命令，检查状态转换是否有效
-        bool valid_transition = false;
-        std::string new_state = current_state_;
-        
-        switch (msg->data)
-        {
-            case 1: // HOLD → HOME
-                if (current_state_ == "HOLD")
-                {
-                    new_state = "HOME";
-                    valid_transition = true;
-                }
-                break;
-            case 2: // HOME → HOLD 或 OCS2 → HOLD 或 MOVEJ → HOLD
-                if (current_state_ == "HOME" || current_state_ == "OCS2" || current_state_ == "MOVEJ")
-                {
-                    new_state = "HOLD";
-                    valid_transition = true;
-                }
-                break;
-            case 3: // HOLD → OCS2
-                if (current_state_ == "HOLD")
-                {
-                    new_state = "OCS2";
-                    valid_transition = true;
-                }
-                break;
-            case 4: // HOLD → MOVEJ
-                if (current_state_ == "HOLD")
-                {
-                    new_state = "MOVEJ";
-                    valid_transition = true;
-                }
-                break;
-            default:
-                break;
-        }
+        // 使用公共的状态转换验证工具类
+        std::string new_state;
+        bool valid_transition = arms_controller_common::FSMStateTransitionValidator::validateTransition(
+            current_state_, msg->data, new_state);
         
         if (valid_transition)
         {

@@ -1,70 +1,83 @@
-#ifndef ARMS_RVIZ_CONTROL_PLUGIN_GRIPPER_CONTROL_PANEL_HPP
-#define ARMS_RVIZ_CONTROL_PLUGIN_GRIPPER_CONTROL_PANEL_HPP
+#pragma once
 
 #include <memory>
-#include <QWidget>
+
 #include <QPushButton>
 #include <QLabel>
-#include <QVBoxLayout>
-#include <QHBoxLayout>
-#include <QGroupBox>
+
 #include <QTimer>
 #include <string>
 
 #include <rviz_common/panel.hpp>
 #include <rclcpp/rclcpp.hpp>
-#include <arms_ros2_control_msgs/msg/gripper.hpp>
-#include <rcl_interfaces/srv/get_parameters.hpp>
+#include <std_msgs/msg/int32.hpp>
+#include <map>
 
 namespace arms_rviz_control_plugin
 {
+    class GripperControlPanel : public rviz_common::Panel
+    {
+        Q_OBJECT
 
-class GripperControlPanel : public rviz_common::Panel
-{
-  Q_OBJECT
+    public:
+        GripperControlPanel(QWidget* parent = nullptr);
+        ~GripperControlPanel() override;
 
-public:
-  GripperControlPanel(QWidget* parent = nullptr);
-  ~GripperControlPanel() override;
+        void onInitialize() override;
 
-  void onInitialize() override;
+        // Load and save configuration data
+        void load(const rviz_common::Config& config) override;
+        void save(rviz_common::Config config) const override;
 
-  // Load and save configuration data
-  void load(const rviz_common::Config& config) override;
-  void save(rviz_common::Config config) const override;
+    private Q_SLOTS:
+        void onLeftGripperToggle();
+        void onRightGripperToggle();
 
-private Q_SLOTS:
-  void onLeftGripperToggle();
-  void onRightGripperToggle();
+    private:
+        void onTargetCommandReceived(const std::string& controller_name, const std_msgs::msg::Int32::SharedPtr msg);
+        void publishGripperCommand(bool open, const std::string& controller_name);
+        void updateGripperDisplay();
+        void updateButtonVisibility();
 
-private:
-  void onGripperCommandReceived(const arms_ros2_control_msgs::msg::Gripper::SharedPtr msg);
-  void publishGripperCommand(bool open, int32_t arm_id);
-  void updateGripperDisplay();
-  void updateButtonVisibility();
-
-
-
-  // ROS2
-  rclcpp::Node::SharedPtr node_;
-  rclcpp::Publisher<arms_ros2_control_msgs::msg::Gripper>::SharedPtr gripper_publisher_;
-  rclcpp::Subscription<arms_ros2_control_msgs::msg::Gripper>::SharedPtr gripper_subscription_;
+        // Helper functions
+        void createTargetCommandPublishers();
+        void createTargetCommandSubscriptions();
+        void determineControllerMapping();
+        std::string getDisplayNameFromControllerName(const std::string& controller_name);
 
 
-  // UI Elements
-  std::unique_ptr<QPushButton> left_gripper_btn_;
-  std::unique_ptr<QPushButton> right_gripper_btn_;
-  std::unique_ptr<QLabel> no_controller_label_;
+        // ROS2
+        rclcpp::Node::SharedPtr node_;
 
-  // Robot configuration
-  bool is_dual_arm_mode_;
-  std::vector<std::string> hand_controllers_;
+        // target_command publishers (controller name -> publisher)
+        std::map<std::string, rclcpp::Publisher<std_msgs::msg::Int32>::SharedPtr> target_command_publishers_;
 
-  // Gripper state tracking
-  bool left_gripper_open_;   // Left arm gripper state
-  bool right_gripper_open_;  // Right arm gripper state
-};
+        // target_command subscriptions (controller name -> subscription)
+        std::map<std::string, rclcpp::Subscription<std_msgs::msg::Int32>::SharedPtr> target_command_subscriptions_;
 
+        // Controller name to button state mapping (controller name -> is_open)
+        std::map<std::string, bool*> controller_to_state_;
+
+        // Controller names for left and right buttons
+        std::string left_controller_name_;
+        std::string right_controller_name_;
+        
+        // Display names for buttons (computed once during initialization)
+        std::string left_display_name_;
+        std::string right_display_name_;
+
+
+        // UI Elements
+        std::unique_ptr<QPushButton> left_gripper_btn_;
+        std::unique_ptr<QPushButton> right_gripper_btn_;
+        std::unique_ptr<QLabel> no_controller_label_;
+
+        // Robot configuration
+        bool is_dual_arm_mode_ = false;
+        std::vector<std::string> hand_controllers_;
+
+        // Gripper state tracking
+        bool left_gripper_open_ = false; // Left arm gripper state
+        bool right_gripper_open_ = false; // Right arm gripper state
+    };
 } // namespace arms_rviz_control_plugin
-
-#endif // ARMS_RVIZ_CONTROL_PLUGIN_GRIPPER_CONTROL_PANEL_HPP
