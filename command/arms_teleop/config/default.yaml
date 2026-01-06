@@ -26,8 +26,8 @@
       left_stick_y: 1      # 左摇杆 Y 轴 - 控制 X 方向移动
       right_stick_x: 3     # 右摇杆 X 轴 - 控制 Yaw 旋转
       right_stick_y: 4     # 右摇杆 Y 轴 - 控制 Z 方向移动
-      dpad_x: 7            # D-Pad X 轴 - 控制 Pitch 旋转
-      dpad_y: 6            # D-Pad Y 轴 - 控制 Roll 旋转
+      dpad_x: 6            # D-Pad X 轴 - 控制 Pitch 旋转
+      dpad_y: 7            # D-Pad Y 轴 - 控制 Roll 旋转
       deadzone: 0.1        # 摇杆死区
       dpad_deadzone: 0.5   # D-Pad 死区
     

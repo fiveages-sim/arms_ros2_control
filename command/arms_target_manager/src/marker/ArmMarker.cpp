@@ -51,6 +51,12 @@ namespace arms_ros2_control::command
             current_pose_topic, 10,
             [this](const geometry_msgs::msg::PoseStamped::ConstSharedPtr msg)
             {
+                // 先通知外部收到原始消息（如 VRInputHandler）
+                if (current_pose_callback_)
+                {
+                    current_pose_callback_(msg);
+                }
+                // 然后更新 marker
                 updateFromTopic(msg);
             });
 
@@ -148,6 +154,11 @@ namespace arms_ros2_control::command
     void ArmMarker::setStateCheckCallback(StateCheckCallback callback)
     {
         state_check_callback_ = std::move(callback);
+    }
+
+    void ArmMarker::setCurrentPoseCallback(CurrentPoseCallback callback)
+    {
+        current_pose_callback_ = std::move(callback);
     }
 
     bool ArmMarker::publishTargetPose(bool force, bool use_stamped)

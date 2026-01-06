@@ -77,6 +77,27 @@ namespace arms_ros2_control::command
          */
         bool checkNodeExists(const std::shared_ptr<rclcpp::Node>& node, const std::string& targetNodeName);
 
+        /**
+         * FSM命令回调函数（用于跟踪FSM状态）
+         * 由外部统一订阅后调用，避免重复订阅
+         * @param msg FSM命令消息
+         */
+        void fsmCommandCallback(std_msgs::msg::Int32::SharedPtr msg);
+
+        /**
+         * 机器人左臂当前pose回调函数
+         * 由外部统一订阅后调用，避免重复订阅
+         * @param msg 机器人pose消息
+         */
+        void robotLeftPoseCallback(geometry_msgs::msg::PoseStamped::SharedPtr msg);
+
+        /**
+         * 机器人右臂当前pose回调函数
+         * 由外部统一订阅后调用，避免重复订阅
+         * @param msg 机器人pose消息
+         */
+        void robotRightPoseCallback(geometry_msgs::msg::PoseStamped::SharedPtr msg);
+
     private:
         /**
          * VR左臂pose回调函数
@@ -101,18 +122,6 @@ namespace arms_ros2_control::command
          * @param msg 布尔消息，表示摇杆按下状态
          */
         void leftThumbstickCallback(std_msgs::msg::Bool::SharedPtr msg);
-
-        /**
-         * 机器人左臂当前pose回调函数
-         * @param msg 机器人pose消息
-         */
-        void robotLeftPoseCallback(geometry_msgs::msg::PoseStamped::SharedPtr msg);
-
-        /**
-         * 机器人右臂当前pose回调函数
-         * @param msg 机器人pose消息
-         */
-        void robotRightPoseCallback(geometry_msgs::msg::PoseStamped::SharedPtr msg);
 
         /**
          * 左摇杆轴值回调函数
@@ -149,12 +158,6 @@ namespace arms_ros2_control::command
          * @param msg B按键状态消息
          */
         void rightBButtonCallback(std_msgs::msg::Bool::SharedPtr msg);
-
-        /**
-         * FSM命令回调函数（用于跟踪FSM状态）
-         * @param msg FSM命令消息
-         */
-         void fsmCommandCallback(std_msgs::msg::Int32::SharedPtr msg);
 
         /**
          * 更新marker位置（已废弃，保留用于兼容）
@@ -245,9 +248,8 @@ namespace arms_ros2_control::command
         rclcpp::Subscription<std_msgs::msg::Bool>::SharedPtr sub_right_grip_;
         rclcpp::Subscription<std_msgs::msg::Bool>::SharedPtr sub_left_y_button_;
         rclcpp::Subscription<std_msgs::msg::Bool>::SharedPtr sub_right_b_button_;
-        rclcpp::Subscription<geometry_msgs::msg::PoseStamped>::SharedPtr sub_robot_left_pose_;
-        rclcpp::Subscription<geometry_msgs::msg::PoseStamped>::SharedPtr sub_robot_right_pose_;
-        rclcpp::Subscription<std_msgs::msg::Int32>::SharedPtr sub_fsm_command_;
+        // 机器人 current_pose 订阅已移除，改为在 arms_target_manager_node 中统一处理
+        // FSM命令订阅已移除，改为在 arms_target_manager_node 中统一处理
 
         // VR pose参数
         Eigen::Matrix4d left_ee_pose_ = Eigen::Matrix4d::Identity();

@@ -20,9 +20,6 @@ private:
     void joy_callback(sensor_msgs::msg::Joy::SharedPtr msg);
     void processButtons(const sensor_msgs::msg::Joy::SharedPtr msg);
     void processAxes(const sensor_msgs::msg::Joy::SharedPtr msg);
-    void sendGripperCommand(bool open);
-    void left_target_command_callback(std_msgs::msg::Int32::SharedPtr msg);
-    void right_target_command_callback(std_msgs::msg::Int32::SharedPtr msg);
     double applyDeadzone(double value, double deadzone = 0.1) const;
     void loadButtonMapping();
     void printButtonMapping();
@@ -30,11 +27,7 @@ private:
     arms_ros2_control_msgs::msg::Inputs inputs_;
     rclcpp::Publisher<arms_ros2_control_msgs::msg::Inputs>::SharedPtr publisher_;
     rclcpp::Publisher<std_msgs::msg::Int32>::SharedPtr fsm_command_publisher_;
-    rclcpp::Publisher<std_msgs::msg::Int32>::SharedPtr left_target_command_publisher_;
-    rclcpp::Publisher<std_msgs::msg::Int32>::SharedPtr right_target_command_publisher_;
     rclcpp::Subscription<sensor_msgs::msg::Joy>::SharedPtr subscription_;
-    rclcpp::Subscription<std_msgs::msg::Int32>::SharedPtr left_target_command_subscription_;
-    rclcpp::Subscription<std_msgs::msg::Int32>::SharedPtr right_target_command_subscription_;
     
     // Control parameters
     double updateRate_;
@@ -99,6 +92,9 @@ private:
     // Speed scaling factors
     double low_speed_scale_;
     double high_speed_scale_;
+    
+    // Last FSM command sent (to detect transition to 0)
+    int32_t last_fsm_command_;
 };
 
 #endif //JOYSTICK_TELEOP_H 

@@ -11,6 +11,7 @@
 #include <cmath>
 #include <algorithm>
 #include <utility>
+#include <arms_controller_common/utils/FSMStateTransitionValidator.h>
 
 namespace arms_ros2_control::command
 {
@@ -568,16 +569,23 @@ namespace arms_ros2_control::command
 
     void ArmsTargetManager::fsmCommandCallback(std_msgs::msg::Int32::ConstSharedPtr msg)
     {
-        int32_t new_state = msg->data;
+        int32_t command = msg->data;
 
-        if (new_state == 0)
+        if (command == 0)
         {
             return;
         }
 
-        if (new_state != current_controller_state_)
+        // 使用公共的状态转换验证工具类
+        std::string new_state;
+        bool valid_transition = arms_controller_common::FSMStateTransitionValidator::validateTransition(
+            current_fsm_state_, command, new_state);
+
+        // 只有在有效转换时才更新状态
+        if (valid_transition)
         {
-            current_controller_state_ = new_state;
+            current_fsm_state_ = new_state;
+            current_controller_state_ = command;
 
             // 状态变化时重新创建marker
             updateMarkerShape();
@@ -585,7 +593,19 @@ namespace arms_ros2_control::command
         }
     }
 
-    // updateArmMarkerFromTopic 已移除，现在由 ArmMarker 内部的订阅器直接处理
+    void ArmsTargetManager::setCurrentPoseCallback(
+        const std::string& armType,
+        std::function<void(const geometry_msgs::msg::PoseStamped::ConstSharedPtr&)> callback)
+    {
+        if (armType == "left" && left_arm_marker_)
+        {
+            left_arm_marker_->setCurrentPoseCallback(callback);
+        }
+        else if (armType == "right" && dual_arm_mode_ && right_arm_marker_)
+        {
+            right_arm_marker_->setCurrentPoseCallback(callback);
+        }
+    }
 
     void ArmsTargetManager::updateHeadMarkerFromTopic(
         const sensor_msgs::msg::JointState::ConstSharedPtr& joint_msg)

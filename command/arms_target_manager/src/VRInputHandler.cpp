@@ -81,20 +81,9 @@ namespace arms_ros2_control::command
         sub_left_thumbstick_ = node_->create_subscription<std_msgs::msg::Bool>(
             "xr_left_thumbstick", 10, leftThumbstickCallback);
 
-        // 创建机器人pose订阅器
-        auto robotLeftCallback = [this](const geometry_msgs::msg::PoseStamped::SharedPtr msg)
-        {
-            this->robotLeftPoseCallback(msg);
-        };
-        sub_robot_left_pose_ = node_->create_subscription<geometry_msgs::msg::PoseStamped>(
-            "left_current_pose", 10, robotLeftCallback);
-
-        auto robotRightCallback = [this](const geometry_msgs::msg::PoseStamped::SharedPtr msg)
-        {
-            this->robotRightPoseCallback(msg);
-        };
-        sub_robot_right_pose_ = node_->create_subscription<geometry_msgs::msg::PoseStamped>(
-            "right_current_pose", 10, robotRightCallback);
+        // 注意：机器人 current_pose 订阅已移除，改为在 arms_target_manager_node 中统一处理
+        // 这样可以避免与 ArmMarker 的订阅冲突
+        // current_pose 更新现在通过 robotLeftPoseCallback() 和 robotRightPoseCallback() 方法由外部调用
 
         // 创建摇杆轴值订阅器
         auto leftThumbstickAxesCallback = [this](const geometry_msgs::msg::Point::SharedPtr msg)
@@ -141,14 +130,9 @@ namespace arms_ros2_control::command
         sub_right_b_button_ = node_->create_subscription<std_msgs::msg::Bool>(
             "xr_right_b_button", 10, rightBButtonCallback);
 
-        // 创建FSM命令订阅器（用于跟踪FSM状态）
-        auto fsmCommandCallback = [this](const std_msgs::msg::Int32::SharedPtr msg)
-        {
-            this->fsmCommandCallback(msg);
-        };
-        sub_fsm_command_ = node_->create_subscription<std_msgs::msg::Int32>(
-            "/fsm_command", 10, fsmCommandCallback);
-        
+        // 注意：FSM命令订阅已移除，改为在 arms_target_manager_node 中统一处理
+        // 这样可以避免与 ArmsTargetManager 的订阅冲突
+        // FSM状态更新现在通过 fsmCommandCallback() 方法由外部调用
 
         RCLCPP_INFO(node_->get_logger(), "🕹️🕶️🕹️ VRInputHandler created");
         RCLCPP_INFO(node_->get_logger(), "🕹️🕶️🕹️ Thumbstick scaling: linear=%.3f, angular=%.3f", LINEAR_SCALE,
