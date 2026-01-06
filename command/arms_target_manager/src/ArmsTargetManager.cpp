@@ -52,9 +52,15 @@ namespace arms_ros2_control::command
             publish_rate_,
             [this](const std::string& marker_name, const geometry_msgs::msg::Pose& pose)
             {
+                // 如果 marker 不显示（enable_interaction = false），只更新数值，不更新可视化
+                if (!isStateDisabled(current_controller_state_))
+                {
+                    return;  // marker 不显示时，不更新可视化位置
+                }
+                
                 // 单次模式下：只在非禁用状态下更新（HOME/HOLD/MOVEJ），OCS2状态下不更新
                 // 连续模式下：所有状态下都更新（包括OCS2）
-                if (current_mode_ == MarkerState::SINGLE_SHOT && isStateDisabled(current_controller_state_))
+                if (current_mode_ == MarkerState::SINGLE_SHOT)
                 {
                     return;  // 单次模式下，OCS2 等禁用状态下不更新
                 }

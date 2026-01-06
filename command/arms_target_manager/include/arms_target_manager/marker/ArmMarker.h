@@ -7,7 +7,6 @@
 #include <memory>
 #include <string>
 #include <array>
-#include <mutex>
 #include <rclcpp/rclcpp.hpp>
 #include <geometry_msgs/msg/pose.hpp>
 #include <geometry_msgs/msg/pose_stamped.hpp>
@@ -224,7 +223,6 @@ namespace arms_ros2_control::command
         
         // 当前目标的 frame_id（从 left_current_target 或 right_current_target 获取）
         std::string current_target_frame_id_;
-        mutable std::mutex frame_id_mutex_;  // 保护 frame_id 的互斥锁
         
         // 更新回调（用于通知外部更新可视化）
         UpdateCallback update_callback_;

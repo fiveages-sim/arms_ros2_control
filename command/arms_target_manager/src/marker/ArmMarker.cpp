@@ -61,16 +61,13 @@ namespace arms_ros2_control::command
             });
 
         // 创建当前目标订阅器（用于获取 frame_id 和更新 marker 位置）
-        std::string current_target_topic = (arm_type == ArmType::LEFT) ? "left_current_target" : "right_current_target";
+        std::string current_target_topic = arm_type == ArmType::LEFT ? "left_current_target" : "right_current_target";
         current_target_subscription_ = node_->create_subscription<geometry_msgs::msg::PoseStamped>(
             current_target_topic, 10,
             [this](const geometry_msgs::msg::PoseStamped::ConstSharedPtr msg)
             {
                 // 更新 frame_id
-                {
-                    std::lock_guard<std::mutex> lock(frame_id_mutex_);
-                    current_target_frame_id_ = msg->header.frame_id;
-                }
+                current_target_frame_id_ = msg->header.frame_id;
 
                 // 获取消息的 frame_id
                 std::string source_frame_id = msg->header.frame_id;
@@ -172,11 +169,7 @@ namespace arms_ros2_control::command
             }
 
             // 获取当前目标的 frame_id（从 left_current_target 或 right_current_target）
-            std::string target_frame_id;
-            {
-                std::lock_guard<std::mutex> lock(frame_id_mutex_);
-                target_frame_id = current_target_frame_id_;
-            }
+            std::string target_frame_id = current_target_frame_id_;
 
             // 如果 frame_id 为空，使用默认的 control_base_frame
             if (target_frame_id.empty())
