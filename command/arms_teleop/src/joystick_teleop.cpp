@@ -9,12 +9,16 @@ using std::placeholders::_1;
 JoystickTeleop::JoystickTeleop() : Node("joystick_teleop_node") {
     publisher_ = create_publisher<arms_ros2_control_msgs::msg::Inputs>("control_input", 10);
     fsm_command_publisher_ = create_publisher<std_msgs::msg::Int32>("/fsm_command", 10);
-    gripper_publisher_ = create_publisher<arms_ros2_control_msgs::msg::Gripper>("/gripper_command", rclcpp::QoS(rclcpp::KeepLast(1)).transient_local());
+    left_target_command_publisher_ = create_publisher<std_msgs::msg::Int32>("/left_hand_controller/target_command", 10);
+    right_target_command_publisher_ = create_publisher<std_msgs::msg::Int32>("/right_hand_controller/target_command", 10);
     subscription_ = create_subscription<
         sensor_msgs::msg::Joy>("joy", 10, std::bind(&JoystickTeleop::joy_callback, this, _1));
-    gripper_command_subscription_ = create_subscription<arms_ros2_control_msgs::msg::Gripper>(
-        "/gripper_command", rclcpp::QoS(rclcpp::KeepLast(1)).transient_local(),
-        std::bind(&JoystickTeleop::gripper_command_callback, this, _1));
+    left_target_command_subscription_ = create_subscription<std_msgs::msg::Int32>(
+        "/left_hand_controller/target_command", 10,
+        std::bind(&JoystickTeleop::left_target_command_callback, this, _1));
+    right_target_command_subscription_ = create_subscription<std_msgs::msg::Int32>(
+        "/right_hand_controller/target_command", 10,
+        std::bind(&JoystickTeleop::right_target_command_callback, this, _1));
     
     // Load button and axes mapping from parameters
     loadButtonMapping();
@@ -38,10 +42,6 @@ JoystickTeleop::JoystickTeleop() : Node("joystick_teleop_node") {
     last_start_pressed_ = false;
     last_left_stick_pressed_ = false;
     last_right_stick_pressed_ = false;
-
-    // Initialize gripper command state tracking
-    current_gripper_target_ = 0;  // Initial state: closed
-    gripper_command_received_ = false;
 
     // Initialize separate gripper states for left and right arms
     left_gripper_open_ = false;   // Left arm gripper initially closed
@@ -255,15 +255,16 @@ void JoystickTeleop::processButtons(const sensor_msgs::msg::Joy::SharedPtr msg) 
     }
 
     if (x_just_pressed && enabled_) {
-        // X button: toggle gripper - use separate state management like task3
-        bool& current_gripper_state = (currentTarget_ == 1) ? left_gripper_open_ : right_gripper_open_;
-        current_gripper_state = !current_gripper_state;
+        // X button: toggle gripper - 像VR一样，基于当前状态切换（不立即更新状态）
+        bool current_gripper_state = (currentTarget_ == 1) ? left_gripper_open_ : right_gripper_open_;
+        bool should_open = !current_gripper_state;  // 计算目标状态
 
-        sendGripperCommand(current_gripper_state);
+        sendGripperCommand(should_open);  // 发布命令
 
+        // 不立即更新状态，等待订阅器回调来更新（与VR逻辑一致）
         std::string arm_name = (currentTarget_ == 1) ? "LEFT" : "RIGHT";
-        RCLCPP_INFO(get_logger(), "🎮 %s gripper %s",
-                   arm_name.c_str(), current_gripper_state ? "OPENED" : "CLOSED");
+        RCLCPP_INFO(get_logger(), "🎮 %s gripper command sent: %s",
+                   arm_name.c_str(), should_open ? "OPEN" : "CLOSE");
     }
 
     if (left_stick_just_pressed && enabled_) {
@@ -328,42 +329,35 @@ double JoystickTeleop::applyDeadzone(double value, double deadzone) const {
 
 void JoystickTeleop::sendGripperCommand(bool open)
 {
-    auto gripper_msg = arms_ros2_control_msgs::msg::Gripper();
+    auto target_msg = std_msgs::msg::Int32();
+    target_msg.data = open ? 1 : 0;
 
-    if (open) {
-        gripper_msg.target = 1;  // 打开夹爪
-        gripper_msg.direction = 1;
-    } else {
-        gripper_msg.target = 0;  // 关闭夹爪
-        gripper_msg.direction = -1;
+    // 根据当前目标手臂发布到对应的话题
+    if (currentTarget_ == 1) {
+        // 左臂
+        left_target_command_publisher_->publish(target_msg);
+        RCLCPP_DEBUG(this->get_logger(), "Sent left gripper command: target=%d", target_msg.data);
+    } else if (currentTarget_ == 2) {
+        // 右臂
+        right_target_command_publisher_->publish(target_msg);
+        RCLCPP_DEBUG(this->get_logger(), "Sent right gripper command: target=%d", target_msg.data);
     }
-
-    gripper_msg.arm_id = currentTarget_;  // 设置目标手臂
-
-    gripper_publisher_->publish(gripper_msg);
-    RCLCPP_DEBUG(this->get_logger(), "Sent gripper command: target=%d, direction=%d, arm_id=%d",
-                  gripper_msg.target, gripper_msg.direction, gripper_msg.arm_id);
 }
 
-void JoystickTeleop::gripper_command_callback(arms_ros2_control_msgs::msg::Gripper::SharedPtr msg)
+void JoystickTeleop::left_target_command_callback(std_msgs::msg::Int32::SharedPtr msg)
 {
-    // Update corresponding arm's local state based on received command
-    if (msg->arm_id == 1) {
-        left_gripper_open_ = (msg->target == 1);
-    } else if (msg->arm_id == 2) {
-        right_gripper_open_ = (msg->target == 1);
-    }
+    // 更新左夹爪状态
+    left_gripper_open_ = (msg->data == 1);
+    RCLCPP_DEBUG(this->get_logger(), "Received left target command: target=%d, state=%s",
+                msg->data, left_gripper_open_ ? "open" : "closed");
+}
 
-    // Also maintain the old synchronization logic for backward compatibility
-    if (msg->arm_id == currentTarget_) {
-        current_gripper_target_ = msg->target;
-        gripper_command_received_ = true;
-    }
-
-    RCLCPP_DEBUG(this->get_logger(), "Received gripper command for arm %d: target=%d, direction=%d. Updated local states: left=%s, right=%s",
-                msg->arm_id, msg->target, msg->direction,
-                left_gripper_open_ ? "open" : "closed",
-                right_gripper_open_ ? "open" : "closed");
+void JoystickTeleop::right_target_command_callback(std_msgs::msg::Int32::SharedPtr msg)
+{
+    // 更新右夹爪状态
+    right_gripper_open_ = (msg->data == 1);
+    RCLCPP_DEBUG(this->get_logger(), "Received right target command: target=%d, state=%s",
+                msg->data, right_gripper_open_ ? "open" : "closed");
 }
 
 int main(int argc, char *argv[]) {
