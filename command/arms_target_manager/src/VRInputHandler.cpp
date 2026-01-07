@@ -615,8 +615,8 @@ namespace arms_ros2_control::command
             // 旋转翻转（面对面镜像）
             // 方法：对四元数的Y和Z分量取反，实现绕Z轴的镜像
             // 这相当于对旋转进行XY平面的镜像变换
-            vrOriDiff.y() = -vrOriDiff.y(); // 翻转Y分量
-            // vrOriDiff.z() = -vrOriDiff.z();  // 翻转Z分量
+            // vrOriDiff.y() = -vrOriDiff.y(); // 翻转Y分量
+            vrOriDiff.z() = -vrOriDiff.z();  // 翻转Z分量
             vrOriDiff.x() = -vrOriDiff.x(); // 翻转X分量
             vrOriDiff.normalize(); // 重新归一化
         }
