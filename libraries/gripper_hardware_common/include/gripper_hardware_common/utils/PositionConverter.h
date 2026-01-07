@@ -98,11 +98,11 @@ namespace gripper_hardware_common
             static double jodellToNormalized(int pos_set)
             {
                 // Limit to valid range
-                pos_set = physicalToNormalized(pos_set);
-                
+                double pos_double = 1.0 - (static_cast<double>(pos_set) / static_cast<double>(MAX_POSITION));
                 // Jodell: 0(closed) -> 0.0, 255(open) -> 1.0
                 // Formula: normalized = 1.0 - (pos_set / 255.0)
-                return 1.0 - (static_cast<double>(pos_set) / MAX_POSITION);
+                std::cout << " ++++++ pos set is " << pos_double << std::endl;
+                return normalizedToPhysical(pos_double);
             }
 
             /**

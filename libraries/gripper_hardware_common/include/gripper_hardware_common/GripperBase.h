@@ -23,6 +23,13 @@ namespace gripper_hardware_common
         /// Send async read request for current status (status updated by recv_thread_func).
         virtual bool getStatus() = 0;
 
+        /// Read data from port and process it (for Modbus grippers).
+        /// Returns true if data was successfully read and processed.
+        virtual bool readAndProcessData(int& torque, int& velocity, double& position)
+        {
+            return false;  // Default implementation for non-Modbus grippers
+        }
+
         /// Optional teardown hook.
         virtual void deinitialize() {}
 
