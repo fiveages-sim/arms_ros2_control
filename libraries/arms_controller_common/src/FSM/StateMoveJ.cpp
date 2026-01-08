@@ -249,31 +249,7 @@ namespace arms_controller_common
         }
 
         // Apply joint limit checking if callback is set
-        std::vector<double> clamped_target_pos = target_pos;
-        if (joint_limit_checker_)
-        {
-            clamped_target_pos = joint_limit_checker_(target_pos);
-
-            // Check if any values were clamped
-            bool was_clamped = false;
-            for (size_t i = 0; i < target_pos.size() && i < clamped_target_pos.size(); ++i)
-            {
-                if (std::abs(target_pos[i] - clamped_target_pos[i]) > TARGET_EPSILON)
-                {
-                    was_clamped = true;
-                    break;
-                }
-            }
-
-            if (was_clamped)
-            {
-                RCLCPP_WARN_THROTTLE(logger_, *node_->get_clock(), 1000,
-                                     "Joint limits applied to target position");
-            }
-        }
-
-        // Update target position
-        target_pos_ = clamped_target_pos;
+        target_pos_ = applyJointLimits(target_pos, "target position");
         has_target_ = true;
 
         // Reset interpolation if we're already in the state
@@ -362,10 +338,7 @@ namespace arms_controller_common
         }
 
         // Apply joint limit checking if callback is set
-        if (joint_limit_checker_)
-        {
-            target_pos_ = joint_limit_checker_(target_pos_);
-        }
+        target_pos_ = applyJointLimits(target_pos_, "target position for prefix '" + prefix + "'");
 
         has_target_ = true;
         use_prefix_filter_ = true;
@@ -602,6 +575,12 @@ namespace arms_controller_common
 
     void StateMoveJ::initMoveJPlanner()
     {
+        // Apply joint limit checking if callback is set
+        // This ensures doubles interpolation also respects joint limits
+        std::vector<double> clamped_target_pos = applyJointLimits(target_pos_, "doubles interpolation target position");
+        // Update target_pos_ with clamped values for consistency
+        target_pos_ = clamped_target_pos;
+        
         size_t nr_of_joints = start_pos_.size();
         planning::TrajectPoint start_joint_point(nr_of_joints);
         planning::TrajectPoint end_joint_point(nr_of_joints);
@@ -609,7 +588,7 @@ namespace arms_controller_common
         for (size_t i = 0; i < nr_of_joints; i++)
         {
             start_joint_point.joint_pos(i) = start_pos_[i];
-            end_joint_point.joint_pos(i) = target_pos_[i];
+            end_joint_point.joint_pos(i) = clamped_target_pos[i];
         }
         planning::TrajectoryInitParameters movej_init_para(start_joint_point, end_joint_point, traj_param,
                                                            1.0 / ctrl_interfaces_.frequency_);
@@ -711,5 +690,36 @@ namespace arms_controller_common
             std::ignore = ctrl_interfaces_.joint_position_command_interface_[i].get().set_value(
                 movej_point.joint_pos(i));
         }
+    }
+
+    std::vector<double> StateMoveJ::applyJointLimits(const std::vector<double>& target_pos, 
+                                                      const std::string& log_message)
+    {
+        std::vector<double> clamped_target_pos = target_pos;
+        
+        if (joint_limit_checker_)
+        {
+            clamped_target_pos = joint_limit_checker_(target_pos);
+
+            // Check if any values were clamped
+            bool was_clamped = false;
+            for (size_t i = 0; i < target_pos.size() && i < clamped_target_pos.size(); ++i)
+            {
+                if (std::abs(target_pos[i] - clamped_target_pos[i]) > TARGET_EPSILON)
+                {
+                    was_clamped = true;
+                    break;
+                }
+            }
+
+            // Log warning if limits were applied and log message is provided
+            if (was_clamped && !log_message.empty())
+            {
+                std::string full_message = "Joint limits applied to " + log_message;
+                RCLCPP_WARN_THROTTLE(logger_, *node_->get_clock(), 1000, "%s", full_message.c_str());
+            }
+        }
+
+        return clamped_target_pos;
     }
 } // namespace arms_controller_common

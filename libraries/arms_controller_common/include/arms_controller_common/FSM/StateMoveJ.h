@@ -176,6 +176,15 @@ namespace arms_controller_common
          * @param movej_point Trajectory point from movej planner
          */
         void applyJointPositionsFromMoveJ(const planning::TrajectPoint& movej_point);
+
+        /**
+         * @brief Apply joint limit checking to target position
+         * @param target_pos Input target position to check
+         * @param log_message Optional log message prefix (empty string to skip logging)
+         * @return Clamped target position after applying joint limits
+         */
+        std::vector<double> applyJointLimits(const std::vector<double>& target_pos, 
+                                             const std::string& log_message = "");
         
         static constexpr double TARGET_EPSILON = 1e-6;  // Tolerance for comparing target positions
         planning::moveJ movej_planner;                 //Joint interpolation planner
