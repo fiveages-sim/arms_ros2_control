@@ -36,6 +36,7 @@ namespace arms_ros2_control::command
           , update_callback_(std::move(update_callback))
           , last_publish_time_(node_->now())
           , last_subscription_update_time_(node_->now())
+          , last_marker_command_time_(rclcpp::Time(0, 0, node_->get_clock()->get_clock_type()))  // 初始化为0，表示从未发送过指令
     {
         // 初始化默认 pose
         pose_.position.x = initial_position_[0];
@@ -76,6 +77,17 @@ namespace arms_ros2_control::command
                 if (source_frame_id.empty())
                 {
                     return;
+                }
+
+                // 冷却机制检查：只有当超过1秒不是由marker这边发送的指令，才允许topic的数据来更新marker位置
+                auto now = node_->now();
+                if (last_marker_command_time_.seconds() > 0)  // 如果曾经发送过指令
+                {
+                    auto time_since_last_command = (now - last_marker_command_time_).seconds();
+                    if (time_since_last_command < 1.0)  // 如果距离上次marker发送指令不足1秒，跳过更新
+                    {
+                        return;
+                    }
                 }
 
                 // 转换 pose 到 marker 的坐标系（frame_id_）
@@ -189,6 +201,9 @@ namespace arms_ros2_control::command
 
             target_stamped_publisher_->publish(pose_stamped);
             
+            // 更新marker发送指令的时间戳（用于冷却机制）
+            last_marker_command_time_ = node_->now();
+            
             // 更新节流时间
             last_publish_time_ = node_->now();
             
@@ -215,6 +230,9 @@ namespace arms_ros2_control::command
             pose_, frame_id_, control_base_frame_);
 
         target_publisher_->publish(transformed_pose);
+        
+        // 更新marker发送指令的时间戳（用于冷却机制）
+        last_marker_command_time_ = node_->now();
         
         // 即使强制发送，也更新节流时间，避免连续强制发送过于频繁
         if (force)
