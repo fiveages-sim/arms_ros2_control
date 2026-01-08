@@ -34,8 +34,7 @@ arms_ros2_control/
 │   ├── arms_rviz_control_plugin/ # RViz control plugin
 │   ├── arms_target_manager/     # Target management system
 │   └── arms_teleop/             # Unified teleoperation package
-│       ├── joystick_teleop      # Joystick-based control
-│       └── keyboard_teleop      # Keyboard-based control
+│       └── joystick_teleop      # Joystick-based control
 └── README.md
 ```
 

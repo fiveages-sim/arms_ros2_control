@@ -83,7 +83,7 @@ namespace gripper_hardware_common
             static int normalizedToJodell(double normalized)
             {
                 // Limit to valid range
-                normalized = std::max(0.0, std::min(1.0, normalized));
+                normalized = physicalToNormalized(normalized);
                 
                 // Jodell: 0.0(closed) -> 255, 1.0(open) -> 0
                 // Formula: pos_set = 255 * (1.0 - normalized)
@@ -98,15 +98,15 @@ namespace gripper_hardware_common
             static double jodellToNormalized(int pos_set)
             {
                 // Limit to valid range
-                pos_set = std::max(0, std::min(MAX_POSITION, pos_set));
-                
+                double pos_double = 1.0 - (static_cast<double>(pos_set) / static_cast<double>(MAX_POSITION));
                 // Jodell: 0(closed) -> 0.0, 255(open) -> 1.0
                 // Formula: normalized = 1.0 - (pos_set / 255.0)
-                return 1.0 - (static_cast<double>(pos_set) / MAX_POSITION);
+                std::cout << " ++++++ pos set is " << pos_double << std::endl;
+                return normalizedToPhysical(pos_double);
             }
 
             /**
-             * @brief Extract position from Jodell status register
+             * @brief ExtractnormalizedToPhysical position from Jodell status register
              * 
              * Jodell status register format: position is in the high byte of the second register
              * @param status_reg_high High byte of status register (robot_stats[1] >> 8)

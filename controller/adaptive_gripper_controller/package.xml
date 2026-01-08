@@ -17,7 +17,6 @@
 	<depend>pluginlib</depend>
 	<depend>rclcpp</depend>
 	<depend>rclcpp_lifecycle</depend>
-	<depend>arms_ros2_control_msgs</depend>
 
 	<export>
 		<build_type>ament_cmake</build_type>

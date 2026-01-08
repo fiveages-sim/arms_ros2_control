@@ -3,6 +3,7 @@
 //
 
 #include "ocs2_arm_controller/control/Visualizer.h"
+#include <limits>
 #include <ocs2_ros_interfaces/common/RosMsgHelpers.h>
 #include <pinocchio/algorithm/frames.hpp>
 #include <pinocchio/algorithm/kinematics.hpp>
@@ -53,12 +54,16 @@ namespace ocs2::mobile_manipulator
         {
             if (const auto pinocchio_geometry_interface = interface_->getPinocchioGeometryInterface())
             {
+                // Get activation distance for visualization filtering
+                const scalar_t activationDistance = interface_->getSelfCollisionActivationDistance();
+                
                 geometry_visualization_ = std::make_unique<GeometryInterfaceVisualization>(
                     interface_->getPinocchioInterface(),
-                    std::move(*pinocchio_geometry_interface), base_frame_);
+                    std::move(*pinocchio_geometry_interface), base_frame_, activationDistance);
 
                 enable_self_collision_ = true;
-                RCLCPP_INFO(node_->get_logger(), "Self-collision visualization initialized using interface geometry");
+                RCLCPP_INFO(node_->get_logger(), 
+                    "Self-collision visualization initialized (activation distance: %.3f m)", activationDistance);
             }
             else
             {
@@ -212,6 +217,15 @@ namespace ocs2::mobile_manipulator
             // Use GeometryInterfaceVisualization for self-collision visualization
             geometry_visualization_->publishDistances(state);
         }
+    }
+
+    bool Visualizer::isCollisionDetected(scalar_t threshold) const
+    {
+        if (geometry_visualization_)
+        {
+            return geometry_visualization_->isCollisionDetected(threshold);
+        }
+        return false;
     }
 
     void Visualizer::publishEndEffectorPose(const rclcpp::Time& time, const vector_t& state) const

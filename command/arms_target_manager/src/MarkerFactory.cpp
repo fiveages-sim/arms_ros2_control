@@ -33,7 +33,7 @@ namespace arms_ros2_control::command
         interactiveMarker.header.frame_id = frame_id_;
         interactiveMarker.header.stamp = node_->now();
         interactiveMarker.name = name;
-        interactiveMarker.scale = 0.2;
+        interactiveMarker.scale = enable_interaction ? 0.2 : 0.001;
         interactiveMarker.description = description;
 
         // 设置位姿
@@ -50,11 +50,17 @@ namespace arms_ros2_control::command
             marker = createBoxMarker(color);
         }
 
+        // 如果不启用交互，将透明度设置为 0（完全透明）
+        if (!enable_interaction)
+        {
+            marker.color.a = 0.0;
+        }
+
         // 创建控制
         visualization_msgs::msg::InteractiveMarkerControl boxControl;
         boxControl.always_visible = true;
         boxControl.markers.push_back(marker);
-
+        
         // 根据是否启用交互功能设置交互模式
         if (enable_interaction)
         {
@@ -86,7 +92,7 @@ namespace arms_ros2_control::command
         interactiveMarker.header.frame_id = frame_id_;
         interactiveMarker.header.stamp = node_->now();
         interactiveMarker.name = name;
-        interactiveMarker.scale = 0.25;
+        interactiveMarker.scale = enable_interaction ? 0.25 : 0.001;
         interactiveMarker.description = "Head Target";
 
         // 设置位姿
@@ -94,6 +100,12 @@ namespace arms_ros2_control::command
 
         // 创建箭头marker表示头部朝向
         visualization_msgs::msg::Marker arrowMarker = createArrowMarker("red");
+
+        // 如果不启用交互，将透明度设置为 0（完全透明）
+        if (!enable_interaction)
+        {
+            arrowMarker.color.a = 0.0;
+        }
 
         // 箭头marker只用于显示，不用于交互
         visualization_msgs::msg::InteractiveMarkerControl arrowControl;

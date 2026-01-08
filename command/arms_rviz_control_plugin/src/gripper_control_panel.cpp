@@ -3,14 +3,15 @@
 #include <rviz_common/display_context.hpp>
 #include <rclcpp/rclcpp.hpp>
 #include <algorithm>
+#include <cctype>
+
+#include <QHBoxLayout>
+#include <QGroupBox>
 
 namespace arms_rviz_control_plugin
 {
     GripperControlPanel::GripperControlPanel(QWidget* parent)
         : Panel(parent)
-          , is_dual_arm_mode_(false)
-          , left_gripper_open_(false)
-          , right_gripper_open_(false)
     {
         // Create UI layout
         auto* main_layout = new QVBoxLayout(this);
@@ -56,7 +57,7 @@ namespace arms_rviz_control_plugin
 
         // Declare parameter with empty default
         node_->declare_parameter("hand_controllers", std::vector<std::string>());
-        
+
         // Get hand controllers from parameters
         hand_controllers_ = node_->get_parameter("hand_controllers").as_string_array();
 
@@ -64,7 +65,7 @@ namespace arms_rviz_control_plugin
         if (hand_controllers_.empty())
         {
             RCLCPP_INFO(node_->get_logger(), "No gripper controllers detected");
-            is_dual_arm_mode_ = false;  // Not relevant when no controllers
+            is_dual_arm_mode_ = false; // Not relevant when no controllers
         }
         else
         {
@@ -80,16 +81,17 @@ namespace arms_rviz_control_plugin
         // Only create publishers and subscribers if we have controllers
         if (!hand_controllers_.empty())
         {
-            // Create publishers
-            gripper_publisher_ = node_->create_publisher<arms_ros2_control_msgs::msg::Gripper>(
-                "/gripper_command", rclcpp::QoS(rclcpp::KeepLast(1)).transient_local());
+            // Determine controller mapping (left/right)
+            determineControllerMapping();
 
-            // Create subscriber for gripper command state - this enables joystick-panel synchronization
-            gripper_subscription_ = node_->create_subscription<arms_ros2_control_msgs::msg::Gripper>(
-                "/gripper_command", rclcpp::QoS(rclcpp::KeepLast(1)).transient_local(),
-                std::bind(&GripperControlPanel::onGripperCommandReceived, this, std::placeholders::_1));
+            // Create target_command publishers
+            createTargetCommandPublishers();
 
-            RCLCPP_INFO(node_->get_logger(), "Gripper Control Panel initialized with %zu controllers", hand_controllers_.size());
+            // Create target_command subscriptions for state synchronization
+            createTargetCommandSubscriptions();
+
+            RCLCPP_INFO(node_->get_logger(), "Gripper Control Panel initialized with %zu controllers",
+                        hand_controllers_.size());
         }
         else
         {
@@ -126,113 +128,107 @@ namespace arms_rviz_control_plugin
 
     void GripperControlPanel::onLeftGripperToggle()
     {
+        if (left_controller_name_.empty())
+        {
+            RCLCPP_WARN(node_->get_logger(), "Left controller not found");
+            return;
+        }
         // Toggle based on current state
         bool should_open = !left_gripper_open_;
-        publishGripperCommand(should_open, 1);
+        publishGripperCommand(should_open, left_controller_name_);
     }
 
     void GripperControlPanel::onRightGripperToggle()
     {
+        if (right_controller_name_.empty())
+        {
+            RCLCPP_WARN(node_->get_logger(), "Right controller not found");
+            return;
+        }
         // Toggle based on current state
         bool should_open = !right_gripper_open_;
-        publishGripperCommand(should_open, 2);
+        publishGripperCommand(should_open, right_controller_name_);
     }
 
-    void GripperControlPanel::onGripperCommandReceived(const arms_ros2_control_msgs::msg::Gripper::SharedPtr msg)
+    void GripperControlPanel::onTargetCommandReceived(const std::string& controller_name,
+                                                      const std_msgs::msg::Int32::SharedPtr msg)
     {
-        // Update gripper state based on arm_id
-        if (msg->arm_id == 1)
+        // Get state pointer from controller name
+        auto it = controller_to_state_.find(controller_name);
+        if (it == controller_to_state_.end())
         {
-            // Left arm
-            left_gripper_open_ = (msg->target == 1);
-        }
-        else if (msg->arm_id == 2)
-        {
-            // Right arm
-            right_gripper_open_ = (msg->target == 1);
-        }
-
-        updateGripperDisplay();
-
-        RCLCPP_DEBUG(node_->get_logger(), "Gripper command received for arm %d: target=%d",
-                     msg->arm_id, msg->target);
-    }
-
-    void GripperControlPanel::publishGripperCommand(bool open, int32_t arm_id)
-    {
-        if (!gripper_publisher_)
-        {
-            RCLCPP_WARN(rclcpp::get_logger("gripper_control_panel"), "Gripper publisher not initialized");
+            RCLCPP_WARN(node_->get_logger(), "Received target command from unknown controller: %s",
+                        controller_name.c_str());
             return;
         }
 
-        auto gripper_msg = arms_ros2_control_msgs::msg::Gripper();
+        bool is_open = msg->data == 1;
 
-        if (open)
+        // Update gripper state directly
+        *it->second = is_open;
+
+        updateGripperDisplay();
+    }
+
+    void GripperControlPanel::publishGripperCommand(bool open, const std::string& controller_name)
+    {
+        auto it = target_command_publishers_.find(controller_name);
+        if (it == target_command_publishers_.end() || !it->second)
         {
-            gripper_msg.target = 1; // gripper state: 1=open
-            gripper_msg.direction = 1; // direction: positive
+            RCLCPP_WARN(node_->get_logger(), "Target command publisher not found for controller: %s",
+                        controller_name.c_str());
+            return;
         }
-        else
+
+        // Publish to /<controller_name>/target_command
+        auto target_msg = std_msgs::msg::Int32();
+        target_msg.data = open ? 1 : 0;
+        it->second->publish(target_msg);
+
+        // Update state immediately when we publish (don't wait for subscription callback)
+        auto state_it = controller_to_state_.find(controller_name);
+        if (state_it != controller_to_state_.end())
         {
-            gripper_msg.target = 0; // gripper state: 0=close
-            gripper_msg.direction = -1; // direction: negative
+            *(state_it->second) = open;
+            updateGripperDisplay();
         }
-
-        gripper_msg.arm_id = arm_id; // target arm: 1=left, 2=right
-
-        gripper_publisher_->publish(gripper_msg);
 
         RCLCPP_DEBUG(node_->get_logger(),
-                     "Published gripper command: target=%d, direction=%d, arm_id=%d",
-                     gripper_msg.target, gripper_msg.direction, gripper_msg.arm_id);
+                     "Published target command: controller=%s, target=%d (state updated immediately)",
+                     controller_name.c_str(), target_msg.data);
     }
 
     void GripperControlPanel::updateGripperDisplay()
     {
         // Update left arm button
-        if (left_gripper_btn_)
+        if (left_gripper_btn_ && !left_display_name_.empty())
         {
             if (left_gripper_open_)
             {
-                if (is_dual_arm_mode_)
-                {
-                    left_gripper_btn_->setText("Close Left Gripper");
-                }
-                else
-                {
-                    left_gripper_btn_->setText("Close Gripper");
-                }
+                left_gripper_btn_->setText(("Close " + left_display_name_).c_str());
                 left_gripper_btn_->setStyleSheet(
                     "QPushButton { background-color: #F44336; color: white; font-weight: bold; padding: 10px; }");
             }
             else
             {
-                if (is_dual_arm_mode_)
-                {
-                    left_gripper_btn_->setText("Open Left Gripper");
-                }
-                else
-                {
-                    left_gripper_btn_->setText("Open Gripper");
-                }
+                left_gripper_btn_->setText(("Open " + left_display_name_).c_str());
                 left_gripper_btn_->setStyleSheet(
                     "QPushButton { background-color: #4CAF50; color: white; font-weight: bold; padding: 10px; }");
             }
         }
 
         // Update right arm button (only in dual arm mode)
-        if (right_gripper_btn_ && is_dual_arm_mode_)
+        if (right_gripper_btn_ && is_dual_arm_mode_ && !right_display_name_.empty())
         {
             if (right_gripper_open_)
             {
-                right_gripper_btn_->setText("Close Right Gripper");
+                right_gripper_btn_->setText(("Close " + right_display_name_).c_str());
                 right_gripper_btn_->setStyleSheet(
                     "QPushButton { background-color: #F44336; color: white; font-weight: bold; padding: 10px; }");
             }
             else
             {
-                right_gripper_btn_->setText("Open Right Gripper");
+                right_gripper_btn_->setText(("Open " + right_display_name_).c_str());
                 right_gripper_btn_->setStyleSheet(
                     "QPushButton { background-color: #4CAF50; color: white; font-weight: bold; padding: 10px; }");
             }
@@ -262,16 +258,170 @@ namespace arms_rviz_control_plugin
         }
         else
         {
-            // Single arm mode: show and enable left button (rename to generic "Gripper"), hide and disable right button
+            // Single arm mode: show and enable left button, hide and disable right button
             left_gripper_btn_->setVisible(true);
             left_gripper_btn_->setEnabled(true);
-            left_gripper_btn_->setText("Open Gripper");
+            if (!left_display_name_.empty())
+            {
+                left_gripper_btn_->setText(("Open " + left_display_name_).c_str());
+            }
             right_gripper_btn_->setVisible(false);
             right_gripper_btn_->setEnabled(false);
             no_controller_label_->setVisible(false);
         }
     }
 
+    std::string GripperControlPanel::getDisplayNameFromControllerName(const std::string& controller_name)
+    {
+        std::string name = controller_name;
+
+        // Remove common suffixes
+        std::vector<std::string> suffixes = {"_controller", "controller", "_gripper", "gripper", "_hand", "hand"};
+        for (const auto& suffix : suffixes)
+        {
+            if (name.length() >= suffix.length())
+            {
+                std::string name_lower = name;
+                std::transform(name_lower.begin(), name_lower.end(), name_lower.begin(), ::tolower);
+                std::string suffix_lower = suffix;
+                std::transform(suffix_lower.begin(), suffix_lower.end(), suffix_lower.begin(), ::tolower);
+
+                // Check if ends with suffix
+                if (name_lower.length() >= suffix_lower.length() &&
+                    name_lower.substr(name_lower.length() - suffix_lower.length()) == suffix_lower)
+                {
+                    name = name.substr(0, name.length() - suffix_lower.length());
+                    break;
+                }
+            }
+        }
+
+        // Remove leading/trailing underscores
+        while (!name.empty() && name.front() == '_')
+        {
+            name = name.substr(1);
+        }
+        while (!name.empty() && name.back() == '_')
+        {
+            name = name.substr(0, name.length() - 1);
+        }
+
+        // Replace underscores with spaces
+        std::replace(name.begin(), name.end(), '_', ' ');
+
+        // Capitalize first letter of each word
+        bool capitalize_next = true;
+        for (char& c : name)
+        {
+            if (c == ' ')
+            {
+                capitalize_next = true;
+            }
+            else if (capitalize_next)
+            {
+                c = std::toupper(c);
+                capitalize_next = false;
+            }
+            else
+            {
+                c = std::tolower(c);
+            }
+        }
+
+        return name.empty() ? "Gripper" : name;
+    }
+
+    void GripperControlPanel::determineControllerMapping()
+    {
+        left_controller_name_.clear();
+        right_controller_name_.clear();
+        left_display_name_.clear();
+        right_display_name_.clear();
+        controller_to_state_.clear();
+
+        for (const auto& controller_name : hand_controllers_)
+        {
+            // Convert to lowercase for case-insensitive matching
+            std::string name_lower = controller_name;
+            std::transform(name_lower.begin(), name_lower.end(), name_lower.begin(), ::tolower);
+
+            if (name_lower.find("left") != std::string::npos)
+            {
+                // Left arm controller
+                left_controller_name_ = controller_name;
+                left_display_name_ = getDisplayNameFromControllerName(controller_name);
+                controller_to_state_[controller_name] = &left_gripper_open_;
+            }
+            else if (name_lower.find("right") != std::string::npos)
+            {
+                // Right arm controller
+                right_controller_name_ = controller_name;
+                right_display_name_ = getDisplayNameFromControllerName(controller_name);
+                controller_to_state_[controller_name] = &right_gripper_open_;
+            }
+            else
+            {
+                // Default to left arm for single-arm robots
+                if (left_controller_name_.empty())
+                {
+                    left_controller_name_ = controller_name;
+                    left_display_name_ = getDisplayNameFromControllerName(controller_name);
+                    controller_to_state_[controller_name] = &left_gripper_open_;
+                }
+            }
+        }
+
+        RCLCPP_INFO(node_->get_logger(),
+                    "Controller mapping - Left: %s (%s), Right: %s (%s)",
+                    left_controller_name_.c_str(), left_display_name_.c_str(),
+                    right_controller_name_.c_str(), right_display_name_.c_str());
+    }
+
+    void GripperControlPanel::createTargetCommandPublishers()
+    {
+        target_command_publishers_.clear();
+
+        for (const auto& controller_name : hand_controllers_)
+        {
+            // Create publisher for target_command topic
+            // Use volatile QoS to allow subscribers to receive messages
+            std::string topic_name = "/" + controller_name + "/target_command";
+            auto publisher = node_->create_publisher<std_msgs::msg::Int32>(
+                topic_name, rclcpp::QoS(10));
+
+            target_command_publishers_[controller_name] = publisher;
+
+            RCLCPP_INFO(node_->get_logger(),
+                        "Created target_command publisher: %s",
+                        topic_name.c_str());
+        }
+    }
+
+    void GripperControlPanel::createTargetCommandSubscriptions()
+    {
+        target_command_subscriptions_.clear();
+
+        for (const auto& controller_name : hand_controllers_)
+        {
+            // Create subscription for target_command topic to sync state
+            // Use same QoS as publisher to ensure compatibility
+            std::string topic_name = "/" + controller_name + "/target_command";
+
+            // Use lambda to capture controller_name
+            auto subscription = node_->create_subscription<std_msgs::msg::Int32>(
+                topic_name, rclcpp::QoS(10),
+                [this, controller_name](const std_msgs::msg::Int32::SharedPtr msg)
+                {
+                    onTargetCommandReceived(controller_name, msg);
+                });
+
+            target_command_subscriptions_[controller_name] = subscription;
+
+            RCLCPP_INFO(node_->get_logger(),
+                        "Created target_command subscription: %s (QoS: KeepLast(10))",
+                        topic_name.c_str());
+        }
+    }
 } // namespace arms_rviz_control_plugin
 
 #include <pluginlib/class_list_macros.hpp>

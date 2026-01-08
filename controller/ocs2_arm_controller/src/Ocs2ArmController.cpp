@@ -80,6 +80,10 @@ namespace ocs2::mobile_manipulator
             current_state_ = next_state_;
             current_state_->enter();
             mode_ = FSMMode::NORMAL;
+            
+            // Reset FSM command after state transition is complete
+            // This prevents the command from triggering another transition
+            ctrl_interfaces_.fsm_command_ = 0;
         }
 
         return controller_interface::return_type::OK;
@@ -154,7 +158,7 @@ namespace ocs2::mobile_manipulator
                 ctrl_interfaces_, logger, home_duration, gravity_compensation);
 
             // Home interpolation parameters
-            std::string home_interpolation_type = auto_declare<std::string>("home_interpolation_type", "tanh");
+            std::string home_interpolation_type = auto_declare<std::string>("home_interpolation_type", "linear");
             double home_tanh_scale = auto_declare<double>("home_tanh_scale", 3.0);
             state_list_.home->setInterpolationType(home_interpolation_type);
             state_list_.home->setTanhScale(home_tanh_scale);
@@ -214,7 +218,7 @@ namespace ocs2::mobile_manipulator
 
             // MoveJ state parameters
             double move_duration = auto_declare<double>("move_duration", 3.0);
-            std::string movej_interpolation_type = auto_declare<std::string>("movej_interpolation_type", "tanh");
+            std::string movej_interpolation_type = auto_declare<std::string>("movej_interpolation_type", "linear");
             double movej_tanh_scale = auto_declare<double>("movej_tanh_scale", 3.0);
 
             // Create StateMoveJ using common implementation

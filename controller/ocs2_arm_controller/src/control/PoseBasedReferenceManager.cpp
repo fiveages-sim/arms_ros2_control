@@ -41,10 +41,10 @@ namespace ocs2::mobile_manipulator
     {
         // 保存node的logger用于后续日志输出
         logger_ = node->get_logger();
-        
+
         // 保存clock用于时间戳
         clock_ = node->get_clock();
-        
+
         // 初始化TF2 buffer和listener
         tf_buffer_ = std::make_shared<tf2_ros::Buffer>(node->get_clock());
         tf_listener_ = std::make_shared<tf2_ros::TransformListener>(*tf_buffer_);
@@ -106,11 +106,11 @@ namespace ocs2::mobile_manipulator
         };
         path_subscriber_ = node->create_subscription<nav_msgs::msg::Path>(
             "target_path", 1, pathCallback);
-        
+
         // 初始化发布器：发布当前目标
         left_target_publisher_ = node->create_publisher<geometry_msgs::msg::PoseStamped>(
             "left_current_target", 1);
-        
+
         if (dual_arm_mode_)
         {
             right_target_publisher_ = node->create_publisher<geometry_msgs::msg::PoseStamped>(
@@ -158,14 +158,14 @@ namespace ocs2::mobile_manipulator
     {
         // 使用 moveL_duration_ 作为插值时间
         const double actual_duration = moveL_duration_;
-        
+
         // 采样间隔（秒）
-        constexpr double kSampleInterval = 0.04;  // 0.04秒一个采样点（25Hz）
-        
+        constexpr double kSampleInterval = 0.04; // 0.04秒一个采样点（25Hz）
+
         // 根据时间长度动态计算采样点数量
         const size_t kNumSamples = std::max(
             static_cast<size_t>(std::ceil(actual_duration / kSampleInterval)) + 1,
-            static_cast<size_t>(2)  // 至少2个采样点
+            static_cast<size_t>(2) // 至少2个采样点
         );
 
         // 起始/终止时间
@@ -181,11 +181,11 @@ namespace ocs2::mobile_manipulator
         {
             start_state = vector_t::Zero(14);
             goal_state = vector_t::Zero(14);
-            
+
             // 左臂：从previous到current
             start_state.segment(0, 7) = previous_left_target_state;
             goal_state.segment(0, 7) = left_target_state_;
-            
+
             // 右臂：从previous到current
             start_state.segment(7, 7) = previous_right_target_state;
             goal_state.segment(7, 7) = right_target_state_;
@@ -285,7 +285,7 @@ namespace ocs2::mobile_manipulator
 
         // 更新target trajectory
         updateTargetTrajectory();
-        
+
         // 发布当前目标
         publishCurrentTargets();
     }
@@ -307,7 +307,7 @@ namespace ocs2::mobile_manipulator
 
         // 更新target trajectory
         updateTargetTrajectory();
-        
+
         // 发布当前目标
         publishCurrentTargets();
     }
@@ -316,7 +316,7 @@ namespace ocs2::mobile_manipulator
     {
         // 保存上一帧缓存（用于插值起点）
         const vector_t previous_left_target_state = left_target_state_;
-        
+
         // 更新缓存到新目标
         vector_t target_state = vector_t::Zero(7);
         target_state(0) = msg->position.x;
@@ -387,7 +387,7 @@ namespace ocs2::mobile_manipulator
         try
         {
             geometry_msgs::msg::PoseStamped transformed_pose;
-            
+
             // 使用最新可用变换
             geometry_msgs::msg::TransformStamped transform = tf_buffer_->lookupTransform(
                 base_frame_, msg->header.frame_id, tf2::TimePointZero);
@@ -411,14 +411,16 @@ namespace ocs2::mobile_manipulator
 
     void PoseBasedReferenceManager::leftPoseStampedCallback(const geometry_msgs::msg::PoseStamped::SharedPtr msg)
     {
-        processPoseStamped(msg, [this](geometry_msgs::msg::Pose::SharedPtr pose_msg) {
+        processPoseStamped(msg, [this](geometry_msgs::msg::Pose::SharedPtr pose_msg)
+        {
             leftPoseStampedPoseCallback(pose_msg);
         });
     }
 
     void PoseBasedReferenceManager::rightPoseStampedCallback(const geometry_msgs::msg::PoseStamped::SharedPtr msg)
     {
-        processPoseStamped(msg, [this](geometry_msgs::msg::Pose::SharedPtr pose_msg) {
+        processPoseStamped(msg, [this](geometry_msgs::msg::Pose::SharedPtr pose_msg)
+        {
             rightPoseStampedPoseCallback(pose_msg);
         });
     }
@@ -434,9 +436,9 @@ namespace ocs2::mobile_manipulator
         // 检查path长度必须为2
         if (msg->poses.size() != 2)
         {
-            RCLCPP_WARN(logger_, 
-                       "Dual target path must contain exactly 2 poses (left and right), got %zu", 
-                       msg->poses.size());
+            RCLCPP_WARN(logger_,
+                        "Dual target path must contain exactly 2 poses (left and right), got %zu",
+                        msg->poses.size());
             return;
         }
 
@@ -461,7 +463,7 @@ namespace ocs2::mobile_manipulator
         // 处理左臂（第一个pose）
         const auto& left_pose_stamped = msg->poses[0];
         vector_t left_target_state;
-        
+
         if (left_pose_stamped.header.frame_id == base_frame_)
         {
             left_target_state = poseToState(left_pose_stamped.pose);
@@ -488,7 +490,7 @@ namespace ocs2::mobile_manipulator
         // 处理右臂（第二个pose）
         const auto& right_pose_stamped = msg->poses[1];
         vector_t right_target_state;
-        
+
         if (right_pose_stamped.header.frame_id == base_frame_)
         {
             right_target_state = poseToState(right_pose_stamped.pose);
@@ -547,44 +549,21 @@ namespace ocs2::mobile_manipulator
             return state;
         };
 
-        // 处理TF转换：将路径点转换到base frame
+        // 处理路径点：默认所有点都在base frame下，不做TF转换
         std::vector<vector_t> left_arm_waypoints;
         std::vector<vector_t> right_arm_waypoints;
 
         for (size_t i = 0; i < total_points; ++i)
         {
             const auto& pose_stamped = msg->poses[i];
-            vector_t state;
-
-            // 如果frame_id不是base_frame，需要转换
-            if (pose_stamped.header.frame_id != base_frame_)
-            {
-                try
-                {
-                    geometry_msgs::msg::PoseStamped transformed_pose;
-                    geometry_msgs::msg::TransformStamped transform = tf_buffer_->lookupTransform(
-                        base_frame_, pose_stamped.header.frame_id, tf2::TimePointZero);
-                    tf2::doTransform(pose_stamped, transformed_pose, transform);
-                    state = poseToState(transformed_pose);
-                }
-                catch (const tf2::TransformException& ex)
-                {
-                    RCLCPP_WARN(logger_,
-                                "无法将路径点 %zu 从 %s 转换到 %s: %s",
-                                i, pose_stamped.header.frame_id.c_str(), base_frame_.c_str(), ex.what());
-                    continue;  // 跳过无法转换的点
-                }
-            }
-            else
-            {
-                state = poseToState(pose_stamped);
-            }
+            // 直接转换，假设所有点都在base frame下
+            vector_t state = poseToState(pose_stamped);
 
             // 根据模式分配路径点
             if (dual_arm_mode_)
             {
                 // 双臂模式：将路径点分成两半，前半段给左臂，后半段给右臂
-                const size_t left_points = (total_points + 1) / 2;  // 前半段（向上取整）
+                const size_t left_points = (total_points + 1) / 2; // 前半段（向上取整）
                 if (i < left_points)
                 {
                     left_arm_waypoints.push_back(state);
@@ -631,14 +610,14 @@ namespace ocs2::mobile_manipulator
 
         // 为每个臂生成插值轨迹
         // 采样间隔（秒）
-        constexpr double kSampleInterval = 0.01;  // 0.04秒一个采样点（25Hz）
-        
+        constexpr double kSampleInterval = 0.04; // 0.04秒一个采样点（25Hz）
+
         // 根据时间长度动态计算采样点数量
         const size_t kNumSamples = std::max(
             static_cast<size_t>(std::ceil(trajectory_duration_ / kSampleInterval)) + 1,
-            static_cast<size_t>(2)  // 至少2个采样点
+            static_cast<size_t>(2) // 至少2个采样点
         );
-        
+
         const double t0 = current_observation_.time;
         const double t1 = t0 + trajectory_duration_;
         const double dt = (t1 - t0) / static_cast<double>(kNumSamples - 1);
@@ -687,13 +666,13 @@ namespace ocs2::mobile_manipulator
 
         // 构建完整的路径点序列（包含起始状态）
         std::vector<vector_t> left_full_path;
-        left_full_path.push_back(left_target_state_);  // 起始点
+        left_full_path.push_back(left_target_state_); // 起始点
         left_full_path.insert(left_full_path.end(), left_arm_waypoints.begin(), left_arm_waypoints.end());
 
         std::vector<vector_t> right_full_path;
         if (dual_arm_mode_)
         {
-            right_full_path.push_back(right_target_state_);  // 起始点
+            right_full_path.push_back(right_target_state_); // 起始点
             right_full_path.insert(right_full_path.end(), right_arm_waypoints.begin(), right_arm_waypoints.end());
         }
 
@@ -704,7 +683,8 @@ namespace ocs2::mobile_manipulator
         state_trajectory.reserve(kNumSamples);
 
         // 辅助函数：根据全局alpha值在路径点序列中插值
-        auto interpolateAlongPath = [&interpolatePose7](const std::vector<vector_t>& path, double global_alpha) -> vector_t
+        auto interpolateAlongPath = [&interpolatePose7](const std::vector<vector_t>& path,
+                                                        double global_alpha) -> vector_t
         {
             if (path.size() == 1)
             {
@@ -792,17 +772,18 @@ namespace ocs2::mobile_manipulator
                     "Target state cache reset - cleared all cached target states");
     }
 
-    void PoseBasedReferenceManager::setCurrentEndEffectorPoses(const vector_t& left_ee_pose, const vector_t& right_ee_pose)
+    void PoseBasedReferenceManager::setCurrentEndEffectorPoses(const vector_t& left_ee_pose,
+                                                               const vector_t& right_ee_pose)
     {
         // 设置左臂pose到缓存
         left_target_state_ = left_ee_pose;
-        
+
         // 如果是双臂模式，设置右臂pose到缓存
         if (dual_arm_mode_)
         {
             right_target_state_ = right_ee_pose;
         }
-        
+
         // 发布当前目标
         publishCurrentTargets();
     }
@@ -812,7 +793,7 @@ namespace ocs2::mobile_manipulator
         // 根据 arm_type 决定发布哪个臂的目标
         bool publish_left = (arm_type.empty() || arm_type == "both" || arm_type == "left");
         bool publish_right = (arm_type.empty() || arm_type == "both" || arm_type == "right");
-        
+
         // 发布左臂当前目标
         if (publish_left)
         {
@@ -828,7 +809,7 @@ namespace ocs2::mobile_manipulator
             left_target_msg.pose.orientation.w = left_target_state_(6);
             left_target_publisher_->publish(left_target_msg);
         }
-        
+
         // 发布右臂当前目标（仅双臂模式）
         if (dual_arm_mode_ && publish_right)
         {

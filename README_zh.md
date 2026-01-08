@@ -32,8 +32,7 @@ arms_ros2_control/
 │   ├── arms_rviz_control_plugin/ # RViz控制插件
 │   ├── arms_target_manager/     # 目标管理系统
 │   └── arms_teleop/             # 统一遥操作包
-│       ├── joystick_teleop      # 基于手柄的控制
-│       └── keyboard_teleop      # 基于键盘的控制
+│       └── joystick_teleop      # 基于手柄的控制
 └── README.md
 ```
 

@@ -148,6 +148,13 @@ namespace arms_controller_common
         void selectConfiguration(size_t config_index);
 
         /**
+         * @brief Get configuration by index (0-based)
+         * @param config_index Configuration index
+         * @return Configuration vector, or empty vector if index is invalid
+         */
+        std::vector<double> getConfiguration(size_t config_index) const;
+
+        /**
          * @brief Select interpolation type used to compute phase from percent.
          * @param type "tanh" or "linear" (case-insensitive). Unknown values fall back to "tanh".
          */

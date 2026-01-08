@@ -71,10 +71,8 @@ install(
         DESTINATION lib/${PROJECT_NAME}
 )
 
-install(
-        DIRECTORY launch/
-        DESTINATION share/${PROJECT_NAME}/launch
-)
+# Launch files are now handled by robot_common_launch utilities
+# No need to install launch directory anymore
 
 install(
         DIRECTORY config/
