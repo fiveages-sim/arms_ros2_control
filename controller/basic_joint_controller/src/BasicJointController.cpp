@@ -119,21 +119,21 @@ namespace basic_joint_controller
             // Configure interpolation type/shape
             state_list_.home->setInterpolationType(home_interpolation_type);
             state_list_.home->setTanhScale(home_tanh_scale);
-            
+
             // Initialize StateHome with configurations from parameters (home_1, home_2, home_3, etc.)
             // Pass auto_declare as a lambda to allow StateHome to use it
             state_list_.home->init([this](const std::string& name, const std::vector<double>& default_value)
             {
                 return this->auto_declare<std::vector<double>>(name, default_value);
             });
-            
+
             // Set configuration switch command base
             state_list_.home->setSwitchCommandBase(switch_command_base);
-            
+
             // StateHold - extends common StateHold to support MOVEJ transition
             state_list_.hold = std::make_shared<StateHold>(
                 ctrl_interfaces_, logger, hold_position_threshold_);
-            
+
             // StateMoveJ - extends common StateMoveJ for basic_joint_controller
             state_list_.movej = std::make_shared<StateMoveJ>(
                 ctrl_interfaces_, logger, move_duration_);
@@ -141,7 +141,7 @@ namespace basic_joint_controller
             // Configure interpolation type/shape
             state_list_.movej->setInterpolationType(movej_interpolation_type);
             state_list_.movej->setTanhScale(movej_tanh_scale);
-            
+
             // Set joint names from controller parameters
             state_list_.movej->setJointNames(joint_names_);
 
@@ -158,8 +158,8 @@ namespace basic_joint_controller
             if (target_command_enabled_)
             {
                 RCLCPP_INFO(get_node()->get_logger(),
-                          "Target command enabled: close_config=%d, open_config=%d",
-                          target_command_close_config_, target_command_open_config_);
+                            "Target command enabled: close_config=%d, open_config=%d",
+                            target_command_close_config_, target_command_open_config_);
             }
 
             return CallbackReturn::SUCCESS;
@@ -186,7 +186,7 @@ namespace basic_joint_controller
         if (state_list_.movej)
         {
             state_list_.movej->setupSubscriptions(get_node(), "target_joint_position", false);
-            
+
             // Set joint limit checker from joint limits manager
             if (joint_limits_manager_)
             {
@@ -237,7 +237,7 @@ namespace basic_joint_controller
                         else
                         {
                             RCLCPP_WARN(get_node()->get_logger(),
-                                      "Invalid target_command value: %d (expected 0 or 1)", msg->data);
+                                        "Invalid target_command value: %d (expected 0 or 1)", msg->data);
                             return;
                         }
 
@@ -245,7 +245,7 @@ namespace basic_joint_controller
                         if (config_index < 0)
                         {
                             RCLCPP_WARN(get_node()->get_logger(),
-                                      "Invalid configuration index: %d (must be >= 0)", config_index);
+                                        "Invalid configuration index: %d (must be >= 0)", config_index);
                             return;
                         }
 
@@ -254,31 +254,31 @@ namespace basic_joint_controller
                         {
                             std::vector<double> target_config = state_list_.home->getConfiguration(
                                 static_cast<size_t>(config_index));
-                            
+
                             if (!target_config.empty())
                             {
                                 // Directly set target position in MOVEJ state
                                 state_list_.movej->setTargetPosition(target_config);
                                 RCLCPP_INFO(get_node()->get_logger(),
-                                          "Target command received: %d, setting MOVEJ target to configuration %d",
-                                          msg->data, config_index);
+                                            "Target command received: %d, setting MOVEJ target to configuration %d",
+                                            msg->data, config_index);
                             }
                             else
                             {
                                 RCLCPP_WARN(get_node()->get_logger(),
-                                          "Configuration %d not available or invalid", config_index);
+                                            "Configuration %d not available or invalid", config_index);
                             }
                         }
                     }
                     else
                     {
                         RCLCPP_DEBUG(get_node()->get_logger(),
-                                   "Target command received but ignored (current state is not MOVEJ)");
+                                     "Target command received but ignored (current state is not MOVEJ)");
                     }
                 });
             RCLCPP_INFO(get_node()->get_logger(),
-                      "Subscribed to target_command topic: %s (close_config=%d, open_config=%d)",
-                      target_command_topic.c_str(), target_command_close_config_, target_command_open_config_);
+                        "Subscribed to target_command topic: %s (close_config=%d, open_config=%d)",
+                        target_command_topic.c_str(), target_command_close_config_, target_command_open_config_);
         }
         else
         {
@@ -305,8 +305,8 @@ namespace basic_joint_controller
         }
         catch (const std::exception& e)
         {
-            RCLCPP_DEBUG(get_node()->get_logger(), 
-                        "Could not get robot_description from parameter server: %s", e.what());
+            RCLCPP_DEBUG(get_node()->get_logger(),
+                         "Could not get robot_description from parameter server: %s", e.what());
         }
 
         return CallbackReturn::SUCCESS;
@@ -389,7 +389,6 @@ namespace basic_joint_controller
             return state_list_.invalid;
         }
     }
-
 } // namespace basic_joint_controller
 
 #include "pluginlib/class_list_macros.hpp"

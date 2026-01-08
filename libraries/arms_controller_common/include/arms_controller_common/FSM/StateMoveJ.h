@@ -153,6 +153,29 @@ namespace arms_controller_common
          * @param prefix Joint name prefix to filter
          */
         void updateJointMask(const std::string& prefix);
+
+        /**
+         * @brief Update interpolation progress based on controller frequency
+         */
+        void updateInterpolationProgress();
+
+        /**
+         * @brief Calculate interpolation phase based on interpolation type
+         * @return Phase value in [0, 1]
+         */
+        double calculateInterpolationPhase();
+
+        /**
+         * @brief Apply interpolated joint positions based on phase
+         * @param phase Interpolation phase [0, 1]
+         */
+        void applyInterpolatedJointPositions(double phase);
+
+        /**
+         * @brief Apply joint positions from movej planner result
+         * @param movej_point Trajectory point from movej planner
+         */
+        void applyJointPositionsFromMoveJ(const planning::TrajectPoint& movej_point);
         
         static constexpr double TARGET_EPSILON = 1e-6;  // Tolerance for comparing target positions
         planning::moveJ movej_planner;                 //Joint interpolation planner

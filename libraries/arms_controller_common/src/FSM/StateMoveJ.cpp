@@ -4,14 +4,13 @@
 #include "arms_controller_common/FSM/StateMoveJ.h"
 #include <cmath>
 #include <algorithm>
-#include <limits>
 
 namespace arms_controller_common
 {
     StateMoveJ::StateMoveJ(CtrlInterfaces& ctrl_interfaces,
-                          const rclcpp::Logger& logger,
-                          double duration,
-                          std::shared_ptr<GravityCompensation> gravity_compensation)
+                           const rclcpp::Logger& logger,
+                           double duration,
+                           std::shared_ptr<GravityCompensation> gravity_compensation)
         : FSMState(FSMStateName::MOVEJ, "movej", ctrl_interfaces),
           logger_(logger),
           gravity_compensation_(gravity_compensation),
@@ -50,7 +49,7 @@ namespace arms_controller_common
         use_prefix_filter_ = false;
         active_prefix_.clear();
         joint_mask_.clear();
-        joint_mask_.resize(joint_names_.size(), true);  // Default: control all joints
+        joint_mask_.resize(joint_names_.size(), true); // Default: control all joints
 
         // Check if we have a target position
         std::lock_guard lock(target_mutex_);
@@ -58,11 +57,11 @@ namespace arms_controller_common
         {
             interpolation_active_ = true;
             RCLCPP_INFO(logger_,
-                       "Starting interpolation to target position over %.1f seconds (type=%s)",
-                       duration_,
-                       toString(interpolation_type_));
+                        "Starting interpolation to target position over %.1f seconds (type=%s)",
+                        duration_,
+                        toString(interpolation_type_));
             //init movej
-            if (interpolation_type_==InterpolationType::DOUBLES)
+            if (interpolation_type_ == InterpolationType::DOUBLES)
             {
                 initMoveJPlanner();
             }
@@ -70,7 +69,7 @@ namespace arms_controller_common
         else
         {
             RCLCPP_WARN(logger_,
-                       "No target position set, waiting for target position...");
+                        "No target position set, waiting for target position...");
         }
     }
 
@@ -82,7 +81,7 @@ namespace arms_controller_common
         if (!has_target_ || target_pos_.size() != start_pos_.size())
         {
             // Maintain current position
-            for (size_t i = 0; i < ctrl_interfaces_.joint_position_command_interface_.size() && 
+            for (size_t i = 0; i < ctrl_interfaces_.joint_position_command_interface_.size() &&
                  i < start_pos_.size(); ++i)
             {
                 std::ignore = ctrl_interfaces_.joint_position_command_interface_[i].get().set_value(start_pos_[i]);
@@ -101,110 +100,32 @@ namespace arms_controller_common
             }
             percent_ = 0.0;
             //init movej
-            if (interpolation_type_==InterpolationType::DOUBLES)
+            if (interpolation_type_ == InterpolationType::DOUBLES)
             {
                 initMoveJPlanner();
             }
             interpolation_active_ = true;
             RCLCPP_INFO(logger_,
-                       "Target position received, starting interpolation from current position");
+                        "Target position received, starting interpolation from current position");
         }
 
-        if (interpolation_type_==InterpolationType::DOUBLES)
+        // Handle different interpolation types
+        if (interpolation_type_ == InterpolationType::DOUBLES)
         {
+            // Use movej planner for DOUBLES interpolation
             planning::TrajectPoint movej_point = movej_planner.run();
+            applyJointPositionsFromMoveJ(movej_point);
+        }
+        else
+        {
+            // Update interpolation progress for other types
+            updateInterpolationProgress();
+            
+            // Calculate interpolation phase
+            double phase = calculateInterpolationPhase();
+            
             // Apply interpolated position to joints
-            for (size_t i = 0; i < ctrl_interfaces_.joint_position_command_interface_.size() &&
-                 i < target_pos_.size() && i < start_pos_.size(); ++i)
-            {
-                std::ignore = ctrl_interfaces_.joint_position_command_interface_[i].get().set_value(
-                    movej_point.joint_pos(i));
-            }
-            //Save data
-            // std::ofstream file("/home/lina/lina/data/state_movej.csv",std::ios::app);
-            // file << std::fixed << std::setprecision(12);
-            // for (size_t i = 0; i < movej_point.joint_pos.getJointSize(); ++i)
-            // {
-            //     file << movej_point.joint_pos(i);
-            //     if (i < movej_point.joint_pos.getJointSize())
-            //     {
-            //         file << ",";
-            //     }
-            // }
-            // file << std::endl;
-            // file.close();
-        }
-        else
-        {
-            // Update interpolation progress based on actual controller frequency
-        double controller_frequency = ctrl_interfaces_.frequency_;
-        if (duration_ <= 0.0 || controller_frequency <= 0.0)
-        {
-            // Invalid timing configuration: jump directly to target
-            percent_ = 1.0;
-        }
-        else
-        {
-            percent_ += 1.0 / (duration_ * controller_frequency);
-        }
-
-        // Clamp percent to [0, 1]
-        if (percent_ > 1.0)
-        {
-            percent_ = 1.0;
-        }
-
-        // Calculate interpolation phase
-        double phase = 0.0;
-        if (interpolation_type_ == InterpolationType::NONE)
-        {
-            // NONE type: directly set target position without interpolation
-            phase = 1.0;
-        }
-        else if (percent_ >= 1.0)
-        {
-            // Ensure exact convergence to target at the end
-            phase = 1.0;
-        }
-        else if (interpolation_type_ == InterpolationType::LINEAR)
-        {
-            phase = percent_;
-        }
-        else
-        {
-            // TANH (legacy behavior): smooth transition
-            const double scale = (tanh_scale_ > 0.0) ? tanh_scale_ : 3.0;
-            phase = std::tanh(percent_ * scale);
-        }
-
-        // Safety clamp
-        phase = std::clamp(phase, 0.0, 1.0);
-
-        // Apply interpolated position to joints
-        for (size_t i = 0; i < ctrl_interfaces_.joint_position_command_interface_.size() &&
-             i < target_pos_.size() && i < start_pos_.size(); ++i)
-        {
-            double interpolated_value;
-            if (use_prefix_filter_ && i < joint_mask_.size())
-            {
-                if (joint_mask_[i])
-                {
-                    // Control this joint: interpolate to target
-                    interpolated_value = phase * target_pos_[i] + (1.0 - phase) * start_pos_[i];
-                }
-                else
-                {
-                    // Hold this joint: keep at start position
-                    interpolated_value = start_pos_[i];
-                }
-            }
-            else
-            {
-                // No filtering: control all joints
-                interpolated_value = phase * target_pos_[i] + (1.0 - phase) * start_pos_[i];
-            }
-            std::ignore = ctrl_interfaces_.joint_position_command_interface_[i].get().set_value(interpolated_value);
-        }
+            applyInterpolatedJointPositions(phase);
         }
 
         // In force control mode, calculate static torques
@@ -219,11 +140,11 @@ namespace arms_controller_common
             }
 
             // Calculate static torques
-            std::vector<double> static_torques = 
+            std::vector<double> static_torques =
                 gravity_compensation_->calculateStaticTorques(interpolated_positions);
 
             // Set effort commands
-            for (size_t i = 0; i < ctrl_interfaces_.joint_force_command_interface_.size() && 
+            for (size_t i = 0; i < ctrl_interfaces_.joint_force_command_interface_.size() &&
                  i < static_torques.size(); ++i)
             {
                 std::ignore = ctrl_interfaces_.joint_force_command_interface_[i].get().set_value(static_torques[i]);
@@ -236,30 +157,26 @@ namespace arms_controller_common
         std::lock_guard lock(target_mutex_);
         // Mark state as inactive
         state_active_ = false;
-        
+
         // Reset all state variables
         percent_ = 0.0;
         interpolation_active_ = false;
         has_target_ = false;
         target_pos_.clear();
         start_pos_.clear();
-        
+
         // Reset prefix filtering
         use_prefix_filter_ = false;
         active_prefix_.clear();
         joint_mask_.clear();
-        
+
         RCLCPP_DEBUG(logger_, "StateMoveJ exited, all state variables reset");
     }
 
     void StateMoveJ::setInterpolationType(const std::string& type)
     {
-        const std::string t = toLowerCopy(type);
-        if (t != "linear" && t != "tanh" && t != "doubles")
-        {
-            RCLCPP_WARN(logger_, "Unknown movej interpolation type '%s', falling back to 'linear'", type.c_str());
-        }
-        interpolation_type_ = parseInterpolationType(type, InterpolationType::LINEAR);
+        interpolation_type_ = parseInterpolationType(type);
+        RCLCPP_INFO(logger_, "Interpolation type set to '%s'", toString(interpolation_type_));
     }
 
     void StateMoveJ::setTanhScale(double scale)
@@ -291,14 +208,15 @@ namespace arms_controller_common
     void StateMoveJ::setTargetPosition(const std::vector<double>& target_pos)
     {
         std::lock_guard lock(target_mutex_);
-        
+
         // Check if state is active
         if (!state_active_)
         {
-            RCLCPP_WARN(logger_, "Cannot set target position: StateMoveJ is not active. Please enter MOVEJ state first.");
+            RCLCPP_WARN(
+                logger_, "Cannot set target position: StateMoveJ is not active. Please enter MOVEJ state first.");
             return;
         }
-        
+
         // Disable prefix filtering when using the original method
         use_prefix_filter_ = false;
         active_prefix_.clear();
@@ -307,7 +225,7 @@ namespace arms_controller_common
         {
             joint_mask_.resize(joint_names_.size(), true);
         }
-        
+
         // Check if the new target is the same as the current target_pos_
         bool is_same_target = false;
         if (has_target_ && target_pos_.size() == target_pos.size())
@@ -322,20 +240,20 @@ namespace arms_controller_common
                 }
             }
         }
-        
+
         // If target is the same, skip re-interpolation
         if (is_same_target && interpolation_active_)
         {
             RCLCPP_DEBUG(logger_, "Received same target position, skipping re-interpolation");
             return;
         }
-        
+
         // Apply joint limit checking if callback is set
         std::vector<double> clamped_target_pos = target_pos;
         if (joint_limit_checker_)
         {
             clamped_target_pos = joint_limit_checker_(target_pos);
-            
+
             // Check if any values were clamped
             bool was_clamped = false;
             for (size_t i = 0; i < target_pos.size() && i < clamped_target_pos.size(); ++i)
@@ -346,18 +264,18 @@ namespace arms_controller_common
                     break;
                 }
             }
-            
+
             if (was_clamped)
             {
                 RCLCPP_WARN_THROTTLE(logger_, *node_->get_clock(), 1000,
-                                    "Joint limits applied to target position");
+                                     "Joint limits applied to target position");
             }
         }
-        
+
         // Update target position
         target_pos_ = clamped_target_pos;
         has_target_ = true;
-        
+
         // Reset interpolation if we're already in the state
         if (interpolation_active_)
         {
@@ -370,7 +288,7 @@ namespace arms_controller_common
             }
             percent_ = 0.0;
             RCLCPP_INFO(logger_, "New target position received, restarting interpolation");
-            if (interpolation_type_==InterpolationType::DOUBLES)
+            if (interpolation_type_ == InterpolationType::DOUBLES)
             {
                 initMoveJPlanner();
             }
@@ -380,53 +298,56 @@ namespace arms_controller_common
     void StateMoveJ::setTargetPosition(const std::string& prefix, const std::vector<double>& target_pos)
     {
         std::lock_guard lock(target_mutex_);
-        
+
         // Check if state is active
         if (!state_active_)
         {
-            RCLCPP_WARN(logger_, "Cannot set target position for prefix '%s': StateMoveJ is not active. Please enter MOVEJ state first.", prefix.c_str());
+            RCLCPP_WARN(
+                logger_,
+                "Cannot set target position for prefix '%s': StateMoveJ is not active. Please enter MOVEJ state first.",
+                prefix.c_str());
             return;
         }
-        
+
         // Initialize joint names if not already done
         if (joint_names_.empty())
         {
             initializeJointNames();
         }
-        
+
         // Update joint mask based on prefix
         updateJointMask(prefix);
-        
+
         // Count how many joints match the prefix
         size_t matching_joints = 0;
         for (bool mask : joint_mask_)
         {
             if (mask) matching_joints++;
         }
-        
+
         // Validate target position size
         if (target_pos.size() != matching_joints)
         {
             RCLCPP_WARN(logger_,
-                       "Target position size (%zu) does not match number of joints with prefix '%s' (%zu). "
-                       "Ignoring target position.",
-                       target_pos.size(), prefix.c_str(), matching_joints);
+                        "Target position size (%zu) does not match number of joints with prefix '%s' (%zu). "
+                        "Ignoring target position.",
+                        target_pos.size(), prefix.c_str(), matching_joints);
             return;
         }
-        
+
         // Create full target position vector (only set values for matching joints)
         if (target_pos_.size() != joint_names_.size())
         {
             target_pos_.resize(joint_names_.size());
             // Initialize with current positions for all joints
-            for (size_t i = 0; i < ctrl_interfaces_.joint_position_state_interface_.size() && 
+            for (size_t i = 0; i < ctrl_interfaces_.joint_position_state_interface_.size() &&
                  i < target_pos_.size(); ++i)
             {
                 auto value = ctrl_interfaces_.joint_position_state_interface_[i].get().get_optional();
                 target_pos_[i] = value.value_or(0.0);
             }
         }
-        
+
         // Set target positions only for joints matching the prefix
         size_t target_idx = 0;
         for (size_t i = 0; i < joint_mask_.size() && i < target_pos_.size(); ++i)
@@ -445,11 +366,11 @@ namespace arms_controller_common
         {
             target_pos_ = joint_limit_checker_(target_pos_);
         }
-        
+
         has_target_ = true;
         use_prefix_filter_ = true;
         active_prefix_ = prefix;
-        
+
         // Reset interpolation if we're already in the state
         if (interpolation_active_)
         {
@@ -461,10 +382,10 @@ namespace arms_controller_common
                 start_pos_.push_back(value.value_or(0.0));
             }
             percent_ = 0.0;
-            RCLCPP_INFO(logger_, 
-                       "New target position received for joints with prefix '%s', restarting interpolation", 
-                       prefix.c_str());
-            if (interpolation_type_==InterpolationType::DOUBLES)
+            RCLCPP_INFO(logger_,
+                        "New target position received for joints with prefix '%s', restarting interpolation",
+                        prefix.c_str());
+            if (interpolation_type_ == InterpolationType::DOUBLES)
             {
                 initMoveJPlanner();
             }
@@ -486,14 +407,14 @@ namespace arms_controller_common
         }
 
         joint_names_.clear();
-        
+
         // Extract joint names from position command interfaces as fallback
         for (const auto& interface : ctrl_interfaces_.joint_position_command_interface_)
         {
             std::string full_name = interface.get().get_prefix_name();
             joint_names_.push_back(full_name);
         }
-        
+
         RCLCPP_INFO(logger_, "Initialized %zu joint names from interfaces", joint_names_.size());
     }
 
@@ -501,7 +422,7 @@ namespace arms_controller_common
     {
         joint_mask_.clear();
         joint_mask_.resize(joint_names_.size(), false);
-        
+
         size_t matching_count = 0;
         for (size_t i = 0; i < joint_names_.size(); ++i)
         {
@@ -516,15 +437,15 @@ namespace arms_controller_common
                 joint_mask_[i] = false;
             }
         }
-        
-        RCLCPP_INFO(logger_, 
-                   "Updated joint mask for prefix '%s': %zu joints will be controlled, %zu will be held",
-                   prefix.c_str(), matching_count, joint_names_.size() - matching_count);
+
+        RCLCPP_INFO(logger_,
+                    "Updated joint mask for prefix '%s': %zu joints will be controlled, %zu will be held",
+                    prefix.c_str(), matching_count, joint_names_.size() - matching_count);
     }
 
-    void StateMoveJ::setupSubscriptions(std::shared_ptr<rclcpp_lifecycle::LifecycleNode> node, 
-                                       const std::string& topic_base_name,
-                                       bool enable_prefix_topics)
+    void StateMoveJ::setupSubscriptions(std::shared_ptr<rclcpp_lifecycle::LifecycleNode> node,
+                                        const std::string& topic_base_name,
+                                        bool enable_prefix_topics)
     {
         if (!node)
         {
@@ -661,8 +582,8 @@ namespace arms_controller_common
         // Log summary
         if (!has_left && !has_right && !has_body)
         {
-            RCLCPP_DEBUG(logger_, 
-                        "No left/right/body prefixed joints found, only using default target_joint_position topic");
+            RCLCPP_DEBUG(logger_,
+                         "No left/right/body prefixed joints found, only using default target_joint_position topic");
         }
     }
 
@@ -694,6 +615,101 @@ namespace arms_controller_common
                                                            1.0 / ctrl_interfaces_.frequency_);
         movej_planner.init(movej_init_para);
         movej_planner.setRealStartTime(0.0);
-    };
-} // namespace arms_controller_common
+        // Reset curve start time to ensure planner starts from the beginning
+        // This is critical when reinitializing the planner for a new target
+        movej_planner.setCurveStartTime(0.0);
+    }
 
+    void StateMoveJ::updateInterpolationProgress()
+    {
+        double controller_frequency = ctrl_interfaces_.frequency_;
+        if (duration_ <= 0.0 || controller_frequency <= 0.0)
+        {
+            // Invalid timing configuration: jump directly to target
+            percent_ = 1.0;
+        }
+        else
+        {
+            percent_ += 1.0 / (duration_ * controller_frequency);
+        }
+
+        // Clamp percent to [0, 1]
+        if (percent_ > 1.0)
+        {
+            percent_ = 1.0;
+        }
+    }
+
+    double StateMoveJ::calculateInterpolationPhase()
+    {
+        if (interpolation_type_ == InterpolationType::NONE)
+        {
+            // NONE type: directly set target position without interpolation
+            return 1.0;
+        }
+        
+        if (percent_ >= 1.0)
+        {
+            // Ensure exact convergence to target at the end
+            return 1.0;
+        }
+
+        double phase = 0.0;
+        if (interpolation_type_ == InterpolationType::LINEAR)
+        {
+            phase = percent_;
+        }
+        else // TANH (default)
+        {
+            const double scale = (tanh_scale_ > 0.0) ? tanh_scale_ : 3.0;
+            phase = std::tanh(percent_ * scale);
+        }
+
+        // Safety clamp
+        return std::clamp(phase, 0.0, 1.0);
+    }
+
+    void StateMoveJ::applyInterpolatedJointPositions(double phase)
+    {
+        const size_t num_joints = std::min({
+            ctrl_interfaces_.joint_position_command_interface_.size(),
+            target_pos_.size(),
+            start_pos_.size()
+        });
+
+        for (size_t i = 0; i < num_joints; ++i)
+        {
+            double interpolated_value;
+            
+            // Check if joint filtering is enabled
+            if (use_prefix_filter_ && i < joint_mask_.size())
+            {
+                // Apply joint mask: control if true, hold if false
+                interpolated_value = joint_mask_[i] 
+                    ? (phase * target_pos_[i] + (1.0 - phase) * start_pos_[i])
+                    : start_pos_[i];
+            }
+            else
+            {
+                // No filtering: interpolate all joints
+                interpolated_value = phase * target_pos_[i] + (1.0 - phase) * start_pos_[i];
+            }
+            
+            std::ignore = ctrl_interfaces_.joint_position_command_interface_[i].get().set_value(interpolated_value);
+        }
+    }
+
+    void StateMoveJ::applyJointPositionsFromMoveJ(const planning::TrajectPoint& movej_point)
+    {
+        const size_t num_joints = std::min({
+            ctrl_interfaces_.joint_position_command_interface_.size(),
+            static_cast<size_t>(movej_point.joint_pos.getJointSize())
+        });
+
+        for (size_t i = 0; i < num_joints; ++i)
+        {
+            std::ignore = ctrl_interfaces_.joint_position_command_interface_[i].get().set_value(
+                movej_point.joint_pos(i));
+        }
+    }
+} // namespace arms_controller_common
