@@ -15,7 +15,8 @@ namespace arms_controller_common
           logger_(logger),
           gravity_compensation_(gravity_compensation),
           duration_(duration),
-          joint_limit_checker_(nullptr)
+          joint_limit_checker_(nullptr),
+          trajectory_manager_(logger)
     {
     }
 
@@ -41,8 +42,6 @@ namespace arms_controller_common
             start_pos_.push_back(value.value_or(0.0));
         }
 
-        // Reset interpolation progress
-        percent_ = 0.0;
         interpolation_active_ = false;
 
         // Reset prefix filtering
@@ -55,16 +54,20 @@ namespace arms_controller_common
         std::lock_guard lock(target_mutex_);
         if (has_target_ && target_pos_.size() == start_pos_.size())
         {
+            // Initialize trajectory manager
+            trajectory_manager_.initSingleNode(
+                start_pos_,
+                target_pos_,
+                duration_,
+                interpolation_type_,
+                ctrl_interfaces_.frequency_,
+                tanh_scale_
+            );
             interpolation_active_ = true;
             RCLCPP_INFO(logger_,
                         "Starting interpolation to target position over %.1f seconds (type=%s)",
                         duration_,
                         toString(interpolation_type_));
-            //init movej
-            if (interpolation_type_ == InterpolationType::DOUBLES)
-            {
-                initMoveJPlanner();
-            }
         }
         else
         {
@@ -98,34 +101,58 @@ namespace arms_controller_common
                 auto value = i.get().get_optional();
                 start_pos_.push_back(value.value_or(0.0));
             }
-            percent_ = 0.0;
-            //init movej
-            if (interpolation_type_ == InterpolationType::DOUBLES)
-            {
-                initMoveJPlanner();
-            }
+            
+            // Initialize trajectory manager
+            trajectory_manager_.initSingleNode(
+                start_pos_,
+                target_pos_,
+                duration_,
+                interpolation_type_,
+                ctrl_interfaces_.frequency_,
+                tanh_scale_
+            );
+            
             interpolation_active_ = true;
             RCLCPP_INFO(logger_,
                         "Target position received, starting interpolation from current position");
         }
 
-        // Handle different interpolation types
-        if (interpolation_type_ == InterpolationType::DOUBLES)
+        // Get next trajectory point from unified manager
+        std::vector<double> next_positions = trajectory_manager_.getNextPoint();
+        
+        if (!next_positions.empty() && 
+            next_positions.size() == ctrl_interfaces_.joint_position_command_interface_.size())
         {
-            // Use movej planner for DOUBLES interpolation
-            planning::TrajectPoint movej_point = movej_planner.run();
-            applyJointPositionsFromMoveJ(movej_point);
+            // Apply interpolated position to joints (with prefix filtering if enabled)
+            for (size_t i = 0; i < ctrl_interfaces_.joint_position_command_interface_.size() &&
+                 i < next_positions.size(); ++i)
+            {
+                double position_to_set;
+                
+                // Check if joint filtering is enabled
+                if (use_prefix_filter_ && i < joint_mask_.size())
+                {
+                    // Apply joint mask: control if true, hold if false
+                    position_to_set = joint_mask_[i] ? next_positions[i] : start_pos_[i];
+                }
+                else
+                {
+                    // No filtering: use interpolated position
+                    position_to_set = next_positions[i];
+                }
+                
+                std::ignore = ctrl_interfaces_.joint_position_command_interface_[i].get().set_value(position_to_set);
+            }
         }
-        else
+        else if (!next_positions.empty())
         {
-            // Update interpolation progress for other types
-            updateInterpolationProgress();
-            
-            // Calculate interpolation phase
-            double phase = calculateInterpolationPhase();
-            
-            // Apply interpolated position to joints
-            applyInterpolatedJointPositions(phase);
+            static bool warned = false;
+            if (!warned)
+            {
+                RCLCPP_WARN(logger_,
+                           "Trajectory manager returned positions with size mismatch");
+                warned = true;
+            }
         }
 
         // In force control mode, calculate static torques
@@ -159,11 +186,13 @@ namespace arms_controller_common
         state_active_ = false;
 
         // Reset all state variables
-        percent_ = 0.0;
         interpolation_active_ = false;
         has_target_ = false;
         target_pos_.clear();
         start_pos_.clear();
+
+        // Reset trajectory manager
+        trajectory_manager_.reset();
 
         // Reset prefix filtering
         use_prefix_filter_ = false;
@@ -262,12 +291,18 @@ namespace arms_controller_common
                 auto value = i.get().get_optional();
                 start_pos_.push_back(value.value_or(0.0));
             }
-            percent_ = 0.0;
+            
+            // Reinitialize trajectory manager with new target
+            trajectory_manager_.initSingleNode(
+                start_pos_,
+                target_pos_,
+                duration_,
+                interpolation_type_,
+                ctrl_interfaces_.frequency_,
+                tanh_scale_
+            );
+            
             RCLCPP_INFO(logger_, "New target position received, restarting interpolation");
-            if (interpolation_type_ == InterpolationType::DOUBLES)
-            {
-                initMoveJPlanner();
-            }
         }
     }
 
@@ -354,14 +389,20 @@ namespace arms_controller_common
                 auto value = i.get().get_optional();
                 start_pos_.push_back(value.value_or(0.0));
             }
-            percent_ = 0.0;
+            
+            // Reinitialize trajectory manager with new target
+            trajectory_manager_.initSingleNode(
+                start_pos_,
+                target_pos_,
+                duration_,
+                interpolation_type_,
+                ctrl_interfaces_.frequency_,
+                tanh_scale_
+            );
+            
             RCLCPP_INFO(logger_,
                         "New target position received for joints with prefix '%s', restarting interpolation",
                         prefix.c_str());
-            if (interpolation_type_ == InterpolationType::DOUBLES)
-            {
-                initMoveJPlanner();
-            }
         }
     }
 
@@ -573,124 +614,6 @@ namespace arms_controller_common
         }
     }
 
-    void StateMoveJ::initMoveJPlanner()
-    {
-        // Apply joint limit checking if callback is set
-        // This ensures doubles interpolation also respects joint limits
-        std::vector<double> clamped_target_pos = applyJointLimits(target_pos_, "doubles interpolation target position");
-        // Update target_pos_ with clamped values for consistency
-        target_pos_ = clamped_target_pos;
-        
-        size_t nr_of_joints = start_pos_.size();
-        planning::TrajectPoint start_joint_point(nr_of_joints);
-        planning::TrajectPoint end_joint_point(nr_of_joints);
-        planning::TrajectoryParameter traj_param(duration_, nr_of_joints);
-        for (size_t i = 0; i < nr_of_joints; i++)
-        {
-            start_joint_point.joint_pos(i) = start_pos_[i];
-            end_joint_point.joint_pos(i) = clamped_target_pos[i];
-        }
-        planning::TrajectoryInitParameters movej_init_para(start_joint_point, end_joint_point, traj_param,
-                                                           1.0 / ctrl_interfaces_.frequency_);
-        movej_planner.init(movej_init_para);
-        movej_planner.setRealStartTime(0.0);
-        // Reset curve start time to ensure planner starts from the beginning
-        // This is critical when reinitializing the planner for a new target
-        movej_planner.setCurveStartTime(0.0);
-    }
-
-    void StateMoveJ::updateInterpolationProgress()
-    {
-        double controller_frequency = ctrl_interfaces_.frequency_;
-        if (duration_ <= 0.0 || controller_frequency <= 0.0)
-        {
-            // Invalid timing configuration: jump directly to target
-            percent_ = 1.0;
-        }
-        else
-        {
-            percent_ += 1.0 / (duration_ * controller_frequency);
-        }
-
-        // Clamp percent to [0, 1]
-        if (percent_ > 1.0)
-        {
-            percent_ = 1.0;
-        }
-    }
-
-    double StateMoveJ::calculateInterpolationPhase()
-    {
-        if (interpolation_type_ == InterpolationType::NONE)
-        {
-            // NONE type: directly set target position without interpolation
-            return 1.0;
-        }
-        
-        if (percent_ >= 1.0)
-        {
-            // Ensure exact convergence to target at the end
-            return 1.0;
-        }
-
-        double phase = 0.0;
-        if (interpolation_type_ == InterpolationType::LINEAR)
-        {
-            phase = percent_;
-        }
-        else // TANH (default)
-        {
-            const double scale = (tanh_scale_ > 0.0) ? tanh_scale_ : 3.0;
-            phase = std::tanh(percent_ * scale);
-        }
-
-        // Safety clamp
-        return std::clamp(phase, 0.0, 1.0);
-    }
-
-    void StateMoveJ::applyInterpolatedJointPositions(double phase)
-    {
-        const size_t num_joints = std::min({
-            ctrl_interfaces_.joint_position_command_interface_.size(),
-            target_pos_.size(),
-            start_pos_.size()
-        });
-
-        for (size_t i = 0; i < num_joints; ++i)
-        {
-            double interpolated_value;
-            
-            // Check if joint filtering is enabled
-            if (use_prefix_filter_ && i < joint_mask_.size())
-            {
-                // Apply joint mask: control if true, hold if false
-                interpolated_value = joint_mask_[i] 
-                    ? (phase * target_pos_[i] + (1.0 - phase) * start_pos_[i])
-                    : start_pos_[i];
-            }
-            else
-            {
-                // No filtering: interpolate all joints
-                interpolated_value = phase * target_pos_[i] + (1.0 - phase) * start_pos_[i];
-            }
-            
-            std::ignore = ctrl_interfaces_.joint_position_command_interface_[i].get().set_value(interpolated_value);
-        }
-    }
-
-    void StateMoveJ::applyJointPositionsFromMoveJ(const planning::TrajectPoint& movej_point)
-    {
-        const size_t num_joints = std::min({
-            ctrl_interfaces_.joint_position_command_interface_.size(),
-            static_cast<size_t>(movej_point.joint_pos.getJointSize())
-        });
-
-        for (size_t i = 0; i < num_joints; ++i)
-        {
-            std::ignore = ctrl_interfaces_.joint_position_command_interface_[i].get().set_value(
-                movej_point.joint_pos(i));
-        }
-    }
 
     std::vector<double> StateMoveJ::applyJointLimits(const std::vector<double>& target_pos, 
                                                       const std::string& log_message)

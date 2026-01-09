@@ -6,7 +6,7 @@
 #include "arms_controller_common/FSM/FSMState.h"
 #include "arms_controller_common/utils/Interpolation.h"
 #include "arms_controller_common/utils/GravityCompensation.h"
-#include "lina_planning/planning/path_planner/movej.h"
+#include "arms_controller_common/utils/JointTrajectoryManager.h"
 #include <vector>
 #include <memory>
 #include <mutex>
@@ -105,13 +105,11 @@ namespace arms_controller_common
          */
         void setTanhScale(double scale);
 
-        void initMoveJPlanner();
     private:
         rclcpp::Logger logger_;
         std::shared_ptr<GravityCompensation> gravity_compensation_;
         
         double duration_;                 // Interpolation duration in seconds
-        double percent_{0.0};             // Interpolation progress (0.0 to 1.0)
         
         std::vector<double> start_pos_;   // Starting position when entering state or starting new movement
         std::vector<double> target_pos_;  // Target position to move to
@@ -143,6 +141,9 @@ namespace arms_controller_common
         InterpolationType interpolation_type_{InterpolationType::TANH};
         double tanh_scale_{3.0};
         
+        // Unified trajectory manager
+        JointTrajectoryManager trajectory_manager_;
+        
         /**
          * @brief Initialize joint names from interfaces
          */
@@ -155,29 +156,6 @@ namespace arms_controller_common
         void updateJointMask(const std::string& prefix);
 
         /**
-         * @brief Update interpolation progress based on controller frequency
-         */
-        void updateInterpolationProgress();
-
-        /**
-         * @brief Calculate interpolation phase based on interpolation type
-         * @return Phase value in [0, 1]
-         */
-        double calculateInterpolationPhase();
-
-        /**
-         * @brief Apply interpolated joint positions based on phase
-         * @param phase Interpolation phase [0, 1]
-         */
-        void applyInterpolatedJointPositions(double phase);
-
-        /**
-         * @brief Apply joint positions from movej planner result
-         * @param movej_point Trajectory point from movej planner
-         */
-        void applyJointPositionsFromMoveJ(const planning::TrajectPoint& movej_point);
-
-        /**
          * @brief Apply joint limit checking to target position
          * @param target_pos Input target position to check
          * @param log_message Optional log message prefix (empty string to skip logging)
@@ -187,7 +165,6 @@ namespace arms_controller_common
                                              const std::string& log_message = "");
         
         static constexpr double TARGET_EPSILON = 1e-6;  // Tolerance for comparing target positions
-        planning::moveJ movej_planner;                 //Joint interpolation planner
     };
 } // namespace arms_controller_common
 

@@ -6,7 +6,7 @@
 #include "arms_controller_common/FSM/FSMState.h"
 #include "arms_controller_common/utils/Interpolation.h"
 #include "arms_controller_common/utils/GravityCompensation.h"
-#include "lina_planning/planning/path_planner/movej.h"
+#include "arms_controller_common/utils/JointTrajectoryManager.h"
 #include <vector>
 #include <memory>
 #include <functional>
@@ -166,7 +166,6 @@ namespace arms_controller_common
          */
         void setTanhScale(double scale);
 
-        void initMoveJPlanner();
     private:
         void switchConfiguration();
         void startInterpolation();
@@ -182,15 +181,16 @@ namespace arms_controller_common
 
         // Interpolation
         double duration_;                               // Interpolation duration in seconds
-        double percent_{0.0};                          // Interpolation progress (0.0 to 1.0)
         InterpolationType interpolation_type_{InterpolationType::TANH};
         double tanh_scale_{3.0};
+
+        // Unified trajectory manager
+        JointTrajectoryManager trajectory_manager_;
 
         // Configuration switching
         int32_t switch_command_base_{100};             // Base command for multi-config switching
         int32_t last_command_{0};                      // Last command value for edge detection
         bool has_multiple_configs_{false};             // Whether multiple configurations are available
-        planning::moveJ movej_planner;                 //Joint interpolation planner
     };
 } // namespace arms_controller_common
 
