@@ -83,7 +83,6 @@ namespace arms_controller_common
             const std::vector<double>& durations,
             InterpolationType type,
             double controller_frequency,
-            double default_duration = 3.0,
             double tanh_scale = 3.0
         );
 
@@ -122,6 +121,18 @@ namespace arms_controller_common
          * @return True if a trajectory has been initialized
          */
         bool isInitialized() const;
+
+        /**
+         * @brief Set trajectory duration for multi-node trajectories
+         * @param duration Total trajectory duration in seconds
+         */
+        void setTrajectoryDuration(double duration);
+
+        /**
+         * @brief Get trajectory duration for multi-node trajectories
+         * @return Total trajectory duration in seconds
+         */
+        double getTrajectoryDuration() const;
 
     private:
         // Trajectory mode
@@ -186,6 +197,9 @@ namespace arms_controller_common
         // Controller parameters
         double controller_frequency_{100.0};
         double period_{0.01};  // 1.0 / controller_frequency_
+
+        // Multi-node trajectory duration (for automatic time calculation in lina planning)
+        double trajectory_duration_ = 3.0;  // Default 3 seconds
 
         // Advanced mode (lina_planning) - conditionally compiled
 #ifdef HAS_LINA_PLANNING

@@ -15,6 +15,7 @@
 #include <rclcpp/rclcpp.hpp>
 #include <rclcpp_lifecycle/lifecycle_node.hpp>
 #include <std_msgs/msg/float64_multi_array.hpp>
+#include <trajectory_msgs/msg/joint_trajectory.hpp>
 
 namespace arms_controller_common
 {
@@ -105,6 +106,31 @@ namespace arms_controller_common
          */
         void setTanhScale(double scale);
 
+        /**
+         * @brief Set trajectory from ROS2 JointTrajectory message
+         * @param trajectory JointTrajectory message containing waypoints
+         * @note Current joint position will be used as the first waypoint
+         * @note Requires at least 2 points in trajectory (total >= 3 with current position)
+         * @note Uses trajectory_duration from JointTrajectoryManager for total duration
+         */
+        void setTrajectory(const trajectory_msgs::msg::JointTrajectory& trajectory);
+
+        /**
+         * @brief Set trajectory duration for multi-node trajectory planning
+         * @param duration Total trajectory duration in seconds
+         * @note This duration is used when planning multi-node trajectories
+         */
+        void setTrajectoryDuration(double duration);
+
+        /**
+         * @brief Setup ROS subscription for trajectory messages
+         * @param node ROS lifecycle node for creating subscription
+         * @param topic_name Topic name for trajectory messages (default: "target_joint_trajectory")
+         */
+        void setupTrajectorySubscription(
+            std::shared_ptr<rclcpp_lifecycle::LifecycleNode> node,
+            const std::string& topic_name = "target_joint_trajectory");
+
     private:
         rclcpp::Logger logger_;
         std::shared_ptr<GravityCompensation> gravity_compensation_;
@@ -133,6 +159,10 @@ namespace arms_controller_common
         rclcpp::Subscription<std_msgs::msg::Float64MultiArray>::SharedPtr target_position_right_subscription_;
         rclcpp::Subscription<std_msgs::msg::Float64MultiArray>::SharedPtr target_position_body_subscription_;
         bool subscriptions_setup_{false};        // Whether subscriptions have been set up
+
+        // Trajectory message subscription
+        rclcpp::Subscription<trajectory_msgs::msg::JointTrajectory>::SharedPtr trajectory_subscription_;
+        bool trajectory_subscription_setup_{false};  // Whether trajectory subscription has been set up
 
         // Joint limit checking
         std::function<std::vector<double>(const std::vector<double>&)> joint_limit_checker_;  // Optional joint limit checker callback
@@ -163,6 +193,30 @@ namespace arms_controller_common
          */
         std::vector<double> applyJointLimits(const std::vector<double>& target_pos, 
                                              const std::string& log_message = "");
+
+        /**
+         * @brief Validate trajectory message
+         * @param trajectory Trajectory message to validate
+         * @return True if valid, false otherwise
+         */
+        bool validateTrajectory(const trajectory_msgs::msg::JointTrajectory& trajectory);
+
+        /**
+         * @brief Map trajectory joint names to controller joint indices
+         * @param trajectory_joint_names Joint names from trajectory message
+         * @return Vector of controller joint indices (empty if mapping fails)
+         */
+        std::vector<size_t> mapJointNames(const std::vector<std::string>& trajectory_joint_names);
+
+        /**
+         * @brief Calculate segment durations based on path length
+         * @param waypoints Vector of waypoints
+         * @param total_duration Total trajectory duration
+         * @return Vector of segment durations (size = waypoints.size() - 1)
+         */
+        std::vector<double> calculateSegmentDurations(
+            const std::vector<std::vector<double>>& waypoints,
+            double total_duration);
         
         static constexpr double TARGET_EPSILON = 1e-6;  // Tolerance for comparing target positions
     };

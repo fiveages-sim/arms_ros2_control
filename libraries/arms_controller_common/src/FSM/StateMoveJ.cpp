@@ -80,10 +80,20 @@ namespace arms_controller_common
     {
         std::lock_guard lock(target_mutex_);
 
-        // If no target or target size mismatch, maintain current position
-        if (!has_target_ || target_pos_.size() != start_pos_.size())
+        // Check if multi-node trajectory is initialized (from setTrajectory)
+        if (trajectory_manager_.isInitialized())
         {
-            // Maintain current position
+            // Multi-node trajectory is active, directly execute it
+            if (!interpolation_active_)
+            {
+                interpolation_active_ = true;
+                RCLCPP_INFO(logger_, "Multi-node trajectory execution started");
+            }
+        }
+        // Check single-node trajectory conditions
+        else if (!has_target_ || target_pos_.size() != start_pos_.size())
+        {
+            // No valid target, maintain current position
             for (size_t i = 0; i < ctrl_interfaces_.joint_position_command_interface_.size() &&
                  i < start_pos_.size(); ++i)
             {
@@ -91,9 +101,8 @@ namespace arms_controller_common
             }
             return;
         }
-
-        // If interpolation just started, update start position to current position
-        if (!interpolation_active_)
+        // Single-node trajectory: if interpolation just started, update start position to current position
+        else if (!interpolation_active_)
         {
             start_pos_.clear();
             for (auto i : ctrl_interfaces_.joint_position_state_interface_)
@@ -102,7 +111,7 @@ namespace arms_controller_common
                 start_pos_.push_back(value.value_or(0.0));
             }
             
-            // Initialize trajectory manager
+            // Initialize trajectory manager for single-node trajectory
             trajectory_manager_.initSingleNode(
                 start_pos_,
                 target_pos_,
@@ -117,42 +126,114 @@ namespace arms_controller_common
                         "Target position received, starting interpolation from current position");
         }
 
-        // Get next trajectory point from unified manager
+        // Get next trajectory point from unified manager (works for both single and multi-node)
         std::vector<double> next_positions = trajectory_manager_.getNextPoint();
         
-        if (!next_positions.empty() && 
-            next_positions.size() == ctrl_interfaces_.joint_position_command_interface_.size())
+        if (next_positions.empty())
         {
-            // Apply interpolated position to joints (with prefix filtering if enabled)
-            for (size_t i = 0; i < ctrl_interfaces_.joint_position_command_interface_.size() &&
-                 i < next_positions.size(); ++i)
+            // Trajectory not initialized or error occurred
+            if (trajectory_manager_.isInitialized())
             {
-                double position_to_set;
-                
-                // Check if joint filtering is enabled
-                if (use_prefix_filter_ && i < joint_mask_.size())
+                // Trajectory is initialized but returned empty - this shouldn't happen normally
+                static bool warned = false;
+                if (!warned)
                 {
-                    // Apply joint mask: control if true, hold if false
-                    position_to_set = joint_mask_[i] ? next_positions[i] : start_pos_[i];
+                    RCLCPP_WARN(logger_,
+                               "Trajectory manager returned empty positions (trajectory may be completed or error occurred)");
+                    warned = true;
                 }
-                else
+                // Maintain current position
+                for (size_t i = 0; i < ctrl_interfaces_.joint_position_command_interface_.size() &&
+                     i < start_pos_.size(); ++i)
                 {
-                    // No filtering: use interpolated position
-                    position_to_set = next_positions[i];
+                    std::ignore = ctrl_interfaces_.joint_position_command_interface_[i].get().set_value(start_pos_[i]);
                 }
-                
-                std::ignore = ctrl_interfaces_.joint_position_command_interface_[i].get().set_value(position_to_set);
             }
+            else
+            {
+                // Trajectory not initialized - maintain current position
+                for (size_t i = 0; i < ctrl_interfaces_.joint_position_command_interface_.size() &&
+                     i < start_pos_.size(); ++i)
+                {
+                    std::ignore = ctrl_interfaces_.joint_position_command_interface_[i].get().set_value(start_pos_[i]);
+                }
+            }
+            return;
         }
-        else if (!next_positions.empty())
+        
+        if (next_positions.size() != ctrl_interfaces_.joint_position_command_interface_.size())
         {
             static bool warned = false;
             if (!warned)
             {
                 RCLCPP_WARN(logger_,
-                           "Trajectory manager returned positions with size mismatch");
+                           "Trajectory manager returned positions with size mismatch: expected %zu, got %zu",
+                           ctrl_interfaces_.joint_position_command_interface_.size(),
+                           next_positions.size());
                 warned = true;
             }
+            // Maintain current position on size mismatch
+            for (size_t i = 0; i < ctrl_interfaces_.joint_position_command_interface_.size() &&
+                 i < start_pos_.size(); ++i)
+            {
+                std::ignore = ctrl_interfaces_.joint_position_command_interface_[i].get().set_value(start_pos_[i]);
+            }
+            return;
+        }
+        
+        // Apply interpolated position to joints (with joint mask filtering for multi-node trajectory)
+        // For joints not in the mask, use current real-time position to avoid jumping back
+        std::vector<double> current_real_time_positions;
+        if (use_prefix_filter_ && !joint_mask_.empty())
+        {
+            // Get current real-time positions for joints that are not controlled
+            current_real_time_positions.reserve(joint_names_.size());
+            for (auto i : ctrl_interfaces_.joint_position_state_interface_)
+            {
+                auto value = i.get().get_optional();
+                current_real_time_positions.push_back(value.value_or(0.0));
+            }
+        }
+        
+        for (size_t i = 0; i < ctrl_interfaces_.joint_position_command_interface_.size() &&
+             i < next_positions.size(); ++i)
+        {
+            double position_to_set;
+            
+            // Check if joint filtering is enabled (for both single-node prefix filter and multi-node trajectory)
+            if (use_prefix_filter_ && i < joint_mask_.size())
+            {
+                // Apply joint mask: control if true, hold if false
+                // For multi-node trajectory: only joints specified in trajectory message are controlled
+                // For single-node trajectory: only joints matching prefix are controlled
+                if (joint_mask_[i])
+                {
+                    // Controlled joint: use interpolated position
+                    position_to_set = next_positions[i];
+                }
+                else
+                {
+                    // Uncontrolled joint: use current real-time position to avoid jumping back
+                    // This ensures that when controlling only left arm, then only right arm,
+                    // the left arm stays at its current position instead of jumping back
+                    if (i < current_real_time_positions.size())
+                    {
+                        position_to_set = current_real_time_positions[i];
+                    }
+                    else
+                    {
+                        // Fallback to start_pos_ if real-time position not available
+                        position_to_set = (i < start_pos_.size()) ? start_pos_[i] : 0.0;
+                    }
+                }
+            }
+            else
+            {
+                // No filtering: use interpolated position for all joints
+                position_to_set = next_positions[i];
+            }
+            
+            std::ignore = ctrl_interfaces_.joint_position_command_interface_[i].get().set_value(position_to_set);
         }
 
         // In force control mode, calculate static torques
@@ -644,5 +725,316 @@ namespace arms_controller_common
         }
 
         return clamped_target_pos;
+    }
+
+    void StateMoveJ::setTrajectory(const trajectory_msgs::msg::JointTrajectory& trajectory)
+    {
+        std::lock_guard lock(target_mutex_);
+        
+        // 1. Validate message
+        if (!validateTrajectory(trajectory))
+        {
+            return;
+        }
+        
+        // 2. Map joint names
+        std::vector<size_t> joint_indices = mapJointNames(trajectory.joint_names);
+        if (joint_indices.empty())
+        {
+            RCLCPP_ERROR(logger_, "Cannot map trajectory joint names to controller joints");
+            return;
+        }
+        
+        // 2.5. Setup joint mask based on trajectory joint names (only control specified joints)
+        // This allows controlling only left arm, right arm, or any subset of joints
+        use_prefix_filter_ = true;  // Enable joint filtering for multi-node trajectory
+        joint_mask_.clear();
+        joint_mask_.resize(joint_names_.size(), false);  // Default: hold all joints
+        
+        size_t controlled_joints = 0;
+        for (size_t idx : joint_indices)
+        {
+            if (idx < joint_mask_.size())
+            {
+                joint_mask_[idx] = true;  // Mark joints in trajectory for control
+                controlled_joints++;
+            }
+        }
+        
+        RCLCPP_INFO(logger_,
+                   "Multi-node trajectory joint mask set: %zu joints will be controlled, %zu will be held",
+                   controlled_joints, joint_names_.size() - controlled_joints);
+        
+        // 3. Get current positions as starting point (first waypoint)
+        std::vector<double> current_positions;
+        current_positions.reserve(joint_names_.size());
+        for (auto i : ctrl_interfaces_.joint_position_state_interface_)
+        {
+            auto value = i.get().get_optional();
+            current_positions.push_back(value.value_or(0.0));
+        }
+        
+        // Apply joint limits to current position
+        current_positions = applyJointLimits(current_positions, "current position");
+        
+        // 4. Extract input trajectory positions (mapped to controller joint order)
+        std::vector<std::vector<double>> waypoints;
+        waypoints.reserve(trajectory.points.size() + 1);  // +1 for current position
+        
+        // Add current position as first waypoint
+        waypoints.push_back(current_positions);
+        
+        // Add input trajectory points
+        for (const auto& point : trajectory.points)
+        {
+            if (point.positions.size() != trajectory.joint_names.size())
+            {
+                RCLCPP_ERROR(logger_, "Position size mismatch in trajectory point");
+                return;
+            }
+            
+            std::vector<double> mapped_positions(joint_names_.size());
+            // Initialize: use current positions (for unmatched joints)
+            for (size_t i = 0; i < joint_names_.size(); ++i)
+            {
+                if (i < current_positions.size())
+                {
+                    mapped_positions[i] = current_positions[i];
+                }
+            }
+            
+            // Map trajectory positions
+            for (size_t i = 0; i < joint_indices.size(); ++i)
+            {
+                size_t controller_idx = joint_indices[i];
+                if (controller_idx < mapped_positions.size() && i < point.positions.size())
+                {
+                    mapped_positions[controller_idx] = point.positions[i];
+                }
+            }
+            
+            // Apply joint limits
+            mapped_positions = applyJointLimits(mapped_positions, "trajectory waypoint");
+            
+            waypoints.push_back(mapped_positions);
+        }
+        
+        // 5. Calculate segment durations (only for basic mode)
+        // Note: For DOUBLES mode, lina planning will auto-calculate
+        std::vector<double> durations;
+        double trajectory_duration = trajectory_manager_.getTrajectoryDuration();
+        
+        if (interpolation_type_ != InterpolationType::DOUBLES || 
+            !JointTrajectoryManager::isDoublesAvailable())
+        {
+            // Basic mode: manually calculate segment durations
+            durations = calculateSegmentDurations(waypoints, trajectory_duration);
+        }
+        // DOUBLES mode: durations stays empty, lina planning will auto-calculate
+        
+        // 6. Initialize multi-node trajectory
+        // waypoints now contains: current position + input trajectory points (at least 2) = at least 3 points
+        // This satisfies lina planning's SmoothCurveOfMultiJointsUsingBlending requirement (>= 3 points)
+        if (waypoints.size() >= 3)
+        {
+            size_t num_segments = waypoints.size() - 1;
+            
+            if (!trajectory_manager_.initMultiNode(
+                waypoints,
+                durations,  // Basic mode: contains calculated segment durations; DOUBLES mode: empty, auto-calculated
+                interpolation_type_,
+                ctrl_interfaces_.frequency_,
+                tanh_scale_))
+            {
+                RCLCPP_ERROR(logger_, "Failed to initialize multi-node trajectory");
+                return;
+            }
+            
+            has_target_ = true;
+            interpolation_active_ = false;  // Will be activated in run()
+            
+            RCLCPP_INFO(logger_,
+                       "Trajectory loaded: %zu waypoints (1 current + %zu input), %zu segments. "
+                       "Compatible with lina planning multi-node planner.",
+                       waypoints.size(), trajectory.points.size(), num_segments);
+        }
+        else
+        {
+            RCLCPP_ERROR(logger_,
+                        "Invalid trajectory: need at least 2 input points (total >= 3 with current position), got %zu",
+                        trajectory.points.size());
+        }
+    }
+
+    bool StateMoveJ::validateTrajectory(const trajectory_msgs::msg::JointTrajectory& trajectory)
+    {
+        // Check input trajectory point count (at least 2 points, with current position total >= 3 points)
+        if (trajectory.points.size() < 2)
+        {
+            RCLCPP_ERROR(logger_,
+                        "Trajectory must have at least 2 input points (current position will be added as first point), got %zu",
+                        trajectory.points.size());
+            return false;
+        }
+        
+        // Check joint names
+        if (trajectory.joint_names.empty())
+        {
+            RCLCPP_ERROR(logger_, "Trajectory joint_names is empty");
+            return false;
+        }
+        
+        // Check position count for each point
+        for (size_t i = 0; i < trajectory.points.size(); ++i)
+        {
+            if (trajectory.points[i].positions.size() != trajectory.joint_names.size())
+            {
+                RCLCPP_ERROR(logger_,
+                            "Point %zu: position size (%zu) != joint_names size (%zu)",
+                            i, trajectory.points[i].positions.size(), trajectory.joint_names.size());
+                return false;
+            }
+        }
+        
+        return true;
+    }
+
+    std::vector<size_t> StateMoveJ::mapJointNames(const std::vector<std::string>& trajectory_joint_names)
+    {
+        std::vector<size_t> indices;
+        indices.reserve(trajectory_joint_names.size());
+        
+        for (const auto& traj_joint_name : trajectory_joint_names)
+        {
+            bool found = false;
+            for (size_t i = 0; i < joint_names_.size(); ++i)
+            {
+                if (joint_names_[i] == traj_joint_name)
+                {
+                    indices.push_back(i);
+                    found = true;
+                    break;
+                }
+            }
+            if (!found)
+            {
+                RCLCPP_WARN(logger_,
+                           "Trajectory joint '%s' not found in controller joints",
+                           traj_joint_name.c_str());
+                // Return empty for strict matching
+                return std::vector<size_t>();
+            }
+        }
+        
+        return indices;
+    }
+
+    std::vector<double> StateMoveJ::calculateSegmentDurations(
+        const std::vector<std::vector<double>>& waypoints,
+        double total_duration)
+    {
+        std::vector<double> durations;
+        
+        if (waypoints.size() < 2)
+        {
+            return durations;  // Empty vector, will use default duration
+        }
+        
+        size_t num_segments = waypoints.size() - 1;
+        durations.reserve(num_segments);
+        
+        // Calculate path length (Euclidean distance) for each segment
+        std::vector<double> segment_lengths;
+        segment_lengths.reserve(num_segments);
+        
+        for (size_t i = 0; i < num_segments; ++i)
+        {
+            double length = 0.0;
+            const auto& start = waypoints[i];
+            const auto& end = waypoints[i + 1];
+            
+            if (start.size() != end.size())
+            {
+                RCLCPP_ERROR(logger_,
+                            "Waypoint size mismatch: waypoint %zu has %zu joints, waypoint %zu has %zu joints",
+                            i, start.size(), i + 1, end.size());
+                durations.clear();
+                return durations;
+            }
+            
+            for (size_t j = 0; j < start.size(); ++j)
+            {
+                double diff = end[j] - start[j];
+                length += diff * diff;  // Euclidean distance squared
+            }
+            segment_lengths.push_back(std::sqrt(length));
+        }
+        
+        // Calculate total length
+        double total_length = 0.0;
+        for (double len : segment_lengths)
+        {
+            total_length += len;
+        }
+        
+        // Allocate time proportionally to path length
+        if (total_length > 1e-6)  // Avoid division by zero
+        {
+            for (double len : segment_lengths)
+            {
+                double segment_duration = total_duration * (len / total_length);
+                durations.push_back(segment_duration);
+            }
+        }
+        else
+        {
+            // If all segments have zero length (all points identical), evenly distribute
+            double avg_duration = total_duration / num_segments;
+            durations.assign(num_segments, avg_duration);
+            RCLCPP_WARN(logger_,
+                       "All waypoints are identical, evenly distributing duration %.3f across %zu segments",
+                       total_duration, num_segments);
+        }
+        
+        return durations;
+    }
+
+    void StateMoveJ::setTrajectoryDuration(double duration)
+    {
+        trajectory_manager_.setTrajectoryDuration(duration);
+    }
+
+    void StateMoveJ::setupTrajectorySubscription(
+        std::shared_ptr<rclcpp_lifecycle::LifecycleNode> node,
+        const std::string& topic_name)
+    {
+        if (!node)
+        {
+            RCLCPP_WARN(logger_, "Cannot setup trajectory subscription: node is nullptr");
+            return;
+        }
+
+        if (trajectory_subscription_setup_)
+        {
+            RCLCPP_DEBUG(logger_, "Trajectory subscription already set up, skipping");
+            return;
+        }
+
+        // Use the same approach as setupSubscriptions: node_name + "/" + topic_name
+        std::string full_topic = node->get_name() + std::string("/") + topic_name;
+
+        // Subscribe to trajectory topic
+        trajectory_subscription_ = node->create_subscription<trajectory_msgs::msg::JointTrajectory>(
+            full_topic, 10,
+            [this](const trajectory_msgs::msg::JointTrajectory::SharedPtr msg)
+            {
+                if (msg)
+                {
+                    setTrajectory(*msg);
+                }
+            });
+
+        trajectory_subscription_setup_ = true;
+        RCLCPP_INFO(logger_, "Subscribed to trajectory topic: %s", full_topic.c_str());
     }
 } // namespace arms_controller_common

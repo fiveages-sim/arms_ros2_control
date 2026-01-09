@@ -4,12 +4,12 @@
 #include "arms_controller_common/utils/JointTrajectoryManager.h"
 #include <algorithm>
 #include <cmath>
-#include <stdexcept>
+#include <utility>
 
 namespace arms_controller_common
 {
     JointTrajectoryManager::JointTrajectoryManager(rclcpp::Logger logger)
-        : logger_(logger)
+        : logger_(std::move(logger))
     {
     }
 
@@ -65,28 +65,28 @@ namespace arms_controller_common
                 try
                 {
                     movej_planner_ = std::make_unique<planning::moveJ>();
-                    
+
                     size_t nr_of_joints = start_pos_.size();
                     planning::TrajectPoint start_joint_point(nr_of_joints);
                     planning::TrajectPoint end_joint_point(nr_of_joints);
                     planning::TrajectoryParameter traj_param(duration_, nr_of_joints);
-                    
+
                     for (size_t i = 0; i < nr_of_joints; i++)
                     {
                         start_joint_point.joint_pos(i) = start_pos_[i];
                         end_joint_point.joint_pos(i) = target_pos_[i];
                     }
-                    
+
                     planning::TrajectoryInitParameters movej_init_para(
                         start_joint_point, end_joint_point, traj_param, period_);
-                    
+
                     if (!movej_planner_->init(movej_init_para))
                     {
                         RCLCPP_ERROR(logger_, "Failed to initialize moveJ planner for DOUBLES interpolation");
                         reset();
                         return false;
                     }
-                    
+
                     movej_planner_->setRealStartTime(0.0);
                     mode_ = TrajectoryMode::SINGLE_NODE;
                 }
@@ -110,8 +110,8 @@ namespace arms_controller_common
         percent_ = 0.0;
 
         RCLCPP_DEBUG(logger_,
-                    "Initialized single-node trajectory: %zu joints, duration=%.3f, type=%s",
-                    start_pos_.size(), duration_, toString(interpolation_type_));
+                     "Initialized single-node trajectory: %zu joints, duration=%.3f, type=%s",
+                     start_pos_.size(), duration_, toString(interpolation_type_));
 
         return true;
     }
@@ -121,7 +121,6 @@ namespace arms_controller_common
         const std::vector<double>& durations,
         InterpolationType type,
         double controller_frequency,
-        double default_duration,
         double tanh_scale)
     {
         if (!validateMultiNodeParams(waypoints, durations))
@@ -137,7 +136,7 @@ namespace arms_controller_common
         interpolation_type_ = type;
         tanh_scale_ = tanh_scale;
         controller_frequency_ = controller_frequency;
-        period_ = (controller_frequency_ > 0.0) ? (1.0 / controller_frequency_) : 0.01;
+        period_ = controller_frequency_ > 0.0 ? 1.0 / controller_frequency_ : 0.01;
 
         // Prepare segment durations
         size_t num_segments = waypoints.size() - 1;
@@ -146,8 +145,12 @@ namespace arms_controller_common
 
         if (durations.empty())
         {
-            // Use default duration for all segments
-            segment_durations_.assign(num_segments, default_duration);
+            // Use trajectory_duration_ divided by number of segments as default
+            // This ensures consistent behavior when durations are not provided
+            double default_segment_duration = (num_segments > 0)
+                                                  ? (trajectory_duration_ / static_cast<double>(num_segments))
+                                                  : trajectory_duration_;
+            segment_durations_.assign(num_segments, default_segment_duration);
         }
         else if (durations.size() == num_segments)
         {
@@ -157,9 +160,12 @@ namespace arms_controller_common
         {
             RCLCPP_WARN(logger_,
                         "Duration vector size (%zu) doesn't match number of segments (%zu). "
-                        "Using default duration for all segments.",
+                        "Using trajectory_duration_ / num_segments for all segments.",
                         durations.size(), num_segments);
-            segment_durations_.assign(num_segments, default_duration);
+            double default_segment_duration = (num_segments > 0)
+                                                  ? (trajectory_duration_ / static_cast<double>(num_segments))
+                                                  : trajectory_duration_;
+            segment_durations_.assign(num_segments, default_segment_duration);
         }
 
         // Initialize based on interpolation type
@@ -180,11 +186,11 @@ namespace arms_controller_common
                 try
                 {
                     multi_node_planner_ = std::make_unique<planning::SmoothCurveOfMultiJointsUsingBlending>();
-                    
+
                     size_t nr_of_joints = waypoints_[0].size();
                     std::vector<planning::TrajectPoint> trajectory_points;
                     trajectory_points.reserve(waypoints_.size());
-                    
+
                     // Convert waypoints to TrajectPoint
                     for (const auto& waypoint : waypoints_)
                     {
@@ -195,34 +201,40 @@ namespace arms_controller_common
                         }
                         trajectory_points.push_back(point);
                     }
-                    
-                    // Create trajectory parameters for each segment
-                    std::vector<planning::TrajectoryParameter> trajectory_parameters;
-                    trajectory_parameters.reserve(num_segments);
-                    
-                    for (size_t i = 0; i < num_segments; ++i)
-                    {
-                        planning::TrajectoryParameter param(segment_durations_[i], nr_of_joints);
-                        trajectory_parameters.push_back(param);
-                    }
-                    
+
+                    // For DOUBLES mode, use automatic time calculation (time_mode = true)
+                    // lina planning will automatically calculate segment durations based on
+                    // trajectory_duration_ and joint_max_vel
+                    // Note: trajectory_duration_ should be the TOTAL time for all segments
+                    size_t num_segments = waypoints_.size() - 1;
+                    RCLCPP_INFO(logger_,
+                                "Initializing DOUBLES multi-node trajectory: %zu waypoints, %zu segments, "
+                                "total_time=%.3f seconds (will be distributed proportionally)",
+                                waypoints_.size(), num_segments, trajectory_duration_);
+
+                    planning::TrajectoryParameter param(trajectory_duration_, nr_of_joints);
+                    param.time_mode = true; // Enable automatic time calculation
+
+                    // Use single parameter, lina planning will auto-calculate segment times
+                    // The total_time in param will be distributed proportionally to all segments
                     planning::TrajectoryInitParameters init_params(
-                        trajectory_points, trajectory_parameters, period_);
-                    
+                        trajectory_points, param, period_);
+
                     if (!multi_node_planner_->init(init_params))
                     {
                         RCLCPP_ERROR(logger_,
-                                    "Failed to initialize SmoothCurveOfMultiJointsUsingBlending for DOUBLES interpolation");
+                                     "Failed to initialize SmoothCurveOfMultiJointsUsingBlending for DOUBLES interpolation")
+                        ;
                         reset();
                         return false;
                     }
-                    
+
                     mode_ = TrajectoryMode::MULTI_NODE_ADVANCED;
                 }
                 catch (const std::exception& e)
                 {
                     RCLCPP_ERROR(logger_,
-                                "Exception while initializing multi-node planner: %s", e.what());
+                                 "Exception while initializing multi-node planner: %s", e.what());
                     reset();
                     return false;
                 }
@@ -247,8 +259,8 @@ namespace arms_controller_common
         completed_ = false;
 
         RCLCPP_DEBUG(logger_,
-                    "Initialized multi-node trajectory: %zu waypoints, %zu segments, type=%s",
-                    waypoints_.size(), num_segments, toString(interpolation_type_));
+                     "Initialized multi-node trajectory: %zu waypoints, %zu segments, type=%s",
+                     waypoints_.size(), num_segments, toString(interpolation_type_));
 
         return true;
     }
@@ -262,7 +274,7 @@ namespace arms_controller_common
             if (!warned)
             {
                 RCLCPP_WARN(logger_,
-                           "getNextPoint() called but trajectory is not initialized");
+                            "getNextPoint() called but trajectory is not initialized");
                 warned = true;
             }
             return std::vector<double>();
@@ -325,20 +337,19 @@ namespace arms_controller_common
         initialized_ = false;
         completed_ = false;
 
+        // Clear trajectory data
         start_pos_.clear();
         target_pos_.clear();
         waypoints_.clear();
         segment_durations_.clear();
         segment_progress_.clear();
 
+        // Reset progress tracking
         duration_ = 0.0;
         percent_ = 0.0;
         current_segment_ = 0;
-        interpolation_type_ = InterpolationType::TANH;
-        tanh_scale_ = 3.0;
-        controller_frequency_ = 100.0;
-        period_ = 0.01;
 
+        // Reset planners (but keep configuration parameters unchanged)
 #ifdef HAS_LINA_PLANNING
         movej_planner_.reset();
         multi_node_planner_.reset();
@@ -355,6 +366,26 @@ namespace arms_controller_common
         return initialized_;
     }
 
+    void JointTrajectoryManager::setTrajectoryDuration(double duration)
+    {
+        if (duration > 0.0)
+        {
+            trajectory_duration_ = duration;
+            RCLCPP_INFO(logger_, "trajectory duration set to %.2f seconds", trajectory_duration_);
+        }
+        else
+        {
+            RCLCPP_WARN(logger_,
+                        "Invalid trajectory_duration: %.3f, must be positive. Keeping current value: %.3f",
+                        duration, trajectory_duration_);
+        }
+    }
+
+    double JointTrajectoryManager::getTrajectoryDuration() const
+    {
+        return trajectory_duration_;
+    }
+
     std::vector<double> JointTrajectoryManager::computeSingleNodePoint()
     {
         std::vector<double> result;
@@ -366,7 +397,7 @@ namespace arms_controller_common
             if (movej_planner_)
             {
                 planning::TrajectPoint movej_point = movej_planner_->run();
-                
+
                 if (movej_planner_->isMotionOver())
                 {
                     completed_ = true;
@@ -379,18 +410,18 @@ namespace arms_controller_common
                     double current_time = movej_planner_->current_real_time;
                     percent_ = std::min(1.0, current_time / total_time);
                 }
-                
+
                 for (size_t i = 0; i < static_cast<size_t>(movej_point.joint_pos.getJointSize()); ++i)
                 {
                     result.push_back(movej_point.joint_pos(i));
                 }
-                
+
                 return result;
             }
             else
             {
                 RCLCPP_ERROR(logger_, "moveJ planner not initialized for DOUBLES interpolation");
-                return target_pos_;  // Fallback to target
+                return target_pos_; // Fallback to target
             }
 #else
             // Should not reach here if validation is correct
@@ -420,7 +451,7 @@ namespace arms_controller_common
         if (current_segment_ < segment_progress_.size())
         {
             double segment_duration = segment_durations_[current_segment_];
-            
+
             // Update progress for current segment
             if (segment_duration > 0.0 && controller_frequency_ > 0.0)
             {
@@ -434,9 +465,9 @@ namespace arms_controller_common
             }
 
             // Calculate phase for current segment
-            double segment_percent = (segment_duration > 0.0) 
-                ? (segment_progress_[current_segment_] / segment_duration)
-                : 1.0;
+            double segment_percent = segment_duration > 0.0
+                                         ? (segment_progress_[current_segment_] / segment_duration)
+                                         : 1.0;
             segment_percent = std::clamp(segment_percent, 0.0, 1.0);
 
             double phase = calculatePhase(interpolation_type_, segment_percent);
@@ -459,7 +490,7 @@ namespace arms_controller_common
             {
                 // Move to next segment
                 current_segment_++;
-                
+
                 if (current_segment_ >= segment_progress_.size())
                 {
                     // All segments completed
@@ -471,7 +502,7 @@ namespace arms_controller_common
                     // Calculate overall progress
                     double total_duration = 0.0;
                     double elapsed_duration = 0.0;
-                    
+
                     for (size_t i = 0; i < segment_durations_.size(); ++i)
                     {
                         total_duration += segment_durations_[i];
@@ -484,8 +515,8 @@ namespace arms_controller_common
                             elapsed_duration += segment_progress_[i];
                         }
                     }
-                    
-                    percent_ = (total_duration > 0.0) ? (elapsed_duration / total_duration) : 1.0;
+
+                    percent_ = total_duration > 0.0 ? elapsed_duration / total_duration : 1.0;
                     percent_ = std::clamp(percent_, 0.0, 1.0);
                 }
             }
@@ -494,7 +525,7 @@ namespace arms_controller_common
                 // Calculate overall progress
                 double total_duration = 0.0;
                 double elapsed_duration = 0.0;
-                
+
                 for (size_t i = 0; i < segment_durations_.size(); ++i)
                 {
                     total_duration += segment_durations_[i];
@@ -507,8 +538,8 @@ namespace arms_controller_common
                         elapsed_duration += segment_progress_[i];
                     }
                 }
-                
-                percent_ = (total_duration > 0.0) ? (elapsed_duration / total_duration) : 1.0;
+
+                percent_ = total_duration > 0.0 ? elapsed_duration / total_duration : 1.0;
                 percent_ = std::clamp(percent_, 0.0, 1.0);
             }
 
@@ -529,7 +560,7 @@ namespace arms_controller_common
         if (!multi_node_planner_)
         {
             RCLCPP_ERROR(logger_, "Multi-node planner not initialized for DOUBLES interpolation");
-            return waypoints_.back();  // Fallback to final waypoint
+            return waypoints_.back(); // Fallback to final waypoint
         }
 
         planning::TrajectPoint traj_point = multi_node_planner_->run();
@@ -579,7 +610,7 @@ namespace arms_controller_common
         }
         else if (type == InterpolationType::TANH)
         {
-            const double scale = (tanh_scale_ > 0.0) ? tanh_scale_ : 3.0;
+            const double scale = tanh_scale_ > 0.0 ? tanh_scale_ : 3.0;
             phase = std::tanh(percent * scale);
         }
         else
@@ -595,7 +626,7 @@ namespace arms_controller_common
     {
         if (duration_ <= 0.0 || controller_frequency_ <= 0.0)
         {
-            percent_ = 1.0;  // Already normalized
+            percent_ = 1.0; // Already normalized
             completed_ = true;
         }
         else
@@ -609,7 +640,7 @@ namespace arms_controller_common
             if (percent_ >= 1.0)
             {
                 completed_ = true;
-                percent_ = 1.0;  // Ensure exact 1.0
+                percent_ = 1.0; // Ensure exact 1.0
             }
         }
     }
@@ -640,8 +671,8 @@ namespace arms_controller_common
         if (start_pos.size() != target_pos.size())
         {
             RCLCPP_ERROR(logger_,
-                        "Start position size (%zu) doesn't match target position size (%zu)",
-                        start_pos.size(), target_pos.size());
+                         "Start position size (%zu) doesn't match target position size (%zu)",
+                         start_pos.size(), target_pos.size());
             return false;
         }
 
@@ -654,7 +685,7 @@ namespace arms_controller_common
         if (type == InterpolationType::DOUBLES && !isDoublesAvailable())
         {
             RCLCPP_WARN(logger_,
-                       "DOUBLES interpolation requested but lina_planning is not available");
+                        "DOUBLES interpolation requested but lina_planning is not available");
             // Don't fail validation, will fall back to LINEAR
         }
 
@@ -668,8 +699,8 @@ namespace arms_controller_common
         if (waypoints.size() < 2)
         {
             RCLCPP_ERROR(logger_,
-                        "Multi-node trajectory requires at least 2 waypoints, got %zu",
-                        waypoints.size());
+                         "Multi-node trajectory requires at least 2 waypoints, got %zu",
+                         waypoints.size());
             return false;
         }
 
@@ -680,8 +711,8 @@ namespace arms_controller_common
             if (waypoints[i].size() != expected_size)
             {
                 RCLCPP_ERROR(logger_,
-                            "Waypoint %zu has size %zu, but expected %zu",
-                            i, waypoints[i].size(), expected_size);
+                             "Waypoint %zu has size %zu, but expected %zu",
+                             i, waypoints[i].size(), expected_size);
                 return false;
             }
         }
@@ -693,9 +724,9 @@ namespace arms_controller_common
             if (durations.size() != expected_num_segments)
             {
                 RCLCPP_WARN(logger_,
-                           "Duration vector size (%zu) doesn't match number of segments (%zu). "
-                           "Will use default duration for all segments.",
-                           durations.size(), expected_num_segments);
+                            "Duration vector size (%zu) doesn't match number of segments (%zu). "
+                            "Will use default duration for all segments.",
+                            durations.size(), expected_num_segments);
             }
 
             for (size_t i = 0; i < durations.size(); ++i)
@@ -703,8 +734,8 @@ namespace arms_controller_common
                 if (durations[i] < 0.0)
                 {
                     RCLCPP_ERROR(logger_,
-                               "Segment %zu duration must be non-negative, got %.3f",
-                               i, durations[i]);
+                                 "Segment %zu duration must be non-negative, got %.3f",
+                                 i, durations[i]);
                     return false;
                 }
             }
@@ -713,4 +744,3 @@ namespace arms_controller_common
         return true;
     }
 } // namespace arms_controller_common
-

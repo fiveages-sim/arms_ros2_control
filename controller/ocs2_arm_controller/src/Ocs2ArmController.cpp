@@ -132,6 +132,10 @@ namespace ocs2::mobile_manipulator
             int switch_command_base = auto_declare<int>("switch_command_base", 100);
             // Default: 100 for multi-home switching
 
+            // Declare trajectory_duration parameter (used by both CtrlComponent and StateMoveJ)
+            // This must be declared before CtrlComponent is created
+            double trajectory_duration = auto_declare<double>("trajectory_duration", 2.0);
+
             // Create CtrlComponent (auto-initialize interface)
             // Pass auto_declare function to CtrlComponent so it can declare its own parameters
             auto auto_declare_func = [this](const std::string& name, const auto& default_value) {
@@ -231,6 +235,7 @@ namespace ocs2::mobile_manipulator
 
             // Set joint names from controller parameters
             state_list_.movej->setJointNames(joint_names_);
+            state_list_.movej->setTrajectoryDuration(trajectory_duration);
 
             // Set joint limit checker from Pinocchio model
             if (ctrl_comp_->interface_)
@@ -293,6 +298,8 @@ namespace ocs2::mobile_manipulator
         if (state_list_.movej)
         {
             state_list_.movej->setupSubscriptions(get_node(), "target_joint_position", true);
+            // Setup trajectory subscription for multi-node trajectory planning (uses default topic name)
+            state_list_.movej->setupTrajectorySubscription(get_node());
         }
 
         return CallbackReturn::SUCCESS;

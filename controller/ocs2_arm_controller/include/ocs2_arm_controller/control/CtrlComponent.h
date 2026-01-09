@@ -75,8 +75,10 @@ namespace ocs2::mobile_manipulator
             RCLCPP_INFO(node_->get_logger(), "Future time offset: %.2f seconds", future_time_offset_);
             
             // Setup MPC components
-            // Declare and load MPC trajectory duration parameters using auto_declare
-            double trajectory_duration = auto_declare("trajectory_duration", 2.0);
+            // Get trajectory_duration parameter (already declared in Ocs2ArmController)
+            // Declare moveL_duration parameter (only used in CtrlComponent)
+            double trajectory_duration = 2.0;  // Default value
+            node_->get_parameter("trajectory_duration", trajectory_duration);
             double moveL_duration = auto_declare("moveL_duration", 2.0);
             
             RCLCPP_INFO(node_->get_logger(), "Trajectory duration: %.2f seconds", trajectory_duration);

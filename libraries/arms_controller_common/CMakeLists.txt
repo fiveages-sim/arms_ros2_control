@@ -18,6 +18,7 @@ set(dependencies
         tf2_geometry_msgs
         tf2
         geometry_msgs
+        trajectory_msgs
 )
 
 find_package(ament_cmake REQUIRED)

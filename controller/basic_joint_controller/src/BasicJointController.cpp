@@ -145,6 +145,11 @@ namespace basic_joint_controller
             // Set joint names from controller parameters
             state_list_.movej->setJointNames(joint_names_);
 
+            // Set trajectory duration for multi-node trajectory planning
+            double trajectory_duration = auto_declare<double>("trajectory_duration", 3.0);
+            state_list_.movej->setTrajectoryDuration(trajectory_duration);
+            RCLCPP_INFO(get_node()->get_logger(), "Trajectory duration set to %.2f seconds", trajectory_duration);
+
             // Create joint limits manager
             joint_limits_manager_ = std::make_shared<arms_controller_common::JointLimitsManager>(
                 get_node()->get_logger());
@@ -186,6 +191,8 @@ namespace basic_joint_controller
         if (state_list_.movej)
         {
             state_list_.movej->setupSubscriptions(get_node(), "target_joint_position", false);
+            // Setup trajectory subscription for multi-node trajectory planning (uses default topic name)
+            state_list_.movej->setupTrajectorySubscription(get_node());
 
             // Set joint limit checker from joint limits manager
             if (joint_limits_manager_)
