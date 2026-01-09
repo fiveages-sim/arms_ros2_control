@@ -160,6 +160,80 @@ namespace gripper_hardware_common
             // Function codes
             static constexpr uint8_t READ_FUNCTION = 0x04;   // Read Input Registers
             static constexpr uint8_t WRITE_FUNCTION = 0x10;  // Write Multiple Registers
+
+            /**
+             * @brief O7 hand joint limits (in radians)
+             * Joint order: thumb_joint1, thumb_joint2, thumb_joint3, index_joint, middle_joint, ring_joint, pinky_joint
+             * Values from linkerhand_description/xacro/o7.xacro
+             */
+            struct O7
+            {
+                // Thumb joints
+                static constexpr double THUMB_JOINT1_LOWER = 0.0;
+                static constexpr double THUMB_JOINT1_UPPER = 1.1339;  // thumb_joint1 limit
+                static constexpr double THUMB_JOINT2_LOWER = 0.0;
+                static constexpr double THUMB_JOINT2_UPPER = 1.9189;  // thumb_joint2 limit
+                static constexpr double THUMB_JOINT3_LOWER = 0.0;
+                static constexpr double THUMB_JOINT3_UPPER = 0.5146;   // thumb_joint3 limit
+                
+                // Finger joints
+                static constexpr double INDEX_JOINT_LOWER = 0.0;
+                static constexpr double INDEX_JOINT_UPPER = 1.3607;   // index_joint limit
+                static constexpr double MIDDLE_JOINT_LOWER = 0.0;
+                static constexpr double MIDDLE_JOINT_UPPER = 1.3607;  // middle_joint limit
+                static constexpr double RING_JOINT_LOWER = 0.0;
+                static constexpr double RING_JOINT_UPPER = 1.3607;    // ring_joint limit
+                static constexpr double PINKY_JOINT_LOWER = 0.0;
+                static constexpr double PINKY_JOINT_UPPER = 1.3607;  // pinky_joint limit
+            };
+
+            /**
+             * @brief O6 hand joint limits (in radians)
+             * Joint order: thumb_joint1, thumb_joint2, index_joint, middle_joint, ring_joint, pinky_joint
+             * Values from linkerhand_description/xacro/o6.xacro
+             */
+            struct O6
+            {
+                // Thumb joints
+                static constexpr double THUMB_JOINT1_LOWER = 0.0;
+                static constexpr double THUMB_JOINT1_UPPER = 1.36;    // thumb_joint1 limit (using max value)
+                static constexpr double THUMB_JOINT2_LOWER = 0.0;
+                static constexpr double THUMB_JOINT2_UPPER = 0.58;    // thumb_joint2 limit
+                
+                // Finger joints
+                static constexpr double INDEX_JOINT_LOWER = 0.0;
+                static constexpr double INDEX_JOINT_UPPER = 1.60;     // index_joint limit
+                static constexpr double MIDDLE_JOINT_LOWER = 0.0;
+                static constexpr double MIDDLE_JOINT_UPPER = 1.60;   // middle_joint limit
+                static constexpr double RING_JOINT_LOWER = 0.0;
+                static constexpr double RING_JOINT_UPPER = 1.60;    // ring_joint limit
+                static constexpr double PINKY_JOINT_LOWER = 0.0;
+                static constexpr double PINKY_JOINT_UPPER = 1.60;   // pinky_joint limit
+            };
+
+            /**
+             * @brief L6 hand joint limits (in radians)
+             * Joint order: thumb_joint1, thumb_joint2, index_joint, middle_joint, ring_joint, pinky_joint
+             * Values from linkerhand_description/xacro/l6.xacro
+             */
+            struct L6
+            {
+                // Thumb joints
+                static constexpr double THUMB_JOINT1_LOWER = 0.0;
+                static constexpr double THUMB_JOINT1_UPPER = 1.39;   // thumb_joint1 limit
+                static constexpr double THUMB_JOINT2_LOWER = 0.0;
+                static constexpr double THUMB_JOINT2_UPPER = 0.99;    // thumb_joint2 limit
+                
+                // Finger joints
+                static constexpr double INDEX_JOINT_LOWER = 0.0;
+                static constexpr double INDEX_JOINT_UPPER = 1.26;    // index_joint limit
+                static constexpr double MIDDLE_JOINT_LOWER = 0.0;
+                static constexpr double MIDDLE_JOINT_UPPER = 1.26;   // middle_joint limit
+                static constexpr double RING_JOINT_LOWER = 0.0;
+                static constexpr double RING_JOINT_UPPER = 1.26;    // ring_joint limit
+                static constexpr double PINKY_JOINT_LOWER = 0.0;
+                static constexpr double PINKY_JOINT_UPPER = 1.26;   // pinky_joint limit
+            };
         };
     }
 } // namespace gripper_hardware_common
