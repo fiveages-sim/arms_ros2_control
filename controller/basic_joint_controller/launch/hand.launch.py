@@ -1,4 +1,5 @@
 import os
+import re
 
 from ament_index_python.packages import get_package_share_directory
 from launch import LaunchDescription
@@ -8,6 +9,31 @@ import xacro
 
 # Import robot_common_launch utilities
 from robot_common_launch import load_robot_config
+
+
+def get_default_arg_from_xacro(xacro_file, arg_name):
+    """
+    从 xacro 文件中读取指定参数的默认值
+    
+    Args:
+        xacro_file (str): xacro 文件路径
+        arg_name (str): 参数名称
+        
+    Returns:
+        str: 默认值，如果找不到则返回 None
+    """
+    try:
+        with open(xacro_file, 'r') as f:
+            content = f.read()
+            # 查找 xacro:arg name="arg_name" default="..." 的模式
+            # 支持单引号和双引号
+            pattern = rf'xacro:arg\s+name=["\']{re.escape(arg_name)}["\']\s+default=["\']([^"\']+)["\']'
+            match = re.search(pattern, content)
+            if match:
+                return match.group(1)
+    except Exception as e:
+        print(f"[WARN] Could not read default {arg_name} from {xacro_file}: {e}")
+    return None
 
 
 def launch_setup(context, *args, **kwargs):
@@ -42,6 +68,9 @@ def launch_setup(context, *args, **kwargs):
     if not os.path.exists(hand_xacro_path):
         print(f"[ERROR] Hand xacro file not found: {hand_xacro_path}")
         return []
+    
+    # Get serial_port from launch configuration (default was already read from xacro in generate_launch_description)
+    serial_port = context.launch_configurations.get('serial_port', '/dev/ttyUSB0')
     
     # 构建 xacro mappings
     mappings = {
@@ -223,10 +252,26 @@ def generate_launch_description():
         description="Hardware type: 'gz' for Gazebo simulation, 'isaac' for Isaac simulation, 'mock_components' for mock components, 'real' for real hardware"
     )
 
+    # Try to read default serial_port from xacro file
+    # This is a best-effort attempt - if it fails, we'll use a hardcoded default
+    default_serial_port = "/dev/ttyUSB0"  # Fallback default
+    try:
+        hand_pkg_name = "linkerhand_description"  # Default hand name
+        hand_pkg_path = get_package_share_directory(hand_pkg_name)
+        if hand_pkg_path:
+            hand_xacro_path = os.path.join(hand_pkg_path, 'xacro', 'ros2_control', 'hand.xacro')
+            if os.path.exists(hand_xacro_path):
+                xacro_default = get_default_arg_from_xacro(hand_xacro_path, 'serial_port')
+                if xacro_default:
+                    default_serial_port = xacro_default
+                    print(f"[INFO] Using default serial_port from xacro: {default_serial_port}")
+    except Exception as e:
+        print(f"[WARN] Could not read default serial_port from xacro, using fallback: {e}")
+
     serial_port_arg = DeclareLaunchArgument(
         "serial_port",
-        default_value="/dev/ttyUSB0",
-        description="Serial port for real hardware (e.g., /dev/ttyUSB0). Only used when hardware=real."
+        default_value=default_serial_port,
+        description=f"Serial port for real hardware (e.g., /dev/ttyUSB0). Only used when hardware=real. Default: {default_serial_port} (read from xacro if available)."
     )
 
     world_arg = DeclareLaunchArgument(
