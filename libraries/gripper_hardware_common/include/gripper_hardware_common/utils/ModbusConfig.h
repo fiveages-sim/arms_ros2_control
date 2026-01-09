@@ -129,5 +129,37 @@ namespace gripper_hardware_common
             static constexpr uint16_t INIT_VALUE = 0x0000;
             static constexpr uint16_t INIT_REGISTER_NUM = 0x0002;
         }
+
+        /**
+         * @brief Dexterous Hand Modbus configuration
+         * 
+         * Configuration for O7 (7-DOF) and O6 (6-DOF) dexterous hands.
+         * Both use the same Modbus slave addresses and register layout.
+         */
+        struct DexterousHand
+        {
+            // Register addresses
+            static constexpr uint16_t JOINT_POSITION_REG_START = 0;  // Starting register for joint positions
+
+            // Joint counts
+            static constexpr int JOINT_COUNT_O7 = 7;  // O7 hand has 7 joints
+            static constexpr int JOINT_COUNT_O6 = 6;  // O6 hand has 6 joints
+            static constexpr int JOINT_COUNT = JOINT_COUNT_O7;  // Default to O7 for backward compatibility
+
+            // Modbus slave addresses
+            static constexpr uint8_t RIGHT_HAND_SLAVE_ID = 0x27;  // Right hand Modbus ID
+            static constexpr uint8_t LEFT_HAND_SLAVE_ID = 0x28;   // Left hand Modbus ID
+
+            // Default Modbus parameters
+            static constexpr const char* DEFAULT_SERIAL_PORT = "/dev/ttyUSB0";
+            static constexpr int DEFAULT_BAUDRATE = 115200;
+            static constexpr char DEFAULT_PARITY = 'N';
+            static constexpr int DEFAULT_DATA_BITS = 8;
+            static constexpr int DEFAULT_STOP_BITS = 1;
+
+            // Function codes
+            static constexpr uint8_t READ_FUNCTION = 0x04;   // Read Input Registers
+            static constexpr uint8_t WRITE_FUNCTION = 0x10;  // Write Multiple Registers
+        };
     }
 } // namespace gripper_hardware_common

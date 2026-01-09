@@ -17,9 +17,15 @@ def launch_setup(context, *args, **kwargs):
     direction = context.launch_configurations.get('direction', '1')
     hardware = context.launch_configurations.get('hardware', 'mock_components')
     world = context.launch_configurations.get('world', 'dart')
+    serial_port = context.launch_configurations.get('serial_port', '/dev/ttyUSB0')
 
     # 基本参数
     use_sim_time = hardware in ['gz', 'isaac']
+
+    # 显示手部配置信息
+    hand_side = "left" if direction == "1" else "right"
+    modbus_id = "0x28" if direction == "1" else "0x27"
+    print(f"[INFO] Hand configuration: {hand_side} hand (direction={direction}, Modbus ID={modbus_id})")
 
     # 生成 ros2_control robot_description
     # 对于灵巧手，直接处理 hand.xacro 文件
@@ -45,6 +51,13 @@ def launch_setup(context, *args, **kwargs):
         mappings["type"] = hand_type
     if direction and direction.strip():
         mappings["direction"] = direction
+    
+    # Pass serial_port and max_speed_ratio to xacro if hardware is real
+    if hardware == 'real':
+        mappings["serial_port"] = serial_port
+        max_speed_ratio = context.launch_configurations.get('max_speed_ratio', '1.0')
+        if max_speed_ratio and max_speed_ratio.strip():
+            mappings["max_speed_ratio"] = max_speed_ratio
     
     # 如果是 Gazebo 模式，添加 gazebo 映射
     if hardware == 'gz':
@@ -92,6 +105,7 @@ def launch_setup(context, *args, **kwargs):
     node_parameters = [
         ros2_controllers_path,
         {'use_sim_time': use_sim_time},
+        {'robot_description': robot_description},
     ]
     
     # 如果使用了 type-specific 配置，可以在这里添加额外的参数处理逻辑
@@ -194,19 +208,25 @@ def generate_launch_description():
     type_arg = DeclareLaunchArgument(
         "type",
         default_value="o7",
-        description="Hand type (o7, etc.). Leave empty to not pass type parameter to xacro."
+        description="Hand type: 'o7' (7-DOF), 'o6' (6-DOF), or 'l6' (6-DOF). Leave empty to not pass type parameter to xacro."
     )
 
     direction_arg = DeclareLaunchArgument(
         "direction",
         default_value="1",
-        description="Hand direction (1 for left hand, -1 for right hand)"
+        description="Hand direction: '1' for left hand (Modbus ID 0x28), '-1' for right hand (Modbus ID 0x27). Default is left hand (1)."
     )
 
     hardware_arg = DeclareLaunchArgument(
         "hardware",
         default_value="mock_components",
-        description="Hardware type: 'gz' for Gazebo simulation, 'isaac' for Isaac simulation, 'mock_components' for mock components"
+        description="Hardware type: 'gz' for Gazebo simulation, 'isaac' for Isaac simulation, 'mock_components' for mock components, 'real' for real hardware"
+    )
+
+    serial_port_arg = DeclareLaunchArgument(
+        "serial_port",
+        default_value="/dev/ttyUSB0",
+        description="Serial port for real hardware (e.g., /dev/ttyUSB0). Only used when hardware=real."
     )
 
     world_arg = DeclareLaunchArgument(
@@ -219,13 +239,21 @@ def generate_launch_description():
         description='Whether to launch RViz visualization'
     )
 
+    max_speed_ratio_arg = DeclareLaunchArgument(
+        'max_speed_ratio',
+        default_value='1.0',
+        description='Maximum speed ratio for joint movement (0.0-1.0). 1.0 = no limiting, 0.5 = 50% of max speed. Only used when hardware=real.'
+    )
+
     return LaunchDescription([
         hand_arg,
         type_arg,
         direction_arg,
         hardware_arg,
+        serial_port_arg,
         world_arg,
         use_rviz_arg,
+        max_speed_ratio_arg,
         OpaqueFunction(function=launch_setup),
     ])
 
