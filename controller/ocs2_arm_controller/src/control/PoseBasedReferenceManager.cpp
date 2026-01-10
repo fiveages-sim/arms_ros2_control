@@ -549,38 +549,15 @@ namespace ocs2::mobile_manipulator
             return state;
         };
 
-        // 处理TF转换：将路径点转换到base frame
+        // 处理路径点：默认所有点都在base frame下，不做TF转换
         std::vector<vector_t> left_arm_waypoints;
         std::vector<vector_t> right_arm_waypoints;
 
         for (size_t i = 0; i < total_points; ++i)
         {
             const auto& pose_stamped = msg->poses[i];
-            vector_t state;
-
-            // 如果frame_id不是base_frame，需要转换
-            if (pose_stamped.header.frame_id != base_frame_)
-            {
-                try
-                {
-                    geometry_msgs::msg::PoseStamped transformed_pose;
-                    geometry_msgs::msg::TransformStamped transform = tf_buffer_->lookupTransform(
-                        base_frame_, pose_stamped.header.frame_id, tf2::TimePointZero);
-                    tf2::doTransform(pose_stamped, transformed_pose, transform);
-                    state = poseToState(transformed_pose);
-                }
-                catch (const tf2::TransformException& ex)
-                {
-                    RCLCPP_WARN(logger_,
-                                "无法将路径点 %zu 从 %s 转换到 %s: %s",
-                                i, pose_stamped.header.frame_id.c_str(), base_frame_.c_str(), ex.what());
-                    continue; // 跳过无法转换的点
-                }
-            }
-            else
-            {
-                state = poseToState(pose_stamped);
-            }
+            // 直接转换，假设所有点都在base frame下
+            vector_t state = poseToState(pose_stamped);
 
             // 根据模式分配路径点
             if (dual_arm_mode_)
@@ -633,7 +610,7 @@ namespace ocs2::mobile_manipulator
 
         // 为每个臂生成插值轨迹
         // 采样间隔（秒）
-        constexpr double kSampleInterval = 0.01; // 0.04秒一个采样点（25Hz）
+        constexpr double kSampleInterval = 0.04; // 0.04秒一个采样点（25Hz）
 
         // 根据时间长度动态计算采样点数量
         const size_t kNumSamples = std::max(
