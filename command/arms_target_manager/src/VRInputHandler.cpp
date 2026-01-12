@@ -343,6 +343,16 @@ namespace arms_ros2_control::command
         }
 
         left_ee_pose_ = poseMsgToMatrix(msg);
+
+        // 坐标系转换：x→z, z→x, y→-y
+        Eigen::Matrix4d T_transform = Eigen::Matrix4d::Identity();
+        T_transform.block<3,3>(0,0) << 0,  0,  1,   // new_x = old_z
+                                        0, -1,  0,   // new_y = -old_y
+                                        1,  0,  0;   // new_z = old_x
+
+        // 应用相似变换：pose_new = T * pose_old * T^T
+        left_ee_pose_ = T_transform * left_ee_pose_ * T_transform.transpose();
+
         matrixToPosOri(left_ee_pose_, left_position_, left_orientation_);
 
 
@@ -414,6 +424,16 @@ namespace arms_ros2_control::command
     void VRInputHandler::vrRightCallback(const geometry_msgs::msg::PoseStamped::SharedPtr msg)
     {
         right_ee_pose_ = poseMsgToMatrix(msg);
+
+        // 坐标系转换：x→z, z→x, y→-y
+        Eigen::Matrix4d T_transform = Eigen::Matrix4d::Identity();
+        T_transform.block<3,3>(0,0) << 0,  0,  1,   // new_x = old_z
+                                        0, -1,  0,   // new_y = -old_y
+                                        1,  0,  0;   // new_z = old_x
+
+        // 应用相似变换：pose_new = T * pose_old * T^T
+        right_ee_pose_ = T_transform * right_ee_pose_ * T_transform.transpose();
+
         matrixToPosOri(right_ee_pose_, right_position_, right_orientation_);
 
         if (enabled_.load())
@@ -621,10 +641,11 @@ namespace arms_ros2_control::command
             vrOriDiff.normalize(); // 重新归一化
         }
 
-        // 将相同的变换应用到机器人base pose
-        resultPos = robotBasePos + vrPosDiff;
-        // resultOri = robotBaseOri * vrOriDiff;
-        resultOri = vrOriDiff * robotBaseOri;
+        // 将相同的变换应用到机器人base pose（局部坐标系版本）
+        // 将VR的全局增量向量旋转到机器人局部坐标系，然后应用
+        resultPos = robotBasePos + robotBaseOri * vrPosDiff;
+        // 旋转增量在机器人局部坐标系下施加
+        resultOri = robotBaseOri * vrOriDiff;
 
         // 归一化四元数以避免漂移
         resultOri.normalize();
