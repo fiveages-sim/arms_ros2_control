@@ -4,10 +4,10 @@
 #include <rclcpp/rclcpp.hpp>
 #include <geometry_msgs/msg/pose_stamped.hpp>
 #include <geometry_msgs/msg/pose.hpp>
-#include <QFrame>
 #include <algorithm>
 #include <cmath>
 #include <cctype>
+#include <arms_controller_common/utils/FSMStateTransitionValidator.h>
 
 namespace arms_rviz_control_plugin
 {
@@ -36,7 +36,7 @@ namespace arms_rviz_control_plugin
 
         // Create group box for joint controls (no title)
         joint_control_group_ = std::make_unique<QGroupBox>(this);
-        joint_control_group_->setTitle("");  // Hide title
+        joint_control_group_->setTitle(""); // Hide title
         joint_layout_ = std::make_unique<QVBoxLayout>(joint_control_group_.get());
         joint_layout_->setSpacing(5);
 
@@ -46,7 +46,8 @@ namespace arms_rviz_control_plugin
 
         // Create send button
         send_button_ = std::make_unique<QPushButton>("发送关节位置", this);
-        send_button_->setStyleSheet("QPushButton { background-color: #4CAF50; color: white; font-weight: bold; padding: 8px; }");
+        send_button_->setStyleSheet(
+            "QPushButton { background-color: #4CAF50; color: white; font-weight: bold; padding: 8px; }");
         send_button_->setVisible(false);
         connect(send_button_.get(), &QPushButton::clicked, this, &JointControlPanel::onSendButtonClicked);
         main_layout->addWidget(send_button_.get());
@@ -78,7 +79,7 @@ namespace arms_rviz_control_plugin
                 // Always cache robot_description
                 robot_description_cache_ = msg->data;
                 robot_description_received_ = true;
-                
+
                 // If joints are already initialized, parse limits immediately
                 if (joint_limits_manager_ && joints_initialized_ && !joint_names_.empty())
                 {
@@ -86,42 +87,42 @@ namespace arms_rviz_control_plugin
                     // Update spinbox ranges after parsing limits
                     updateSpinboxRanges();
                     RCLCPP_INFO(node_->get_logger(),
-                               "关节限位已从 /robot_description topic 加载");
+                                "关节限位已从 /robot_description topic 加载");
                 }
                 else
                 {
                     RCLCPP_DEBUG(node_->get_logger(),
-                               "robot_description 已缓存，等待关节初始化");
+                                 "robot_description 已缓存，等待关节初始化");
                 }
             });
 
         // Declare parameter with empty default
         node_->declare_parameter("joint_controllers", std::vector<std::string>());
-        
+
         // Get joint controllers from parameters
         available_controllers_ = node_->get_parameter("joint_controllers").as_string_array();
 
         // Determine available categories and map to controllers
         available_categories_.clear();
         category_to_controller_.clear();
-        
-        std::string wbc_controller;  // ocs2_wbc_controller (handles left, right, body)
-        std::string arm_controller;  // ocs2_arm_controller (handles left, right only)
-        
+
+        std::string wbc_controller; // ocs2_wbc_controller (handles left, right, body)
+        std::string arm_controller; // ocs2_arm_controller (handles left, right only)
+
         for (const auto& controller : available_controllers_)
         {
             std::string controller_lower = controller;
-            std::transform(controller_lower.begin(), controller_lower.end(), 
-                          controller_lower.begin(), ::tolower);
-            
+            std::transform(controller_lower.begin(), controller_lower.end(),
+                           controller_lower.begin(), ::tolower);
+
             if (controller_lower.find("head") != std::string::npos)
             {
                 available_categories_.insert("head");
                 category_to_controller_["head"] = controller;
             }
             else if (controller_lower.find("body") != std::string::npos &&
-                     controller_lower.find("ocs2_wbc_controller") == std::string::npos &&
-                     controller_lower.find("ocs2_arm_controller") == std::string::npos)
+                controller_lower.find("ocs2_wbc_controller") == std::string::npos &&
+                controller_lower.find("ocs2_arm_controller") == std::string::npos)
             {
                 // Only map body to dedicated body controller if it's not a WBC/arm controller
                 available_categories_.insert("body");
@@ -143,7 +144,7 @@ namespace arms_rviz_control_plugin
                 // Don't add left/right categories here - wait for joint state to determine
             }
         }
-        
+
         // Map left and right to WBC controller if found
         if (!wbc_controller.empty())
         {
@@ -155,7 +156,7 @@ namespace arms_rviz_control_plugin
                 category_to_controller_["body"] = wbc_controller;
             }
         }
-        
+
         // Map left and right to arm controller if found (and WBC controller not found)
         // Note: For ocs2_arm_controller, left/right mapping will be done after joint state is received
         // to determine if it's a single-arm or dual-arm robot
@@ -182,7 +183,7 @@ namespace arms_rviz_control_plugin
         left_current_target_subscriber_ = node_->create_subscription<geometry_msgs::msg::PoseStamped>(
             "left_current_target", 10,
             std::bind(&JointControlPanel::onLeftCurrentTargetReceived, this, std::placeholders::_1));
-        
+
         right_current_target_subscriber_ = node_->create_subscription<geometry_msgs::msg::PoseStamped>(
             "right_current_target", 10,
             std::bind(&JointControlPanel::onRightCurrentTargetReceived, this, std::placeholders::_1));
@@ -193,7 +194,8 @@ namespace arms_rviz_control_plugin
         // Initialize visibility based on default state (command = 2, not enabled)
         updatePanelVisibility();
 
-        RCLCPP_INFO(node_->get_logger(), "Joint Control Panel initialized with %zu controllers", available_controllers_.size());
+        RCLCPP_INFO(node_->get_logger(), "Joint Control Panel initialized with %zu controllers",
+                    available_controllers_.size());
         if (!available_categories_.empty())
         {
             std::string categories_str;
@@ -208,61 +210,79 @@ namespace arms_rviz_control_plugin
 
     void JointControlPanel::onFsmCommandReceived(const std_msgs::msg::Int32::SharedPtr msg)
     {
+        // 使用公共的状态转换验证工具类
+        std::string new_state;
+        bool valid_transition = arms_controller_common::FSMStateTransitionValidator::validateTransition(
+            current_state_, msg->data, new_state);
+
         int32_t old_command = current_command_;
-        current_command_ = msg->data;
-        
-        // Enable joint control when command is 3 (OCS2) or 4 (MOVEJ)
-        bool should_enable = (msg->data == 3 || msg->data == 4);
-        
-        if (should_enable != is_joint_control_enabled_)
+
+        // 只有在有效转换时才更新状态和命令
+        if (valid_transition)
         {
-            is_joint_control_enabled_ = should_enable;
-            // Update publisher when enabling/disabling (left/right category uses different publishers in different modes)
-            if (is_joint_control_enabled_)
+            current_state_ = new_state;
+            current_command_ = msg->data;
+
+            // Enable joint control when command is 3 (OCS2) or 4 (MOVEJ)
+            bool should_enable = (msg->data == 3 || msg->data == 4);
+
+            if (should_enable != is_joint_control_enabled_)
             {
-                updatePublisher();
+                is_joint_control_enabled_ = should_enable;
+                // Update publisher when enabling/disabling (left/right category uses different publishers in different modes)
+                if (is_joint_control_enabled_)
+                {
+                    updatePublisher();
+                }
+                updatePanelVisibility();
             }
-            updatePanelVisibility();
+            else if (old_command != current_command_ && is_joint_control_enabled_)
+            {
+                // Command changed but control is still enabled, update publisher and button text
+                // Left/right category uses different publishers in OCS2 vs MOVEJ mode
+                updatePublisher();
+                updatePanelVisibility();
+            }
         }
-        else if (old_command != current_command_ && is_joint_control_enabled_)
+        else if (msg->data == 0 || msg->data == 100)
         {
-            // Command changed but control is still enabled, update publisher and button text
-            // Left/right category uses different publishers in OCS2 vs MOVEJ mode
-            updatePublisher();
-            updatePanelVisibility();
+            // 对于 command 0 和 100（切换姿态等特殊命令），不更新状态但允许处理
+            // 这些命令不影响状态转换
+            current_command_ = msg->data;
         }
+        // 如果转换无效，不更新任何状态
     }
 
     std::string JointControlPanel::classifyJoint(const std::string& joint_name)
     {
         std::string joint_name_lower = joint_name;
-        std::transform(joint_name_lower.begin(), joint_name_lower.end(), 
-                      joint_name_lower.begin(), ::tolower);
-        
+        std::transform(joint_name_lower.begin(), joint_name_lower.end(),
+                       joint_name_lower.begin(), ::tolower);
+
         // Check for head joints
         if (joint_name_lower.find("head") != std::string::npos)
         {
             return "head";
         }
-        
+
         // Check for left arm joints
         if (joint_name_lower.find("left") != std::string::npos ||
             joint_name_lower.find("l_") != std::string::npos ||
-            (joint_name_lower.length() > 0 && joint_name_lower[0] == 'l' && 
-             (joint_name_lower[1] == '_' || std::isdigit(joint_name_lower[1]))))
+            (joint_name_lower.length() > 0 && joint_name_lower[0] == 'l' &&
+                (joint_name_lower[1] == '_' || std::isdigit(joint_name_lower[1]))))
         {
             return "left";
         }
-        
+
         // Check for right arm joints
         if (joint_name_lower.find("right") != std::string::npos ||
             joint_name_lower.find("r_") != std::string::npos ||
-            (joint_name_lower.length() > 0 && joint_name_lower[0] == 'r' && 
-             (joint_name_lower[1] == '_' || std::isdigit(joint_name_lower[1]))))
+            (joint_name_lower.length() > 0 && joint_name_lower[0] == 'r' &&
+                (joint_name_lower[1] == '_' || std::isdigit(joint_name_lower[1]))))
         {
             return "right";
         }
-        
+
         // Default to body for all other joints
         return "body";
     }
@@ -284,7 +304,7 @@ namespace arms_rviz_control_plugin
             for (size_t i = 0; i < joint_names_.size(); ++i)
             {
                 const std::string& joint_name = joint_names_[i];
-                
+
                 // Find this joint in the message
                 auto it = std::find(msg->name.begin(), msg->name.end(), joint_name);
                 if (it != msg->name.end())
@@ -294,7 +314,7 @@ namespace arms_rviz_control_plugin
                     {
                         double position = msg->position[msg_index];
                         joint_positions_[i] = position;
-                        
+
                         // Update spinbox value (block signals to avoid triggering publish)
                         if (joint_spinboxes_[i])
                         {
@@ -410,13 +430,13 @@ namespace arms_rviz_control_plugin
         {
             return false;
         }
-        
+
         // Hide button if "all" is selected and there are category partitions
         if (current_category_ == "all" && category_combo_ && category_combo_->count() > 1)
         {
             return false;
         }
-        
+
         // When command is 3 (OCS2), hide button for body (if using ocs2_wbc_controller)
         // But show button for left/right with different text
         if (current_command_ == 3)
@@ -428,9 +448,9 @@ namespace arms_rviz_control_plugin
                 if (it != category_to_controller_.end())
                 {
                     std::string controller_lower = it->second;
-                    std::transform(controller_lower.begin(), controller_lower.end(), 
-                                  controller_lower.begin(), ::tolower);
-                    
+                    std::transform(controller_lower.begin(), controller_lower.end(),
+                                   controller_lower.begin(), ::tolower);
+
                     if (controller_lower.find("ocs2_wbc_controller") != std::string::npos)
                     {
                         return false;
@@ -438,7 +458,7 @@ namespace arms_rviz_control_plugin
                 }
             }
         }
-        
+
         // When command is 4 (MOVEJ), hide button for left/right categories
         // NOTE: Now enabled - button will show in MOVEJ mode for left/right categories
         // if (current_command_ == 4)
@@ -448,7 +468,7 @@ namespace arms_rviz_control_plugin
         //         return false;
         //     }
         // }
-        
+
         return true;
     }
 
@@ -456,7 +476,7 @@ namespace arms_rviz_control_plugin
     {
         bool should_show_controls = is_joint_control_enabled_ && joints_initialized_;
         scroll_area_->setVisible(should_show_controls);
-        
+
         // Show/hide category selection combo box
         if (category_layout_)
         {
@@ -470,13 +490,13 @@ namespace arms_rviz_control_plugin
                 }
             }
         }
-        
+
         // Show/hide send button and update text
         if (send_button_)
         {
             bool should_show = shouldShowSendButton();
             send_button_->setVisible(should_show);
-            
+
             // Update button text based on command and category
             if (should_show)
             {
@@ -490,13 +510,13 @@ namespace arms_rviz_control_plugin
                 }
             }
         }
-        
+
         // Hide status label when joint control is enabled
         if (status_label_)
         {
             status_label_->setVisible(!should_show_controls);
         }
-        
+
         if (should_show_controls)
         {
             updateJointVisibility();
@@ -512,9 +532,9 @@ namespace arms_rviz_control_plugin
             {
                 std::string controller = available_controllers_[0];
                 std::string controller_lower = controller;
-                std::transform(controller_lower.begin(), controller_lower.end(), 
-                              controller_lower.begin(), ::tolower);
-                
+                std::transform(controller_lower.begin(), controller_lower.end(),
+                               controller_lower.begin(), ::tolower);
+
                 // If it's a WBC controller, use the base topic
                 if (controller_lower.find("ocs2_wbc_controller") != std::string::npos ||
                     controller_lower.find("ocs2_arm_controller") != std::string::npos)
@@ -528,16 +548,16 @@ namespace arms_rviz_control_plugin
             }
             return "/ocs2_wbc_controller/target_joint_position";
         }
-        
+
         // Check if we have a controller mapped for this category
         auto it = category_to_controller_.find(category);
         if (it != category_to_controller_.end())
         {
             std::string controller = it->second;
             std::string controller_lower = controller;
-            std::transform(controller_lower.begin(), controller_lower.end(), 
-                          controller_lower.begin(), ::tolower);
-            
+            std::transform(controller_lower.begin(), controller_lower.end(),
+                           controller_lower.begin(), ::tolower);
+
             // For ocs2_wbc_controller with left/right/body, use sub-topics
             if ((category == "left" || category == "right" || category == "body") &&
                 controller_lower.find("ocs2_wbc_controller") != std::string::npos)
@@ -546,7 +566,7 @@ namespace arms_rviz_control_plugin
             }
             // For ocs2_arm_controller with left/right, use sub-topics (but not body)
             else if ((category == "left" || category == "right") &&
-                     controller_lower.find("ocs2_arm_controller") != std::string::npos)
+                controller_lower.find("ocs2_arm_controller") != std::string::npos)
             {
                 return "/" + controller + "/target_joint_position/" + category;
             }
@@ -556,7 +576,7 @@ namespace arms_rviz_control_plugin
                 return "/" + controller + "/target_joint_position";
             }
         }
-        
+
         // Fallback to default if no mapping found
         if (category == "head")
         {
@@ -574,7 +594,7 @@ namespace arms_rviz_control_plugin
         {
             return "/ocs2_wbc_controller/target_joint_position/right";
         }
-        
+
         return "/ocs2_wbc_controller/target_joint_position";
     }
 
@@ -584,7 +604,7 @@ namespace arms_rviz_control_plugin
         joint_position_publisher_.reset();
         left_target_publisher_.reset();
         right_target_publisher_.reset();
-        
+
         // For left/right category:
         // - OCS2 mode (command == 3): use PoseStamped publisher (end-effector pose)
         // - MOVEJ mode (command == 4): use joint position publisher
@@ -637,10 +657,10 @@ namespace arms_rviz_control_plugin
     void JointControlPanel::updateCategoryOptions()
     {
         category_combo_->clear();
-        
+
         // Always add "全部" option
         category_combo_->addItem("全部", "all");
-        
+
         // Add available categories
         if (available_categories_.find("body") != available_categories_.end())
         {
@@ -658,7 +678,7 @@ namespace arms_rviz_control_plugin
         {
             category_combo_->addItem("Right", "right");
         }
-        
+
         // Set default to first item
         if (category_combo_->count() > 0)
         {
@@ -697,9 +717,9 @@ namespace arms_rviz_control_plugin
 
         // Check if dual-arm mode
         bool has_left_joints = category_to_joints_.find("left") != category_to_joints_.end() &&
-                               !category_to_joints_["left"].empty();
+            !category_to_joints_["left"].empty();
         bool has_right_joints = category_to_joints_.find("right") != category_to_joints_.end() &&
-                                !category_to_joints_["right"].empty();
+            !category_to_joints_["right"].empty();
         bool is_dual_arm_mode = has_left_joints || has_right_joints;
 
         if (is_dual_arm_mode)
@@ -747,7 +767,7 @@ namespace arms_rviz_control_plugin
         for (size_t i = 0; i < joint_names_.size(); ++i)
         {
             bool visible = false;
-            
+
             if (current_category_ == "all")
             {
                 visible = true;
@@ -762,7 +782,7 @@ namespace arms_rviz_control_plugin
                     // - MOVEJ mode (command == 4): show joints (hide xyz/quaternion)
                     if (it->second == "left" || it->second == "right")
                     {
-                        visible = (current_command_ == 4);  // Show joints only in MOVEJ mode
+                        visible = (current_command_ == 4); // Show joints only in MOVEJ mode
                     }
                     else
                     {
@@ -770,7 +790,7 @@ namespace arms_rviz_control_plugin
                     }
                 }
             }
-            
+
             // Show/hide the row layout widgets
             if (i < joint_row_layouts_.size() && joint_row_layouts_[i])
             {
@@ -816,25 +836,25 @@ namespace arms_rviz_control_plugin
                 }
 
                 auto msg = geometry_msgs::msg::PoseStamped();
-                
+
                 // Get frame_id from saved value (use default if not set)
                 {
                     std::lock_guard<std::mutex> lock(frame_id_mutex_);
                     msg.header.frame_id = left_target_frame_id_.empty() ? "base_link" : left_target_frame_id_;
                 }
                 msg.header.stamp = node_->get_clock()->now();
-                
+
                 // Set position (x, y, z)
                 msg.pose.position.x = left_arm_spinboxes_[0]->value();
                 msg.pose.position.y = left_arm_spinboxes_[1]->value();
                 msg.pose.position.z = left_arm_spinboxes_[2]->value();
-                
+
                 // Set orientation (qx, qy, qz, qw)
                 msg.pose.orientation.x = left_arm_spinboxes_[3]->value();
                 msg.pose.orientation.y = left_arm_spinboxes_[4]->value();
                 msg.pose.orientation.z = left_arm_spinboxes_[5]->value();
                 msg.pose.orientation.w = left_arm_spinboxes_[6]->value();
-                
+
                 left_target_publisher_->publish(msg);
                 return;
             }
@@ -858,25 +878,25 @@ namespace arms_rviz_control_plugin
                 }
 
                 auto msg = geometry_msgs::msg::PoseStamped();
-                
+
                 // Get frame_id from saved value (use default if not set)
                 {
                     std::lock_guard<std::mutex> lock(frame_id_mutex_);
                     msg.header.frame_id = right_target_frame_id_.empty() ? "base_link" : right_target_frame_id_;
                 }
                 msg.header.stamp = node_->get_clock()->now();
-                
+
                 // Set position (x, y, z)
                 msg.pose.position.x = right_arm_spinboxes_[0]->value();
                 msg.pose.position.y = right_arm_spinboxes_[1]->value();
                 msg.pose.position.z = right_arm_spinboxes_[2]->value();
-                
+
                 // Set orientation (qx, qy, qz, qw)
                 msg.pose.orientation.x = right_arm_spinboxes_[3]->value();
                 msg.pose.orientation.y = right_arm_spinboxes_[4]->value();
                 msg.pose.orientation.z = right_arm_spinboxes_[5]->value();
                 msg.pose.orientation.w = right_arm_spinboxes_[6]->value();
-                
+
                 right_target_publisher_->publish(msg);
                 return;
             }
@@ -894,7 +914,7 @@ namespace arms_rviz_control_plugin
 
         std::vector<double> target_positions;
         std::vector<std::string> target_joint_names;
-        
+
         // Collect target positions and joint names
         if (current_category_ == "all")
         {
@@ -926,16 +946,16 @@ namespace arms_rviz_control_plugin
             }
             else
             {
-                return;  // No joints in this category
+                return; // No joints in this category
             }
         }
-        
+
         // Apply joint limits if available
         if (joint_limits_manager_ && joint_limits_manager_->hasAnyLimits())
         {
             target_positions = joint_limits_manager_->applyLimits(target_joint_names, target_positions);
         }
-        
+
         // Create and publish message
         auto msg = std_msgs::msg::Float64MultiArray();
         msg.data = target_positions;
@@ -953,14 +973,14 @@ namespace arms_rviz_control_plugin
         {
             const std::string& joint_name = joint_names_[i];
             auto limits = joint_limits_manager_->getJointLimits(joint_name);
-            
+
             if (limits.initialized)
             {
                 // Set spinbox range to joint limits
                 joint_spinboxes_[i]->setRange(limits.lower, limits.upper);
                 RCLCPP_DEBUG(node_->get_logger(),
-                            "Set range for joint %s: [%.6f, %.6f]",
-                            joint_name.c_str(), limits.lower, limits.upper);
+                             "Set range for joint %s: [%.6f, %.6f]",
+                             joint_name.c_str(), limits.lower, limits.upper);
             }
             else
             {
@@ -982,13 +1002,13 @@ namespace arms_rviz_control_plugin
                 // Update spinbox ranges after parsing limits
                 updateSpinboxRanges();
                 RCLCPP_INFO(node_->get_logger(),
-                           "关节限位已从缓存的 robot_description 加载 (%zu 个关节)",
-                           parsed_count);
+                            "关节限位已从缓存的 robot_description 加载 (%zu 个关节)",
+                            parsed_count);
             }
             else
             {
                 RCLCPP_WARN(node_->get_logger(),
-                           "未能从缓存的 robot_description 中解析关节限位");
+                            "未能从缓存的 robot_description 中解析关节限位");
             }
         }
     }
@@ -1006,29 +1026,49 @@ namespace arms_rviz_control_plugin
         joint_to_category_.clear();
         category_to_joints_.clear();
 
+        // 如果存在 hand / gripper 控制器，则不要过滤掉手部关节
+        bool has_hand_controller = false;
+        for (const auto& controller : available_controllers_)
+        {
+            std::string controller_lower = controller;
+            std::transform(controller_lower.begin(), controller_lower.end(),
+                           controller_lower.begin(), ::tolower);
+            if (controller_lower.find("hand") != std::string::npos ||
+                controller_lower.find("gripper") != std::string::npos)
+            {
+                has_hand_controller = true;
+                break;
+            }
+        }
+
         // Filter out gripper joints and classify joints
         for (size_t i = 0; i < joint_names_source.size(); ++i)
         {
             const std::string& joint_name = joint_names_source[i];
             // Skip gripper joints - check for gripper, hand, finger, thumb, etc.
             std::string joint_name_lower = joint_name;
-            std::transform(joint_name_lower.begin(), joint_name_lower.end(), 
-                          joint_name_lower.begin(), ::tolower);
-            
+            std::transform(joint_name_lower.begin(), joint_name_lower.end(),
+                           joint_name_lower.begin(), ::tolower);
+
             // Filter out gripper-related joints
-            bool is_gripper_joint = 
+            bool is_gripper_joint =
                 joint_name_lower.find("gripper") != std::string::npos ||
                 joint_name_lower.find("hand") != std::string::npos ||
                 joint_name_lower.find("finger") != std::string::npos ||
                 joint_name_lower.find("thumb") != std::string::npos ||
                 joint_name_lower.find("palm") != std::string::npos;
-            
+            // 如果有 hand/gripper 控制器，则不过滤手部关节
+            if (has_hand_controller)
+            {
+                is_gripper_joint = false;
+            }
+
             if (!is_gripper_joint)
             {
                 size_t joint_index = joint_names_.size();
                 joint_names_.push_back(joint_name);
                 joint_name_to_index_[joint_name] = joint_index;
-                
+
                 // Classify joint
                 std::string category = classifyJoint(joint_name);
                 joint_to_category_[joint_name] = category;
@@ -1044,16 +1084,16 @@ namespace arms_rviz_control_plugin
 
         // Check if dual-arm mode (has left and right joints)
         bool has_left_joints = category_to_joints_.find("left") != category_to_joints_.end() &&
-                               !category_to_joints_["left"].empty();
+            !category_to_joints_["left"].empty();
         bool has_right_joints = category_to_joints_.find("right") != category_to_joints_.end() &&
-                                !category_to_joints_["right"].empty();
+            !category_to_joints_["right"].empty();
         bool is_dual_arm_mode = has_left_joints || has_right_joints;
 
         // Create UI elements for each joint
         joint_row_layouts_.clear();
         joint_labels_.clear();
         joint_spinboxes_.clear();
-        
+
         // Clear dual-arm mode UI elements
         left_arm_row_layouts_.clear();
         left_arm_labels_.clear();
@@ -1068,7 +1108,7 @@ namespace arms_rviz_control_plugin
         if (is_dual_arm_mode)
         {
             const std::vector<std::string> param_names = {"x", "y", "z", "qx", "qy", "qz", "qw"};
-            
+
             // Create left arm UI elements (7 row layouts)
             if (has_left_joints)
             {
@@ -1079,29 +1119,30 @@ namespace arms_rviz_control_plugin
 
                     // Create label
                     std::string label_text = "Left " + param_names[i];
-                    auto label = std::make_unique<QLabel>(QString::fromStdString(label_text), joint_control_group_.get());
+                    auto label = std::make_unique<QLabel>(QString::fromStdString(label_text),
+                                                          joint_control_group_.get());
                     label->setStyleSheet("QLabel { font-weight: bold; }");
                     row_layout->addWidget(label.get());
                     left_arm_labels_.push_back(std::move(label));
 
                     // Create spinbox
                     auto spinbox = std::make_unique<QDoubleSpinBox>(joint_control_group_.get());
-                    spinbox->setRange(-1000.0, 1000.0);  // Wide range for position and quaternion
+                    spinbox->setRange(-1000.0, 1000.0); // Wide range for position and quaternion
                     spinbox->setSingleStep(0.01);
                     spinbox->setDecimals(6);
                     if (i < 3)
                     {
-                        spinbox->setSuffix(" m");  // x, y, z in meters
+                        spinbox->setSuffix(" m"); // x, y, z in meters
                         spinbox->setValue(0.0);
                     }
                     else if (i == 6)
                     {
-                        spinbox->setSuffix("");  // quaternion w
-                        spinbox->setValue(1.0);  // Valid quaternion: w=1.0 for no rotation
+                        spinbox->setSuffix(""); // quaternion w
+                        spinbox->setValue(1.0); // Valid quaternion: w=1.0 for no rotation
                     }
                     else
                     {
-                        spinbox->setSuffix("");  // quaternion x, y, z
+                        spinbox->setSuffix(""); // quaternion x, y, z
                         spinbox->setValue(0.0);
                     }
                     row_layout->addWidget(spinbox.get());
@@ -1122,29 +1163,30 @@ namespace arms_rviz_control_plugin
 
                     // Create label
                     std::string label_text = "Right " + param_names[i];
-                    auto label = std::make_unique<QLabel>(QString::fromStdString(label_text), joint_control_group_.get());
+                    auto label = std::make_unique<QLabel>(QString::fromStdString(label_text),
+                                                          joint_control_group_.get());
                     label->setStyleSheet("QLabel { font-weight: bold; }");
                     row_layout->addWidget(label.get());
                     right_arm_labels_.push_back(std::move(label));
 
                     // Create spinbox
                     auto spinbox = std::make_unique<QDoubleSpinBox>(joint_control_group_.get());
-                    spinbox->setRange(-1000.0, 1000.0);  // Wide range for position and quaternion
+                    spinbox->setRange(-1000.0, 1000.0); // Wide range for position and quaternion
                     spinbox->setSingleStep(0.01);
                     spinbox->setDecimals(6);
                     if (i < 3)
                     {
-                        spinbox->setSuffix(" m");  // x, y, z in meters
+                        spinbox->setSuffix(" m"); // x, y, z in meters
                         spinbox->setValue(0.0);
                     }
                     else if (i == 6)
                     {
-                        spinbox->setSuffix("");  // quaternion w
-                        spinbox->setValue(1.0);  // Valid quaternion: w=1.0 for no rotation
+                        spinbox->setSuffix(""); // quaternion w
+                        spinbox->setValue(1.0); // Valid quaternion: w=1.0 for no rotation
                     }
                     else
                     {
-                        spinbox->setSuffix("");  // quaternion x, y, z
+                        spinbox->setSuffix(""); // quaternion x, y, z
                         spinbox->setValue(0.0);
                     }
                     row_layout->addWidget(spinbox.get());
@@ -1186,33 +1228,33 @@ namespace arms_rviz_control_plugin
         }
 
         joints_initialized_ = true;
-        
+
         // Set joint names in limits manager
         if (joint_limits_manager_)
         {
             joint_limits_manager_->setJointNames(joint_names_);
         }
-        
+
         // Try to parse limits from cached robot_description if available
         tryParseLimitsFromCache();
-        
+
         // For ocs2_arm_controller, check if we have left/right joints
         // If yes, add left/right categories; if no, it's a single-arm robot
         std::string arm_controller;
         for (const auto& controller : available_controllers_)
         {
             std::string controller_lower = controller;
-            std::transform(controller_lower.begin(), controller_lower.end(), 
-                          controller_lower.begin(), ::tolower);
+            std::transform(controller_lower.begin(), controller_lower.end(),
+                           controller_lower.begin(), ::tolower);
             if (controller_lower.find("ocs2_arm_controller") != std::string::npos)
             {
                 arm_controller = controller;
                 break;
             }
         }
-        
+
         // Use the has_left_joints and has_right_joints already declared above
-        
+
         // If we have ocs2_arm_controller and no left/right joints, it's a single-arm robot
         // Don't add left/right categories
         if (!arm_controller.empty() && !has_left_joints && !has_right_joints)
@@ -1240,9 +1282,9 @@ namespace arms_rviz_control_plugin
             // Update category options after adding left/right
             updateCategoryOptions();
         }
-        
+
         updateJointVisibility();
-        
+
         // Log classification results
         RCLCPP_INFO(node_->get_logger(), "Initialized %zu joints for control", joint_names_.size());
         for (const auto& [category, indices] : category_to_joints_)

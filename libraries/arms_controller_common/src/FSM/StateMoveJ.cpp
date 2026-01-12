@@ -120,7 +120,12 @@ namespace arms_controller_common
 
         // Calculate interpolation phase
         double phase = 0.0;
-        if (percent_ >= 1.0)
+        if (interpolation_type_ == InterpolationType::NONE)
+        {
+            // NONE type: directly set target position without interpolation
+            phase = 1.0;
+        }
+        else if (percent_ >= 1.0)
         {
             // Ensure exact convergence to target at the end
             phase = 1.0;
@@ -215,9 +220,9 @@ namespace arms_controller_common
         const std::string t = toLowerCopy(type);
         if (t != "linear" && t != "tanh")
         {
-            RCLCPP_WARN(logger_, "Unknown movej interpolation type '%s', falling back to 'tanh'", type.c_str());
+            RCLCPP_WARN(logger_, "Unknown movej interpolation type '%s', falling back to 'linear'", type.c_str());
         }
-        interpolation_type_ = parseInterpolationType(type, InterpolationType::TANH);
+        interpolation_type_ = parseInterpolationType(type, InterpolationType::LINEAR);
     }
 
     void StateMoveJ::setTanhScale(double scale)

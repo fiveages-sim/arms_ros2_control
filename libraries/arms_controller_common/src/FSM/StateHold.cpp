@@ -15,33 +15,43 @@ namespace arms_controller_common
           gravity_compensation_(gravity_compensation),
           joint_position_threshold_(position_threshold)
     {
-        RCLCPP_INFO(logger_,
-                   "StateHold initialized with position threshold: %.4f rad (%.2f degrees)",
-                   joint_position_threshold_, joint_position_threshold_ * 180.0 / M_PI);
+        if (position_threshold > 0.0)
+        {
+            RCLCPP_INFO(logger_,
+                       "StateHold initialized with position threshold: %.4f rad (%.2f degrees), threshold checking enabled",
+                       joint_position_threshold_, joint_position_threshold_ * 180.0 / M_PI);
+        }
+        else
+        {
+            RCLCPP_INFO(logger_,
+                       "StateHold initialized with position threshold: %.4f rad, threshold checking disabled",
+                       position_threshold);
+        }
     }
 
     void StateHold::enter()
     {
-        // Record current position on first run or if position difference exceeds threshold
-        if (hold_positions_.empty())
+        // Always record current position when entering HOLD state
+        size_t num_joints = ctrl_interfaces_.joint_position_state_interface_.size();
+        hold_positions_.resize(num_joints);
+        for (size_t i = 0; i < num_joints; ++i)
         {
-            // Get current joint positions
-            hold_positions_.resize(ctrl_interfaces_.joint_position_state_interface_.size());
-            for (size_t i = 0; i < ctrl_interfaces_.joint_position_state_interface_.size(); ++i)
-            {
-                auto value = ctrl_interfaces_.joint_position_state_interface_[i].get().get_optional();
-                hold_positions_[i] = value.value_or(0.0);
-            }
-
-            RCLCPP_INFO(logger_,
-                      "HOLD state entered, current positions recorded for %zu joints", 
-                      hold_positions_.size());
+            auto value = ctrl_interfaces_.joint_position_state_interface_[i].get().get_optional();
+            hold_positions_[i] = value.value_or(0.0);
         }
-        else
+
+        RCLCPP_INFO(logger_,
+                   "HOLD state entered, current positions recorded for %zu joints", 
+                   hold_positions_.size());
+    }
+
+    void StateHold::run(const rclcpp::Time& time, const rclcpp::Duration& /* period */)
+    {
+        // Check position difference between current and hold positions (if threshold > 0)
+        if (joint_position_threshold_ > 0.0)
         {
-            // Check if current joint positions are within threshold of recorded positions
-            bool within_threshold = true;
             double max_diff = 0.0;
+            bool exceeds_threshold = false;
 
             for (size_t i = 0; i < ctrl_interfaces_.joint_position_state_interface_.size() && 
                  i < hold_positions_.size(); ++i)
@@ -57,19 +67,13 @@ namespace arms_controller_common
 
                 if (diff > joint_position_threshold_)
                 {
-                    within_threshold = false;
+                    exceeds_threshold = true;
                 }
             }
 
-            if (within_threshold)
+            // If position difference exceeds threshold, update hold positions to current positions
+            if (exceeds_threshold)
             {
-                RCLCPP_INFO(logger_,
-                           "HOLD state entered, using previously recorded positions (max diff: %.4f rad < %.4f rad)",
-                           max_diff, joint_position_threshold_);
-            }
-            else
-            {
-                // Update hold positions to current positions when difference exceeds threshold
                 size_t num_joints = ctrl_interfaces_.joint_position_state_interface_.size();
                 hold_positions_.resize(num_joints);
                 for (size_t i = 0; i < num_joints; ++i)
@@ -78,16 +82,24 @@ namespace arms_controller_common
                     hold_positions_[i] = value.value_or(0.0);
                 }
 
-                RCLCPP_WARN(logger_,
-                           "HOLD state entered, position difference (max: %.4f rad) exceeds threshold (%.4f rad). "
-                           "Updating hold positions to current positions for safety.",
-                           max_diff, joint_position_threshold_);
+                // Throttle warning messages using ROS2 time (log at most once per second)
+                static rclcpp::Time last_warn_time(0, 0, RCL_ROS_TIME);
+                static bool first_warn = true;
+                
+                rclcpp::Duration time_since_last_warn = time - last_warn_time;
+                
+                if (first_warn || time_since_last_warn.seconds() >= 1.0)
+                {
+                    RCLCPP_WARN(logger_,
+                               "HOLD state: position difference (max: %.4f rad) exceeds threshold (%.4f rad). "
+                               "Updating hold positions to current positions for safety.",
+                               max_diff, joint_position_threshold_);
+                    last_warn_time = time;
+                    first_warn = false;
+                }
             }
         }
-    }
 
-    void StateHold::run(const rclcpp::Time& /* time */, const rclcpp::Duration& /* period */)
-    {
         // HOLD state maintains the recorded positions
         // Set position commands to hold positions
         for (size_t i = 0; i < ctrl_interfaces_.joint_position_command_interface_.size() &&

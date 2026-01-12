@@ -151,6 +151,15 @@ namespace arms_ros2_control::command
          */
         void fsmCommandCallback(std_msgs::msg::Int32::ConstSharedPtr msg);
 
+        /**
+         * 设置 current pose 回调函数（用于通知外部收到原始 current_pose 消息，如 VRInputHandler）
+         * @param armType 手臂类型 ("left" 或 "right")
+         * @param callback current pose 回调函数
+         */
+        void setCurrentPoseCallback(
+            const std::string& armType,
+            std::function<void(const geometry_msgs::msg::PoseStamped::ConstSharedPtr&)> callback);
+
     private:
         /**
          * 从当前状态构建 interactive marker（适配器函数）
@@ -288,7 +297,8 @@ namespace arms_ros2_control::command
 
         // 状态管理
         mutable std::mutex state_update_mutex_;
-        int32_t current_controller_state_ = 2; // 当前控制器状态
+        int32_t current_controller_state_ = 2; // 当前控制器状态（命令值）
+        std::string current_fsm_state_ = "HOLD"; // 当前FSM状态（字符串，用于状态转换验证）
         std::vector<int32_t> disable_auto_update_states_; // 禁用自动更新的状态值数组
 
         // 更新节流

@@ -6,7 +6,7 @@ A basic joint controller with three finite state machine states: Home, Hold, and
 
 ```bash
 cd ~/ros2_ws
-colcon build --packages-up-to basic_joint_controller
+colcon build --packages-up-to basic_joint_controller --symlink-install
 ```
 
 ## 2. Features
@@ -42,26 +42,26 @@ basic_joint_controller:
 
 ## 4. State Transitions
 
-State transitions are controlled via the `command` field of the `/control_input` topic:
+State transitions are controlled via the `/fsm_command` topic:
 
-- `command = 1`: Switch to HOME state
-- `command = 2`: Switch to HOLD state
-- `command = 3`: Switch to MOVE state
+- `data = 1`: Switch to HOME state
+- `data = 2`: Switch to HOLD state
+- `data = 3`: Switch to MOVE state
 
 ### 4.1 Home State Configuration Switching
 
 In the HOME state, you can switch between different home configurations using the following commands:
 
-- `command = switch_command_base` (default 100): Cycle to next configuration
-- `command = switch_command_base + 1` (default 101): Switch to configuration 0
-- `command = switch_command_base + 2` (default 102): Switch to configuration 1
-- `command = switch_command_base + 3` (default 103): Switch to configuration 2
+- `data = switch_command_base` (default 100): Cycle to next configuration
+- `data = switch_command_base + 1` (default 101): Switch to configuration 0
+- `data = switch_command_base + 2` (default 102): Switch to configuration 1
+- `data = switch_command_base + 3` (default 103): Switch to configuration 2
 - ... and so on
 
 For example, if `switch_command_base = 4` (for backward compatibility):
-- `command = 4`: Cycle to next
-- `command = 5`: Switch to configuration 0
-- `command = 6`: Switch to configuration 1
+- `data = 4`: Cycle to next
+- `data = 5`: Switch to configuration 0
+- `data = 6`: Switch to configuration 1
 
 ## 5. Usage
 
@@ -92,12 +92,12 @@ Launch file arguments:
 
 ### 5.2 State Switching
 
-Switch states by publishing to the `/control_input` topic:
+Switch states by publishing to the `/fsm_command` topic:
 
 ```bash
-ros2 topic pub /control_input arms_ros2_control_msgs/msg/Inputs "{command: 1}"  # Switch to HOME
-ros2 topic pub /control_input arms_ros2_control_msgs/msg/Inputs "{command: 2}"  # Switch to HOLD
-ros2 topic pub /control_input arms_ros2_control_msgs/msg/Inputs "{command: 3}"  # Switch to MOVE
+ros2 topic pub /fsm_command std_msgs/msg/Int32 "{data: 1}"  # Switch to HOME
+ros2 topic pub /fsm_command std_msgs/msg/Int32 "{data: 2}"  # Switch to HOLD
+ros2 topic pub /fsm_command std_msgs/msg/Int32 "{data: 3}"  # Switch to MOVE
 ```
 
 ### 5.3 Setting Target Position (Move State)

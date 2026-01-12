@@ -6,7 +6,7 @@
 
 ```bash
 cd ~/ros2_ws
-colcon build --packages-up-to basic_joint_controller
+colcon build --packages-up-to basic_joint_controller --symlink-install
 ```
 
 ## 2. 功能特性
@@ -42,26 +42,26 @@ basic_joint_controller:
 
 ## 4. 状态转换
 
-状态转换通过 `/control_input` 话题的 `command` 字段控制：
+状态转换通过 `/fsm_command` 话题控制：
 
-- `command = 1`: 切换到 HOME 状态
-- `command = 2`: 切换到 HOLD 状态
-- `command = 3`: 切换到 MOVE 状态
+- `data = 1`: 切换到 HOME 状态
+- `data = 2`: 切换到 HOLD 状态
+- `data = 3`: 切换到 MOVE 状态
 
 ### 4.1 Home 状态配置切换
 
 在 HOME 状态下，可以通过以下命令切换不同的 home 配置：
 
-- `command = switch_command_base`（默认 100）: 循环切换到下一个配置
-- `command = switch_command_base + 1`（默认 101）: 切换到配置 0
-- `command = switch_command_base + 2`（默认 102）: 切换到配置 1
-- `command = switch_command_base + 3`（默认 103）: 切换到配置 2
+- `data = switch_command_base`（默认 100）: 循环切换到下一个配置
+- `data = switch_command_base + 1`（默认 101）: 切换到配置 0
+- `data = switch_command_base + 2`（默认 102）: 切换到配置 1
+- `data = switch_command_base + 3`（默认 103）: 切换到配置 2
 - ... 以此类推
 
 例如，如果 `switch_command_base = 4`（兼容旧代码）：
-- `command = 4`: 循环切换
-- `command = 5`: 切换到配置 0
-- `command = 6`: 切换到配置 1
+- `data = 4`: 循环切换
+- `data = 5`: 切换到配置 0
+- `data = 6`: 切换到配置 1
 
 ## 5. 使用方法
 
@@ -92,12 +92,12 @@ Launch 文件参数：
 
 ### 5.2 状态切换
 
-通过发布 `/control_input` 话题来切换状态：
+通过发布 `/fsm_command` 话题来切换状态：
 
 ```bash
-ros2 topic pub /control_input arms_ros2_control_msgs/msg/Inputs "{command: 1}"  # 切换到 HOME
-ros2 topic pub /control_input arms_ros2_control_msgs/msg/Inputs "{command: 2}"  # 切换到 HOLD
-ros2 topic pub /control_input arms_ros2_control_msgs/msg/Inputs "{command: 3}"  # 切换到 MOVE
+ros2 topic pub /fsm_command std_msgs/msg/Int32 "{data: 1}"  # 切换到 HOME
+ros2 topic pub /fsm_command std_msgs/msg/Int32 "{data: 2}"  # 切换到 HOLD
+ros2 topic pub /fsm_command std_msgs/msg/Int32 "{data: 3}"  # 切换到 MOVE
 ```
 
 ### 5.3 设置目标位置（Move 状态）

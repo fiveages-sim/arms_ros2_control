@@ -14,7 +14,6 @@ set(THIS_PACKAGE_INCLUDE_DEPENDS
         pluginlib
         rclcpp
         rclcpp_lifecycle
-        arms_ros2_control_msgs
 )
 find_package(ament_cmake REQUIRED)
 foreach (Dependency IN ITEMS ${THIS_PACKAGE_INCLUDE_DEPENDS})

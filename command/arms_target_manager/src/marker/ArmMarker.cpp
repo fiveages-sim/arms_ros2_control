@@ -51,20 +51,23 @@ namespace arms_ros2_control::command
             current_pose_topic, 10,
             [this](const geometry_msgs::msg::PoseStamped::ConstSharedPtr msg)
             {
+                // 先通知外部收到原始消息（如 VRInputHandler）
+                if (current_pose_callback_)
+                {
+                    current_pose_callback_(msg);
+                }
+                // 然后更新 marker
                 updateFromTopic(msg);
             });
 
         // 创建当前目标订阅器（用于获取 frame_id 和更新 marker 位置）
-        std::string current_target_topic = (arm_type == ArmType::LEFT) ? "left_current_target" : "right_current_target";
+        std::string current_target_topic = arm_type == ArmType::LEFT ? "left_current_target" : "right_current_target";
         current_target_subscription_ = node_->create_subscription<geometry_msgs::msg::PoseStamped>(
             current_target_topic, 10,
             [this](const geometry_msgs::msg::PoseStamped::ConstSharedPtr msg)
             {
                 // 更新 frame_id
-                {
-                    std::lock_guard<std::mutex> lock(frame_id_mutex_);
-                    current_target_frame_id_ = msg->header.frame_id;
-                }
+                current_target_frame_id_ = msg->header.frame_id;
 
                 // 获取消息的 frame_id
                 std::string source_frame_id = msg->header.frame_id;
@@ -150,6 +153,11 @@ namespace arms_ros2_control::command
         state_check_callback_ = std::move(callback);
     }
 
+    void ArmMarker::setCurrentPoseCallback(CurrentPoseCallback callback)
+    {
+        current_pose_callback_ = std::move(callback);
+    }
+
     bool ArmMarker::publishTargetPose(bool force, bool use_stamped)
     {
         // 如果是单次发布且使用 stamped，发布到 left_target/stamped
@@ -161,11 +169,7 @@ namespace arms_ros2_control::command
             }
 
             // 获取当前目标的 frame_id（从 left_current_target 或 right_current_target）
-            std::string target_frame_id;
-            {
-                std::lock_guard<std::mutex> lock(frame_id_mutex_);
-                target_frame_id = current_target_frame_id_;
-            }
+            std::string target_frame_id = current_target_frame_id_;
 
             // 如果 frame_id 为空，使用默认的 control_base_frame
             if (target_frame_id.empty())

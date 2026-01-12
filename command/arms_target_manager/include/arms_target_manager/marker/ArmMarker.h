@@ -7,7 +7,6 @@
 #include <memory>
 #include <string>
 #include <array>
-#include <mutex>
 #include <rclcpp/rclcpp.hpp>
 #include <geometry_msgs/msg/pose.hpp>
 #include <geometry_msgs/msg/pose_stamped.hpp>
@@ -54,6 +53,12 @@ namespace arms_ros2_control::command
          * @return 如果允许自动更新返回 true
          */
         using StateCheckCallback = std::function<bool()>;
+
+        /**
+         * @brief Current pose 原始消息回调函数类型（用于通知外部收到原始 current_pose 消息）
+         * @param pose_msg 原始 PoseStamped 消息
+         */
+        using CurrentPoseCallback = std::function<void(const geometry_msgs::msg::PoseStamped::ConstSharedPtr& pose_msg)>;
 
         /**
          * @brief 构造函数
@@ -122,6 +127,12 @@ namespace arms_ros2_control::command
          * @param callback 状态检查回调函数
          */
         void setStateCheckCallback(StateCheckCallback callback);
+
+        /**
+         * @brief 设置 current pose 原始消息回调函数（用于通知外部收到原始消息）
+         * @param callback current pose 回调函数
+         */
+        void setCurrentPoseCallback(CurrentPoseCallback callback);
 
         /**
          * @brief 发布目标 pose（带内部节流管理）
@@ -212,13 +223,15 @@ namespace arms_ros2_control::command
         
         // 当前目标的 frame_id（从 left_current_target 或 right_current_target 获取）
         std::string current_target_frame_id_;
-        mutable std::mutex frame_id_mutex_;  // 保护 frame_id 的互斥锁
         
         // 更新回调（用于通知外部更新可视化）
         UpdateCallback update_callback_;
         
         // 状态检查回调（用于检查是否允许自动更新）
         StateCheckCallback state_check_callback_;
+        
+        // Current pose 原始消息回调（用于通知外部收到原始消息，如 VRInputHandler）
+        CurrentPoseCallback current_pose_callback_;
         
         // 节流管理（每个 marker 独立管理）
         mutable rclcpp::Time last_publish_time_;

@@ -32,22 +32,8 @@ ament_target_dependencies(
         rclcpp_action
 )
 
-# Keyboard teleop node
-add_executable(keyboard_teleop src/keyboard_teleop.cpp)
-target_include_directories(keyboard_teleop
-        PUBLIC
-        "$<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>"
-        "$<INSTALL_INTERFACE:include/${PROJECT_NAME}>")
-ament_target_dependencies(
-        keyboard_teleop PUBLIC
-        rclcpp
-        std_msgs
-        arms_ros2_control_msgs
-)
-
 install(TARGETS
         joystick_teleop
-        keyboard_teleop
         DESTINATION lib/${PROJECT_NAME})
 
 install(

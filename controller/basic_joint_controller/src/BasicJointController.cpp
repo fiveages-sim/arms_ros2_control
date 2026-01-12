@@ -83,6 +83,9 @@ namespace basic_joint_controller
     {
         try
         {
+            // Get controller name
+            controller_name_ = get_node()->get_name();
+
             // Get update frequency
             get_node()->get_parameter("update_rate", ctrl_interfaces_.frequency_);
             RCLCPP_INFO(get_node()->get_logger(), "Controller Manager Update Rate: %d Hz", ctrl_interfaces_.frequency_);
@@ -98,9 +101,9 @@ namespace basic_joint_controller
             // State machine parameters
             home_duration_ = auto_declare<double>("home_duration", 3.0);
             move_duration_ = auto_declare<double>("move_duration", 3.0);
-            std::string home_interpolation_type = auto_declare<std::string>("home_interpolation_type", "tanh");
+            std::string home_interpolation_type = auto_declare<std::string>("home_interpolation_type", "linear");
             double home_tanh_scale = auto_declare<double>("home_tanh_scale", 3.0);
-            std::string movej_interpolation_type = auto_declare<std::string>("movej_interpolation_type", "tanh");
+            std::string movej_interpolation_type = auto_declare<std::string>("movej_interpolation_type", "linear");
             double movej_tanh_scale = auto_declare<double>("movej_tanh_scale", 3.0);
             hold_position_threshold_ = auto_declare<double>("hold_position_threshold", 0.1);
             long switch_command_base = auto_declare<long>("switch_command_base", 100);
@@ -146,6 +149,18 @@ namespace basic_joint_controller
             joint_limits_manager_ = std::make_shared<arms_controller_common::JointLimitsManager>(
                 get_node()->get_logger());
             joint_limits_manager_->setJointNames(joint_names_);
+
+            // Target command parameters
+            target_command_enabled_ = auto_declare<bool>("target_command_enabled", false);
+            target_command_close_config_ = auto_declare<int32_t>("target_command_close_config", 1);
+            target_command_open_config_ = auto_declare<int32_t>("target_command_open_config", 0);
+
+            if (target_command_enabled_)
+            {
+                RCLCPP_INFO(get_node()->get_logger(),
+                          "Target command enabled: close_config=%d, open_config=%d",
+                          target_command_close_config_, target_command_open_config_);
+            }
 
             return CallbackReturn::SUCCESS;
         }
@@ -196,6 +211,79 @@ namespace basic_joint_controller
                     }
                 }
             });
+
+        // Subscribe to target_command topic for dexterous hand control (if enabled)
+        // Only effective when in MOVEJ state - directly sets target position without switching states
+        if (target_command_enabled_)
+        {
+            std::string target_command_topic = "/" + controller_name_ + "/target_command";
+            target_command_subscription_ = get_node()->create_subscription<std_msgs::msg::Int32>(
+                target_command_topic, rclcpp::QoS(10),
+                [this](const std_msgs::msg::Int32::SharedPtr msg)
+                {
+                    // Only process if current state is MOVEJ
+                    if (current_state_ && current_state_->state_name == FSMStateName::MOVEJ)
+                    {
+                        // Map command value to configuration index
+                        int32_t config_index = -1;
+                        if (msg->data == 0)
+                        {
+                            config_index = target_command_close_config_;
+                        }
+                        else if (msg->data == 1)
+                        {
+                            config_index = target_command_open_config_;
+                        }
+                        else
+                        {
+                            RCLCPP_WARN(get_node()->get_logger(),
+                                      "Invalid target_command value: %d (expected 0 or 1)", msg->data);
+                            return;
+                        }
+
+                        // Validate configuration index
+                        if (config_index < 0)
+                        {
+                            RCLCPP_WARN(get_node()->get_logger(),
+                                      "Invalid configuration index: %d (must be >= 0)", config_index);
+                            return;
+                        }
+
+                        // Get configuration from StateHome and set as target for StateMoveJ
+                        if (state_list_.home && state_list_.movej)
+                        {
+                            std::vector<double> target_config = state_list_.home->getConfiguration(
+                                static_cast<size_t>(config_index));
+                            
+                            if (!target_config.empty())
+                            {
+                                // Directly set target position in MOVEJ state
+                                state_list_.movej->setTargetPosition(target_config);
+                                RCLCPP_INFO(get_node()->get_logger(),
+                                          "Target command received: %d, setting MOVEJ target to configuration %d",
+                                          msg->data, config_index);
+                            }
+                            else
+                            {
+                                RCLCPP_WARN(get_node()->get_logger(),
+                                          "Configuration %d not available or invalid", config_index);
+                            }
+                        }
+                    }
+                    else
+                    {
+                        RCLCPP_DEBUG(get_node()->get_logger(),
+                                   "Target command received but ignored (current state is not MOVEJ)");
+                    }
+                });
+            RCLCPP_INFO(get_node()->get_logger(),
+                      "Subscribed to target_command topic: %s (close_config=%d, open_config=%d)",
+                      target_command_topic.c_str(), target_command_close_config_, target_command_open_config_);
+        }
+        else
+        {
+            RCLCPP_DEBUG(get_node()->get_logger(), "Target command subscription disabled");
+        }
 
         // Also try to get robot_description from parameter server as fallback
         try

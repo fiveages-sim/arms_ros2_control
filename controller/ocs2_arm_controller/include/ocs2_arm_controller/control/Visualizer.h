@@ -39,6 +39,10 @@ namespace ocs2::mobile_manipulator
         // Publish self-collision distance visualization
         void publishSelfCollisionVisualization(const vector_t& state) const;
 
+        // Check if collision was detected in last visualization update
+        // @param threshold: Distance threshold to consider as collision (default 0.0 = actual penetration)
+        bool isCollisionDetected(scalar_t threshold = 0.0) const;
+
         // End effector pose publishing
         void publishEndEffectorPose(const rclcpp::Time& time, const vector_t& state) const;
 

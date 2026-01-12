@@ -7,7 +7,6 @@ from launch.actions import IncludeLaunchDescription
 from launch.launch_description_sources import PythonLaunchDescriptionSource
 from launch.substitutions import LaunchConfiguration
 from launch_ros.actions import Node
-from launch.conditions import IfCondition
 
 # Import robot_common_launch utilities
 from robot_common_launch import (
@@ -16,7 +15,8 @@ from robot_common_launch import (
     get_info_file_name,
     detect_controllers,
     create_controller_spawners,
-    get_ros2_control_robot_description
+    get_ros2_control_robot_description,
+    prepare_arms_target_manager_parameters
 )
 
 # All utility functions are now imported from robot_common_launch
@@ -118,16 +118,30 @@ def launch_setup(context, *args, **kwargs):
     )
     print(f"[INFO] Using task file for ArmsTargetManager: {task_file_path}")
 
-    ocs2_arms_target_manager = IncludeLaunchDescription(
-        PythonLaunchDescriptionSource([
-            os.path.join(get_package_share_directory('arms_target_manager'), 'launch'),
-            '/ocs2_arm_target_manager.launch.py',
-        ]),
-        launch_arguments=[
-            ('task_file', task_file_path),
-        ],
-        condition=IfCondition(LaunchConfiguration('enable_arms_target_manager'))
+    # Extract hand controller names for ArmsTargetManager (if available)
+    hand_controller_names_for_target_manager = []
+    if enable_gripper and hand_controllers:
+        hand_controller_names_for_target_manager = [c['name'] for c in hand_controllers]
+
+    # Prepare parameters using robot_common_launch utility function
+    arms_target_manager_parameters = prepare_arms_target_manager_parameters(
+        task_file_path=task_file_path,
+        config_file_path=None,  # Will auto-detect from task file directory
+        marker_fixed_frame='base_link',  # Default value
+        enable_head_control=False,  # Default for demo
+        hand_controllers=hand_controller_names_for_target_manager if hand_controller_names_for_target_manager else None
     )
+
+    # Create ArmsTargetManager node directly
+    ocs2_arms_target_manager = None
+    if arms_target_manager_parameters and context.launch_configurations.get('enable_arms_target_manager', 'true').lower() == 'true':
+        ocs2_arms_target_manager = Node(
+            package='arms_target_manager',
+            executable='arms_target_manager_node',
+            name='arms_target_manager',
+            output='screen',
+            parameters=arms_target_manager_parameters,
+        )
 
     # RViz for visualization
     # 确定配置文件路径（优先级：机器人description包目录 > 默认配置）
@@ -188,8 +202,11 @@ def launch_setup(context, *args, **kwargs):
         rviz_node,
         controller_manager_launch,
         ocs2_arm_controller_spawner,
-        ocs2_arms_target_manager,
     ]
+    
+    # Add ArmsTargetManager node if created
+    if ocs2_arms_target_manager:
+        nodes.append(ocs2_arms_target_manager)
 
     # Add planning robot state publisher if available
     if planning_robot_state_publisher:

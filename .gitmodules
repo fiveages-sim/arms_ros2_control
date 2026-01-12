@@ -20,3 +20,9 @@
 [submodule "hardwares/modbus_ros2_control"]
 	path = hardwares/modbus_ros2_control
 	url = https://github.com/fiveages-sim/modbus-ros2-control.git
+[submodule "libraries/lina_planning"]
+	path = libraries/lina_planning
+	url = git@github.com:fiveages-sim/lina_planning.git
+[submodule "libraries/ocs2_humanoid"]
+	path = libraries/ocs2_humanoid
+	url = git@github.com:fiveages-sim/ocs2-humanoid.git

@@ -8,7 +8,6 @@
 #include <rclcpp/rclcpp.hpp>
 #include <sensor_msgs/msg/joy.hpp>
 #include <arms_ros2_control_msgs/msg/inputs.hpp>
-#include <arms_ros2_control_msgs/msg/gripper.hpp>
 #include <std_msgs/msg/int32.hpp>
 
 class JoystickTeleop final : public rclcpp::Node {
@@ -21,8 +20,6 @@ private:
     void joy_callback(sensor_msgs::msg::Joy::SharedPtr msg);
     void processButtons(const sensor_msgs::msg::Joy::SharedPtr msg);
     void processAxes(const sensor_msgs::msg::Joy::SharedPtr msg);
-    void sendGripperCommand(bool open);
-    void gripper_command_callback(arms_ros2_control_msgs::msg::Gripper::SharedPtr msg);
     double applyDeadzone(double value, double deadzone = 0.1) const;
     void loadButtonMapping();
     void printButtonMapping();
@@ -30,9 +27,7 @@ private:
     arms_ros2_control_msgs::msg::Inputs inputs_;
     rclcpp::Publisher<arms_ros2_control_msgs::msg::Inputs>::SharedPtr publisher_;
     rclcpp::Publisher<std_msgs::msg::Int32>::SharedPtr fsm_command_publisher_;
-    rclcpp::Publisher<arms_ros2_control_msgs::msg::Gripper>::SharedPtr gripper_publisher_;
     rclcpp::Subscription<sensor_msgs::msg::Joy>::SharedPtr subscription_;
-    rclcpp::Subscription<arms_ros2_control_msgs::msg::Gripper>::SharedPtr gripper_command_subscription_;
     
     // Control parameters
     double updateRate_;
@@ -56,9 +51,7 @@ private:
     // Target arm selection (1=left, 2=right)
     int32_t currentTarget_;
 
-    // Gripper command state tracking (for synchronization with panel)
-    int32_t current_gripper_target_;  // 0=close, 1=open
-    bool gripper_command_received_;
+    // Gripper command state tracking (removed - using target_command subscriptions instead)
 
     // Separate gripper states for left and right arms (like task3)
     bool left_gripper_open_;   // Left arm gripper state
@@ -99,6 +92,9 @@ private:
     // Speed scaling factors
     double low_speed_scale_;
     double high_speed_scale_;
+    
+    // Last FSM command sent (to detect transition to 0)
+    int32_t last_fsm_command_;
 };
 
 #endif //JOYSTICK_TELEOP_H 

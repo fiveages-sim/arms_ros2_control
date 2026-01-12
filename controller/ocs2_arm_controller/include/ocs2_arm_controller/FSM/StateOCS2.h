@@ -61,6 +61,9 @@ namespace ocs2::mobile_manipulator
         std::atomic_bool mpc_running_{false};
         std::atomic_bool mpc_thread_should_stop_{false};
         std::atomic_bool mpc_update_requested_{false};
+
+        // Collision detection
+        bool collision_detected_{false};  // Flag indicating collision was detected
     };
 }
 

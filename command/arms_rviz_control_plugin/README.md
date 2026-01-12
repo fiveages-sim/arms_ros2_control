@@ -19,7 +19,7 @@
 
 ```bash
 cd ~/ros2_ws
-colcon build --packages-select arms_rviz_control_plugin
+colcon build --packages-up-to arms_rviz_control_plugin --symlink-install
 ```
 
 ## 使用方法
