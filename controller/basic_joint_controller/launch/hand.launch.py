@@ -8,7 +8,7 @@ from launch_ros.actions import Node
 import xacro
 
 # Import robot_common_launch utilities
-from robot_common_launch import load_robot_config
+from robot_common_launch import load_robot_config, create_rmw_zenohd_node
 
 
 def get_default_arg_from_xacro(xacro_file, arg_name):
@@ -222,6 +222,11 @@ def launch_setup(context, *args, **kwargs):
     # 如果启用了 RViz，添加 RViz 节点
     if rviz_node:
         nodes.append(rviz_node)
+
+    # 如果使用rmw_zenoh_cpp，自动添加rmw_zenohd节点
+    rmw_zenohd_node = create_rmw_zenohd_node()
+    if rmw_zenohd_node is not None:
+        nodes.insert(0, rmw_zenohd_node)  # 将rmw_zenohd放在最前面，确保先启动
 
     return nodes
 
