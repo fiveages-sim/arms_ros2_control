@@ -193,16 +193,55 @@ namespace arms_ros2_control::command
     std::vector<double> HeadMarker::quaternionToJointAngles(
         const geometry_msgs::msg::Quaternion& quaternion) const
     {
-        // 使用 tf2 的 getRPY 从 quaternion 提取欧拉角
-        tf2::Quaternion tf_quat;
-        tf2::fromMsg(quaternion, tf_quat);
+        // 将世界坐标系的四元数转换为相对于 head_link 的局部四元数
+        tf2::Quaternion marker_quat_world;
+        tf2::fromMsg(quaternion, marker_quat_world);
 
+        // 获取 head_link 在世界坐标系下的姿态（head_link_name_ 在配置文件中设置）
+        tf2::Quaternion head_link_quat;
+        try {
+            auto transform = tf_buffer_->lookupTransform(
+                frame_id_, head_link_name_,
+                tf2::TimePointZero);
+            tf2::fromMsg(transform.transform.rotation, head_link_quat);
+        } catch (const tf2::TransformException& ex) {
+            RCLCPP_DEBUG(node_->get_logger(),
+                        "无法获取 %s 姿态，使用单位四元数: %s",
+                        head_link_name_.c_str(), ex.what());
+            head_link_quat.setRPY(0, 0, 0);
+        }
+
+        // 计算相对四元数：relative = head_link^(-1) * marker_world
+        // 这表示 marker 相对于 head_link 的局部旋转
+        tf2::Quaternion relative_quat = head_link_quat.inverse() * marker_quat_world;
+
+        // 从相对四元数提取欧拉角
         double roll, pitch, yaw;
-        tf2::Matrix3x3(tf_quat).getRPY(roll, pitch, yaw);
+        tf2::Matrix3x3(relative_quat).getRPY(roll, pitch, yaw);
 
-        // 使用通用工具类 unwrap 保持角度连续性，避免跳变
+        // 打印世界坐标系和 head_link 的姿态信息（用于调试）
+        double head_link_roll, head_link_pitch, head_link_yaw;
+        tf2::Matrix3x3(head_link_quat).getRPY(head_link_roll, head_link_pitch, head_link_yaw);
+        double marker_world_roll, marker_world_pitch, marker_world_yaw;
+        tf2::Matrix3x3(marker_quat_world).getRPY(marker_world_roll, marker_world_pitch, marker_world_yaw);
+
+        RCLCPP_INFO(node_->get_logger(), "════════════════════════════════════════════════════════════════");
+        RCLCPP_INFO(node_->get_logger(),
+                    "[HeadMarker] Marker世界姿态 RPY: [%.3f, %.3f, %.3f] rad = [%.1f°, %.1f°, %.1f°]",
+                    marker_world_roll, marker_world_pitch, marker_world_yaw,
+                    marker_world_roll * 180.0 / M_PI, marker_world_pitch * 180.0 / M_PI, marker_world_yaw * 180.0 / M_PI);
+        RCLCPP_INFO(node_->get_logger(),
+                    "[HeadMarker] HeadLink世界姿态 RPY: [%.3f, %.3f, %.3f] rad = [%.1f°, %.1f°, %.1f°]",
+                    head_link_roll, head_link_pitch, head_link_yaw,
+                    head_link_roll * 180.0 / M_PI, head_link_pitch * 180.0 / M_PI, head_link_yaw * 180.0 / M_PI);
+        RCLCPP_INFO(node_->get_logger(),
+                    "[HeadMarker] 相对HeadLink的局部姿态 RPY: [%.3f, %.3f, %.3f] rad = [%.1f°, %.1f°, %.1f°]",
+                    roll, pitch, yaw,
+                    roll * 180.0 / M_PI, pitch * 180.0 / M_PI, yaw * 180.0 / M_PI);
+
+        // 使用通用工具类 unwrap 保持角度连续性，避免跳变（使用局部坐标系的历史数据）
         arms_controller_common::AngleUtils::unwrapRPY(
-            roll, pitch, yaw, last_head_rpy_, last_head_rpy_initialized_);
+            roll, pitch, yaw, last_head_rpy_local_, last_head_rpy_local_initialized_);
 
         // 应用旋转轴方向系数
         double roll_with_direction = roll;
@@ -246,7 +285,20 @@ namespace arms_ros2_control::command
                     auto rpy_it = rpy_values.find(rpy_name);
                     if (rpy_it != rpy_values.end())
                     {
-                        joint_angles.push_back(rpy_it->second);
+                        // 获取相对角度
+                        double relative_angle = rpy_it->second;
+
+                        // 获取当前关节角度
+                        double current_angle = 0.0;
+                        auto current_it = current_joint_positions_.find(joint_name);
+                        if (current_it != current_joint_positions_.end())
+                        {
+                            current_angle = current_it->second;
+                        }
+
+                        // 计算绝对目标角度 = 当前角度 + 相对角度
+                        double target_angle = current_angle + relative_angle;
+                        joint_angles.push_back(target_angle);
                     }
                     else
                     {
@@ -258,6 +310,37 @@ namespace arms_ros2_control::command
                     joint_angles.push_back(0.0);
                 }
             }
+
+            // 打印相对角度
+            RCLCPP_INFO(node_->get_logger(),
+                        "[HeadMarker] 相对角度（局部旋转） RPY: [%.3f, %.3f, %.3f] rad = [%.1f°, %.1f°, %.1f°]",
+                        roll_with_direction, pitch_with_direction, yaw_with_direction,
+                        roll_with_direction * 180.0 / M_PI, pitch_with_direction * 180.0 / M_PI, yaw_with_direction * 180.0 / M_PI);
+
+            // 打印当前关节角度
+            std::string current_angles_str = "[";
+            for (size_t i = 0; i < head_joint_send_order_.size(); ++i) {
+                auto it = current_joint_positions_.find(head_joint_send_order_[i]);
+                double current = (it != current_joint_positions_.end()) ? it->second : 0.0;
+                current_angles_str += std::to_string(current) + " rad = " +
+                                     std::to_string(current * 180.0 / M_PI) + "°";
+                if (i < head_joint_send_order_.size() - 1) current_angles_str += ", ";
+            }
+            current_angles_str += "]";
+            RCLCPP_INFO(node_->get_logger(),
+                        "[HeadMarker] 当前关节角度: %s", current_angles_str.c_str());
+
+            // 打印目标绝对角度
+            std::string joint_angles_str = "[";
+            for (size_t i = 0; i < joint_angles.size(); ++i) {
+                joint_angles_str += std::to_string(joint_angles[i]) + " rad = " +
+                                   std::to_string(joint_angles[i] * 180.0 / M_PI) + "°";
+                if (i < joint_angles.size() - 1) joint_angles_str += ", ";
+            }
+            joint_angles_str += "]";
+            RCLCPP_INFO(node_->get_logger(),
+                        "[HeadMarker] 目标绝对角度（发送给控制器）: %s", joint_angles_str.c_str());
+            RCLCPP_INFO(node_->get_logger(), "════════════════════════════════════════════════════════════════");
 
             return joint_angles;
         }
@@ -275,16 +358,34 @@ namespace arms_ros2_control::command
             return false;
         }
 
-        // 从四元数提取 RPY 角度
-        tf2::Quaternion tf_quat;
-        tf2::fromMsg(pose.orientation, tf_quat);
+        // 将世界坐标系的四元数转换为相对于 head_link 的局部四元数
+        tf2::Quaternion marker_quat_world;
+        tf2::fromMsg(pose.orientation, marker_quat_world);
 
+        // 获取 head_link 在世界坐标系下的姿态
+        tf2::Quaternion head_link_quat;
+        try {
+            auto transform = tf_buffer_->lookupTransform(
+                frame_id_, head_link_name_,
+                tf2::TimePointZero);
+            tf2::fromMsg(transform.transform.rotation, head_link_quat);
+        } catch (const tf2::TransformException& ex) {
+            RCLCPP_DEBUG(node_->get_logger(),
+                        "无法获取 %s 姿态，使用单位四元数: %s",
+                        head_link_name_.c_str(), ex.what());
+            head_link_quat.setRPY(0, 0, 0);
+        }
+
+        // 计算相对四元数
+        tf2::Quaternion relative_quat = head_link_quat.inverse() * marker_quat_world;
+
+        // 从相对四元数提取 RPY 角度
         double roll, pitch, yaw;
-        tf2::Matrix3x3(tf_quat).getRPY(roll, pitch, yaw);
+        tf2::Matrix3x3(relative_quat).getRPY(roll, pitch, yaw);
 
-        // 使用通用工具类 unwrap 保持角度连续性，避免跳变
+        // 使用通用工具类 unwrap 保持角度连续性，避免跳变（使用局部坐标系的历史数据）
         arms_controller_common::AngleUtils::unwrapRPY(
-            roll, pitch, yaw, last_head_rpy_, last_head_rpy_initialized_);
+            roll, pitch, yaw, last_head_rpy_local_, last_head_rpy_local_initialized_);
 
         // 应用旋转轴方向系数，得到关节角度
         double roll_with_direction = roll;
@@ -380,15 +481,19 @@ namespace arms_ros2_control::command
             clamped_yaw = clamped_yaw / it_yaw_dir->second;
         }
 
-        // 将限制后的 RPY 转换回四元数
-        tf2::Quaternion clamped_quat;
-        clamped_quat.setRPY(clamped_roll, clamped_pitch, clamped_yaw);
-        clamped_quat.normalize();
+        // 将限制后的相对 RPY 转换为相对四元数
+        tf2::Quaternion clamped_relative_quat;
+        clamped_relative_quat.setRPY(clamped_roll, clamped_pitch, clamped_yaw);
+        clamped_relative_quat.normalize();
 
-        pose.orientation.w = clamped_quat.w();
-        pose.orientation.x = clamped_quat.x();
-        pose.orientation.y = clamped_quat.y();
-        pose.orientation.z = clamped_quat.z();
+        // 将相对四元数转换回世界坐标系：world = head_link * relative
+        tf2::Quaternion clamped_world_quat = head_link_quat * clamped_relative_quat;
+        clamped_world_quat.normalize();
+
+        pose.orientation.w = clamped_world_quat.w();
+        pose.orientation.x = clamped_world_quat.x();
+        pose.orientation.y = clamped_world_quat.y();
+        pose.orientation.z = clamped_world_quat.z();
 
         return true;
     }
@@ -406,15 +511,25 @@ namespace arms_ros2_control::command
             return head_pose_;  // 跳过此次更新，返回当前pose
         }
         last_subscription_update_time_ = now;
-        
+
+        // 初始化关节索引（如果需要）
+        if (head_joint_indices_.empty() && !head_joint_to_rpy_mapping_.empty())
+        {
+            initializeJointIndices(joint_msg);
+        }
+
+        // 更新当前关节角度（用于 quaternionToJointAngles 计算绝对目标角度）
+        for (const auto& [joint_name, index] : head_joint_indices_)
+        {
+            if (index < joint_msg->position.size())
+            {
+                current_joint_positions_[joint_name] = joint_msg->position[index];
+            }
+        }
+
         // 先检查状态：如果状态禁用，根据xyz位置变化来判断是否更新四元数
         if (is_state_disabled)
         {
-            // 初始化关节索引（如果需要）
-            if (head_joint_indices_.empty() && !head_joint_to_rpy_mapping_.empty())
-            {
-                initializeJointIndices(joint_msg);
-            }
 
             try
             {
@@ -437,7 +552,7 @@ namespace arms_ros2_control::command
                 head_pose_.position.z = transform.transform.translation.z;
 
                 // 只有当位置变化较大时才更新四元数（阈值：0.01米 = 1厘米）
-                const double position_change_threshold = 0.001;
+                const double position_change_threshold = 0.0001;
                 bool should_update_orientation = !last_position_initialized_ || position_change > position_change_threshold;
 
                 // 保存当前位置
@@ -541,6 +656,19 @@ namespace arms_ros2_control::command
         {
             joint_angles = head_limits_manager_->applyLimits(joint_angles);
         }
+
+        // 打印实际发布到 topic 的数据
+        RCLCPP_INFO(node_->get_logger(), "────────────────────────────────────────────────────────────────");
+        std::string publish_str = "[";
+        for (size_t i = 0; i < joint_angles.size(); ++i) {
+            publish_str += std::to_string(joint_angles[i]) + " rad = " +
+                          std::to_string(joint_angles[i] * 180.0 / M_PI) + "°";
+            if (i < joint_angles.size() - 1) publish_str += ", ";
+        }
+        publish_str += "]";
+        RCLCPP_INFO(node_->get_logger(),
+                    "[HeadMarker] 📤 发布到 topic 的关节角度（应用限位后）: %s", publish_str.c_str());
+        RCLCPP_INFO(node_->get_logger(), "────────────────────────────────────────────────────────────────");
 
         std_msgs::msg::Float64MultiArray msg;
         msg.data = joint_angles;

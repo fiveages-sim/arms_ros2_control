@@ -197,13 +197,20 @@ namespace arms_ros2_control::command
         mutable rclcpp::Time last_publish_time_;
         mutable rclcpp::Time last_subscription_update_time_;  // 订阅更新的节流时间戳（限制为30Hz）
 
-        // 上一次的 RPY 角度（用于避免角度跳变）
+        // 上一次的 RPY 角度（世界坐标系，用于 updateFromJointState 中避免角度跳变）
         mutable std::array<double, 3> last_head_rpy_ = {0.0, 0.0, 0.0};
         mutable bool last_head_rpy_initialized_ = false;
+
+        // 上一次的 RPY 角度（相对 head_link 的局部坐标系，用于 quaternionToJointAngles 和 clampPoseRotation）
+        mutable std::array<double, 3> last_head_rpy_local_ = {0.0, 0.0, 0.0};
+        mutable bool last_head_rpy_local_initialized_ = false;
 
         // 上一次的位置（用于判断位置变化量，仅在禁用模式下使用）
         mutable geometry_msgs::msg::Point last_position_;
         mutable bool last_position_initialized_ = false;
+
+        // 当前关节角度（从 joint_states 更新，用于计算绝对目标角度）
+        mutable std::map<std::string, double> current_joint_positions_;
     };
 } // namespace arms_ros2_control::command
 
