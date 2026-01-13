@@ -122,6 +122,8 @@ namespace arms_controller_common
          */
         void setTrajectoryDuration(double duration);
 
+        void setCommonJointBlendRatios(double blend_ratio);
+
         /**
          * @brief Setup ROS subscription for trajectory messages
          * @param node ROS lifecycle node for creating subscription

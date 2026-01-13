@@ -237,6 +237,11 @@ namespace ocs2::mobile_manipulator
             state_list_.movej->setJointNames(joint_names_);
             state_list_.movej->setTrajectoryDuration(trajectory_duration);
 
+            // Set trajectory common joint blend ratio for multi-node trajectory planning
+            double joint_blend_ratio=auto_declare<double>("joint_trajectory_common_blend_ratio",0.0);
+            state_list_.movej->setCommonJointBlendRatios(joint_blend_ratio);
+            RCLCPP_INFO(get_node()->get_logger(),"Trajectory blend ratio set to %.2f ",joint_blend_ratio);
+
             // Set joint limit checker from Pinocchio model
             if (ctrl_comp_->interface_)
             {

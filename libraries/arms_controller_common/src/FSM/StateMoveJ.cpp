@@ -831,7 +831,9 @@ namespace arms_controller_common
             durations = calculateSegmentDurations(waypoints, trajectory_duration);
         }
         // DOUBLES mode: durations stays empty, lina planning will auto-calculate
-        
+
+        //temporarily using the common blend ratio
+        std::vector<double> joint_blend_ratios;
         // 6. Initialize multi-node trajectory
         // waypoints now contains: current position + input trajectory points (at least 2) = at least 3 points
         // This satisfies lina planning's SmoothCurveOfMultiJointsUsingBlending requirement (>= 3 points)
@@ -841,6 +843,7 @@ namespace arms_controller_common
             
             if (!trajectory_manager_.initMultiNode(
                 waypoints,
+                joint_blend_ratios,
                 durations,  // Basic mode: contains calculated segment durations; DOUBLES mode: empty, auto-calculated
                 interpolation_type_,
                 ctrl_interfaces_.frequency_,
@@ -1002,6 +1005,10 @@ namespace arms_controller_common
     void StateMoveJ::setTrajectoryDuration(double duration)
     {
         trajectory_manager_.setTrajectoryDuration(duration);
+    }
+    void StateMoveJ::setCommonJointBlendRatios(double blend_ratio)
+    {
+        trajectory_manager_.setCommonJointBlendRatios(blend_ratio);
     }
 
     void StateMoveJ::setupTrajectorySubscription(

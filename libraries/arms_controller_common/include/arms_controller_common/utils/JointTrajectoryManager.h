@@ -80,6 +80,7 @@ namespace arms_controller_common
          */
         bool initMultiNode(
             const std::vector<std::vector<double>>& waypoints,
+            const std::vector<double>& joint_blend_ratios,
             const std::vector<double>& durations,
             InterpolationType type,
             double controller_frequency,
@@ -133,6 +134,11 @@ namespace arms_controller_common
          * @return Total trajectory duration in seconds
          */
         double getTrajectoryDuration() const;
+        /**
+         *@brief Set common blend ratio
+         * @param blend_ratios Set a common blend ratio for multiple points
+         */
+        void setCommonJointBlendRatios(double blend_ratios);
 
     private:
         // Trajectory mode
@@ -200,6 +206,7 @@ namespace arms_controller_common
 
         // Multi-node trajectory duration (for automatic time calculation in lina planning)
         double trajectory_duration_ = 3.0;  // Default 3 seconds
+        double common_joint_blend_ratios=0.0;
 
         // Advanced mode (lina_planning) - conditionally compiled
 #ifdef HAS_LINA_PLANNING

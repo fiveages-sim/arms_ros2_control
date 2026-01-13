@@ -118,6 +118,7 @@ namespace arms_controller_common
 
     bool JointTrajectoryManager::initMultiNode(
         const std::vector<std::vector<double>>& waypoints,
+        const std::vector<double>& joint_blend_ratios,
         const std::vector<double>& durations,
         InterpolationType type,
         double controller_frequency,
@@ -189,16 +190,34 @@ namespace arms_controller_common
 
                     size_t nr_of_joints = waypoints_[0].size();
                     std::vector<planning::TrajectPoint> trajectory_points;
-                    trajectory_points.reserve(waypoints_.size());
+                    size_t nr_of_waypoints = waypoints.size();
+                    trajectory_points.reserve(nr_of_waypoints);
 
                     // Convert waypoints to TrajectPoint
-                    for (const auto& waypoint : waypoints_)
+                    for (size_t i = 0; i < nr_of_waypoints; i++)
                     {
+                        const auto& waypoint =waypoints_[i];
                         planning::TrajectPoint point(nr_of_joints);
-                        for (size_t i = 0; i < nr_of_joints; ++i)
+                        for (size_t j = 0; j < nr_of_joints; ++j)
                         {
-                            point.joint_pos(i) = waypoint[i];
+                            point.joint_pos(j) = waypoint[j];
                         }
+                        if (joint_blend_ratios.empty())
+                        {
+                            if (i==0 || i==nr_of_waypoints-1)
+                            {
+                                point.blend_tolerance_ratio_of_movej=0.0;
+                            }
+                            else
+                            {
+                                point.blend_tolerance_ratio_of_movej=common_joint_blend_ratios;
+                            }
+                        }
+                        else
+                        {
+                            point.blend_tolerance_ratio_of_movej=joint_blend_ratios[i];
+                        }
+                        RCLCPP_INFO(logger_, "%zu th point blend ratio is %.2f",i,point.blend_tolerance_ratio_of_movej);
                         trajectory_points.push_back(point);
                     }
 
@@ -384,6 +403,11 @@ namespace arms_controller_common
     double JointTrajectoryManager::getTrajectoryDuration() const
     {
         return trajectory_duration_;
+    }
+
+    void JointTrajectoryManager::setCommonJointBlendRatios(double blend_ratios)
+    {
+        common_joint_blend_ratios=std::clamp(blend_ratios,0.0,1.0);
     }
 
     std::vector<double> JointTrajectoryManager::computeSingleNodePoint()
