@@ -33,7 +33,6 @@ namespace arms_ros2_control::command
      * - 配置管理（关节映射、限位等）
      * - Marker 创建和更新
      * - 从四元数提取关节角度
-     * - 限制头部旋转范围
      * - 从关节状态更新 marker
      * - 发布目标关节角度
      */
@@ -88,13 +87,6 @@ namespace arms_ros2_control::command
          */
         std::vector<double> quaternionToJointAngles(
             const geometry_msgs::msg::Quaternion& quaternion) const;
-
-        /**
-         * @brief 限制头部 pose 的旋转范围（根据关节限位）
-         * @param pose 要限制的 pose（输入输出参数）
-         * @return 如果 pose 被限制返回 true，否则返回 false
-         */
-        bool clampPoseRotation(geometry_msgs::msg::Pose& pose) const;
 
         /**
          * @brief 从关节状态更新 marker
@@ -201,7 +193,7 @@ namespace arms_ros2_control::command
         mutable std::array<double, 3> last_head_rpy_ = {0.0, 0.0, 0.0};
         mutable bool last_head_rpy_initialized_ = false;
 
-        // 上一次的 RPY 角度（相对 head_link 的局部坐标系，用于 quaternionToJointAngles 和 clampPoseRotation）
+        // 上一次的 RPY 角度（相对 head_link 的局部坐标系，用于 quaternionToJointAngles）
         mutable std::array<double, 3> last_head_rpy_local_ = {0.0, 0.0, 0.0};
         mutable bool last_head_rpy_local_initialized_ = false;
 
