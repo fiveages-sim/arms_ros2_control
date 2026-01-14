@@ -120,6 +120,16 @@ namespace arms_rviz_control_plugin
                 available_categories_.insert("head");
                 category_to_controller_["head"] = controller;
             }
+            else if (controller_lower == "left_hand_controller")
+            {
+                available_categories_.insert("left_hand");
+                category_to_controller_["left_hand"] = controller;
+            }
+            else if (controller_lower == "right_hand_controller")
+            {
+                available_categories_.insert("right_hand");
+                category_to_controller_["right_hand"] = controller;
+            }
             else if (controller_lower.find("body") != std::string::npos &&
                 controller_lower.find("ocs2_wbc_controller") == std::string::npos &&
                 controller_lower.find("ocs2_arm_controller") == std::string::npos)
@@ -263,6 +273,36 @@ namespace arms_rviz_control_plugin
         if (joint_name_lower.find("head") != std::string::npos)
         {
             return "head";
+        }
+
+        // Check for left hand joints (must check before left arm to prioritize hand)
+        bool is_hand_joint = joint_name_lower.find("hand") != std::string::npos ||
+                             joint_name_lower.find("finger") != std::string::npos ||
+                             joint_name_lower.find("thumb") != std::string::npos ||
+                             joint_name_lower.find("palm") != std::string::npos;
+        
+        if (is_hand_joint)
+        {
+            // Check for left hand
+            if (joint_name_lower.find("left") != std::string::npos ||
+                (joint_name_lower.length() > 0 && joint_name_lower[0] == 'l' &&
+                 (joint_name_lower.find("hand") != std::string::npos ||
+                  joint_name_lower.find("finger") != std::string::npos ||
+                  joint_name_lower.find("thumb") != std::string::npos ||
+                  joint_name_lower.find("palm") != std::string::npos)))
+            {
+                return "left_hand";
+            }
+            // Check for right hand
+            if (joint_name_lower.find("right") != std::string::npos ||
+                (joint_name_lower.length() > 0 && joint_name_lower[0] == 'r' &&
+                 (joint_name_lower.find("hand") != std::string::npos ||
+                  joint_name_lower.find("finger") != std::string::npos ||
+                  joint_name_lower.find("thumb") != std::string::npos ||
+                  joint_name_lower.find("palm") != std::string::npos)))
+            {
+                return "right_hand";
+            }
         }
 
         // Check for left arm joints
@@ -594,6 +634,34 @@ namespace arms_rviz_control_plugin
         {
             return "/ocs2_wbc_controller/target_joint_position/right";
         }
+        else if (category == "left_hand" || category == "right_hand")
+        {
+            // Try to find specific left_hand_controller or right_hand_controller
+            std::string target_controller;
+            if (category == "left_hand")
+            {
+                target_controller = "left_hand_controller";
+            }
+            else
+            {
+                target_controller = "right_hand_controller";
+            }
+            
+            // Check if the specific controller exists
+            for (const auto& controller : available_controllers_)
+            {
+                std::string controller_lower = controller;
+                std::transform(controller_lower.begin(), controller_lower.end(),
+                               controller_lower.begin(), ::tolower);
+                if (controller_lower == target_controller)
+                {
+                    return "/" + controller + "/target_joint_position";
+                }
+            }
+            
+            // Fallback: use default hand controller name
+            return "/" + target_controller + "/target_joint_position";
+        }
 
         return "/ocs2_wbc_controller/target_joint_position";
     }
@@ -677,6 +745,19 @@ namespace arms_rviz_control_plugin
         if (available_categories_.find("right") != available_categories_.end())
         {
             category_combo_->addItem("Right", "right");
+        }
+        // Add left hand and right hand categories if they exist in category_to_joints_
+        if (category_to_joints_.find("left_hand") != category_to_joints_.end() &&
+            !category_to_joints_["left_hand"].empty())
+        {
+            category_combo_->addItem("Left Hand", "left_hand");
+            available_categories_.insert("left_hand");
+        }
+        if (category_to_joints_.find("right_hand") != category_to_joints_.end() &&
+            !category_to_joints_["right_hand"].empty())
+        {
+            category_combo_->addItem("Right Hand", "right_hand");
+            available_categories_.insert("right_hand");
         }
 
         // Set default to first item
@@ -1050,13 +1131,20 @@ namespace arms_rviz_control_plugin
             std::transform(joint_name_lower.begin(), joint_name_lower.end(),
                            joint_name_lower.begin(), ::tolower);
 
-            // Filter out gripper-related joints
+            // Classify joint first to check if it's a left_hand or right_hand
+            std::string category = classifyJoint(joint_name);
+            
+            // Filter out gripper-related joints, but keep left_hand and right_hand joints
             bool is_gripper_joint =
                 joint_name_lower.find("gripper") != std::string::npos ||
-                joint_name_lower.find("hand") != std::string::npos ||
-                joint_name_lower.find("finger") != std::string::npos ||
-                joint_name_lower.find("thumb") != std::string::npos ||
-                joint_name_lower.find("palm") != std::string::npos;
+                (joint_name_lower.find("hand") != std::string::npos && 
+                 category != "left_hand" && category != "right_hand") ||
+                (joint_name_lower.find("finger") != std::string::npos && 
+                 category != "left_hand" && category != "right_hand") ||
+                (joint_name_lower.find("thumb") != std::string::npos && 
+                 category != "left_hand" && category != "right_hand") ||
+                (joint_name_lower.find("palm") != std::string::npos && 
+                 category != "left_hand" && category != "right_hand");
             // 如果有 hand/gripper 控制器，则不过滤手部关节
             if (has_hand_controller)
             {
@@ -1069,8 +1157,7 @@ namespace arms_rviz_control_plugin
                 joint_names_.push_back(joint_name);
                 joint_name_to_index_[joint_name] = joint_index;
 
-                // Classify joint
-                std::string category = classifyJoint(joint_name);
+                // Use the category from classifyJoint
                 joint_to_category_[joint_name] = category;
                 category_to_joints_[category].push_back(joint_index);
             }
@@ -1280,6 +1367,11 @@ namespace arms_rviz_control_plugin
                 category_to_controller_["right"] = arm_controller;
             }
             // Update category options after adding left/right
+            updateCategoryOptions();
+        }
+        else
+        {
+            // Update category options to include left_hand and right_hand if they exist
             updateCategoryOptions();
         }
 
