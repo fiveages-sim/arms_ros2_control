@@ -1,5 +1,4 @@
 import os
-import re
 
 from ament_index_python.packages import get_package_share_directory
 from launch import LaunchDescription
@@ -8,32 +7,7 @@ from launch_ros.actions import Node
 import xacro
 
 # Import robot_common_launch utilities
-from robot_common_launch import load_robot_config, create_rmw_zenohd_node
-
-
-def get_default_arg_from_xacro(xacro_file, arg_name):
-    """
-    从 xacro 文件中读取指定参数的默认值
-    
-    Args:
-        xacro_file (str): xacro 文件路径
-        arg_name (str): 参数名称
-        
-    Returns:
-        str: 默认值，如果找不到则返回 None
-    """
-    try:
-        with open(xacro_file, 'r') as f:
-            content = f.read()
-            # 查找 xacro:arg name="arg_name" default="..." 的模式
-            # 支持单引号和双引号
-            pattern = rf'xacro:arg\s+name=["\']{re.escape(arg_name)}["\']\s+default=["\']([^"\']+)["\']'
-            match = re.search(pattern, content)
-            if match:
-                return match.group(1)
-    except Exception as e:
-        print(f"[WARN] Could not read default {arg_name} from {xacro_file}: {e}")
-    return None
+from robot_common_launch import load_robot_config
 
 
 def launch_setup(context, *args, **kwargs):
@@ -43,7 +17,6 @@ def launch_setup(context, *args, **kwargs):
     direction = context.launch_configurations.get('direction', '1')
     hardware = context.launch_configurations.get('hardware', 'mock_components')
     world = context.launch_configurations.get('world', 'dart')
-    serial_port = context.launch_configurations.get('serial_port', '/dev/ttyUSB0')
 
     # 基本参数
     use_sim_time = hardware in ['gz', 'isaac']
@@ -69,9 +42,6 @@ def launch_setup(context, *args, **kwargs):
         print(f"[ERROR] Hand xacro file not found: {hand_xacro_path}")
         return []
     
-    # Get serial_port from launch configuration (default was already read from xacro in generate_launch_description)
-    serial_port = context.launch_configurations.get('serial_port', '/dev/ttyUSB0')
-    
     # 构建 xacro mappings
     mappings = {
         'ros2_control_hardware_type': hardware,
@@ -80,13 +50,6 @@ def launch_setup(context, *args, **kwargs):
         mappings["type"] = hand_type
     if direction and direction.strip():
         mappings["direction"] = direction
-    
-    # Pass serial_port and max_speed_ratio to xacro if hardware is real
-    if hardware == 'real':
-        mappings["serial_port"] = serial_port
-        max_speed_ratio = context.launch_configurations.get('max_speed_ratio', '1.0')
-        if max_speed_ratio and max_speed_ratio.strip():
-            mappings["max_speed_ratio"] = max_speed_ratio
     
     # 如果是 Gazebo 模式，添加 gazebo 映射
     if hardware == 'gz':
@@ -134,7 +97,6 @@ def launch_setup(context, *args, **kwargs):
     node_parameters = [
         ros2_controllers_path,
         {'use_sim_time': use_sim_time},
-        {'robot_description': robot_description},
     ]
     
     # 如果使用了 type-specific 配置，可以在这里添加额外的参数处理逻辑
@@ -242,41 +204,19 @@ def generate_launch_description():
     type_arg = DeclareLaunchArgument(
         "type",
         default_value="o7",
-        description="Hand type: 'o7' (7-DOF), 'o6' (6-DOF), or 'l6' (6-DOF). Leave empty to not pass type parameter to xacro."
+        description="Hand type (o7, etc.). Leave empty to not pass type parameter to xacro."
     )
 
     direction_arg = DeclareLaunchArgument(
         "direction",
         default_value="1",
-        description="Hand direction: '1' for left hand (Modbus ID 0x28), '-1' for right hand (Modbus ID 0x27). Default is left hand (1)."
+        description="Hand direction (1 for left hand, -1 for right hand)"
     )
 
     hardware_arg = DeclareLaunchArgument(
         "hardware",
         default_value="mock_components",
-        description="Hardware type: 'gz' for Gazebo simulation, 'isaac' for Isaac simulation, 'mock_components' for mock components, 'real' for real hardware"
-    )
-
-    # Try to read default serial_port from xacro file
-    # This is a best-effort attempt - if it fails, we'll use a hardcoded default
-    default_serial_port = "/dev/ttyUSB0"  # Fallback default
-    try:
-        hand_pkg_name = "linkerhand_description"  # Default hand name
-        hand_pkg_path = get_package_share_directory(hand_pkg_name)
-        if hand_pkg_path:
-            hand_xacro_path = os.path.join(hand_pkg_path, 'xacro', 'ros2_control', 'hand.xacro')
-            if os.path.exists(hand_xacro_path):
-                xacro_default = get_default_arg_from_xacro(hand_xacro_path, 'serial_port')
-                if xacro_default:
-                    default_serial_port = xacro_default
-                    print(f"[INFO] Using default serial_port from xacro: {default_serial_port}")
-    except Exception as e:
-        print(f"[WARN] Could not read default serial_port from xacro, using fallback: {e}")
-
-    serial_port_arg = DeclareLaunchArgument(
-        "serial_port",
-        default_value=default_serial_port,
-        description=f"Serial port for real hardware (e.g., /dev/ttyUSB0). Only used when hardware=real. Default: {default_serial_port} (read from xacro if available)."
+        description="Hardware type: 'gz' for Gazebo simulation, 'isaac' for Isaac simulation, 'mock_components' for mock components"
     )
 
     world_arg = DeclareLaunchArgument(
@@ -289,21 +229,12 @@ def generate_launch_description():
         description='Whether to launch RViz visualization'
     )
 
-    max_speed_ratio_arg = DeclareLaunchArgument(
-        'max_speed_ratio',
-        default_value='1.0',
-        description='Maximum speed ratio for joint movement (0.0-1.0). 1.0 = no limiting, 0.5 = 50% of max speed. Only used when hardware=real.'
-    )
-
     return LaunchDescription([
         hand_arg,
         type_arg,
         direction_arg,
         hardware_arg,
-        serial_port_arg,
         world_arg,
         use_rviz_arg,
-        max_speed_ratio_arg,
         OpaqueFunction(function=launch_setup),
     ])
-
