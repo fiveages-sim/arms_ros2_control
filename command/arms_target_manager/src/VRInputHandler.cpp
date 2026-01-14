@@ -600,33 +600,38 @@ namespace arms_ros2_control::command
                                                      Eigen::Vector3d& resultPos,
                                                      Eigen::Quaterniond& resultOri)
     {
-        // 计算VR pose差值（从base到current的变换）
-        Eigen::Vector3d vrPosDiff = vrCurrentPos - vrBasePos;
+        // 1. 计算VR位置在世界坐标系下的差值
+        Eigen::Vector3d vrPosDiff_world = vrCurrentPos - vrBasePos;
+
+        // 2. 将位置差值转换到VR手柄基准姿态的局部坐标系
+        //    这样用户转身后，手柄"向前"移动仍然相对于进入UPDATE时手柄的朝向
+        Eigen::Vector3d vrPosDiff_local = vrBaseOri.inverse() * vrPosDiff_world;
+
+        // 3. 计算VR姿态差值（相对旋转）
         Eigen::Quaterniond vrOriDiff = vrBaseOri.inverse() * vrCurrentOri;
 
-        // 镜像模式：翻转x和y轴（面对面控制）
+        // 4. 镜像模式处理（在局部坐标系下应用）
         if (mirror_mode_.load())
         {
-            // 位置翻转
-            vrPosDiff.x() = -vrPosDiff.x(); // 左右翻转
-            vrPosDiff.y() = -vrPosDiff.y(); // 前后翻转
-            // vrPosDiff.z() 保持不变（上下不翻转）
+            // 位置翻转（局部坐标系）
+            vrPosDiff_local.x() = -vrPosDiff_local.x(); // 左右翻转
+            vrPosDiff_local.y() = -vrPosDiff_local.y(); // 前后翻转
+            // vrPosDiff_local.z() 保持不变（上下不翻转）
 
             // 旋转翻转（面对面镜像）
-            // 方法：对四元数的Y和Z分量取反，实现绕Z轴的镜像
-            // 这相当于对旋转进行XY平面的镜像变换
             vrOriDiff.y() = -vrOriDiff.y(); // 翻转Y分量
-            // vrOriDiff.z() = -vrOriDiff.z();  // 翻转Z分量
             vrOriDiff.x() = -vrOriDiff.x(); // 翻转X分量
             vrOriDiff.normalize(); // 重新归一化
         }
 
-        // 将相同的变换应用到机器人base pose
-        resultPos = robotBasePos + vrPosDiff;
-        // resultOri = robotBaseOri * vrOriDiff;
+        // 5. 将局部坐标系的位置差值转换回机器人坐标系并应用
+        //    按照机器人手臂的朝向应用位移，保持相对运动一致性
+        resultPos = robotBasePos + vrPosDiff_local;
+
+        // 6. 应用姿态差值（保持原有逻辑）
         resultOri = vrOriDiff * robotBaseOri;
 
-        // 归一化四元数以避免漂移
+        // 7. 归一化四元数以避免漂移
         resultOri.normalize();
     }
 
