@@ -7,7 +7,7 @@ from launch_ros.actions import Node
 import xacro
 
 # Import robot_common_launch utilities
-from robot_common_launch import load_robot_config
+from robot_common_launch import load_robot_config, create_rmw_zenohd_node
 
 
 def launch_setup(context, *args, **kwargs):
