@@ -7,10 +7,14 @@
 #include <vector>
 #include <memory>
 #include <Eigen/Dense>
+// Disable maybe-uninitialized warning for Pinocchio library headers
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Wmaybe-uninitialized"
 #include <pinocchio/multibody/model.hpp>
 #include <pinocchio/multibody/data.hpp>
 #include <pinocchio/parsers/urdf.hpp>
 #include <pinocchio/algorithm/rnea.hpp>
+#pragma GCC diagnostic pop
 
 namespace arms_controller_common
 {

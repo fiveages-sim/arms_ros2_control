@@ -4,6 +4,8 @@
 #include "arms_controller_common/FSM/StateHome.h"
 #include <cmath>
 #include <algorithm>
+#include <iostream>
+#include <iomanip>
 
 namespace arms_controller_common
 {
@@ -14,7 +16,8 @@ namespace arms_controller_common
         : FSMState(FSMStateName::HOME, "home", ctrl_interfaces),
           logger_(logger),
           gravity_compensation_(gravity_compensation),
-          duration_(duration)
+          duration_(duration),
+          trajectory_manager_(logger)
     {
     }
 
@@ -113,8 +116,27 @@ namespace arms_controller_common
             }
         }
 
-        // Reset interpolation progress
-        percent_ = 0.0;
+        // Initialize trajectory manager
+        if (!start_pos_.empty() && !current_target_.empty() && start_pos_.size() == current_target_.size())
+        {
+            if (!trajectory_manager_.initSingleNode(
+                start_pos_,
+                current_target_,
+                duration_,
+                interpolation_type_,
+                ctrl_interfaces_.frequency_,
+                tanh_scale_))
+            {
+                RCLCPP_ERROR(logger_,
+                            "Failed to initialize trajectory manager in StateHome::enter()");
+            }
+        }
+        else
+        {
+            RCLCPP_WARN(logger_,
+                       "Cannot initialize trajectory manager: start_pos size (%zu) != target_pos size (%zu)",
+                       start_pos_.size(), current_target_.size());
+        }
 
         // Set kp and kd gains for force control if available
         if (ctrl_interfaces_.control_mode_ == ControlMode::MIX &&
@@ -173,49 +195,50 @@ namespace arms_controller_common
 
         last_command_ = current_command;
 
-        // Update interpolation progress
-        double controller_frequency = ctrl_interfaces_.frequency_;
-        if (duration_ <= 0.0 || controller_frequency <= 0.0)
+        // Get next trajectory point from unified manager
+        std::vector<double> next_positions = trajectory_manager_.getNextPoint();
+        
+        if (!next_positions.empty() && 
+            next_positions.size() == ctrl_interfaces_.joint_position_command_interface_.size())
         {
-            // Invalid timing configuration: jump directly to target
-            percent_ = 1.0;
+            // Apply interpolated position to joints
+            for (size_t i = 0; i < ctrl_interfaces_.joint_position_command_interface_.size() &&
+                 i < next_positions.size(); ++i)
+            {
+                std::ignore = ctrl_interfaces_.joint_position_command_interface_[i].get().set_value(next_positions[i]);
+            }
+        }
+        else if (next_positions.empty())
+        {
+            // If trajectory manager returns empty, maintain current position or use target
+            static bool warned = false;
+            if (!warned && !trajectory_manager_.isInitialized())
+            {
+                RCLCPP_WARN_THROTTLE(logger_, *std::make_shared<rclcpp::Clock>(), 1000,
+                                    "Trajectory manager not initialized, maintaining current position");
+                warned = true;
+            }
+            // Maintain current position if trajectory manager is not initialized
+            if (!trajectory_manager_.isInitialized() && !current_target_.empty())
+            {
+                for (size_t i = 0; i < ctrl_interfaces_.joint_position_command_interface_.size() &&
+                     i < current_target_.size(); ++i)
+                {
+                    std::ignore = ctrl_interfaces_.joint_position_command_interface_[i].get().set_value(current_target_[i]);
+                }
+            }
         }
         else
         {
-            percent_ += 1.0 / (duration_ * controller_frequency);
+            static bool warned = false;
+            if (!warned)
+            {
+                RCLCPP_WARN(logger_,
+                           "Trajectory manager returned positions with size mismatch: got %zu, expected %zu",
+                           next_positions.size(), ctrl_interfaces_.joint_position_command_interface_.size());
+                warned = true;
+            }
         }
-        percent_ = std::min(percent_, 1.0);
-
-        // Calculate interpolation phase
-        double phase = 0.0;
-        if (interpolation_type_ == InterpolationType::NONE)
-        {
-            // NONE type: directly set target position without interpolation
-            phase = 1.0;
-        }
-        else if (percent_ >= 1.0)
-        {
-            phase = 1.0;
-        }
-        else if (interpolation_type_ == InterpolationType::LINEAR)
-        {
-            phase = percent_;
-        }
-        else
-        {
-            const double scale = (tanh_scale_ > 0.0) ? tanh_scale_ : 3.0;
-            phase = std::tanh(percent_ * scale);
-        }
-        phase = std::clamp(phase, 0.0, 1.0);
-
-        // Apply interpolated position to joints
-        for (size_t i = 0; i < ctrl_interfaces_.joint_position_command_interface_.size() &&
-             i < current_target_.size() && i < start_pos_.size(); ++i)
-        {
-            double interpolated_value = phase * current_target_[i] + (1.0 - phase) * start_pos_[i];
-            std::ignore = ctrl_interfaces_.joint_position_command_interface_[i].get().set_value(interpolated_value);
-        }
-
         // In force control mode, calculate static torques
         if (ctrl_interfaces_.control_mode_ == ControlMode::MIX && gravity_compensation_)
         {
@@ -242,13 +265,13 @@ namespace arms_controller_common
 
     void StateHome::exit()
     {
-        percent_ = 0.0;
+        trajectory_manager_.reset();
     }
 
     void StateHome::setInterpolationType(const std::string& type)
     {
         const std::string t = toLowerCopy(type);
-        if (t != "linear" && t != "tanh")
+        if (t != "linear" && t != "tanh" && t != "doubles")
         {
             RCLCPP_WARN(logger_, "Unknown home interpolation type '%s', falling back to 'linear'", type.c_str());
         }
@@ -337,11 +360,27 @@ namespace arms_controller_common
             }
         }
 
-        // Reset interpolation progress
-        percent_ = 0.0;
-
-        RCLCPP_INFO(logger_,
-                    "Starting interpolation to configuration %zu over %.1f seconds",
-                    current_config_index_, duration_);
+        // Initialize trajectory manager with new target
+        if (!start_pos_.empty() && !current_target_.empty() && start_pos_.size() == current_target_.size())
+        {
+            trajectory_manager_.initSingleNode(
+                start_pos_,
+                current_target_,
+                duration_,
+                interpolation_type_,
+                ctrl_interfaces_.frequency_,
+                tanh_scale_
+            );
+            
+            RCLCPP_INFO(logger_,
+                        "Starting interpolation to configuration %zu over %.1f seconds (type=%s)",
+                        current_config_index_, duration_, toString(interpolation_type_));
+        }
+        else
+        {
+            RCLCPP_WARN(logger_,
+                       "Cannot start interpolation: start_pos size (%zu) != target_pos size (%zu)",
+                       start_pos_.size(), current_target_.size());
+        }
     }
 } // namespace arms_controller_common
