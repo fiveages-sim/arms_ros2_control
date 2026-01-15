@@ -7,7 +7,7 @@ from launch_ros.actions import Node
 import xacro
 
 # Import robot_common_launch utilities
-from robot_common_launch import load_robot_config
+from robot_common_launch import load_robot_config, create_rmw_zenohd_node
 
 
 def launch_setup(context, *args, **kwargs):
@@ -20,6 +20,11 @@ def launch_setup(context, *args, **kwargs):
 
     # 基本参数
     use_sim_time = hardware in ['gz', 'isaac']
+
+    # 显示手部配置信息
+    hand_side = "left" if direction == "1" else "right"
+    modbus_id = "0x28" if direction == "1" else "0x27"
+    print(f"[INFO] Hand configuration: {hand_side} hand (direction={direction}, Modbus ID={modbus_id})")
 
     # 生成 ros2_control robot_description
     # 对于灵巧手，直接处理 hand.xacro 文件
@@ -180,6 +185,11 @@ def launch_setup(context, *args, **kwargs):
     if rviz_node:
         nodes.append(rviz_node)
 
+    # 如果使用rmw_zenoh_cpp，自动添加rmw_zenohd节点
+    rmw_zenohd_node = create_rmw_zenohd_node()
+    if rmw_zenohd_node is not None:
+        nodes.insert(0, rmw_zenohd_node)  # 将rmw_zenohd放在最前面，确保先启动
+
     return nodes
 
 
@@ -228,4 +238,3 @@ def generate_launch_description():
         use_rviz_arg,
         OpaqueFunction(function=launch_setup),
     ])
-

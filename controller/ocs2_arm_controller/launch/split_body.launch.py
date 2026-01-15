@@ -2,7 +2,7 @@ import os
 
 from ament_index_python.packages import get_package_share_directory
 from launch import LaunchDescription
-from launch.actions import DeclareLaunchArgument, OpaqueFunction
+from launch.actions import DeclareLaunchArgument, OpaqueFunction, SetEnvironmentVariable
 from launch.actions import IncludeLaunchDescription
 from launch.launch_description_sources import PythonLaunchDescriptionSource
 from launch.substitutions import LaunchConfiguration
@@ -17,7 +17,9 @@ from robot_common_launch import (
     create_controller_spawners,
     load_robot_config,
     get_ros2_control_robot_description,
-    prepare_arms_target_manager_parameters
+    prepare_arms_target_manager_parameters,
+    parse_launch_mode,
+    create_launch_mode_arguments,
 )
 
 # All utility functions are now imported from robot_common_launch
@@ -31,6 +33,9 @@ def launch_setup(context, *args, **kwargs):
 
     # 基本参数
     use_sim_time = hardware in ['gz', 'isaac']
+
+    # Launch mode (needed early for planning_robot_state_publisher)
+    launch_mode, rviz_only, use_rviz = parse_launch_mode(context)
 
     # Get robot_name and robot_type from controller configuration (may be different from launch arguments)
     # Logic:
@@ -194,7 +199,6 @@ def launch_setup(context, *args, **kwargs):
     arms_target_manager_parameters = prepare_arms_target_manager_parameters(
         task_file_path=task_file_path,
         config_file_path=config_file_path,  # Use full body robot's config if available
-        marker_fixed_frame='base_link',  # Default value
         enable_head_control=enable_head_control,
         hand_controllers=hand_controller_names_for_target_manager if hand_controller_names_for_target_manager else None
     )
@@ -210,72 +214,89 @@ def launch_setup(context, *args, **kwargs):
             parameters=arms_target_manager_parameters,
         )
 
+    # Launch mode: 'full' (default), 'control_only', or 'rviz_only'
+    # Note: launch_mode, rviz_only, use_rviz and zenoh_env are already set above
+
     # RViz for visualization
-    # 确定配置文件路径（优先级：机器人description包目录 > 默认配置）
-    rviz_config_path = None
-    
-    # 检查机器人description包目录下是否有ocs2rviz配置
-    robot_pkg_path = get_robot_package_path(robot_name)
-    if robot_pkg_path is not None:
-        robot_rviz_config = os.path.join(robot_pkg_path, "config", "rviz", "splitbody.rviz")
-        print(f"[INFO] Checking for rviz config in robot description package: {robot_rviz_config}")
-        if os.path.exists(robot_rviz_config):
-            rviz_config_path = robot_rviz_config
-            print(f"[INFO] Using rviz config from robot description package: {rviz_config_path}")
-    
-    # 如果还没有找到，使用默认配置文件
-    if not rviz_config_path:
-        rviz_base = os.path.join(
-            get_package_share_directory("ocs2_arm_controller"), "config",
+    rviz_node = None
+    if use_rviz:
+        # 确定配置文件路径（优先级：机器人description包目录 > 默认配置）
+        rviz_config_path = None
+        
+        # 检查机器人description包目录下是否有ocs2rviz配置
+        robot_pkg_path = get_robot_package_path(robot_name)
+        if robot_pkg_path is not None:
+            robot_rviz_config = os.path.join(robot_pkg_path, "config", "rviz", "splitbody.rviz")
+            print(f"[INFO] Checking for rviz config in robot description package: {robot_rviz_config}")
+            if os.path.exists(robot_rviz_config):
+                rviz_config_path = robot_rviz_config
+                print(f"[INFO] Using rviz config from robot description package: {rviz_config_path}")
+        
+        # 如果还没有找到，使用默认配置文件
+        if not rviz_config_path:
+            rviz_base = os.path.join(
+                get_package_share_directory("ocs2_arm_controller"), "config",
+            )
+            rviz_config_path = os.path.join(rviz_base, "demo.rviz")
+            print(f"[INFO] Using default rviz config: {rviz_config_path}")
+
+        # Extract hand controller names for GripperControlPanel
+        hand_controller_names = []
+        if enable_gripper and hand_controllers:
+            hand_controller_names = [c['name'] for c in hand_controllers]
+
+        # Prepare RViz parameters
+        rviz_parameters = [{'use_sim_time': use_sim_time}]
+
+        # Only add hand_controllers parameter if we have controllers
+        if hand_controller_names:
+            rviz_parameters.append({'hand_controllers': hand_controller_names})
+
+        # Add joint_controllers parameter for JointControlPanel
+        rviz_parameters.append({'joint_controllers': joint_controller_names})
+
+        rviz_node = Node(
+            package="rviz2",
+            executable="rviz2",
+            name="rviz2",
+            output="log",
+            arguments=["-d", rviz_config_path],
+            parameters=rviz_parameters,
         )
-        rviz_config_path = os.path.join(rviz_base, "demo.rviz")
-        print(f"[INFO] Using default rviz config: {rviz_config_path}")
-
-    # Extract hand controller names for GripperControlPanel
-    hand_controller_names = []
-    if enable_gripper and hand_controllers:
-        hand_controller_names = [c['name'] for c in hand_controllers]
-
-    # Prepare RViz parameters
-    rviz_parameters = [{'use_sim_time': use_sim_time}]
-
-    # Only add hand_controllers parameter if we have controllers
-    if hand_controller_names:
-        rviz_parameters.append({'hand_controllers': hand_controller_names})
-
-    # Add joint_controllers parameter for JointControlPanel
-    rviz_parameters.append({'joint_controllers': joint_controller_names})
-
-    rviz_node = Node(
-        package="rviz2",
-        executable="rviz2",
-        name="rviz2",
-        output="log",
-        arguments=["-d", rviz_config_path],
-        parameters=rviz_parameters,
-    )
 
     # 统一的节点列表 - 不管是否使用 Gazebo，控制器都是一样的
     # robot_state_publisher 和 joint_state_broadcaster 现在由 controller_manager_launch 处理
-    nodes = [
-        rviz_node,
-        controller_manager_launch,
-        ocs2_arm_controller_spawner,
-    ]
+    nodes = []
     
-    # Add ArmsTargetManager node if created
-    if ocs2_arms_target_manager:
+    # If rviz_only mode, only add rviz (all other nodes should be running on the robot)
+    if rviz_only:
+        if rviz_node:
+            nodes.append(rviz_node)
+        # In rviz_only mode, we don't start any other nodes
+        # robot_state_publisher, controller_manager, etc. should be running on the robot
+    else:
+        # Normal mode: add all nodes
+        if rviz_node:
+            nodes.append(rviz_node)
+        nodes.append(controller_manager_launch)
+        nodes.append(ocs2_arm_controller_spawner)
+    
+    # Add ArmsTargetManager node if created (skip in rviz_only mode)
+    if not rviz_only and ocs2_arms_target_manager:
         nodes.append(ocs2_arms_target_manager)
 
-    # Add planning robot state publisher if available
-    if planning_robot_state_publisher:
+    # Add planning robot state publisher if available (already added in rviz_only branch above)
+    # Only add in normal mode if not already added
+    if not rviz_only and planning_robot_state_publisher:
         nodes.append(planning_robot_state_publisher)
 
-    # Add hand controller spawners if any were detected
-    nodes.extend(hand_controller_spawners)
+    # Add hand controller spawners if any were detected (skip in rviz_only mode)
+    if not rviz_only:
+        nodes.extend(hand_controller_spawners)
 
-    # Add body controller spawners if any were detected
-    nodes.extend(body_controller_spawners)
+    # Add body controller spawners if any were detected (skip in rviz_only mode)
+    if not rviz_only:
+        nodes.extend(body_controller_spawners)
 
     return nodes
 
@@ -322,6 +343,9 @@ def generate_launch_description():
         description='Enable body controllers (body, head)'
     )
 
+    # Get launch mode arguments from common utilities
+    launch_mode_args = create_launch_mode_arguments()
+
     return LaunchDescription([
         robot_name_arg,
         robot_type_arg,
@@ -330,5 +354,6 @@ def generate_launch_description():
         enable_arms_target_manager_arg,
         enable_gripper_arg,
         enable_body_arg,
+        *launch_mode_args,  # Unpack the list of arguments
         OpaqueFunction(function=launch_setup),
     ])

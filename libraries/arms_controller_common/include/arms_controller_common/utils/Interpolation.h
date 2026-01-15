@@ -13,6 +13,7 @@ namespace arms_controller_common
     {
         TANH,
         LINEAR,
+        DOUBLES,
         NONE
     };
 
@@ -29,6 +30,8 @@ namespace arms_controller_common
         {
         case InterpolationType::LINEAR:
             return "linear";
+        case InterpolationType::DOUBLES:
+            return "doubles";
         case InterpolationType::NONE:
             return "none";
         case InterpolationType::TANH:
@@ -53,6 +56,10 @@ namespace arms_controller_common
         if (t == "tanh")
         {
             return InterpolationType::TANH;
+        }
+        if (t == "doubles")
+        {
+            return InterpolationType::DOUBLES;
         }
         if (t == "none")
         {

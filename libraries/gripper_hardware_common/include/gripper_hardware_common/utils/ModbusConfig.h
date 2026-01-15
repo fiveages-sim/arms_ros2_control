@@ -129,5 +129,111 @@ namespace gripper_hardware_common
             static constexpr uint16_t INIT_VALUE = 0x0000;
             static constexpr uint16_t INIT_REGISTER_NUM = 0x0002;
         }
+
+        /**
+         * @brief Dexterous Hand Modbus configuration
+         * 
+         * Configuration for O7 (7-DOF) and O6 (6-DOF) dexterous hands.
+         * Both use the same Modbus slave addresses and register layout.
+         */
+        struct DexterousHand
+        {
+            // Register addresses
+            static constexpr uint16_t JOINT_POSITION_REG_START = 0;  // Starting register for joint positions
+
+            // Joint counts
+            static constexpr int JOINT_COUNT_O7 = 7;  // O7 hand has 7 joints
+            static constexpr int JOINT_COUNT_O6 = 6;  // O6 hand has 6 joints
+            static constexpr int JOINT_COUNT = JOINT_COUNT_O7;  // Default to O7 for backward compatibility
+
+            // Modbus slave addresses
+            static constexpr uint8_t RIGHT_HAND_SLAVE_ID = 0x27;  // Right hand Modbus ID
+            static constexpr uint8_t LEFT_HAND_SLAVE_ID = 0x28;   // Left hand Modbus ID
+
+            // Default Modbus parameters
+            static constexpr const char* DEFAULT_SERIAL_PORT = "/dev/ttyUSB0";
+            static constexpr int DEFAULT_BAUDRATE = 115200;
+            static constexpr char DEFAULT_PARITY = 'N';
+            static constexpr int DEFAULT_DATA_BITS = 8;
+            static constexpr int DEFAULT_STOP_BITS = 1;
+
+            // Function codes
+            static constexpr uint8_t READ_FUNCTION = 0x04;   // Read Input Registers
+            static constexpr uint8_t WRITE_FUNCTION = 0x10;  // Write Multiple Registers
+
+            /**
+             * @brief O7 hand joint limits (in radians)
+             * Joint order: thumb_joint1, thumb_joint2, thumb_joint3, index_joint, middle_joint, ring_joint, pinky_joint
+             * Values from linkerhand_description/xacro/o7.xacro
+             */
+            struct O7
+            {
+                // Thumb joints
+                static constexpr double THUMB_JOINT1_LOWER = 0.0;
+                static constexpr double THUMB_JOINT1_UPPER = 1.1339;  // thumb_joint1 limit
+                static constexpr double THUMB_JOINT2_LOWER = 0.0;
+                static constexpr double THUMB_JOINT2_UPPER = 1.9189;  // thumb_joint2 limit
+                static constexpr double THUMB_JOINT3_LOWER = 0.0;
+                static constexpr double THUMB_JOINT3_UPPER = 0.5146;   // thumb_joint3 limit
+                
+                // Finger joints
+                static constexpr double INDEX_JOINT_LOWER = 0.0;
+                static constexpr double INDEX_JOINT_UPPER = 1.3607;   // index_joint limit
+                static constexpr double MIDDLE_JOINT_LOWER = 0.0;
+                static constexpr double MIDDLE_JOINT_UPPER = 1.3607;  // middle_joint limit
+                static constexpr double RING_JOINT_LOWER = 0.0;
+                static constexpr double RING_JOINT_UPPER = 1.3607;    // ring_joint limit
+                static constexpr double PINKY_JOINT_LOWER = 0.0;
+                static constexpr double PINKY_JOINT_UPPER = 1.3607;  // pinky_joint limit
+            };
+
+            /**
+             * @brief O6 hand joint limits (in radians)
+             * Joint order: thumb_joint1, thumb_joint2, index_joint, middle_joint, ring_joint, pinky_joint
+             * Values from linkerhand_description/xacro/o6.xacro
+             */
+            struct O6
+            {
+                // Thumb joints
+                static constexpr double THUMB_JOINT1_LOWER = 0.0;
+                static constexpr double THUMB_JOINT1_UPPER = 1.36;    // thumb_joint1 limit (using max value)
+                static constexpr double THUMB_JOINT2_LOWER = 0.0;
+                static constexpr double THUMB_JOINT2_UPPER = 0.58;    // thumb_joint2 limit
+                
+                // Finger joints
+                static constexpr double INDEX_JOINT_LOWER = 0.0;
+                static constexpr double INDEX_JOINT_UPPER = 1.60;     // index_joint limit
+                static constexpr double MIDDLE_JOINT_LOWER = 0.0;
+                static constexpr double MIDDLE_JOINT_UPPER = 1.60;   // middle_joint limit
+                static constexpr double RING_JOINT_LOWER = 0.0;
+                static constexpr double RING_JOINT_UPPER = 1.60;    // ring_joint limit
+                static constexpr double PINKY_JOINT_LOWER = 0.0;
+                static constexpr double PINKY_JOINT_UPPER = 1.60;   // pinky_joint limit
+            };
+
+            /**
+             * @brief L6 hand joint limits (in radians)
+             * Joint order: thumb_joint1, thumb_joint2, index_joint, middle_joint, ring_joint, pinky_joint
+             * Values from linkerhand_description/xacro/l6.xacro
+             */
+            struct L6
+            {
+                // Thumb joints
+                static constexpr double THUMB_JOINT1_LOWER = 0.0;
+                static constexpr double THUMB_JOINT1_UPPER = 1.39;   // thumb_joint1 limit
+                static constexpr double THUMB_JOINT2_LOWER = 0.0;
+                static constexpr double THUMB_JOINT2_UPPER = 0.99;    // thumb_joint2 limit
+                
+                // Finger joints
+                static constexpr double INDEX_JOINT_LOWER = 0.0;
+                static constexpr double INDEX_JOINT_UPPER = 1.26;    // index_joint limit
+                static constexpr double MIDDLE_JOINT_LOWER = 0.0;
+                static constexpr double MIDDLE_JOINT_UPPER = 1.26;   // middle_joint limit
+                static constexpr double RING_JOINT_LOWER = 0.0;
+                static constexpr double RING_JOINT_UPPER = 1.26;    // ring_joint limit
+                static constexpr double PINKY_JOINT_LOWER = 0.0;
+                static constexpr double PINKY_JOINT_UPPER = 1.26;   // pinky_joint limit
+            };
+        };
     }
 } // namespace gripper_hardware_common

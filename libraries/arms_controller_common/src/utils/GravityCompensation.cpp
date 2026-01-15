@@ -16,7 +16,7 @@ namespace arms_controller_common
             data_ = pinocchio::Data(model_);
             
             RCLCPP_INFO(rclcpp::get_logger("GravityCompensation"),
-                       "Loaded robot model from %s: %zu joints", 
+                       "Loaded robot model from %s: %d joints",
                        urdf_path.c_str(), model_.nq);
         }
         catch (const std::exception& e)
@@ -34,7 +34,7 @@ namespace arms_controller_common
         data_ = pinocchio::Data(model_);
         
         RCLCPP_INFO(rclcpp::get_logger("GravityCompensation"),
-                   "Initialized gravity compensation from existing Pinocchio model: %zu joints", 
+                   "Initialized gravity compensation from existing Pinocchio model: %d joints",
                    model_.nq);
     }
 
@@ -68,7 +68,7 @@ namespace arms_controller_common
     Eigen::VectorXd GravityCompensation::calculateStaticTorquesEigen(
         const Eigen::VectorXd& joint_positions) const
     {
-        if (joint_positions.size() != static_cast<size_t>(model_.nq))
+        if (joint_positions.size() != model_.nq)
         {
             RCLCPP_WARN(rclcpp::get_logger("GravityCompensation"),
                        "Joint positions size (%zu) doesn't match model size (%zu)",
