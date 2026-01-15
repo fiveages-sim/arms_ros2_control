@@ -351,6 +351,80 @@ namespace arms_ros2_control::command
         return {};
     }
 
+    geometry_msgs::msg::Quaternion HeadMarker::jointAnglesToQuaternion(
+        const std::vector<double>& joint_angles) const
+    {
+        // 将关节角度映射回RPY值
+        std::map<std::string, double> rpy_values = {
+            {"head_roll", 0.0},
+            {"head_pitch", 0.0},
+            {"head_yaw", 0.0}
+        };
+
+        // 从关节角度中提取RPY (反向操作)
+        for (size_t i = 0; i < head_joint_send_order_.size() && i < joint_angles.size(); ++i)
+        {
+            const std::string& joint_name = head_joint_send_order_[i];
+            auto it = head_joint_to_rpy_mapping_.find(joint_name);
+            if (it != head_joint_to_rpy_mapping_.end())
+            {
+                const std::string& rpy_name = it->second;
+
+                // 获取当前关节位置
+                double current_angle = 0.0;
+                auto current_it = current_joint_positions_.find(joint_name);
+                if (current_it != current_joint_positions_.end())
+                {
+                    current_angle = current_it->second;
+                }
+
+                // 从绝对目标角度计算相对角度
+                // 正向: target = current + relative
+                // 反向: relative = target - current
+                double relative_angle = joint_angles[i] - current_angle;
+
+                // 应用反向轴方向系数
+                // 正向: angle_with_direction = relative * direction
+                // 反向: relative = angle_with_direction / direction
+                auto dir_it = head_rpy_axis_direction_.find(rpy_name);
+                if (dir_it != head_rpy_axis_direction_.end() && std::abs(dir_it->second) > 1e-6)
+                {
+                    relative_angle /= dir_it->second;
+                }
+
+                rpy_values[rpy_name] = relative_angle;
+            }
+        }
+
+        // 从RPY创建相对四元数
+        tf2::Quaternion relative_quat;
+        relative_quat.setRPY(rpy_values["head_roll"],
+                             rpy_values["head_pitch"],
+                             rpy_values["head_yaw"]);
+
+        // 获取当前head_link的世界坐标系四元数
+        tf2::Quaternion head_link_quat;
+        try
+        {
+            auto transform = tf_buffer_->lookupTransform(
+                frame_id_, head_link_name_, tf2::TimePointZero);
+            tf2::fromMsg(transform.transform.rotation, head_link_quat);
+        }
+        catch (const tf2::TransformException& ex)
+        {
+            RCLCPP_WARN(node_->get_logger(),
+                "无法获取head_link变换用于反向转换: %s", ex.what());
+            head_link_quat.setRPY(0, 0, 0);
+        }
+
+        // 计算世界坐标系marker四元数
+        // 正向: relative = head_link^(-1) * marker_world
+        // 反向: marker_world = head_link * relative
+        tf2::Quaternion marker_quat_world = head_link_quat * relative_quat;
+
+        return tf2::toMsg(marker_quat_world);
+    }
+
     geometry_msgs::msg::Pose HeadMarker::updateFromJointState(
         const sensor_msgs::msg::JointState::ConstSharedPtr& joint_msg,
         bool is_state_disabled)
@@ -405,7 +479,7 @@ namespace arms_ros2_control::command
                 head_pose_.position.z = transform.transform.translation.z;
 
                 // 只有当位置变化较大时才更新四元数（阈值：0.01米 = 1厘米）
-                const double position_change_threshold = 0.0001;
+                const double position_change_threshold = 0.01;
                 bool should_update_orientation = !last_position_initialized_ || position_change > position_change_threshold;
 
                 // 保存当前位置
@@ -484,11 +558,16 @@ namespace arms_ros2_control::command
         return head_pose_;
     }
 
-    bool HeadMarker::publishTargetJointAngles(bool force) const
+    HeadMarker::PublishResult HeadMarker::publishTargetJointAngles(bool force) const
     {
+        PublishResult result;
+        result.success = false;
+        result.limits_applied = false;
+        result.corrected_pose = head_pose_;  // 从当前姿态开始
+
         if (!joint_publisher_)
         {
-            return false;
+            return result;
         }
 
         // 如果不是强制发送，检查是否需要节流（用于连续发布模式）
@@ -496,27 +575,43 @@ namespace arms_ros2_control::command
         {
             if (!shouldThrottle(1.0 / publish_rate_))
             {
-                return false;
+                return result;
             }
         }
 
         // 使用内部管理的 pose（与 ArmMarker 保持一致）
         // 从四元数提取关节角度
-        std::vector<double> joint_angles = quaternionToJointAngles(head_pose_.orientation);
+        std::vector<double> target_joint_angles = quaternionToJointAngles(head_pose_.orientation);
+        std::vector<double> safe_joint_angles = target_joint_angles;
 
-        // 应用关节限位
+        // 应用关节限位并获取详细信息
         if (head_limits_manager_)
         {
-            joint_angles = head_limits_manager_->applyLimits(joint_angles);
+            auto limit_result = head_limits_manager_->applyLimitsWithInfo(target_joint_angles);
+            safe_joint_angles = limit_result.clamped_positions;
+            result.limits_applied = limit_result.any_clamped;
+
+            // 如果有任何关节被限制，计算修正后的marker姿态
+            if (result.limits_applied)
+            {
+                geometry_msgs::msg::Quaternion safe_quaternion =
+                    jointAnglesToQuaternion(safe_joint_angles);
+                result.corrected_pose.orientation = safe_quaternion;
+                // 保持位置不变
+                result.corrected_pose.position = head_pose_.position;
+
+                RCLCPP_WARN(node_->get_logger(),
+                    "[HeadMarker] 关节超限,marker将被修正到安全位置");
+            }
         }
 
         // 打印实际发布到 topic 的数据
         RCLCPP_INFO(node_->get_logger(), "────────────────────────────────────────────────────────────────");
         std::string publish_str = "[";
-        for (size_t i = 0; i < joint_angles.size(); ++i) {
-            publish_str += std::to_string(joint_angles[i]) + " rad = " +
-                          std::to_string(joint_angles[i] * 180.0 / M_PI) + "°";
-            if (i < joint_angles.size() - 1) publish_str += ", ";
+        for (size_t i = 0; i < safe_joint_angles.size(); ++i) {
+            publish_str += std::to_string(safe_joint_angles[i]) + " rad = " +
+                          std::to_string(safe_joint_angles[i] * 180.0 / M_PI) + "°";
+            if (i < safe_joint_angles.size() - 1) publish_str += ", ";
         }
         publish_str += "]";
         RCLCPP_INFO(node_->get_logger(),
@@ -524,7 +619,7 @@ namespace arms_ros2_control::command
         RCLCPP_INFO(node_->get_logger(), "────────────────────────────────────────────────────────────────");
 
         std_msgs::msg::Float64MultiArray msg;
-        msg.data = joint_angles;
+        msg.data = safe_joint_angles;
         joint_publisher_->publish(msg);
 
         // 即使强制发送，也更新节流时间，避免连续强制发送过于频繁
@@ -533,7 +628,8 @@ namespace arms_ros2_control::command
             last_publish_time_ = node_->now();
         }
 
-        return true;
+        result.success = true;
+        return result;
     }
 
     void HeadMarker::initializeJointIndices(const sensor_msgs::msg::JointState::ConstSharedPtr& joint_msg)

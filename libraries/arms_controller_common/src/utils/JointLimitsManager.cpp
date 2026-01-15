@@ -294,7 +294,57 @@ namespace arms_controller_common
         return applyLimits(joint_names_, target_positions);
     }
 
-    std::function<std::vector<double>(const std::vector<double>&)> 
+    JointLimitsManager::LimitApplicationResult JointLimitsManager::applyLimitsWithInfo(
+        const std::vector<double>& target_positions) const
+    {
+        LimitApplicationResult result;
+        result.clamped_positions = target_positions;
+        result.was_clamped.resize(target_positions.size(), false);
+        result.any_clamped = false;
+
+        if (joint_names_.empty())
+        {
+            RCLCPP_WARN(logger_,
+                "Joint names not set in JointLimitsManager. Use setJointNames() first.");
+            return result;
+        }
+
+        if (result.clamped_positions.size() != joint_names_.size())
+        {
+            RCLCPP_WARN(logger_,
+                       "Target position size (%zu) does not match joint count (%zu), skipping limit check",
+                       result.clamped_positions.size(), joint_names_.size());
+            return result;
+        }
+
+        for (size_t i = 0; i < joint_names_.size() && i < target_positions.size(); ++i)
+        {
+            const std::string& joint_name = joint_names_[i];
+            auto it = joint_limits_.find(joint_name);
+
+            if (it != joint_limits_.end() && it->second.initialized)
+            {
+                const auto& limit = it->second;
+                double original = target_positions[i];
+                double clamped = std::clamp(original, limit.lower, limit.upper);
+
+                if (std::abs(clamped - original) > 1e-6)
+                {
+                    result.was_clamped[i] = true;
+                    result.any_clamped = true;
+                    RCLCPP_DEBUG(logger_,
+                        "Joint %s exceeded limits: %.4f → %.4f (limits: [%.4f, %.4f])",
+                        joint_name.c_str(), original, clamped, limit.lower, limit.upper);
+                }
+
+                result.clamped_positions[i] = clamped;
+            }
+        }
+
+        return result;
+    }
+
+    std::function<std::vector<double>(const std::vector<double>&)>
     JointLimitsManager::createLimitChecker() const
     {
         // Capture joint_names_ by value to ensure thread safety

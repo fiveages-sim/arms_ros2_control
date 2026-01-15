@@ -107,6 +107,28 @@ namespace arms_controller_common
         std::vector<double> applyLimits(const std::vector<double>& target_positions) const;
 
         /**
+         * @brief Result structure for applyLimitsWithInfo
+         *
+         * Contains the clamped positions and information about which joints were limited.
+         */
+        struct LimitApplicationResult {
+            std::vector<double> clamped_positions;  ///< Positions after applying limits
+            std::vector<bool> was_clamped;          ///< True if joint[i] exceeded limits
+            bool any_clamped = false;               ///< Quick check if any joint was limited
+        };
+
+        /**
+         * @brief Apply joint limits and return detailed information
+         *
+         * Similar to applyLimits() but also returns information about which joints
+         * were clamped. Useful when you need to know if limits were applied.
+         *
+         * @param target_positions Target joint positions to clamp
+         * @return LimitApplicationResult with clamped positions and limit info
+         */
+        LimitApplicationResult applyLimitsWithInfo(const std::vector<double>& target_positions) const;
+
+        /**
          * @brief Create a limit checker callback function
          * 
          * This creates a std::function that can be used as a joint limit checker

@@ -261,7 +261,18 @@ namespace arms_ros2_control::command
                 if (current_mode_ == MarkerState::CONTINUOUS)
                 {
                     // 在连续发布模式下，发送头部目标关节位置（使用内部节流）
-                    head_marker_->publishTargetJointAngles();
+                    auto result = head_marker_->publishTargetJointAngles();
+
+                    // 如果应用了限制，更新marker到修正后的位置
+                    if (result.limits_applied && result.success)
+                    {
+                        // 同步更新HeadMarker内部的head_pose_，避免闪烁
+                        head_marker_->setPose(result.corrected_pose);
+
+                        // 更新InteractiveMarkerServer中的marker位置
+                        server_->setPose("head_target", result.corrected_pose);
+                        server_->applyChanges();
+                    }
                 }
             }
         }
@@ -304,7 +315,18 @@ namespace arms_ros2_control::command
             if (head_marker_ && head_marker_->isEnabled())
             {
                 // 单次模式下，强制发送，忽略节流
-                head_marker_->publishTargetJointAngles(true);
+                auto result = head_marker_->publishTargetJointAngles(true);
+
+                // 如果应用了限制，更新marker到修正后的位置
+                if (result.limits_applied && result.success)
+                {
+                    // 同步更新HeadMarker内部的head_pose_，避免闪烁
+                    head_marker_->setPose(result.corrected_pose);
+
+                    // 更新InteractiveMarkerServer中的marker位置
+                    server_->setPose("head_target", result.corrected_pose);
+                    server_->applyChanges();
+                }
             }
             return;
         }

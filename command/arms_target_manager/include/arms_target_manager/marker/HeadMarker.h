@@ -111,11 +111,22 @@ namespace arms_ros2_control::command
         void setPose(const geometry_msgs::msg::Pose& pose) { head_pose_ = pose; }
 
         /**
+         * @brief Result structure for publishTargetJointAngles
+         *
+         * Contains publishing status and corrected pose if limits were applied.
+         */
+        struct PublishResult {
+            bool success = false;              ///< Whether publishing succeeded
+            bool limits_applied = false;       ///< Whether joint limits were applied
+            geometry_msgs::msg::Pose corrected_pose;  ///< Corrected pose if limits applied
+        };
+
+        /**
          * @brief 发布目标关节角度（带内部节流管理）
          * @param force 是否强制发送（忽略节流限制，用于单次发布模式）
-         * @return 是否成功发布
+         * @return PublishResult 包含发布状态和修正后的姿态（如果超限）
          */
-        bool publishTargetJointAngles(bool force = false) const;
+        PublishResult publishTargetJointAngles(bool force = false) const;
 
         /**
          * @brief 获取头部 link 名称
@@ -156,6 +167,14 @@ namespace arms_ros2_control::command
          * @return 如果应该执行返回 true
          */
         bool shouldThrottle(double interval) const;
+
+        /**
+         * @brief 从关节角度反向计算四元数（quaternionToJointAngles的逆操作）
+         * @param joint_angles 绝对关节角度数组
+         * @return 对应的marker四元数（世界坐标系）
+         */
+        geometry_msgs::msg::Quaternion jointAnglesToQuaternion(
+            const std::vector<double>& joint_angles) const;
 
         // ROS 节点和工具
         rclcpp::Node::SharedPtr node_;
