@@ -236,6 +236,7 @@ namespace arms_ros2_control::command
         // 节流管理（每个 marker 独立管理）
         mutable rclcpp::Time last_publish_time_;
         mutable rclcpp::Time last_subscription_update_time_;  // 订阅更新的节流时间戳（限制为30Hz）
+        mutable rclcpp::Time last_marker_command_time_;  // 最后一次由marker发送指令的时间（用于冷却机制）
     };
 } // namespace arms_ros2_control::command
 

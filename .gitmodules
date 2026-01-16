@@ -1,6 +1,7 @@
 [submodule "hardwares/marvin_ros2_control"]
 	path = hardwares/marvin_ros2_control
-	url = https://github.com/fiveages-sim/marvin-ros2-control.git
+	url = git@github.com:fiveages-sim/marvin-ros2-control.git
+	branch = master
 [submodule "hardwares/unitree_ros2_control"]
 	path = hardwares/unitree_ros2_control
 	url = git@github.com:fiveages-sim/unitree-ros2-control.git
@@ -19,10 +20,13 @@
 	branch = main
 [submodule "hardwares/modbus_ros2_control"]
 	path = hardwares/modbus_ros2_control
-	url = https://github.com/fiveages-sim/modbus-ros2-control.git
+	url = git@github.com:fiveages-sim/modbus-ros2-control.git
+	branch = main
 [submodule "libraries/lina_planning"]
 	path = libraries/lina_planning
 	url = git@github.com:fiveages-sim/lina_planning.git
+	branch = main
 [submodule "libraries/ocs2_humanoid"]
 	path = libraries/ocs2_humanoid
 	url = git@github.com:fiveages-sim/ocs2-humanoid.git
+	branch = main
