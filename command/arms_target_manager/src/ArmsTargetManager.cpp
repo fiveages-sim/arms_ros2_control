@@ -672,7 +672,25 @@ namespace arms_ros2_control::command
 
     void ArmsTargetManager::markPendingChanges()
     {
-        pending_changes_.store(true, std::memory_order_release);
+        // 标记有待应用的更改
+        bool was_pending = pending_changes_.exchange(true, std::memory_order_acq_rel);
+        
+        // 如果之前没有待处理的更改，且距离上次应用已经超过最小间隔的一半，
+        // 立即应用一次，减少延迟并避免序列号乱序
+        if (!was_pending && server_)
+        {
+            auto now = node_->now();
+            auto time_since_last = (now - last_marker_update_time_).seconds();
+            
+            // 如果距离上次更新已经超过最小间隔的一半，立即应用
+            // 这样可以减少延迟，同时避免过于频繁的更新
+            if (time_since_last >= marker_update_interval_ * 0.5)
+            {
+                server_->applyChanges();
+                last_marker_update_time_ = now;
+                pending_changes_.store(false, std::memory_order_release);
+            }
+        }
     }
 
     void ArmsTargetManager::markerUpdateTimerCallback()
@@ -685,6 +703,7 @@ namespace arms_ros2_control::command
             if (server_)
             {
                 server_->applyChanges();
+                last_marker_update_time_ = node_->now();
             }
         }
     }
