@@ -85,9 +85,15 @@ namespace arms_ros2_control::command
                 publish_rate_,
                 [this](const std::string& marker_name, const geometry_msgs::msg::Pose& pose)
                 {
+                    // 如果 marker 不显示（enable_interaction = false），只更新数值，不更新可视化
+                    if (!isStateDisabled(current_controller_state_))
+                    {
+                        return;  // marker 不显示时，不更新可视化位置
+                    }
+                    
                     // 单次模式下：只在非禁用状态下更新（HOME/HOLD/MOVEJ），OCS2状态下不更新
                     // 连续模式下：所有状态下都更新（包括OCS2）
-                    if (current_mode_ == MarkerState::SINGLE_SHOT && isStateDisabled(current_controller_state_))
+                    if (current_mode_ == MarkerState::SINGLE_SHOT)
                     {
                         return;  // 单次模式下，OCS2 等禁用状态下不更新
                     }
@@ -95,7 +101,6 @@ namespace arms_ros2_control::command
                     server_->setPose(marker_name, pose);
                     // 标记有待应用的更改，由定时器统一处理
                     markPendingChanges();
-                    
                 });
             
             // 设置状态检查回调（用于控制是否允许 current_pose 更新 marker 的 pose_）
@@ -264,7 +269,8 @@ namespace arms_ros2_control::command
                 head_marker_->setPose(clamped_pose);
 
                 // 如果被限制，更新 marker 位置，让用户看到限制效果
-                if (was_clamped && server_)
+                // 只有在marker显示时才更新可视化
+                if (was_clamped && server_ && isStateDisabled(current_controller_state_))
                 {
                     server_->setPose(marker_name, clamped_pose);
                     // 标记有待应用的更改，由定时器统一处理
@@ -628,11 +634,17 @@ namespace arms_ros2_control::command
             return;
         }
 
+        // 如果 marker 不显示（状态不在禁用列表中），不需要更新
+        if (!isStateDisabled(current_controller_state_))
+        {
+            return;  // marker 不显示时，不进行任何更新操作
+        }
+
         // 使用 HeadMarker 更新
         geometry_msgs::msg::Pose updated_pose = head_marker_->updateFromJointState(
             joint_msg, isStateDisabled(current_controller_state_));
 
-        // 更新 marker
+        // 更新 marker 可视化
         server_->setPose("head_target", updated_pose);
         // 标记有待应用的更改，由定时器统一处理
         markPendingChanges();
@@ -769,7 +781,8 @@ namespace arms_ros2_control::command
         arm_marker->setPose(new_pose);
 
         // 更新 interactive marker 的可视化位置
-        if (server_)
+        // 只有在marker显示时才更新可视化（避免在不显示的状态下不必要的更新）
+        if (server_ && isStateDisabled(current_controller_state_))
         {
             server_->setPose(arm_marker->getMarkerName(), new_pose);
             // 标记有待应用的更改，由定时器统一处理
@@ -881,6 +894,9 @@ namespace arms_ros2_control::command
         arm_marker->setPose(current_pose);
 
         // 更新 interactive marker 的可视化位置
+        // 只有在marker显示时才更新可视化（避免在不显示的状态下不必要的更新）
+        // 注意：updateMarkerPoseIncremental 已经在函数开头检查了 isStateDisabled，
+        // 所以这里一定是在禁用状态下，marker是显示的
         if (server_)
         {
             server_->setPose(arm_marker->getMarkerName(), current_pose);
