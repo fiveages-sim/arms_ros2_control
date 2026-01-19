@@ -182,11 +182,10 @@ def launch_setup(context, *args, **kwargs):
         hand_controller_names_for_target_manager = [c['name'] for c in hand_controllers]
 
     # Prepare parameters using robot_common_launch utility function
-    enable_head_control = context.launch_configurations.get('enable_head', 'true').lower() == 'true'
+    # enable_head_control is now configured via YAML config file, not via launch argument
     arms_target_manager_parameters = prepare_arms_target_manager_parameters(
         task_file_path=task_file_path,
         config_file_path=None,  # Will auto-detect from task file directory
-        enable_head_control=enable_head_control,
         hand_controllers=hand_controller_names_for_target_manager if hand_controller_names_for_target_manager else None
     )
 
@@ -324,11 +323,6 @@ def generate_launch_description():
         description='Enable gripper controllers and gripper control panel'
     )
 
-    enable_head_arg = DeclareLaunchArgument(
-        'enable_head',
-        default_value='true',
-        description='Enable body controllers ( head)'
-    )
 
     # Get launch mode arguments from common utilities
     launch_mode_args = create_launch_mode_arguments()
@@ -340,7 +334,6 @@ def generate_launch_description():
         world_arg,
         enable_arms_target_manager_arg,
         enable_gripper_arg,
-        enable_head_arg,
         *launch_mode_args,  # Unpack the list of arguments
         OpaqueFunction(function=launch_setup),
     ])

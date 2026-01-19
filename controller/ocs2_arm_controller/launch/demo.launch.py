@@ -132,7 +132,6 @@ def launch_setup(context, *args, **kwargs):
     arms_target_manager_parameters = prepare_arms_target_manager_parameters(
         task_file_path=task_file_path,
         config_file_path=None,  # Will auto-detect from task file directory
-        enable_head_control=False,  # Default for demo
         hand_controllers=hand_controller_names_for_target_manager if hand_controller_names_for_target_manager else None
     )
 
