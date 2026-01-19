@@ -107,13 +107,13 @@ namespace arms_ros2_control::command
          * VR左臂pose回调函数
          * @param msg VR pose消息
          */
-        void vrLeftCallback(geometry_msgs::msg::PoseStamped::SharedPtr msg);
+        void vrLeftCallback(geometry_msgs::msg::Pose::SharedPtr msg);
 
         /**
          * VR右臂pose回调函数
          * @param msg VR pose消息
          */
-        void vrRightCallback(geometry_msgs::msg::PoseStamped::SharedPtr msg);
+        void vrRightCallback(geometry_msgs::msg::Pose::SharedPtr msg);
 
         /**
          * 右摇杆回调函数
@@ -184,11 +184,11 @@ namespace arms_ros2_control::command
                                      const Eigen::Quaterniond& orientation);
 
         /**
-         * 将PoseStamped消息转换为Eigen::Matrix4d
-         * @param msg PoseStamped消息
+         * 将Pose消息转换为Eigen::Matrix4d
+         * @param msg Pose消息
          * @return 4x4变换矩阵
          */
-        Eigen::Matrix4d poseMsgToMatrix(geometry_msgs::msg::PoseStamped::SharedPtr msg);
+        Eigen::Matrix4d poseMsgToMatrix(geometry_msgs::msg::Pose::SharedPtr msg);
 
         /**
          * 从4x4矩阵提取位置和方向
@@ -242,8 +242,8 @@ namespace arms_ros2_control::command
         rclcpp::Publisher<geometry_msgs::msg::Pose>::SharedPtr pub_right_target_;
 
         // 订阅器
-        rclcpp::Subscription<geometry_msgs::msg::PoseStamped>::SharedPtr sub_left_;
-        rclcpp::Subscription<geometry_msgs::msg::PoseStamped>::SharedPtr sub_right_;
+        rclcpp::Subscription<geometry_msgs::msg::Pose>::SharedPtr sub_left_;
+        rclcpp::Subscription<geometry_msgs::msg::Pose>::SharedPtr sub_right_;
         rclcpp::Subscription<std_msgs::msg::Bool>::SharedPtr sub_right_thumbstick_;
         rclcpp::Subscription<std_msgs::msg::Bool>::SharedPtr sub_left_thumbstick_;
         rclcpp::Subscription<geometry_msgs::msg::Point>::SharedPtr sub_left_thumbstick_axes_;

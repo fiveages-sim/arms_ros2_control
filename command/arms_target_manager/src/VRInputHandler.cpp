@@ -46,18 +46,18 @@ namespace arms_ros2_control::command
     {
 
         // 创建VR订阅器
-        auto vrLeftCallback = [this](const geometry_msgs::msg::PoseStamped::SharedPtr msg)
+        auto vrLeftCallback = [this](const geometry_msgs::msg::Pose::SharedPtr msg)
         {
             this->vrLeftCallback(msg);
         };
-        sub_left_ = node_->create_subscription<geometry_msgs::msg::PoseStamped>(
+        sub_left_ = node_->create_subscription<geometry_msgs::msg::Pose>(
             "xr_left_ee_pose", 10, vrLeftCallback);
 
-        auto vrRightCallback = [this](const geometry_msgs::msg::PoseStamped::SharedPtr msg)
+        auto vrRightCallback = [this](const geometry_msgs::msg::Pose::SharedPtr msg)
         {
             this->vrRightCallback(msg);
         };
-        sub_right_ = node_->create_subscription<geometry_msgs::msg::PoseStamped>(
+        sub_right_ = node_->create_subscription<geometry_msgs::msg::Pose>(
             "xr_right_ee_pose", 10, vrRightCallback);
 
         // 创建右摇杆订阅器
@@ -290,17 +290,21 @@ namespace arms_ros2_control::command
 
     void VRInputHandler::robotLeftPoseCallback(const geometry_msgs::msg::PoseStamped::SharedPtr msg)
     {
-        Eigen::Matrix4d pose = poseMsgToMatrix(msg);
+        // 直接使用 Pose 版本，避免代码重复
+        auto pose_msg = std::make_shared<geometry_msgs::msg::Pose>(msg->pose);
+        Eigen::Matrix4d pose = poseMsgToMatrix(pose_msg);
         matrixToPosOri(pose, robot_current_left_position_, robot_current_left_orientation_);
     }
 
     void VRInputHandler::robotRightPoseCallback(const geometry_msgs::msg::PoseStamped::SharedPtr msg)
     {
-        Eigen::Matrix4d pose = poseMsgToMatrix(msg);
+        // 直接使用 Pose 版本，避免代码重复
+        auto pose_msg = std::make_shared<geometry_msgs::msg::Pose>(msg->pose);
+        Eigen::Matrix4d pose = poseMsgToMatrix(pose_msg);
         matrixToPosOri(pose, robot_current_right_position_, robot_current_right_orientation_);
     }
 
-    void VRInputHandler::vrLeftCallback(const geometry_msgs::msg::PoseStamped::SharedPtr msg)
+    void VRInputHandler::vrLeftCallback(const geometry_msgs::msg::Pose::SharedPtr msg)
     {
         // 检查更新频率
         auto currentTime = node_->now();
@@ -441,7 +445,7 @@ namespace arms_ros2_control::command
         }
     }
 
-    void VRInputHandler::vrRightCallback(const geometry_msgs::msg::PoseStamped::SharedPtr msg)
+    void VRInputHandler::vrRightCallback(const geometry_msgs::msg::Pose::SharedPtr msg)
     {
         // 右话题接收的是右手柄数据
         right_ee_pose_ = poseMsgToMatrix(msg);
@@ -618,23 +622,24 @@ namespace arms_ros2_control::command
         }
     }
 
-    Eigen::Matrix4d VRInputHandler::poseMsgToMatrix(const geometry_msgs::msg::PoseStamped::SharedPtr msg)
+    Eigen::Matrix4d VRInputHandler::poseMsgToMatrix(const geometry_msgs::msg::Pose::SharedPtr msg)
     {
         Eigen::Matrix4d pose = Eigen::Matrix4d::Identity();
-        pose(0, 3) = msg->pose.position.x;
-        pose(1, 3) = msg->pose.position.y;
-        pose(2, 3) = msg->pose.position.z;
+        pose(0, 3) = msg->position.x;
+        pose(1, 3) = msg->position.y;
+        pose(2, 3) = msg->position.z;
 
         Eigen::Quaterniond q(
-            msg->pose.orientation.w,
-            msg->pose.orientation.x,
-            msg->pose.orientation.y,
-            msg->pose.orientation.z);
+            msg->orientation.w,
+            msg->orientation.x,
+            msg->orientation.y,
+            msg->orientation.z);
         Eigen::Matrix3d rot = q.normalized().toRotationMatrix();
         pose.block<3, 3>(0, 0) = rot;
 
         return pose;
     }
+
 
     void VRInputHandler::matrixToPosOri(const Eigen::Matrix4d& matrix,
                                         Eigen::Vector3d& position,
