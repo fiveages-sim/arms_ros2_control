@@ -15,6 +15,7 @@
 #include <Eigen/Core>
 #include <Eigen/Geometry>
 #include <std_msgs/msg/int32.hpp>
+#include <arms_ros2_control_msgs/msg/vr_controller_state.hpp>
 #include "arms_target_manager/ArmsTargetManager.h"
 
 namespace arms_ros2_control::command
@@ -164,6 +165,12 @@ namespace arms_ros2_control::command
         void rightBButtonCallback(std_msgs::msg::Bool::SharedPtr msg);
 
         /**
+         * 统一控制器状态回调函数（处理所有按钮和轴值）
+         * @param msg VRControllerState消息
+         */
+        void processControllerState(const arms_ros2_control_msgs::msg::VRControllerState::SharedPtr msg);
+
+        /**
          * 更新marker位置（已废弃，保留用于兼容）
          * @param armType 手臂类型 ("left" 或 "right")
          * @param position 位置
@@ -244,14 +251,8 @@ namespace arms_ros2_control::command
         // 订阅器
         rclcpp::Subscription<geometry_msgs::msg::Pose>::SharedPtr sub_left_;
         rclcpp::Subscription<geometry_msgs::msg::Pose>::SharedPtr sub_right_;
-        rclcpp::Subscription<std_msgs::msg::Bool>::SharedPtr sub_right_thumbstick_;
-        rclcpp::Subscription<std_msgs::msg::Bool>::SharedPtr sub_left_thumbstick_;
-        rclcpp::Subscription<geometry_msgs::msg::Point>::SharedPtr sub_left_thumbstick_axes_;
-        rclcpp::Subscription<geometry_msgs::msg::Point>::SharedPtr sub_right_thumbstick_axes_;
-        rclcpp::Subscription<std_msgs::msg::Bool>::SharedPtr sub_left_grip_;
-        rclcpp::Subscription<std_msgs::msg::Bool>::SharedPtr sub_right_grip_;
-        rclcpp::Subscription<std_msgs::msg::Bool>::SharedPtr sub_left_y_button_;
-        rclcpp::Subscription<std_msgs::msg::Bool>::SharedPtr sub_right_b_button_;
+        // 统一控制器状态订阅器
+        rclcpp::Subscription<arms_ros2_control_msgs::msg::VRControllerState>::SharedPtr sub_controller_state_;
         // 机器人 current_pose 订阅已移除，改为在 arms_target_manager_node 中统一处理
         // FSM命令订阅已移除，改为在 arms_target_manager_node 中统一处理
 

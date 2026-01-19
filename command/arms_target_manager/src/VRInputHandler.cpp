@@ -9,6 +9,7 @@
 #include <geometry_msgs/msg/pose.hpp>
 #include <geometry_msgs/msg/point.hpp>
 #include <std_msgs/msg/bool.hpp>
+#include <arms_ros2_control_msgs/msg/vr_controller_state.hpp>
 #include <Eigen/Core>
 #include <Eigen/Geometry>
 
@@ -51,85 +52,29 @@ namespace arms_ros2_control::command
             this->vrLeftCallback(msg);
         };
         sub_left_ = node_->create_subscription<geometry_msgs::msg::Pose>(
-            "xr_left_ee_pose", 10, vrLeftCallback);
+            "/xr/left_ee_pose", 10, vrLeftCallback);
 
         auto vrRightCallback = [this](const geometry_msgs::msg::Pose::SharedPtr msg)
         {
             this->vrRightCallback(msg);
         };
         sub_right_ = node_->create_subscription<geometry_msgs::msg::Pose>(
-            "xr_right_ee_pose", 10, vrRightCallback);
+            "/xr/right_ee_pose", 10, vrRightCallback);
 
-        // 创建右摇杆订阅器
-        auto thumbstickCallback = [this](const std_msgs::msg::Bool::SharedPtr msg)
+        // 创建统一控制器状态订阅器
+        auto controllerStateCallback = [this](const arms_ros2_control_msgs::msg::VRControllerState::SharedPtr msg)
         {
-            this->rightThumbstickCallback(msg);
+            this->processControllerState(msg);
         };
-        sub_right_thumbstick_ = node_->create_subscription<std_msgs::msg::Bool>(
-            "xr_right_thumbstick", 10, thumbstickCallback);
-
-        // 创建左摇杆订阅器
-        auto leftThumbstickCallback = [this](const std_msgs::msg::Bool::SharedPtr msg)
-        {
-            this->leftThumbstickCallback(msg);
-        };
-        sub_left_thumbstick_ = node_->create_subscription<std_msgs::msg::Bool>(
-            "xr_left_thumbstick", 10, leftThumbstickCallback);
-
-        // 注意：机器人 current_pose 订阅已移除，改为在 arms_target_manager_node 中统一处理
-        // 这样可以避免与 ArmMarker 的订阅冲突
-        // current_pose 更新现在通过 robotLeftPoseCallback() 和 robotRightPoseCallback() 方法由外部调用
-
-        // 创建摇杆轴值订阅器
-        auto leftThumbstickAxesCallback = [this](const geometry_msgs::msg::Point::SharedPtr msg)
-        {
-            this->leftThumbstickAxesCallback(msg);
-        };
-        sub_left_thumbstick_axes_ = node_->create_subscription<geometry_msgs::msg::Point>(
-            "xr_left_thumbstick_axes", 10, leftThumbstickAxesCallback);
-
-        auto rightThumbstickAxesCallback = [this](const geometry_msgs::msg::Point::SharedPtr msg)
-        {
-            this->rightThumbstickAxesCallback(msg);
-        };
-        sub_right_thumbstick_axes_ = node_->create_subscription<geometry_msgs::msg::Point>(
-            "xr_right_thumbstick_axes", 10, rightThumbstickAxesCallback);
-
-        // 创建握把按钮订阅器
-        auto leftGripCallback = [this](const std_msgs::msg::Bool::SharedPtr msg)
-        {
-            this->leftGripCallback(msg);
-        };
-        sub_left_grip_ = node_->create_subscription<std_msgs::msg::Bool>(
-            "xr_left_grip", 10, leftGripCallback);
-
-        auto rightGripCallback = [this](const std_msgs::msg::Bool::SharedPtr msg)
-        {
-            this->rightGripCallback(msg);
-        };
-        sub_right_grip_ = node_->create_subscription<std_msgs::msg::Bool>(
-            "xr_right_grip", 10, rightGripCallback);
-
-        // 创建Y按键订阅器
-        auto leftYButtonCallback = [this](const std_msgs::msg::Bool::SharedPtr msg)
-        {
-            this->leftYButtonCallback(msg);
-        };
-        sub_left_y_button_ = node_->create_subscription<std_msgs::msg::Bool>(
-            "xr_left_y_button", 10, leftYButtonCallback);
-
-        auto rightBButtonCallback = [this](const std_msgs::msg::Bool::SharedPtr msg)
-        {
-            this->rightBButtonCallback(msg);
-        };
-        sub_right_b_button_ = node_->create_subscription<std_msgs::msg::Bool>(
-            "xr_right_b_button", 10, rightBButtonCallback);
+        sub_controller_state_ = node_->create_subscription<arms_ros2_control_msgs::msg::VRControllerState>(
+            "/xr/controller_state", 10, controllerStateCallback);
 
         // 注意：FSM命令订阅已移除，改为在 arms_target_manager_node 中统一处理
         // 这样可以避免与 ArmsTargetManager 的订阅冲突
         // FSM状态更新现在通过 fsmCommandCallback() 方法由外部调用
 
         RCLCPP_INFO(node_->get_logger(), "🕹️🕶️🕹️ VRInputHandler created");
+        RCLCPP_INFO(node_->get_logger(), "🕹️🕶️🕹️ Subscribed to unified controller state topic: /xr/controller_state");
         RCLCPP_INFO(node_->get_logger(), "🕹️🕶️🕹️ Thumbstick scaling: linear=%.3f, angular=%.3f", LINEAR_SCALE,
                     ANGULAR_SCALE);
         RCLCPP_INFO(node_->get_logger(),
@@ -1108,6 +1053,73 @@ namespace arms_ros2_control::command
         }
     }
 
+
+    void VRInputHandler::processControllerState(const arms_ros2_control_msgs::msg::VRControllerState::SharedPtr msg)
+    {
+        // 处理所有按钮事件（触发事件，已经过上升沿检测）
+        // 创建Bool消息用于调用现有回调函数
+
+        // 左摇杆按钮
+        if (msg->left_thumbstick_button)
+        {
+            auto thumbstick_msg = std::make_shared<std_msgs::msg::Bool>();
+            thumbstick_msg->data = true;
+            leftThumbstickCallback(thumbstick_msg);
+        }
+
+        // 右摇杆按钮
+        if (msg->right_thumbstick_button)
+        {
+            auto thumbstick_msg = std::make_shared<std_msgs::msg::Bool>();
+            thumbstick_msg->data = true;
+            rightThumbstickCallback(thumbstick_msg);
+        }
+
+        // 左握把按钮
+        if (msg->left_grip_button)
+        {
+            auto grip_msg = std::make_shared<std_msgs::msg::Bool>();
+            grip_msg->data = true;
+            leftGripCallback(grip_msg);
+        }
+
+        // 右握把按钮
+        if (msg->right_grip_button)
+        {
+            auto grip_msg = std::make_shared<std_msgs::msg::Bool>();
+            grip_msg->data = true;
+            rightGripCallback(grip_msg);
+        }
+
+        // 左Y按钮
+        if (msg->left_y_button)
+        {
+            auto y_button_msg = std::make_shared<std_msgs::msg::Bool>();
+            y_button_msg->data = true;
+            leftYButtonCallback(y_button_msg);
+        }
+
+        // 右B按钮
+        if (msg->right_b_button)
+        {
+            auto b_button_msg = std::make_shared<std_msgs::msg::Bool>();
+            b_button_msg->data = true;
+            rightBButtonCallback(b_button_msg);
+        }
+
+        // 处理摇杆轴值
+        auto left_axes_msg = std::make_shared<geometry_msgs::msg::Point>();
+        left_axes_msg->x = msg->left_thumbstick_x;
+        left_axes_msg->y = msg->left_thumbstick_y;
+        left_axes_msg->z = 0.0;
+        leftThumbstickAxesCallback(left_axes_msg);
+
+        auto right_axes_msg = std::make_shared<geometry_msgs::msg::Point>();
+        right_axes_msg->x = msg->right_thumbstick_x;
+        right_axes_msg->y = msg->right_thumbstick_y;
+        right_axes_msg->z = 0.0;
+        rightThumbstickAxesCallback(right_axes_msg);
+    }
 
     void VRInputHandler::fsmCommandCallback(std_msgs::msg::Int32::SharedPtr msg)
     {
