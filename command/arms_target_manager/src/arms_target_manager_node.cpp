@@ -82,23 +82,33 @@ int main(int argc, char** argv)
 
     try
     {
+        // 创建统一的目标位姿发布器（在所有模块之前创建，供 ArmMarker 和 VRInputHandler 共享）
+        // 队列长度统一为 1，只关心最新的目标位姿
+        auto pub_left_target = node->create_publisher<geometry_msgs::msg::Pose>("left_target", 1);
+        auto pub_left_target_stamped = node->create_publisher<geometry_msgs::msg::PoseStamped>("left_target/stamped", 1);
+        auto pub_right_target = node->create_publisher<geometry_msgs::msg::Pose>("right_target", 1);
+        auto pub_right_target_stamped = node->create_publisher<geometry_msgs::msg::PoseStamped>("right_target/stamped", 1);
+
+        RCLCPP_INFO(node->get_logger(), "✅ Created unified target pose publishers (queue_size=1)");
+
         auto target_manager = std::make_unique<ArmsTargetManager>(
             node, dual_arm_mode, control_base_frame, marker_fixed_frame,
             20.0, std::vector<int32_t>{3}, 0.05);
 
-        // 初始化
-        target_manager->initialize();
+        // 初始化（传入统一的发布器）
+        target_manager->initialize(pub_left_target, pub_left_target_stamped,
+                                   pub_right_target, pub_right_target_stamped);
 
         // 创建ControlInputHandler（传入hand_controllers参数）
         auto control_handler = std::make_unique<ControlInputHandler>(
             node, target_manager.get(), linear_scale, angular_scale, hand_controllers);
 
-        // 创建VRInputHandler（如果启用）
+        // 创建VRInputHandler（如果启用，传入统一的发布器）
         std::unique_ptr<VRInputHandler> vr_handler = nullptr;
         if (enable_vr)
         {
             vr_handler = std::make_unique<VRInputHandler>(
-                node, target_manager.get(), vr_update_rate);
+                node, target_manager.get(), pub_left_target, pub_right_target, vr_update_rate);
         }
 
         // 创建 control input 订阅器（用于增量控制）

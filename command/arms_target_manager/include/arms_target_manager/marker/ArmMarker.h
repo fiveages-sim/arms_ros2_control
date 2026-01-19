@@ -69,7 +69,8 @@ namespace arms_ros2_control::command
          * @param control_base_frame 控制基坐标系（目标 pose 会转换到此坐标系发布）
          * @param arm_type 手臂类型（LEFT 或 RIGHT）
          * @param initial_position 初始位置 [x, y, z]
-         * @param target_topic 目标 pose 发布的 topic 名称
+         * @param target_publisher 外部传入的目标 pose 发布器（统一管理，连续发布用）
+         * @param target_stamped_publisher 外部传入的 stamped 发布器（统一管理，单次发布用）
          * @param current_pose_topic 当前 pose 订阅的 topic 名称
          * @param publish_rate 发布频率（Hz，用于节流）
          * @param update_callback 更新回调函数（可选，用于通知外部更新可视化）
@@ -82,7 +83,8 @@ namespace arms_ros2_control::command
             const std::string& control_base_frame,
             ArmType arm_type,
             const std::array<double, 3>& initial_position,
-            const std::string& target_topic,
+            rclcpp::Publisher<geometry_msgs::msg::Pose>::SharedPtr target_publisher,
+            rclcpp::Publisher<geometry_msgs::msg::PoseStamped>::SharedPtr target_stamped_publisher,
             const std::string& current_pose_topic,
             double publish_rate = 20.0,
             UpdateCallback update_callback = nullptr);

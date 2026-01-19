@@ -36,7 +36,11 @@ namespace arms_ros2_control::command
     {
     }
 
-    void ArmsTargetManager::initialize()
+    void ArmsTargetManager::initialize(
+        rclcpp::Publisher<geometry_msgs::msg::Pose>::SharedPtr pub_left_target,
+        rclcpp::Publisher<geometry_msgs::msg::PoseStamped>::SharedPtr pub_left_target_stamped,
+        rclcpp::Publisher<geometry_msgs::msg::Pose>::SharedPtr pub_right_target,
+        rclcpp::Publisher<geometry_msgs::msg::PoseStamped>::SharedPtr pub_right_target_stamped)
     {
         // 创建 MarkerFactory（必须在 Marker 类之前创建）
         marker_factory_ = std::make_unique<MarkerFactory>(
@@ -46,10 +50,11 @@ namespace arms_ros2_control::command
         tf_buffer_ = std::make_shared<tf2_ros::Buffer>(node_->get_clock());
         tf_listener_ = std::make_shared<tf2_ros::TransformListener>(*tf_buffer_);
 
-        // 创建左臂 Marker（带更新回调和状态检查回调）
+        // 创建左臂 Marker（带更新回调和状态检查回调，使用外部发布器）
         left_arm_marker_ = std::make_shared<ArmMarker>(
             node_, marker_factory_, tf_buffer_, marker_fixed_frame_, control_base_frame_,
-            ArmType::LEFT, std::array<double, 3>{0.0, 0.5, 1.0}, "left_target", "left_current_pose",
+            ArmType::LEFT, std::array<double, 3>{0.0, 0.5, 1.0},
+            pub_left_target, pub_left_target_stamped, "left_current_pose",
             publish_rate_,
             [this](const std::string& marker_name, const geometry_msgs::msg::Pose& pose)
             {
@@ -58,30 +63,31 @@ namespace arms_ros2_control::command
                 {
                     return;  // marker 不显示时，不更新可视化位置
                 }
-                
+
                 // 单次模式下：只在非禁用状态下更新（HOME/HOLD/MOVEJ），OCS2状态下不更新
                 // 连续模式下：所有状态下都更新（包括OCS2）
                 if (current_mode_ == MarkerState::SINGLE_SHOT)
                 {
                     return;  // 单次模式下，OCS2 等禁用状态下不更新
                 }
-               
+
                 server_->setPose(marker_name, pose);
                 // 标记有待应用的更改，由定时器统一处理
                 markPendingChanges();
-                
+
             });
-        
+
         // 设置状态检查回调（用于控制是否允许 current_pose 更新 marker 的 pose_）
         left_arm_marker_->setStateCheckCallback(
             [this]() { return !isStateDisabled(current_controller_state_); });
 
-        // 创建右臂 Marker（如果是双臂模式，带更新回调和状态检查回调）
+        // 创建右臂 Marker（如果是双臂模式，带更新回调和状态检查回调，使用外部发布器）
         if (dual_arm_mode_)
         {
             right_arm_marker_ = std::make_shared<ArmMarker>(
                 node_, marker_factory_, tf_buffer_, marker_fixed_frame_, control_base_frame_,
-                ArmType::RIGHT, std::array<double, 3>{0.0, -0.5, 1.0}, "right_target", "right_current_pose",
+                ArmType::RIGHT, std::array<double, 3>{0.0, -0.5, 1.0},
+                pub_right_target, pub_right_target_stamped, "right_current_pose",
                 publish_rate_,
                 [this](const std::string& marker_name, const geometry_msgs::msg::Pose& pose)
                 {
@@ -90,19 +96,19 @@ namespace arms_ros2_control::command
                     {
                         return;  // marker 不显示时，不更新可视化位置
                     }
-                    
+
                     // 单次模式下：只在非禁用状态下更新（HOME/HOLD/MOVEJ），OCS2状态下不更新
                     // 连续模式下：所有状态下都更新（包括OCS2）
                     if (current_mode_ == MarkerState::SINGLE_SHOT)
                     {
                         return;  // 单次模式下，OCS2 等禁用状态下不更新
                     }
-                    
+
                     server_->setPose(marker_name, pose);
                     // 标记有待应用的更改，由定时器统一处理
                     markPendingChanges();
                 });
-            
+
             // 设置状态检查回调（用于控制是否允许 current_pose 更新 marker 的 pose_）
             right_arm_marker_->setStateCheckCallback(
                 [this]() { return !isStateDisabled(current_controller_state_); });

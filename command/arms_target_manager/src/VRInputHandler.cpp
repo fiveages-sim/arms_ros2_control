@@ -24,9 +24,13 @@ namespace arms_ros2_control::command
     VRInputHandler::VRInputHandler(
         rclcpp::Node::SharedPtr node,
         ArmsTargetManager* targetManager,
+        rclcpp::Publisher<geometry_msgs::msg::Pose>::SharedPtr pub_left_target,
+        rclcpp::Publisher<geometry_msgs::msg::Pose>::SharedPtr pub_right_target,
         double updateRate)
         : node_(std::move(node))
           , target_manager_(targetManager)
+          , pub_left_target_(std::move(pub_left_target))
+          , pub_right_target_(std::move(pub_right_target))
           , enabled_(false)
           , is_update_mode_(false)
           , last_thumbstick_state_(false)
@@ -46,9 +50,6 @@ namespace arms_ros2_control::command
           , current_position_(0.0, 0.0, 1.0)
           , current_orientation_(1.0, 0.0, 0.0, 0.0)
     {
-        // 创建目标位姿发布器（直接发布到left_target/right_target）
-        pub_left_target_ = node_->create_publisher<geometry_msgs::msg::Pose>("left_target", 10);
-        pub_right_target_ = node_->create_publisher<geometry_msgs::msg::Pose>("right_target", 10);
 
         // 创建VR订阅器
         auto vrLeftCallback = [this](const geometry_msgs::msg::PoseStamped::SharedPtr msg)

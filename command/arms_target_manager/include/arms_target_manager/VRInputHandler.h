@@ -38,11 +38,15 @@ namespace arms_ros2_control::command
          * 构造函数
          * @param node ROS节点指针
          * @param targetManager ArmsTargetManager指针
+         * @param pub_left_target 外部传入的左臂目标位姿发布器（统一管理）
+         * @param pub_right_target 外部传入的右臂目标位姿发布器（统一管理）
          * @param updateRate 更新频率，默认为500Hz
          */
         VRInputHandler(
             rclcpp::Node::SharedPtr node,
             ArmsTargetManager* targetManager,
+            rclcpp::Publisher<geometry_msgs::msg::Pose>::SharedPtr pub_left_target,
+            rclcpp::Publisher<geometry_msgs::msg::Pose>::SharedPtr pub_right_target,
             double updateRate = 500.0);
 
         ~VRInputHandler() = default;

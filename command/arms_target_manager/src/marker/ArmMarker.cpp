@@ -18,7 +18,8 @@ namespace arms_ros2_control::command
         const std::string& control_base_frame,
         ArmType arm_type,
         const std::array<double, 3>& initial_position,
-        const std::string& target_topic,
+        rclcpp::Publisher<geometry_msgs::msg::Pose>::SharedPtr target_publisher,
+        rclcpp::Publisher<geometry_msgs::msg::PoseStamped>::SharedPtr target_stamped_publisher,
         const std::string& current_pose_topic,
         double publish_rate,
         UpdateCallback update_callback)
@@ -30,8 +31,8 @@ namespace arms_ros2_control::command
           , arm_type_(arm_type)
           , initial_position_(initial_position)
           , publish_rate_(publish_rate)
-          , target_publisher_(node_->create_publisher<geometry_msgs::msg::Pose>(target_topic, 1))
-          , target_stamped_publisher_(node_->create_publisher<geometry_msgs::msg::PoseStamped>(target_topic + "/stamped", 1))
+          , target_publisher_(std::move(target_publisher))
+          , target_stamped_publisher_(std::move(target_stamped_publisher))
           , current_target_frame_id_(control_base_frame)  // 默认使用 control_base_frame
           , update_callback_(std::move(update_callback))
           , last_publish_time_(node_->now())
