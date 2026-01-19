@@ -431,6 +431,12 @@ void JoystickTeleop::processAxes(const sensor_msgs::msg::Joy::SharedPtr msg) {
     double dpad_x = applyDeadzone(msg->axes[axes_map_.dpad_x], axes_map_.dpad_deadzone);
     double dpad_y = applyDeadzone(msg->axes[axes_map_.dpad_y], axes_map_.dpad_deadzone);
 
+    // Apply mirror movement to D-pad if enabled (invert both X and Y)
+    if (!mirror_movement_) {
+        dpad_x = -dpad_x;
+        dpad_y = -dpad_y;
+    }
+
     // Apply speed scaling based on current mode
     double speed_scale = high_speed_mode_ ? high_speed_scale_ : low_speed_scale_;
 
