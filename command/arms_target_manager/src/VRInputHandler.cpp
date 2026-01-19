@@ -33,13 +33,7 @@ namespace arms_ros2_control::command
           , pub_right_target_(std::move(pub_right_target))
           , enabled_(false)
           , is_update_mode_(false)
-          , last_thumbstick_state_(false)
           , mirror_mode_(false)
-          , last_left_thumbstick_state_(false)
-          , last_left_grip_state_(false)
-          , last_right_grip_state_(false)
-          , last_left_y_button_state_(false)
-          , last_right_b_button_state_(false)
           , left_arm_paused_(false)
           , right_arm_paused_(false)
           , left_grip_mode_(false)
@@ -187,11 +181,8 @@ namespace arms_ros2_control::command
             return;
         }
 
-        bool currentThumbstickState = msg->data;
-        bool lastState = last_thumbstick_state_.load();
-
-        // 检测上升沿（按钮按下）
-        if (currentThumbstickState && !lastState)
+        // xr_target_node 已经进行上升沿检测，这里直接响应触发事件
+        if (msg->data)
         {
             // 确保切换到连续发布模式（更稳健，防止用户手动切换回单次模式）
             if (target_manager_ && target_manager_->getCurrentMode() != MarkerState::CONTINUOUS)
@@ -253,8 +244,6 @@ namespace arms_ros2_control::command
                 RCLCPP_INFO(node_->get_logger(), "🕹️🕶️🕹️ Switched to STORAGE mode - Ready to store new base poses!");
             }
         }
-
-        last_thumbstick_state_.store(currentThumbstickState);
     }
 
     void VRInputHandler::leftThumbstickCallback(const std_msgs::msg::Bool::SharedPtr msg)
@@ -265,11 +254,8 @@ namespace arms_ros2_control::command
             return;
         }
 
-        bool currentThumbstickState = msg->data;
-        bool lastState = last_left_thumbstick_state_.load();
-
-        // 检测上升沿（按钮按下）
-        if (currentThumbstickState && !lastState)
+        // xr_target_node 已经进行上升沿检测，这里直接响应触发事件
+        if (msg->data)
         {
             // 切换镜像模式
             mirror_mode_.store(!mirror_mode_.load());
@@ -300,8 +286,6 @@ namespace arms_ros2_control::command
                 RCLCPP_INFO(node_->get_logger(), "🕹️🕶️🕹️ Thumbstick offsets reset!");
             }
         }
-
-        last_left_thumbstick_state_.store(currentThumbstickState);
     }
 
     void VRInputHandler::robotLeftPoseCallback(const geometry_msgs::msg::PoseStamped::SharedPtr msg)
@@ -638,11 +622,8 @@ namespace arms_ros2_control::command
 
     void VRInputHandler::leftGripCallback(const std_msgs::msg::Bool::SharedPtr msg)
     {
-        bool currentGripState = msg->data;
-        bool lastState = last_left_grip_state_.load();
-
-        // 检测上升沿（按钮按下）
-        if (currentGripState && !lastState)
+        // xr_target_node 已经进行上升沿检测，这里直接响应触发事件
+        if (msg->data)
         {
             // 切换控制模式
             left_grip_mode_.store(!left_grip_mode_.load());
@@ -656,17 +637,12 @@ namespace arms_ros2_control::command
                 RCLCPP_INFO(node_->get_logger(), "🟢 Left grip mode: XY translation (Y→X, X→Y)");
             }
         }
-
-        last_left_grip_state_.store(currentGripState);
     }
 
     void VRInputHandler::rightGripCallback(const std_msgs::msg::Bool::SharedPtr msg)
     {
-        bool currentGripState = msg->data;
-        bool lastState = last_right_grip_state_.load();
-
-        // 检测上升沿（按钮按下）
-        if (currentGripState && !lastState)
+        // xr_target_node 已经进行上升沿检测，这里直接响应触发事件
+        if (msg->data)
         {
             // 切换控制模式
             right_grip_mode_.store(!right_grip_mode_.load());
@@ -680,8 +656,6 @@ namespace arms_ros2_control::command
                 RCLCPP_INFO(node_->get_logger(), "🟢 Right grip mode: XY translation (Y→X, X→Y)");
             }
         }
-
-        last_right_grip_state_.store(currentGripState);
     }
 
     void VRInputHandler::leftYButtonCallback(std_msgs::msg::Bool::SharedPtr msg)
@@ -692,11 +666,8 @@ namespace arms_ros2_control::command
             return;
         }
 
-        bool currentYButtonState = msg->data;
-        bool lastState = last_left_y_button_state_.load();
-
-        // 检测上升沿（按键按下）
-        if (currentYButtonState && !lastState)
+        // xr_target_node 已经进行上升沿检测，这里直接响应触发事件
+        if (msg->data)
         {
             // 切换左臂暂停状态
             if (left_arm_paused_.load())
@@ -733,8 +704,6 @@ namespace arms_ros2_control::command
                 RCLCPP_INFO(node_->get_logger(), "🟡 左Y按键按下 - 左臂更新已暂停！");
             }
         }
-
-        last_left_y_button_state_.store(currentYButtonState);
     }
 
     void VRInputHandler::rightBButtonCallback(std_msgs::msg::Bool::SharedPtr msg)
@@ -745,11 +714,8 @@ namespace arms_ros2_control::command
             return;
         }
 
-        bool currentBButtonState = msg->data;
-        bool lastState = last_right_b_button_state_.load();
-
-        // 检测上升沿（按键按下）
-        if (currentBButtonState && !lastState)
+        // xr_target_node 已经进行上升沿检测，这里直接响应触发事件
+        if (msg->data)
         {
             // 切换右臂暂停状态
             if (right_arm_paused_.load())
@@ -786,8 +752,6 @@ namespace arms_ros2_control::command
                 RCLCPP_INFO(node_->get_logger(), "🔵 右B按键按下 - 右臂更新已暂停！");
             }
         }
-
-        last_right_b_button_state_.store(currentBButtonState);
     }
 
     void VRInputHandler::leftThumbstickAxesCallback(const geometry_msgs::msg::Point::SharedPtr msg)

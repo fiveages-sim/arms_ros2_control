@@ -280,13 +280,7 @@ namespace arms_ros2_control::command
         // 状态管理
         std::atomic<bool> enabled_;
         std::atomic<bool> is_update_mode_; // true = 更新模式, false = 存储模式
-        std::atomic<bool> last_thumbstick_state_;
         std::atomic<bool> mirror_mode_; // true = 镜像模式, false = 正常模式
-        std::atomic<bool> last_left_thumbstick_state_;
-        std::atomic<bool> last_left_grip_state_; // 左握把按钮上次状态
-        std::atomic<bool> last_right_grip_state_; // 右握把按钮上次状态
-        std::atomic<bool> last_left_y_button_state_; // 左Y按键上次状态
-        std::atomic<bool> last_right_b_button_state_; // 右B按键上次状态
         std::atomic<bool> left_arm_paused_; // 左臂是否暂停更新（Y按键控制）
         std::atomic<bool> right_arm_paused_; // 右臂是否暂停更新（B按键控制）
         std::atomic<bool> left_grip_mode_; // 左摇杆控制模式：false=XY平移, true=Z轴+Yaw
