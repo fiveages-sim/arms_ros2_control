@@ -9,6 +9,7 @@
 #include <sensor_msgs/msg/joy.hpp>
 #include <arms_ros2_control_msgs/msg/inputs.hpp>
 #include <std_msgs/msg/int32.hpp>
+#include <geometry_msgs/msg/twist.hpp>
 
 class JoystickTeleop final : public rclcpp::Node {
 public:
@@ -20,6 +21,7 @@ private:
     void joy_callback(sensor_msgs::msg::Joy::SharedPtr msg);
     void processButtons(const sensor_msgs::msg::Joy::SharedPtr msg);
     void processAxes(const sensor_msgs::msg::Joy::SharedPtr msg);
+    void processChassisAxes(const sensor_msgs::msg::Joy::SharedPtr msg);
     double applyDeadzone(double value, double deadzone = 0.1) const;
     void loadButtonMapping();
     void printButtonMapping();
@@ -27,6 +29,7 @@ private:
     arms_ros2_control_msgs::msg::Inputs inputs_;
     rclcpp::Publisher<arms_ros2_control_msgs::msg::Inputs>::SharedPtr publisher_;
     rclcpp::Publisher<std_msgs::msg::Int32>::SharedPtr fsm_command_publisher_;
+    rclcpp::Publisher<geometry_msgs::msg::Twist>::SharedPtr chassis_publisher_;
     rclcpp::Subscription<sensor_msgs::msg::Joy>::SharedPtr subscription_;
     
     // Control parameters
@@ -35,6 +38,13 @@ private:
     // State management
     bool enabled_;
     rclcpp::Time lastUpdateTime_;
+    
+    // Control mode (ARM_MODE or CHASSIS_MODE)
+    enum ControlMode {
+        ARM_MODE = 0,      // 控制机械臂
+        CHASSIS_MODE = 1   // 控制底盘
+    };
+    ControlMode current_mode_;
     
     // Button state tracking for edge detection
     bool last_x_pressed_;
@@ -92,6 +102,13 @@ private:
     // Speed scaling factors
     double low_speed_scale_;
     double high_speed_scale_;
+    
+    // Chassis speed scaling factors
+    double chassis_linear_scale_;
+    double chassis_angular_scale_;
+    
+    // Chassis command message
+    geometry_msgs::msg::Twist chassis_cmd_;
     
     // Last FSM command sent (to detect transition to 0)
     int32_t last_fsm_command_;

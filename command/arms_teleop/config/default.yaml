@@ -12,8 +12,8 @@
       x_button: 2          # X 按钮 - 开关夹爪
       y_button: 3          # Y 按钮 - 预留
       lb_button: 4         # 左肩键 - 组合键
-      rb_button: 5         # 右肩键 - 预留
-      back_button: 6       # Back 按钮 - 预留
+      rb_button: 5         # 右肩键 - 切换控制模式（ARM/CHASSIS）
+      back_button: 6       # Back 按钮 - 切换镜像移动模式
       start_button: 7      # Start 按钮 - 特殊命令
       left_stick_button: 9 # 左摇杆按下 - 切换高速/低速模式
       right_stick_button: 10 # 右摇杆按下 - 启用/禁用控制
@@ -40,4 +40,10 @@
     speed:
       low_scale: 0.3   # 低速模式缩放因子 (30% 速度)
       high_scale: 1.0  # 高速模式缩放因子 (100% 速度)
+    
+    # 底盘速度配置 (Chassis Speed)
+    # 底盘控制的线速度和角速度缩放因子
+    chassis:
+      linear_scale: 0.35   # 线速度缩放因子 (m/s)
+      angular_scale: 0.5   # 角速度缩放因子 (rad/s)
 
