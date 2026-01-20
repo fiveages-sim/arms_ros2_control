@@ -135,6 +135,19 @@ namespace arms_ros2_control::command
         std::string getLinkName() const { return head_link_name_; }
 
         /**
+         * @brief 检查头部是否已到达目标位置
+         * @param threshold 位置误差阈值（弧度），默认 0.02 rad ≈ 1.1°
+         * @return 如果所有关节误差都小于阈值返回 true
+         */
+        bool isTargetReached(double threshold = 0.02) const;
+
+        /**
+         * @brief 将 marker 位姿对齐到实际的 head link 位姿
+         * @return 对齐后的 pose，如果失败则返回当前 pose
+         */
+        geometry_msgs::msg::Pose alignToHeadLink();
+
+        /**
          * @brief 获取关节发送顺序
          * @return 关节名称数组（按照控制器期望的顺序）
          */
@@ -222,6 +235,10 @@ namespace arms_ros2_control::command
 
         // 当前关节角度（从 joint_states 更新，用于计算绝对目标角度）
         mutable std::map<std::string, double> current_joint_positions_;
+
+        // 最后发送的目标关节角度（用于到位判断）
+        mutable std::vector<double> last_sent_target_;
+        mutable bool has_sent_target_ = false;
     };
 } // namespace arms_ros2_control::command
 

@@ -454,6 +454,17 @@ namespace arms_ros2_control::command
             }
         }
 
+        // 在非禁用状态（用户操作模式）下，检查是否到达目标位置
+        // 如果到位，将 marker 对齐到实际的 head link 位姿
+        // threshold: 0.02 rad ≈ 1.1°
+        constexpr double kTargetReachedThreshold = 0.02;
+        if (is_state_disabled && isTargetReached(kTargetReachedThreshold))
+        {
+            RCLCPP_INFO(node_->get_logger(),
+                        "[HeadMarker] 头部已到达目标位置，对齐 marker 到 head link");
+            return alignToHeadLink();
+        }
+
         // 先检查状态：如果状态禁用，根据xyz位置变化来判断是否更新四元数
         if (is_state_disabled)
         {
@@ -622,6 +633,10 @@ namespace arms_ros2_control::command
         msg.data = safe_joint_angles;
         joint_publisher_->publish(msg);
 
+        // 保存发送的目标位置（用于到位判断）
+        last_sent_target_ = safe_joint_angles;
+        has_sent_target_ = true;
+
         // 即使强制发送，也更新节流时间，避免连续强制发送过于频繁
         if (force)
         {
@@ -630,6 +645,84 @@ namespace arms_ros2_control::command
 
         result.success = true;
         return result;
+    }
+
+    bool HeadMarker::isTargetReached(double threshold) const
+    {
+        // 检查是否有发送过目标
+        if (!has_sent_target_ || last_sent_target_.empty() || head_joint_send_order_.empty())
+        {
+            RCLCPP_INFO(node_->get_logger(),
+                        "[HeadMarker] isTargetReached: 未发送过目标 (has_sent=%d, target_size=%zu, order_size=%zu)",
+                        has_sent_target_, last_sent_target_.size(), head_joint_send_order_.size());
+            return false;
+        }
+
+        // 检查每个关节的误差
+        std::string error_info = "关节误差: ";
+        bool all_reached = true;
+        for (size_t i = 0; i < head_joint_send_order_.size() && i < last_sent_target_.size(); ++i)
+        {
+            const std::string& joint_name = head_joint_send_order_[i];
+            auto it = current_joint_positions_.find(joint_name);
+            if (it == current_joint_positions_.end())
+            {
+                RCLCPP_INFO(node_->get_logger(),
+                            "[HeadMarker] isTargetReached: 找不到关节 '%s' 的当前位置",
+                            joint_name.c_str());
+                return false;  // 找不到当前位置，无法判断
+            }
+
+            double current = it->second;
+            double target = last_sent_target_[i];
+            double error = std::abs(current - target);
+
+            error_info += joint_name + "=" + std::to_string(error * 180.0 / M_PI) + "°";
+            if (i < head_joint_send_order_.size() - 1) error_info += ", ";
+
+            if (error > threshold)
+            {
+                all_reached = false;
+            }
+        }
+
+        RCLCPP_INFO(node_->get_logger(),
+                    "[HeadMarker] isTargetReached: %s (阈值=%.2f°) | %s",
+                    all_reached ? "YES" : "NO",
+                    threshold * 180.0 / M_PI,
+                    error_info.c_str());
+
+        return all_reached;
+    }
+
+    geometry_msgs::msg::Pose HeadMarker::alignToHeadLink()
+    {
+        try
+        {
+            geometry_msgs::msg::TransformStamped transform = tf_buffer_->lookupTransform(
+                frame_id_, head_link_name_, tf2::TimePointZero);
+
+            // 对齐 xyz 位置
+            head_pose_.position.x = transform.transform.translation.x;
+            head_pose_.position.y = transform.transform.translation.y;
+            head_pose_.position.z = transform.transform.translation.z;
+
+            // 对齐四元数方向
+            head_pose_.orientation = transform.transform.rotation;
+
+            // 重置目标发送状态，避免立即再次触发对齐
+            has_sent_target_ = false;
+
+            RCLCPP_DEBUG(node_->get_logger(),
+                        "[HeadMarker] Marker 已对齐到 head link 位姿");
+        }
+        catch (const tf2::TransformException& ex)
+        {
+            RCLCPP_WARN(node_->get_logger(),
+                        "[HeadMarker] 无法获取 head link 变换进行对齐: %s", ex.what());
+        }
+
+        return head_pose_;
     }
 
     void HeadMarker::initializeJointIndices(const sensor_msgs::msg::JointState::ConstSharedPtr& joint_msg)
