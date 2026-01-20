@@ -15,3 +15,6 @@ bool right_grip_button           # 右握把按钮（按下事件）
 bool right_b_button              # 右B按钮（按下事件）
 float64 right_thumbstick_x       # 右摇杆X轴值 (-1.0 ~ 1.0)
 float64 right_thumbstick_y       # 右摇杆Y轴值 (-1.0 ~ 1.0)
+
+# 镜像模式状态
+bool mirror                      # 镜像模式标志（左摇杆按钮切换）

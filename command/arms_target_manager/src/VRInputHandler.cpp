@@ -83,7 +83,7 @@ namespace arms_ros2_control::command
         RCLCPP_INFO(node_->get_logger(), "🕹️🕶️🕹️ Right thumbstick toggles between STORAGE and UPDATE modes.");
         RCLCPP_INFO(node_->get_logger(), "🕹️🕶️🕹️ STORAGE mode: Store VR and robot base poses (no marker update)");
         RCLCPP_INFO(node_->get_logger(), "🕹️🕶️🕹️ UPDATE mode: Calculate pose differences and update markers");
-        RCLCPP_INFO(node_->get_logger(), "🕹️🕶️🕹️ Left thumbstick toggles MIRROR mode (face-to-face control).");
+        RCLCPP_INFO(node_->get_logger(), "🕹️🕶️🕹️ MIRROR mode: Synced from xr_target_node (left thumbstick toggles)");
     }
 
     bool VRInputHandler::checkNodeExists(const std::shared_ptr<rclcpp::Node>& node, const std::string& targetNodeName)
@@ -193,44 +193,9 @@ namespace arms_ros2_control::command
 
     void VRInputHandler::leftThumbstickCallback(const std_msgs::msg::Bool::SharedPtr msg)
     {
-        // 只在OCS2状态下执行（状态值为3）
-        if (current_fsm_state_.load() != 3)
-        {
-            return;
-        }
-
-        // xr_target_node 已经进行上升沿检测，这里直接响应触发事件
-        if (msg->data)
-        {
-            // 切换镜像模式
-            mirror_mode_.store(!mirror_mode_.load());
-
-            if (mirror_mode_.load())
-            {
-                RCLCPP_INFO(node_->get_logger(),
-                            "🕹️🕶️🕹️ MIRROR mode ENABLED - Left controller controls right arm, right controller controls left arm")
-                ;
-            }
-            else
-            {
-                RCLCPP_INFO(node_->get_logger(), "🕹️🕶️🕹️ MIRROR mode DISABLED - Normal control restored");
-            }
-
-            // 切换镜像模式后，自动切换到STORAGE模式，避免跳变
-            if (is_update_mode_.load())
-            {
-                is_update_mode_.store(false);
-                // 重置摇杆累积偏移
-                left_thumbstick_offset_ = Eigen::Vector3d::Zero();
-                right_thumbstick_offset_ = Eigen::Vector3d::Zero();
-                left_thumbstick_yaw_offset_ = 0.0;
-                right_thumbstick_yaw_offset_ = 0.0;
-                RCLCPP_WARN(node_->get_logger(),
-                            "🕹️🕶️🕹️ Automatically switched to STORAGE mode - Please re-enter UPDATE mode to apply mirror changes")
-                ;
-                RCLCPP_INFO(node_->get_logger(), "🕹️🕶️🕹️ Thumbstick offsets reset!");
-            }
-        }
+        // 左摇杆按钮功能已移至 xr_target_node.py（用于切换镜像模式）
+        // 镜像模式的切换和相关逻辑在 processControllerState 中通过 mirror 字段同步处理
+        // 这里保留空回调函数以保持兼容性
     }
 
     void VRInputHandler::robotLeftPoseCallback(const geometry_msgs::msg::PoseStamped::SharedPtr msg)
@@ -1058,6 +1023,38 @@ namespace arms_ros2_control::command
     {
         // 处理所有按钮事件（触发事件，已经过上升沿检测）
         // 创建Bool消息用于调用现有回调函数
+
+        // 更新镜像模式状态（从 xr_target_node 同步）
+        bool old_mirror_mode = mirror_mode_.load();
+        mirror_mode_.store(msg->mirror);
+
+        // 如果镜像模式发生变化，记录日志并自动切换到 STORAGE 模式
+        if (old_mirror_mode != msg->mirror)
+        {
+            if (msg->mirror)
+            {
+                RCLCPP_INFO(node_->get_logger(),
+                            "🕹️🕶️🕹️ MIRROR mode ENABLED - Left controller controls right arm, right controller controls left arm");
+            }
+            else
+            {
+                RCLCPP_INFO(node_->get_logger(), "🕹️🕶️🕹️ MIRROR mode DISABLED - Normal control restored");
+            }
+
+            // 切换镜像模式后，自动切换到STORAGE模式，避免跳变
+            if (is_update_mode_.load())
+            {
+                is_update_mode_.store(false);
+                // 重置摇杆累积偏移
+                left_thumbstick_offset_ = Eigen::Vector3d::Zero();
+                right_thumbstick_offset_ = Eigen::Vector3d::Zero();
+                left_thumbstick_yaw_offset_ = 0.0;
+                right_thumbstick_yaw_offset_ = 0.0;
+                RCLCPP_WARN(node_->get_logger(),
+                            "🕹️🕶️🕹️ Automatically switched to STORAGE mode - Please re-enter UPDATE mode to apply mirror changes");
+                RCLCPP_INFO(node_->get_logger(), "🕹️🕶️🕹️ Thumbstick offsets reset!");
+            }
+        }
 
         // 左摇杆按钮
         if (msg->left_thumbstick_button)
