@@ -191,7 +191,7 @@ namespace arms_ros2_control::command
         }
     }
 
-    void VRInputHandler::leftThumbstickCallback(const std_msgs::msg::Bool::SharedPtr msg)
+    void VRInputHandler::leftThumbstickCallback(const std_msgs::msg::Bool::SharedPtr /* msg */)
     {
         // 左摇杆按钮功能已移至 xr_target_node.py（用于切换镜像模式）
         // 镜像模式的切换和相关逻辑在 processControllerState 中通过 mirror 字段同步处理
