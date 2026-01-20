@@ -8,6 +8,7 @@
 #include <string>
 #include <vector>
 #include <mutex>
+#include <atomic>
 #include <array>
 #include <functional>
 #include <rclcpp/rclcpp.hpp>
@@ -144,6 +145,16 @@ namespace arms_ros2_control::command
          * @return 如果应该执行返回true
          */
         bool shouldThrottle(rclcpp::Time& last_time, double interval);
+
+        /**
+         * 标记有待应用的更改（由定时器定期检查并应用）
+         */
+        void markPendingChanges();
+
+        /**
+         * 定时器回调：定期检查并应用 marker 更新
+         */
+        void markerUpdateTimerCallback();
 
         /**
          * FSM 命令回调函数（用于状态切换和 marker 形态更新）
@@ -305,6 +316,10 @@ namespace arms_ros2_control::command
         rclcpp::Time last_marker_update_time_;
         double marker_update_interval_; // 最小更新间隔（秒）
         rclcpp::Time last_publish_time_; // 连续发布模式的最后发布时间
+        
+        // 定时器机制：定期检查并应用 marker 更新
+        rclcpp::TimerBase::SharedPtr marker_update_timer_;
+        std::atomic<bool> pending_changes_{false}; // 标记是否有待应用的更改
 
         // Marker 管理（封装所有 marker 相关逻辑）
         std::shared_ptr<ArmMarker> left_arm_marker_;

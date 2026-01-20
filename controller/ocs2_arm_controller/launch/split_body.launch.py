@@ -195,11 +195,10 @@ def launch_setup(context, *args, **kwargs):
         hand_controller_names_for_target_manager = [c['name'] for c in hand_controllers]
 
     # Prepare parameters using robot_common_launch utility function
-    enable_head_control = context.launch_configurations.get('enable_body', 'true').lower() == 'true'
+    # enable_head_control is now configured via YAML config file, not via launch argument
     arms_target_manager_parameters = prepare_arms_target_manager_parameters(
         task_file_path=task_file_path,
         config_file_path=config_file_path,  # Use full body robot's config if available
-        enable_head_control=enable_head_control,
         hand_controllers=hand_controller_names_for_target_manager if hand_controller_names_for_target_manager else None
     )
 

@@ -11,6 +11,7 @@
 #include <cmath>
 #include <algorithm>
 #include <utility>
+#include <chrono>
 #include <arms_controller_common/utils/FSMStateTransitionValidator.h>
 
 namespace arms_ros2_control::command
@@ -66,10 +67,8 @@ namespace arms_ros2_control::command
                 }
                
                 server_->setPose(marker_name, pose);
-                if (shouldThrottle(last_marker_update_time_, marker_update_interval_))
-                {
-                    server_->applyChanges();
-                }
+                // 标记有待应用的更改，由定时器统一处理
+                markPendingChanges();
                 
             });
         
@@ -86,19 +85,22 @@ namespace arms_ros2_control::command
                 publish_rate_,
                 [this](const std::string& marker_name, const geometry_msgs::msg::Pose& pose)
                 {
+                    // 如果 marker 不显示（enable_interaction = false），只更新数值，不更新可视化
+                    if (!isStateDisabled(current_controller_state_))
+                    {
+                        return;  // marker 不显示时，不更新可视化位置
+                    }
+
                     // 单次模式下：只在非禁用状态下更新（HOME/HOLD/MOVEJ），OCS2状态下不更新
                     // 连续模式下：所有状态下都更新（包括OCS2）
-                    if (current_mode_ == MarkerState::SINGLE_SHOT && isStateDisabled(current_controller_state_))
+                    if (current_mode_ == MarkerState::SINGLE_SHOT)
                     {
                         return;  // 单次模式下，OCS2 等禁用状态下不更新
                     }
                     
                     server_->setPose(marker_name, pose);
-                    if (shouldThrottle(last_marker_update_time_, marker_update_interval_))
-                    {
-                        server_->applyChanges();
-                    }
-                    
+                    // 标记有待应用的更改，由定时器统一处理
+                    markPendingChanges();
                 });
             
             // 设置状态检查回调（用于控制是否允许 current_pose 更新 marker 的 pose_）
@@ -153,10 +155,17 @@ namespace arms_ros2_control::command
         // 创建所有发布器和订阅器
         createPublishersAndSubscribers();
 
+        // 创建定时器，定期检查并应用 marker 更新
+        // 使用 marker_update_interval_ 作为定时器周期，确保更新频率一致
+        marker_update_timer_ = node_->create_wall_timer(
+            std::chrono::duration_cast<std::chrono::milliseconds>(
+                std::chrono::duration<double>(marker_update_interval_)),
+            [this]() { markerUpdateTimerCallback(); });
 
         updateMenuVisibility();
 
-        server_->applyChanges();
+        // 标记有待应用的更改，由定时器统一处理
+        markPendingChanges();
 
         // 输出初始化信息
         RCLCPP_INFO(node_->get_logger(),
@@ -271,7 +280,7 @@ namespace arms_ros2_control::command
 
                         // 更新InteractiveMarkerServer中的marker位置
                         server_->setPose("head_target", result.corrected_pose);
-                        server_->applyChanges();
+                        markPendingChanges();
                     }
                 }
             }
@@ -299,7 +308,8 @@ namespace arms_ros2_control::command
         updateMarkerShape();
         updateMenuVisibility();
 
-        server_->applyChanges();
+        // 标记有待应用的更改，由定时器统一处理
+        markPendingChanges();
     }
 
     MarkerState ArmsTargetManager::getCurrentMode() const
@@ -609,7 +619,8 @@ namespace arms_ros2_control::command
 
             // 状态变化时重新创建marker
             updateMarkerShape();
-            server_->applyChanges();
+            // 标记有待应用的更改，由定时器统一处理
+            markPendingChanges();
         }
     }
 
@@ -635,17 +646,20 @@ namespace arms_ros2_control::command
             return;
         }
 
+        // 如果 marker 不显示（状态不在禁用列表中），不需要更新
+        if (!isStateDisabled(current_controller_state_))
+        {
+            return;  // marker 不显示时，不进行任何更新操作
+        }
+
         // 使用 HeadMarker 更新
         geometry_msgs::msg::Pose updated_pose = head_marker_->updateFromJointState(
             joint_msg, isStateDisabled(current_controller_state_));
 
-        // 更新 marker（与其他marker保持一致的模式）
+        // 更新 marker 可视化
         server_->setPose("head_target", updated_pose);
-        // 使用独立的节流时间戳，避免与手部marker的更新冲突
-        if (shouldThrottle(last_marker_update_time_, marker_update_interval_))
-        {
-            server_->applyChanges();
-        }
+        // 标记有待应用的更改，由定时器统一处理
+        markPendingChanges();
     }
 
 
@@ -666,6 +680,44 @@ namespace arms_ros2_control::command
             return true;
         }
         return false;
+    }
+
+    void ArmsTargetManager::markPendingChanges()
+    {
+        // 标记有待应用的更改
+        bool was_pending = pending_changes_.exchange(true, std::memory_order_acq_rel);
+
+        // 如果之前没有待处理的更改，且距离上次应用已经超过最小间隔的一半，
+        // 立即应用一次，减少延迟并避免序列号乱序
+        if (!was_pending && server_)
+        {
+            auto now = node_->now();
+            auto time_since_last = (now - last_marker_update_time_).seconds();
+
+            // 如果距离上次更新已经超过最小间隔的一半，立即应用
+            // 这样可以减少延迟，同时避免过于频繁的更新
+            if (time_since_last >= marker_update_interval_ * 0.5)
+            {
+                server_->applyChanges();
+                last_marker_update_time_ = now;
+                pending_changes_.store(false, std::memory_order_release);
+            }
+        }
+    }
+
+    void ArmsTargetManager::markerUpdateTimerCallback()
+    {
+        // 检查是否有待应用的更改
+        if (pending_changes_.exchange(false, std::memory_order_acq_rel))
+        {
+            // 有更改，应用更新
+            // 定时器回调本身已经是串行的，可以直接调用 applyChanges()
+            if (server_)
+            {
+                server_->applyChanges();
+                last_marker_update_time_ = node_->now();
+            }
+        }
     }
 
 
@@ -760,13 +812,12 @@ namespace arms_ros2_control::command
         arm_marker->setPose(new_pose);
 
         // 更新 interactive marker 的可视化位置
-        if (server_)
+        // 只有在marker显示时才更新可视化（避免在不显示的状态下不必要的更新）
+        if (server_ && isStateDisabled(current_controller_state_))
         {
             server_->setPose(arm_marker->getMarkerName(), new_pose);
-            if (shouldThrottle(last_marker_update_time_, marker_update_interval_))
-            {
-                server_->applyChanges();
-            }
+            // 标记有待应用的更改，由定时器统一处理
+            markPendingChanges();
         }
 
         // 在连续发布模式下，自动发送目标位姿到控制器（使用内部节流）
@@ -874,13 +925,14 @@ namespace arms_ros2_control::command
         arm_marker->setPose(current_pose);
 
         // 更新 interactive marker 的可视化位置
+        // 只有在marker显示时才更新可视化（避免在不显示的状态下不必要的更新）
+        // 注意：updateMarkerPoseIncremental 已经在函数开头检查了 isStateDisabled，
+        // 所以这里一定是在禁用状态下，marker是显示的
         if (server_)
         {
             server_->setPose(arm_marker->getMarkerName(), current_pose);
-            if (shouldThrottle(last_marker_update_time_, marker_update_interval_))
-            {
-                server_->applyChanges();
-            }
+            // 标记有待应用的更改，由定时器统一处理
+            markPendingChanges();
         }
 
         // 在连续发布模式下，自动发送目标位姿到控制器（使用内部节流）

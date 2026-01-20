@@ -12,6 +12,7 @@ find_package(ament_cmake REQUIRED)
 find_package(rclcpp REQUIRED)
 find_package(sensor_msgs REQUIRED)
 find_package(std_msgs REQUIRED)
+find_package(geometry_msgs REQUIRED)
 find_package(arms_ros2_control_msgs REQUIRED)
 find_package(control_msgs REQUIRED)
 find_package(rclcpp_action REQUIRED)
@@ -27,6 +28,7 @@ ament_target_dependencies(
         rclcpp
         sensor_msgs
         std_msgs
+        geometry_msgs
         arms_ros2_control_msgs
         control_msgs
         rclcpp_action
