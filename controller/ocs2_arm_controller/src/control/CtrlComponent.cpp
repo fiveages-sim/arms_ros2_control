@@ -191,6 +191,12 @@ namespace ocs2::mobile_manipulator
         // Update observation time to current time
         observation_.time = node_->now().seconds();
 
+        // Use last sent joint positions for initial state (avoids jumps when entering OCS2 state)
+        for (size_t i = 0; i < joint_names_.size() && i < ctrl_interfaces_.last_sent_joint_positions_.size(); ++i)
+        {
+            observation_.state[i] = ctrl_interfaces_.last_sent_joint_positions_[i];
+        }
+
         TargetTrajectories target_trajectories;
 
         if (dual_arm_mode_)
