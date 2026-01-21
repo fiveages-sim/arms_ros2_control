@@ -350,6 +350,10 @@ namespace basic_joint_controller
             state_interface_map_[interface.get_interface_name()]->push_back(interface);
         }
 
+        // Initialize last sent joint positions from current state
+        // This ensures we have a baseline for smooth transitions to HOLD state
+        ctrl_interfaces_.initializeLastSentPositions();
+
         // Initialize FSM
         current_state_ = state_list_.hold;
         current_state_->enter();

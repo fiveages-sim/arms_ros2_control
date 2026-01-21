@@ -13,7 +13,8 @@ namespace arms_controller_common
         : FSMState(FSMStateName::HOLD, "HOLD", ctrl_interfaces),
           logger_(logger),
           gravity_compensation_(gravity_compensation),
-          joint_position_threshold_(position_threshold)
+          joint_position_threshold_(position_threshold),
+          first_threshold_check_passed_(false)
     {
         if (position_threshold > 0.0)
         {
@@ -31,23 +32,21 @@ namespace arms_controller_common
 
     void StateHold::enter()
     {
-        // Always record current position when entering HOLD state
         size_t num_joints = ctrl_interfaces_.joint_position_state_interface_.size();
         hold_positions_.resize(num_joints);
+        first_threshold_check_passed_ = false;
         for (size_t i = 0; i < num_joints; ++i)
         {
-            auto value = ctrl_interfaces_.joint_position_state_interface_[i].get().get_optional();
-            hold_positions_[i] = value.value_or(0.0);
+            hold_positions_[i] = ctrl_interfaces_.last_sent_joint_positions_[i];
         }
-
+        
         RCLCPP_INFO(logger_,
-                   "HOLD state entered, current positions recorded for %zu joints", 
+                   "HOLD state entered, using last sent joint positions for %zu joints (avoids jumps)", 
                    hold_positions_.size());
     }
 
     void StateHold::run(const rclcpp::Time& time, const rclcpp::Duration& /* period */)
     {
-        // Check position difference between current and hold positions (if threshold > 0)
         if (joint_position_threshold_ > 0.0)
         {
             double max_diff = 0.0;
@@ -71,47 +70,66 @@ namespace arms_controller_common
                 }
             }
 
-            // If position difference exceeds threshold, update hold positions to current positions
-            if (exceeds_threshold)
+            if (!first_threshold_check_passed_)
             {
-                size_t num_joints = ctrl_interfaces_.joint_position_state_interface_.size();
-                hold_positions_.resize(num_joints);
-                for (size_t i = 0; i < num_joints; ++i)
+                if (!exceeds_threshold)
                 {
-                    auto value = ctrl_interfaces_.joint_position_state_interface_[i].get().get_optional();
-                    hold_positions_[i] = value.value_or(0.0);
-                }
-
-                // Throttle warning messages using ROS2 time (log at most once per second)
-                static rclcpp::Time last_warn_time(0, 0, RCL_ROS_TIME);
-                static bool first_warn = true;
-                
-                rclcpp::Duration time_since_last_warn = time - last_warn_time;
-                
-                if (first_warn || time_since_last_warn.seconds() >= 1.0)
-                {
-                    RCLCPP_WARN(logger_,
-                               "HOLD state: position difference (max: %.4f rad) exceeds threshold (%.4f rad). "
-                               "Updating hold positions to current positions for safety.",
+                    first_threshold_check_passed_ = true;
+                    RCLCPP_INFO(logger_,
+                               "HOLD state: first threshold check passed (max diff: %.4f rad <= threshold: %.4f rad). "
+                               "Automatic adjustment enabled.",
                                max_diff, joint_position_threshold_);
-                    last_warn_time = time;
-                    first_warn = false;
+                }
+                else
+                {
+                    RCLCPP_WARN_THROTTLE(logger_, *std::make_shared<rclcpp::Clock>(), 1000,
+                                       "HOLD state: first threshold check failed (max diff: %.4f rad > threshold: %.4f rad). "
+                                       "Waiting for threshold to be satisfied before enabling automatic adjustment.",
+                                       max_diff, joint_position_threshold_);
+                }
+            }
+            else
+            {
+                if (exceeds_threshold)
+                {
+                    size_t num_joints = ctrl_interfaces_.joint_position_state_interface_.size();
+                    hold_positions_.resize(num_joints);
+                    for (size_t i = 0; i < num_joints; ++i)
+                    {
+                        auto value = ctrl_interfaces_.joint_position_state_interface_[i].get().get_optional();
+                        hold_positions_[i] = value.value_or(0.0);
+                    }
+
+                    static rclcpp::Time last_warn_time(0, 0, RCL_ROS_TIME);
+                    static bool first_warn = true;
+                    
+                    rclcpp::Duration time_since_last_warn = time - last_warn_time;
+                    
+                    if (first_warn || time_since_last_warn.seconds() >= 1.0)
+                    {
+                        RCLCPP_WARN(logger_,
+                                   "HOLD state: position difference (max: %.4f rad) exceeds threshold (%.4f rad). "
+                                   "Updating hold positions to current positions for safety.",
+                                   max_diff, joint_position_threshold_);
+                        last_warn_time = time;
+                        first_warn = false;
+                    }
                 }
             }
         }
+        else
+        {
+            first_threshold_check_passed_ = true;
+        }
 
-        // HOLD state maintains the recorded positions
-        // Set position commands to hold positions
         for (size_t i = 0; i < ctrl_interfaces_.joint_position_command_interface_.size() &&
              i < hold_positions_.size(); ++i)
         {
-            std::ignore = ctrl_interfaces_.joint_position_command_interface_[i].get().set_value(hold_positions_[i]);
+            ctrl_interfaces_.setJointPositionCommand(i, hold_positions_[i]);
         }
 
-        // In force control mode, calculate static torques
         if (ctrl_interfaces_.control_mode_ == ControlMode::MIX && gravity_compensation_)
         {
-            // Get current joint positions
             std::vector<double> current_positions;
             for (size_t i = 0; i < ctrl_interfaces_.joint_position_state_interface_.size(); ++i)
             {
@@ -119,18 +137,14 @@ namespace arms_controller_common
                 current_positions.push_back(value.value_or(0.0));
             }
 
-            // Calculate static torques
             std::vector<double> static_torques = 
                 gravity_compensation_->calculateStaticTorques(current_positions);
 
-            // Set effort commands
             for (size_t i = 0; i < ctrl_interfaces_.joint_force_command_interface_.size() && 
                  i < static_torques.size(); ++i)
             {
                 std::ignore = ctrl_interfaces_.joint_force_command_interface_[i].get().set_value(static_torques[i]);
             }
-
-            // Set kp and kd gains for force control if available
             if (ctrl_interfaces_.default_gains_.size() >= 2)
             {
                 double kp = ctrl_interfaces_.default_gains_[0];

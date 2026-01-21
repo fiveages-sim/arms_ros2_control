@@ -351,6 +351,7 @@ namespace ocs2::mobile_manipulator
                         "Position control mode enabled - standard position control interfaces detected");
         }
 
+        ctrl_interfaces_.initializeLastSentPositions();
         // Initialize FSM
         current_state_ = state_list_.hold;
         current_state_->enter();
