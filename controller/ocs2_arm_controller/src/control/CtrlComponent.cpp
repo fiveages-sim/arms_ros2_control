@@ -134,7 +134,7 @@ namespace ocs2::mobile_manipulator
             {
                 for (size_t i = 0; i < joint_names_.size() && i < static_cast<size_t>(future_state.size()); ++i)
                 {
-                    std::ignore = ctrl_interfaces_.joint_position_command_interface_[i].get().set_value(future_state(i));
+                    ctrl_interfaces_.setJointPositionCommand(i, future_state(i));
                 }
                 cached_last_action_ = future_state;
                 last_execute_time_ = time;
@@ -151,7 +151,7 @@ namespace ocs2::mobile_manipulator
 
                 for (size_t i = 0; i < joint_names_.size() && i < static_cast<size_t>(future_state.size()); ++i)
                 {
-                    std::ignore = ctrl_interfaces_.joint_position_command_interface_[i].get().set_value(future_state(i));
+                    ctrl_interfaces_.setJointPositionCommand(i, future_state(i));
                 }
 
                 for (size_t i = 0; i < joint_names_.size() && i < static_cast<size_t>(future_input.size()); ++i)
@@ -179,7 +179,7 @@ namespace ocs2::mobile_manipulator
             for (size_t i = 0; i < joint_names_.size() && i < static_cast<size_t>(optimized_input_.size()); ++i)
             {
                 double new_position = current_positions(i) + optimized_input_(i) * dt;
-                std::ignore = ctrl_interfaces_.joint_position_command_interface_[i].get().set_value(new_position);
+                ctrl_interfaces_.setJointPositionCommand(i, new_position);
             }
         }
         visualizer_->updateEndEffectorTrajectory(mpc_mrt_interface_->getPolicy());
