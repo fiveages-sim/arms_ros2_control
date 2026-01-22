@@ -49,7 +49,6 @@ namespace arms_ros2_control::command
             ArmsTargetManager* targetManager,
             rclcpp::Publisher<geometry_msgs::msg::Pose>::SharedPtr pub_left_target,
             rclcpp::Publisher<geometry_msgs::msg::Pose>::SharedPtr pub_right_target,
-            double updateRate = 500.0,
             const std::vector<std::string>& handControllers = {});
 
         ~VRInputHandler() = default;
@@ -271,10 +270,6 @@ namespace arms_ros2_control::command
         std::atomic<bool> left_grip_mode_; // 左摇杆控制模式：false=XY平移, true=Z轴+Yaw
         std::atomic<bool> right_grip_mode_; // 右摇杆控制模式：false=XY平移, true=Z轴+Yaw
         std::atomic<int32_t> current_fsm_state_; // 当前FSM状态：1=HOME, 2=HOLD, 3=OCS2, 100=REST
-
-        // 时间控制
-        rclcpp::Time last_update_time_;
-        double update_rate_;
 
         // VR base poses（摇杆按下时存储）
         Eigen::Vector3d vr_base_left_position_ = Eigen::Vector3d::Zero();

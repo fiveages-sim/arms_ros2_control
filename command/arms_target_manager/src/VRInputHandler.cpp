@@ -29,7 +29,6 @@ namespace arms_ros2_control::command
         ArmsTargetManager* targetManager,
         rclcpp::Publisher<geometry_msgs::msg::Pose>::SharedPtr pub_left_target,
         rclcpp::Publisher<geometry_msgs::msg::Pose>::SharedPtr pub_right_target,
-        double updateRate,
         const std::vector<std::string>& handControllers)
         : node_(std::move(node))
           , target_manager_(targetManager)
@@ -43,8 +42,6 @@ namespace arms_ros2_control::command
           , left_grip_mode_(false)
           , right_grip_mode_(false)
           , current_fsm_state_(2)  // 默认HOLD状态
-          , last_update_time_(node_->now())
-          , update_rate_(updateRate)
           , hand_controllers_(handControllers)
           , left_gripper_open_(false)
           , right_gripper_open_(false)
@@ -258,17 +255,6 @@ namespace arms_ros2_control::command
 
     void VRInputHandler::vrLeftCallback(const geometry_msgs::msg::Pose::SharedPtr msg)
     {
-        // 检查更新频率
-        auto currentTime = node_->now();
-        double timeSinceLastUpdate = (currentTime - last_update_time_).seconds();
-        double updateInterval = 1.0 / update_rate_;
-
-        if (timeSinceLastUpdate < updateInterval)
-        {
-            return;
-        }
-        last_update_time_ = currentTime;
-
         if (checkNodeExists(node_, XR_NODE_NAME) && !enabled_.load())
         {
             RCLCPP_INFO_THROTTLE(node_->get_logger(), *node_->get_clock(), 5000,
