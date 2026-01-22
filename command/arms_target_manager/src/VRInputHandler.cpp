@@ -14,7 +14,6 @@
 #include <Eigen/Geometry>
 #include <algorithm>
 #include <cctype>
-#include <chrono>
 
 namespace arms_ros2_control::command
 {
@@ -107,8 +106,10 @@ namespace arms_ros2_control::command
         sub_thumbstick_axes_ = node_->create_subscription<geometry_msgs::msg::Twist>(
             "/xr/thumbstick_axes", 10, thumbstickAxesCallback);
 
-        // 创建 FSM 命令发布器（用于发送FSM状态切换命令）
-        pub_fsm_command_ = node_->create_publisher<std_msgs::msg::Int32>("/fsm_command", 10);
+        // 创建 FSM 命令发布器（使用通用工具类，自动处理command=100的特殊情况）
+        auto pub_fsm_command = node_->create_publisher<std_msgs::msg::Int32>("/fsm_command", 10);
+        fsm_command_publisher_ = std::make_unique<arms_controller_common::FSMCommandPublisher>(
+            node_, pub_fsm_command);
 
         // 注意：FSM命令订阅已移除，改为在 arms_target_manager_node 中统一处理
         // 这样可以避免与 ArmsTargetManager 的订阅冲突
@@ -211,34 +212,10 @@ namespace arms_ros2_control::command
 
     void VRInputHandler::sendFsmCommand(int32_t command)
     {
-        // 发布FSM命令消息（参考 CtrlComponent::publishFsmCommand 的实现）
-        auto msg = std_msgs::msg::Int32();
-        msg.data = command;
-        pub_fsm_command_->publish(msg);
-
-        // 特殊处理：command=100后延迟100ms发送command=0来重置控制器的防抖标志
-        // 参考RViz的实现：需要给控制器足够的时间处理command=100
-        if (command == 100)
+        // 使用通用工具类发布FSM命令（自动处理command=100的特殊情况）
+        if (fsm_command_publisher_)
         {
-            // 如果已有定时器在运行，先取消
-            if (fsm_reset_timer_)
-            {
-                fsm_reset_timer_->cancel();
-            }
-            
-            // 创建单次定时器延迟发送重置命令
-            fsm_reset_timer_ = node_->create_wall_timer(
-                std::chrono::milliseconds(100),
-                [this]() {
-                    auto reset_msg = std_msgs::msg::Int32();
-                    reset_msg.data = 0;
-                    pub_fsm_command_->publish(reset_msg);
-                    RCLCPP_DEBUG(node_->get_logger(), "📤 延迟发送重置命令 (command=0) 以重置防抖");
-                    
-                    // 取消定时器（单次执行）
-                    fsm_reset_timer_->cancel();
-                    fsm_reset_timer_.reset();
-                });
+            fsm_command_publisher_->publishCommand(command);
         }
     }
 

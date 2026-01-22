@@ -17,6 +17,7 @@
 #include <Eigen/Geometry>
 #include <std_msgs/msg/int32.hpp>
 #include "arms_target_manager/ArmsTargetManager.h"
+#include "arms_controller_common/utils/FSMCommandPublisher.h"
 
 namespace arms_ros2_control::command
 {
@@ -237,8 +238,8 @@ namespace arms_ros2_control::command
         // 发布器（用于直接发布到left_target/right_target）
         rclcpp::Publisher<geometry_msgs::msg::Pose>::SharedPtr pub_left_target_;
         rclcpp::Publisher<geometry_msgs::msg::Pose>::SharedPtr pub_right_target_;
-        // FSM命令发布器（用于发送FSM状态切换命令）
-        rclcpp::Publisher<std_msgs::msg::Int32>::SharedPtr pub_fsm_command_;
+        // FSM命令发布器（使用通用工具类，自动处理command=100的特殊情况）
+        std::unique_ptr<arms_controller_common::FSMCommandPublisher> fsm_command_publisher_;
 
         // 订阅器
         rclcpp::Subscription<geometry_msgs::msg::Pose>::SharedPtr sub_left_;
@@ -252,9 +253,6 @@ namespace arms_ros2_control::command
         rclcpp::Subscription<std_msgs::msg::Int32>::SharedPtr sub_right_gripper_state_;
         // 机器人 current_pose 订阅已移除，改为在 arms_target_manager_node 中统一处理
         // FSM命令订阅已移除，改为在 arms_target_manager_node 中统一处理
-        
-        // FSM命令重置定时器（用于command=100后的延迟重置）
-        rclcpp::TimerBase::SharedPtr fsm_reset_timer_;
 
         // VR pose参数
         Eigen::Matrix4d left_ee_pose_ = Eigen::Matrix4d::Identity();
