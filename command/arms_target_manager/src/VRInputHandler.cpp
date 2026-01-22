@@ -14,6 +14,7 @@
 #include <Eigen/Geometry>
 #include <algorithm>
 #include <cctype>
+#include <chrono>
 
 namespace arms_ros2_control::command
 {
@@ -105,6 +106,9 @@ namespace arms_ros2_control::command
         };
         sub_thumbstick_axes_ = node_->create_subscription<geometry_msgs::msg::Twist>(
             "/xr/thumbstick_axes", 10, thumbstickAxesCallback);
+
+        // 创建 FSM 命令发布器（用于发送FSM状态切换命令）
+        pub_fsm_command_ = node_->create_publisher<std_msgs::msg::Int32>("/fsm_command", 10);
 
         // 注意：FSM命令订阅已移除，改为在 arms_target_manager_node 中统一处理
         // 这样可以避免与 ArmsTargetManager 的订阅冲突
@@ -203,6 +207,63 @@ namespace arms_ros2_control::command
         right_gripper_open_.store(msg->data == 1);
         RCLCPP_DEBUG(node_->get_logger(), "🕹️🕶️🕹️ Right gripper state synced: %s", 
                      (msg->data == 1) ? "open" : "close");
+    }
+
+    void VRInputHandler::sendFsmCommand(int32_t command)
+    {
+        // 创建并发布FSM命令消息
+        auto msg = std_msgs::msg::Int32();
+        msg.data = command;
+        pub_fsm_command_->publish(msg);
+
+        // 命令名称映射
+        const char* command_names[] = {
+            "重置",    // 0
+            "HOME",    // 1
+            "HOLD",    // 2
+            "OCS2",    // 3
+            "未知",    // 4-99
+            "切换姿态(REST)"  // 100
+        };
+
+        const char* command_name = "未知";
+        if (command == 0)
+            command_name = command_names[0];
+        else if (command == 1)
+            command_name = command_names[1];
+        else if (command == 2)
+            command_name = command_names[2];
+        else if (command == 3)
+            command_name = command_names[3];
+        else if (command == 100)
+            command_name = command_names[5];
+
+        RCLCPP_DEBUG(node_->get_logger(), "📤 发送FSM命令: %s (command=%d)", command_name, command);
+
+        // 特殊处理：command=100后延迟100ms发送command=0来重置控制器的防抖标志
+        // 参考RViz的实现：需要给控制器足够的时间处理command=100
+        if (command == 100)
+        {
+            // 如果已有定时器在运行，先取消
+            if (fsm_reset_timer_)
+            {
+                fsm_reset_timer_->cancel();
+            }
+            
+            // 创建单次定时器延迟发送重置命令
+            fsm_reset_timer_ = node_->create_wall_timer(
+                std::chrono::milliseconds(100),
+                [this]() {
+                    auto reset_msg = std_msgs::msg::Int32();
+                    reset_msg.data = 0;
+                    pub_fsm_command_->publish(reset_msg);
+                    RCLCPP_DEBUG(node_->get_logger(), "📤 延迟发送重置命令 (command=0) 以重置防抖");
+                    
+                    // 取消定时器（单次执行）
+                    fsm_reset_timer_->cancel();
+                    fsm_reset_timer_.reset();
+                });
+        }
     }
 
     bool VRInputHandler::checkNodeExists(const std::shared_ptr<rclcpp::Node>& node, const std::string& targetNodeName)
@@ -1205,6 +1266,55 @@ namespace arms_ros2_control::command
 
                 RCLCPP_INFO(node_->get_logger(), "🔵 右扳机按下！%s夹爪已%s",
                             is_target_left_arm ? "左" : "右", (command == 1) ? "打开" : "关闭");
+                break;
+            }
+            case 11: // 右A按钮（FSM状态控制）
+            {
+                // 根据当前FSM状态发送相应的转换命令
+                int32_t current_state = current_fsm_state_.load();
+                
+                if (current_state == 2)  // HOLD
+                {
+                    // HOLD → OCS2
+                    sendFsmCommand(3);
+                    RCLCPP_INFO(node_->get_logger(), "➡️ 右A按钮: HOLD → OCS2");
+                }
+                else if (current_state == 1)  // HOME
+                {
+                    // HOME → HOLD
+                    sendFsmCommand(2);
+                    RCLCPP_INFO(node_->get_logger(), "➡️ 右A按钮: HOME → HOLD");
+                }
+                else if (current_state == 3)  // OCS2
+                {
+                    // OCS2无法继续前进
+                    RCLCPP_WARN(node_->get_logger(), "⚠️ 右A按钮: 已在OCS2，无法继续前进");
+                }
+                break;
+            }
+            case 12: // 左X按钮（FSM状态控制）
+            {
+                // 根据当前FSM状态发送相应的转换命令
+                int32_t current_state = current_fsm_state_.load();
+                
+                if (current_state == 3)  // OCS2
+                {
+                    // OCS2 → HOLD
+                    sendFsmCommand(2);
+                    RCLCPP_INFO(node_->get_logger(), "⬅️ 左X按钮: OCS2 → HOLD");
+                }
+                else if (current_state == 2)  // HOLD
+                {
+                    // HOLD → HOME
+                    sendFsmCommand(1);
+                    RCLCPP_INFO(node_->get_logger(), "⬅️ 左X按钮: HOLD → HOME");
+                }
+                else if (current_state == 1)  // HOME
+                {
+                    // HOME状态下，X按钮切换姿态 (HOME ↔ REST)
+                    sendFsmCommand(100);
+                    RCLCPP_INFO(node_->get_logger(), "🔄 左X按钮: 在HOME状态，切换姿态 (HOME ↔ REST)");
+                }
                 break;
             }
             case 0:  // 无事件
