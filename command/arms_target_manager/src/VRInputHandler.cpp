@@ -9,7 +9,6 @@
 #include <geometry_msgs/msg/pose.hpp>
 #include <geometry_msgs/msg/point.hpp>
 #include <geometry_msgs/msg/twist.hpp>
-#include <std_msgs/msg/bool.hpp>
 #include <std_msgs/msg/int32.hpp>
 #include <Eigen/Core>
 #include <Eigen/Geometry>
@@ -46,8 +45,6 @@ namespace arms_ros2_control::command
           , current_fsm_state_(2)  // 默认HOLD状态
           , last_update_time_(node_->now())
           , update_rate_(updateRate)
-          , current_position_(0.0, 0.0, 1.0)
-          , current_orientation_(1.0, 0.0, 0.0, 0.0)
           , hand_controllers_(handControllers)
           , left_gripper_open_(false)
           , right_gripper_open_(false)
@@ -514,33 +511,6 @@ namespace arms_ros2_control::command
                 // 存储模式：只存储VR pose，不更新marker
                 // 不计算和发布目标位姿
             }
-        }
-    }
-
-    void VRInputHandler::updateMarkerPose(const std::string& armType,
-                                          const Eigen::Vector3d& position,
-                                          const Eigen::Quaterniond& orientation)
-    {
-        if (target_manager_)
-        {
-            // 转换为geometry_msgs格式
-            geometry_msgs::msg::Point pos;
-            pos.x = position.x();
-            pos.y = position.y();
-            pos.z = position.z();
-
-            geometry_msgs::msg::Quaternion ori;
-            ori.w = orientation.w();
-            ori.x = orientation.x();
-            ori.y = orientation.y();
-            ori.z = orientation.z();
-
-            // 使用ArmsTargetManager设置marker位置
-            target_manager_->setMarkerPose(armType, pos, ori);
-
-            // 输出调试信息
-            RCLCPP_INFO(node_->get_logger(), "🕹️🕶️🕹️ Updated %s arm marker position: [%.3f, %.3f, %.3f]",
-                        armType.c_str(), position.x(), position.y(), position.z());
         }
     }
 

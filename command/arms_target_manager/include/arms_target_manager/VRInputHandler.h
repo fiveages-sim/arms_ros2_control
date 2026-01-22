@@ -7,14 +7,12 @@
 #include <string>
 #include <vector>
 #include <map>
-#include <mutex>
 #include <atomic>
 #include <rclcpp/rclcpp.hpp>
 #include <geometry_msgs/msg/pose_stamped.hpp>
 #include <geometry_msgs/msg/pose.hpp>
 #include <geometry_msgs/msg/point.hpp>
 #include <geometry_msgs/msg/twist.hpp>
-#include <std_msgs/msg/bool.hpp>
 #include <Eigen/Core>
 #include <Eigen/Geometry>
 #include <std_msgs/msg/int32.hpp>
@@ -168,16 +166,6 @@ namespace arms_ros2_control::command
         void rightGripperStateCallback(const std_msgs::msg::Int32::SharedPtr msg);
 
         /**
-         * 更新marker位置（已废弃，保留用于兼容）
-         * @param armType 手臂类型 ("left" 或 "right")
-         * @param position 位置
-         * @param orientation 方向
-         */
-        void updateMarkerPose(const std::string& armType,
-                              const Eigen::Vector3d& position,
-                              const Eigen::Quaterniond& orientation);
-
-        /**
          * 直接发布目标位姿到left_target/right_target话题（解耦模式，无坐标转换）
          * @param armType 手臂类型 ("left" 或 "right")
          * @param position 位置（已在目标坐标系下）
@@ -274,12 +262,6 @@ namespace arms_ros2_control::command
         Eigen::Vector3d prev_calculated_right_position_ = Eigen::Vector3d::Zero();
         Eigen::Quaterniond prev_calculated_right_orientation_ = Eigen::Quaterniond::Identity();
 
-        // 用于变化检测的之前VR pose（存储模式）
-        Eigen::Vector3d prev_vr_left_position_ = Eigen::Vector3d::Zero();
-        Eigen::Quaterniond prev_vr_left_orientation_ = Eigen::Quaterniond::Identity();
-        Eigen::Vector3d prev_vr_right_position_ = Eigen::Vector3d::Zero();
-        Eigen::Quaterniond prev_vr_right_orientation_ = Eigen::Quaterniond::Identity();
-
         // 状态管理
         std::atomic<bool> enabled_;
         std::atomic<bool> is_update_mode_; // true = 更新模式, false = 存储模式
@@ -288,16 +270,11 @@ namespace arms_ros2_control::command
         std::atomic<bool> right_arm_paused_; // 右臂是否暂停更新（B按键控制）
         std::atomic<bool> left_grip_mode_; // 左摇杆控制模式：false=XY平移, true=Z轴+Yaw
         std::atomic<bool> right_grip_mode_; // 右摇杆控制模式：false=XY平移, true=Z轴+Yaw
-        std::mutex state_mutex_;
         std::atomic<int32_t> current_fsm_state_; // 当前FSM状态：1=HOME, 2=HOLD, 3=OCS2, 100=REST
 
         // 时间控制
         rclcpp::Time last_update_time_;
         double update_rate_;
-
-        // 当前VR位置和方向（用于兼容性）
-        Eigen::Vector3d current_position_;
-        Eigen::Quaterniond current_orientation_;
 
         // VR base poses（摇杆按下时存储）
         Eigen::Vector3d vr_base_left_position_ = Eigen::Vector3d::Zero();
