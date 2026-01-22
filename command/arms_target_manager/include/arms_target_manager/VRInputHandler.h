@@ -11,11 +11,11 @@
 #include <geometry_msgs/msg/pose_stamped.hpp>
 #include <geometry_msgs/msg/pose.hpp>
 #include <geometry_msgs/msg/point.hpp>
+#include <geometry_msgs/msg/twist.hpp>
 #include <std_msgs/msg/bool.hpp>
 #include <Eigen/Core>
 #include <Eigen/Geometry>
 #include <std_msgs/msg/int32.hpp>
-#include <arms_ros2_control_msgs/msg/vr_controller_state.hpp>
 #include "arms_target_manager/ArmsTargetManager.h"
 
 namespace arms_ros2_control::command
@@ -129,16 +129,20 @@ namespace arms_ros2_control::command
         void leftThumbstickCallback(std_msgs::msg::Bool::SharedPtr msg);
 
         /**
-         * 左摇杆轴值回调函数
-         * @param msg 摇杆轴值消息 (x, y, z)
+         * 摇杆轴值回调函数（合并处理左右摇杆）
+         * @param msg Twist消息，linear.x/y 表示左摇杆，angular.x/y 表示右摇杆
          */
-        void leftThumbstickAxesCallback(geometry_msgs::msg::Point::SharedPtr msg);
-
+        void thumbstickAxesCallback(const geometry_msgs::msg::Twist::SharedPtr msg);
+        
         /**
-         * 右摇杆轴值回调函数
-         * @param msg 摇杆轴值消息 (x, y, z)
+         * 处理左摇杆轴值（内部辅助函数）
          */
-        void rightThumbstickAxesCallback(geometry_msgs::msg::Point::SharedPtr msg);
+        void processLeftThumbstickAxes();
+        
+        /**
+         * 处理右摇杆轴值（内部辅助函数）
+         */
+        void processRightThumbstickAxes();
 
         /**
          * 左握把按钮回调函数
@@ -165,10 +169,10 @@ namespace arms_ros2_control::command
         void rightBButtonCallback(std_msgs::msg::Bool::SharedPtr msg);
 
         /**
-         * 统一控制器状态回调函数（处理所有按钮和轴值）
-         * @param msg VRControllerState消息
+         * 按钮事件回调函数（处理按钮事件数字）
+         * @param msg Int32消息，包含按钮事件数字 (0=无事件, 1-6=按钮按下, 7=mirror启用, 8=mirror禁用)
          */
-        void processControllerState(const arms_ros2_control_msgs::msg::VRControllerState::SharedPtr msg);
+        void processButtonEvent(const std_msgs::msg::Int32::SharedPtr msg);
 
         /**
          * 更新marker位置（已废弃，保留用于兼容）
@@ -251,8 +255,10 @@ namespace arms_ros2_control::command
         // 订阅器
         rclcpp::Subscription<geometry_msgs::msg::Pose>::SharedPtr sub_left_;
         rclcpp::Subscription<geometry_msgs::msg::Pose>::SharedPtr sub_right_;
-        // 统一控制器状态订阅器
-        rclcpp::Subscription<arms_ros2_control_msgs::msg::VRControllerState>::SharedPtr sub_controller_state_;
+        // 按钮事件订阅器（Int32类型）
+        rclcpp::Subscription<std_msgs::msg::Int32>::SharedPtr sub_controller_state_;
+        // 摇杆轴值订阅器（合并订阅左右摇杆，使用 Twist 消息）
+        rclcpp::Subscription<geometry_msgs::msg::Twist>::SharedPtr sub_thumbstick_axes_;
         // 机器人 current_pose 订阅已移除，改为在 arms_target_manager_node 中统一处理
         // FSM命令订阅已移除，改为在 arms_target_manager_node 中统一处理
 

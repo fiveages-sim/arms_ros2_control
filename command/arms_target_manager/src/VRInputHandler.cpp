@@ -8,8 +8,9 @@
 #include <geometry_msgs/msg/pose_stamped.hpp>
 #include <geometry_msgs/msg/pose.hpp>
 #include <geometry_msgs/msg/point.hpp>
+#include <geometry_msgs/msg/twist.hpp>
 #include <std_msgs/msg/bool.hpp>
-#include <arms_ros2_control_msgs/msg/vr_controller_state.hpp>
+#include <std_msgs/msg/int32.hpp>
 #include <Eigen/Core>
 #include <Eigen/Geometry>
 
@@ -61,20 +62,30 @@ namespace arms_ros2_control::command
         sub_right_ = node_->create_subscription<geometry_msgs::msg::Pose>(
             "/xr/right_ee_pose", 10, vrRightCallback);
 
-        // 创建统一控制器状态订阅器
-        auto controllerStateCallback = [this](const arms_ros2_control_msgs::msg::VRControllerState::SharedPtr msg)
+        // 创建按钮事件订阅器（Int32类型）
+        auto controllerStateCallback = [this](const std_msgs::msg::Int32::SharedPtr msg)
         {
-            this->processControllerState(msg);
+            this->processButtonEvent(msg);
         };
-        sub_controller_state_ = node_->create_subscription<arms_ros2_control_msgs::msg::VRControllerState>(
+        sub_controller_state_ = node_->create_subscription<std_msgs::msg::Int32>(
             "/xr/controller_state", 10, controllerStateCallback);
+        
+        // 创建摇杆轴值订阅器（合并订阅左右摇杆，使用 Twist 消息）
+        // linear.x/y 表示左摇杆，angular.x/y 表示右摇杆
+        auto thumbstickAxesCallback = [this](const geometry_msgs::msg::Twist::SharedPtr msg)
+        {
+            this->thumbstickAxesCallback(msg);
+        };
+        sub_thumbstick_axes_ = node_->create_subscription<geometry_msgs::msg::Twist>(
+            "/xr/thumbstick_axes", 10, thumbstickAxesCallback);
 
         // 注意：FSM命令订阅已移除，改为在 arms_target_manager_node 中统一处理
         // 这样可以避免与 ArmsTargetManager 的订阅冲突
         // FSM状态更新现在通过 fsmCommandCallback() 方法由外部调用
 
         RCLCPP_INFO(node_->get_logger(), "🕹️🕶️🕹️ VRInputHandler created");
-        RCLCPP_INFO(node_->get_logger(), "🕹️🕶️🕹️ Subscribed to unified controller state topic: /xr/controller_state");
+        RCLCPP_INFO(node_->get_logger(), "🕹️🕶️🕹️ Subscribed to button event topic: /xr/controller_state (Int32)");
+        RCLCPP_INFO(node_->get_logger(), "🕹️🕶️🕹️ Subscribed to thumbstick axes topic: /xr/thumbstick_axes (ThumbstickAxes)");
         RCLCPP_INFO(node_->get_logger(), "🕹️🕶️🕹️ Thumbstick scaling: linear=%.3f, angular=%.3f", LINEAR_SCALE,
                     ANGULAR_SCALE);
         RCLCPP_INFO(node_->get_logger(),
@@ -852,12 +863,25 @@ namespace arms_ros2_control::command
         }
     }
 
-    void VRInputHandler::leftThumbstickAxesCallback(const geometry_msgs::msg::Point::SharedPtr msg)
+    void VRInputHandler::thumbstickAxesCallback(const geometry_msgs::msg::Twist::SharedPtr msg)
     {
-        // 存储左摇杆轴值
-        left_thumbstick_axes_.x() = msg->x;
-        left_thumbstick_axes_.y() = msg->y;
-
+        // 存储左摇杆轴值（从 linear.x/y 读取）
+        left_thumbstick_axes_.x() = msg->linear.x;
+        left_thumbstick_axes_.y() = msg->linear.y;
+        
+        // 存储右摇杆轴值（从 angular.x/y 读取）
+        right_thumbstick_axes_.x() = msg->angular.x;
+        right_thumbstick_axes_.y() = msg->angular.y;
+        
+        // 处理左摇杆轴值
+        processLeftThumbstickAxes();
+        
+        // 处理右摇杆轴值
+        processRightThumbstickAxes();
+    }
+    
+    void VRInputHandler::processLeftThumbstickAxes()
+    {
         // 在UPDATE模式下累积摇杆输入
         if (enabled_.load() && is_update_mode_.load())
         {
@@ -935,12 +959,8 @@ namespace arms_ros2_control::command
         }
     }
 
-    void VRInputHandler::rightThumbstickAxesCallback(const geometry_msgs::msg::Point::SharedPtr msg)
+    void VRInputHandler::processRightThumbstickAxes()
     {
-        // 存储右摇杆轴值
-        right_thumbstick_axes_.x() = msg->x;
-        right_thumbstick_axes_.y() = msg->y;
-
         // 在UPDATE模式下累积摇杆输入
         if (enabled_.load() && is_update_mode_.load())
         {
@@ -1019,103 +1039,93 @@ namespace arms_ros2_control::command
     }
 
 
-    void VRInputHandler::processControllerState(const arms_ros2_control_msgs::msg::VRControllerState::SharedPtr msg)
+    void VRInputHandler::processButtonEvent(const std_msgs::msg::Int32::SharedPtr msg)
     {
-        // 处理所有按钮事件（触发事件，已经过上升沿检测）
+        // 处理按钮事件（button_event: 0=无事件, 1-6=按钮按下, 7=镜像模式切换）
         // 创建Bool消息用于调用现有回调函数
 
-        // 更新镜像模式状态（从 xr_target_node 同步）
-        bool old_mirror_mode = mirror_mode_.load();
-        mirror_mode_.store(msg->mirror);
-
-        // 如果镜像模式发生变化，记录日志并自动切换到 STORAGE 模式
-        if (old_mirror_mode != msg->mirror)
+        // 处理按钮事件
+        switch (msg->data)
         {
-            if (msg->mirror)
+            case 1:  // 左摇杆按钮
             {
-                RCLCPP_INFO(node_->get_logger(),
-                            "🕹️🕶️🕹️ MIRROR mode ENABLED - Left controller controls right arm, right controller controls left arm");
+                auto thumbstick_msg = std::make_shared<std_msgs::msg::Bool>();
+                thumbstick_msg->data = true;
+                leftThumbstickCallback(thumbstick_msg);
+                break;
             }
-            else
+            case 2:  // 左握把按钮
             {
-                RCLCPP_INFO(node_->get_logger(), "🕹️🕶️🕹️ MIRROR mode DISABLED - Normal control restored");
+                auto grip_msg = std::make_shared<std_msgs::msg::Bool>();
+                grip_msg->data = true;
+                leftGripCallback(grip_msg);
+                break;
             }
-
-            // 切换镜像模式后，自动切换到STORAGE模式，避免跳变
-            if (is_update_mode_.load())
+            case 3:  // 左Y按钮
             {
-                is_update_mode_.store(false);
-                // 重置摇杆累积偏移
-                left_thumbstick_offset_ = Eigen::Vector3d::Zero();
-                right_thumbstick_offset_ = Eigen::Vector3d::Zero();
-                left_thumbstick_yaw_offset_ = 0.0;
-                right_thumbstick_yaw_offset_ = 0.0;
-                RCLCPP_WARN(node_->get_logger(),
-                            "🕹️🕶️🕹️ Automatically switched to STORAGE mode - Please re-enter UPDATE mode to apply mirror changes");
-                RCLCPP_INFO(node_->get_logger(), "🕹️🕶️🕹️ Thumbstick offsets reset!");
+                auto y_button_msg = std::make_shared<std_msgs::msg::Bool>();
+                y_button_msg->data = true;
+                leftYButtonCallback(y_button_msg);
+                break;
             }
+            case 4:  // 右摇杆按钮
+            {
+                auto thumbstick_msg = std::make_shared<std_msgs::msg::Bool>();
+                thumbstick_msg->data = true;
+                rightThumbstickCallback(thumbstick_msg);
+                break;
+            }
+            case 5:  // 右握把按钮
+            {
+                auto grip_msg = std::make_shared<std_msgs::msg::Bool>();
+                grip_msg->data = true;
+                rightGripCallback(grip_msg);
+                break;
+            }
+            case 6:  // 右B按钮
+            {
+                auto b_button_msg = std::make_shared<std_msgs::msg::Bool>();
+                b_button_msg->data = true;
+                rightBButtonCallback(b_button_msg);
+                break;
+            }
+            case 7:  // 镜像模式切换（toggle）
+            {
+                bool old_mirror_mode = mirror_mode_.load();
+                bool new_mirror_mode = !old_mirror_mode;
+                mirror_mode_.store(new_mirror_mode);
+                
+                // 镜像模式发生变化，记录日志并自动切换到 STORAGE 模式
+                if (new_mirror_mode)
+                {
+                    RCLCPP_INFO(node_->get_logger(),
+                                "🕹️🕶️🕹️ MIRROR mode ENABLED - Left controller controls right arm, right controller controls left arm");
+                }
+                else
+                {
+                    RCLCPP_INFO(node_->get_logger(), "🕹️🕶️🕹️ MIRROR mode DISABLED - Normal control restored");
+                }
+                
+                // 切换镜像模式后，自动切换到STORAGE模式，避免跳变
+                if (is_update_mode_.load())
+                {
+                    is_update_mode_.store(false);
+                    // 重置摇杆累积偏移
+                    left_thumbstick_offset_ = Eigen::Vector3d::Zero();
+                    right_thumbstick_offset_ = Eigen::Vector3d::Zero();
+                    left_thumbstick_yaw_offset_ = 0.0;
+                    right_thumbstick_yaw_offset_ = 0.0;
+                    RCLCPP_WARN(node_->get_logger(),
+                                "🕹️🕶️🕹️ Automatically switched to STORAGE mode - Please re-enter UPDATE mode to apply mirror changes");
+                    RCLCPP_INFO(node_->get_logger(), "🕹️🕶️🕹️ Thumbstick offsets reset!");
+                }
+                break;
+            }
+            case 0:  // 无事件
+            default:
+                // 无按钮事件
+                break;
         }
-
-        // 左摇杆按钮
-        if (msg->left_thumbstick_button)
-        {
-            auto thumbstick_msg = std::make_shared<std_msgs::msg::Bool>();
-            thumbstick_msg->data = true;
-            leftThumbstickCallback(thumbstick_msg);
-        }
-
-        // 右摇杆按钮
-        if (msg->right_thumbstick_button)
-        {
-            auto thumbstick_msg = std::make_shared<std_msgs::msg::Bool>();
-            thumbstick_msg->data = true;
-            rightThumbstickCallback(thumbstick_msg);
-        }
-
-        // 左握把按钮
-        if (msg->left_grip_button)
-        {
-            auto grip_msg = std::make_shared<std_msgs::msg::Bool>();
-            grip_msg->data = true;
-            leftGripCallback(grip_msg);
-        }
-
-        // 右握把按钮
-        if (msg->right_grip_button)
-        {
-            auto grip_msg = std::make_shared<std_msgs::msg::Bool>();
-            grip_msg->data = true;
-            rightGripCallback(grip_msg);
-        }
-
-        // 左Y按钮
-        if (msg->left_y_button)
-        {
-            auto y_button_msg = std::make_shared<std_msgs::msg::Bool>();
-            y_button_msg->data = true;
-            leftYButtonCallback(y_button_msg);
-        }
-
-        // 右B按钮
-        if (msg->right_b_button)
-        {
-            auto b_button_msg = std::make_shared<std_msgs::msg::Bool>();
-            b_button_msg->data = true;
-            rightBButtonCallback(b_button_msg);
-        }
-
-        // 处理摇杆轴值
-        auto left_axes_msg = std::make_shared<geometry_msgs::msg::Point>();
-        left_axes_msg->x = msg->left_thumbstick_x;
-        left_axes_msg->y = msg->left_thumbstick_y;
-        left_axes_msg->z = 0.0;
-        leftThumbstickAxesCallback(left_axes_msg);
-
-        auto right_axes_msg = std::make_shared<geometry_msgs::msg::Point>();
-        right_axes_msg->x = msg->right_thumbstick_x;
-        right_axes_msg->y = msg->right_thumbstick_y;
-        right_axes_msg->z = 0.0;
-        rightThumbstickAxesCallback(right_axes_msg);
     }
 
     void VRInputHandler::fsmCommandCallback(std_msgs::msg::Int32::SharedPtr msg)
