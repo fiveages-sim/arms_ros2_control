@@ -103,12 +103,12 @@ int main(int argc, char** argv)
         auto control_handler = std::make_unique<ControlInputHandler>(
             node, target_manager.get(), linear_scale, angular_scale, hand_controllers);
 
-        // 创建VRInputHandler（如果启用，传入统一的发布器）
+        // 创建VRInputHandler（如果启用，传入统一的发布器和hand_controllers参数）
         std::unique_ptr<VRInputHandler> vr_handler = nullptr;
         if (enable_vr)
         {
             vr_handler = std::make_unique<VRInputHandler>(
-                node, target_manager.get(), pub_left_target, pub_right_target, vr_update_rate);
+                node, target_manager.get(), pub_left_target, pub_right_target, vr_update_rate, hand_controllers);
         }
 
         // 创建 control input 订阅器（用于增量控制）

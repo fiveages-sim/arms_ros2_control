@@ -13,6 +13,8 @@
 #include <std_msgs/msg/int32.hpp>
 #include <Eigen/Core>
 #include <Eigen/Geometry>
+#include <algorithm>
+#include <cctype>
 
 namespace arms_ros2_control::command
 {
@@ -28,7 +30,8 @@ namespace arms_ros2_control::command
         ArmsTargetManager* targetManager,
         rclcpp::Publisher<geometry_msgs::msg::Pose>::SharedPtr pub_left_target,
         rclcpp::Publisher<geometry_msgs::msg::Pose>::SharedPtr pub_right_target,
-        double updateRate)
+        double updateRate,
+        const std::vector<std::string>& handControllers)
         : node_(std::move(node))
           , target_manager_(targetManager)
           , pub_left_target_(std::move(pub_left_target))
@@ -45,7 +48,37 @@ namespace arms_ros2_control::command
           , update_rate_(updateRate)
           , current_position_(0.0, 0.0, 1.0)
           , current_orientation_(1.0, 0.0, 0.0, 0.0)
+          , hand_controllers_(handControllers)
+          , left_gripper_open_(false)
+          , right_gripper_open_(false)
     {
+        // 检测左右控制器名称
+        detectGripperControllers(hand_controllers_);
+        
+        // 创建夹爪状态订阅器（用于同步夹爪状态）
+        if (!left_gripper_controller_name_.empty())
+        {
+            std::string left_topic = "/" + left_gripper_controller_name_ + "/target_command";
+            auto leftGripperStateCallback = [this](const std_msgs::msg::Int32::SharedPtr msg)
+            {
+                this->leftGripperStateCallback(msg);
+            };
+            sub_left_gripper_state_ = node_->create_subscription<std_msgs::msg::Int32>(
+                left_topic, 10, leftGripperStateCallback);
+            RCLCPP_INFO(node_->get_logger(), "🕹️🕶️🕹️ Subscribed to left gripper state: %s", left_topic.c_str());
+        }
+        
+        if (!right_gripper_controller_name_.empty())
+        {
+            std::string right_topic = "/" + right_gripper_controller_name_ + "/target_command";
+            auto rightGripperStateCallback = [this](const std_msgs::msg::Int32::SharedPtr msg)
+            {
+                this->rightGripperStateCallback(msg);
+            };
+            sub_right_gripper_state_ = node_->create_subscription<std_msgs::msg::Int32>(
+                right_topic, 10, rightGripperStateCallback);
+            RCLCPP_INFO(node_->get_logger(), "🕹️🕶️🕹️ Subscribed to right gripper state: %s", right_topic.c_str());
+        }
 
         // 创建VR订阅器
         auto vrLeftCallback = [this](const geometry_msgs::msg::Pose::SharedPtr msg)
@@ -95,6 +128,87 @@ namespace arms_ros2_control::command
         RCLCPP_INFO(node_->get_logger(), "🕹️🕶️🕹️ STORAGE mode: Store VR and robot base poses (no marker update)");
         RCLCPP_INFO(node_->get_logger(), "🕹️🕶️🕹️ UPDATE mode: Calculate pose differences and update markers");
         RCLCPP_INFO(node_->get_logger(), "🕹️🕶️🕹️ MIRROR mode: Synced from xr_target_node (left thumbstick toggles)");
+        
+        // 输出检测到的控制器信息
+        if (!left_gripper_controller_name_.empty())
+        {
+            RCLCPP_INFO(node_->get_logger(), "🕹️🕶️🕹️ Left gripper controller: %s", left_gripper_controller_name_.c_str());
+        }
+        if (!right_gripper_controller_name_.empty())
+        {
+            RCLCPP_INFO(node_->get_logger(), "🕹️🕶️🕹️ Right gripper controller: %s", right_gripper_controller_name_.c_str());
+        }
+        if (left_gripper_controller_name_.empty() && right_gripper_controller_name_.empty())
+        {
+            RCLCPP_INFO(node_->get_logger(), "🕹️🕶️🕹️ No gripper controllers detected - gripper control disabled");
+        }
+    }
+
+    void VRInputHandler::detectGripperControllers(const std::vector<std::string>& hand_controllers)
+    {
+        // 清空之前的检测结果
+        left_gripper_controller_name_.clear();
+        right_gripper_controller_name_.clear();
+
+        // 从hand_controllers参数中提取左右控制器名称
+        for (const auto& controller_name : hand_controllers)
+        {
+            // 转换为小写以便比较
+            std::string name_lower = controller_name;
+            std::transform(name_lower.begin(), name_lower.end(), name_lower.begin(), ::tolower);
+
+            // 检测左控制器
+            if (name_lower.find("left") != std::string::npos)
+            {
+                left_gripper_controller_name_ = controller_name;
+                RCLCPP_DEBUG(node_->get_logger(), "🕹️🕶️🕹️ Detected left gripper controller: %s", controller_name.c_str());
+            }
+            // 检测右控制器
+            else if (name_lower.find("right") != std::string::npos)
+            {
+                right_gripper_controller_name_ = controller_name;
+                RCLCPP_DEBUG(node_->get_logger(), "🕹️🕶️🕹️ Detected right gripper controller: %s", controller_name.c_str());
+            }
+            // 单臂模式：如果只有一个控制器且名称中没有left/right，假设是左控制器
+            else if (hand_controllers.size() == 1 && left_gripper_controller_name_.empty())
+            {
+                left_gripper_controller_name_ = controller_name;
+                RCLCPP_DEBUG(node_->get_logger(), "🕹️🕶️🕹️ Detected single-arm gripper controller (assumed left): %s", controller_name.c_str());
+            }
+        }
+    }
+
+    void VRInputHandler::publishGripperCommand(const std::string& controller_name, int32_t command)
+    {
+        // 创建发布器（如果还没有）- 类似ControlInputHandler的方式
+        if (gripper_command_publishers_.find(controller_name) == gripper_command_publishers_.end())
+        {
+            std::string topic_name = "/" + controller_name + "/target_command";
+            gripper_command_publishers_[controller_name] = 
+                node_->create_publisher<std_msgs::msg::Int32>(topic_name, 10);
+            RCLCPP_INFO(node_->get_logger(), "🕹️🕶️🕹️ Created gripper command publisher: %s", topic_name.c_str());
+        }
+
+        // 发布命令
+        auto target_msg = std_msgs::msg::Int32();
+        target_msg.data = command;
+        gripper_command_publishers_[controller_name]->publish(target_msg);
+    }
+
+    void VRInputHandler::leftGripperStateCallback(const std_msgs::msg::Int32::SharedPtr msg)
+    {
+        // 同步左夹爪状态（从 topic 中获取）
+        left_gripper_open_.store(msg->data == 1);
+        RCLCPP_DEBUG(node_->get_logger(), "🕹️🕶️🕹️ Left gripper state synced: %s", 
+                     (msg->data == 1) ? "open" : "close");
+    }
+
+    void VRInputHandler::rightGripperStateCallback(const std_msgs::msg::Int32::SharedPtr msg)
+    {
+        // 同步右夹爪状态（从 topic 中获取）
+        right_gripper_open_.store(msg->data == 1);
+        RCLCPP_DEBUG(node_->get_logger(), "🕹️🕶️🕹️ Right gripper state synced: %s", 
+                     (msg->data == 1) ? "open" : "close");
     }
 
     bool VRInputHandler::checkNodeExists(const std::shared_ptr<rclcpp::Node>& node, const std::string& targetNodeName)
@@ -127,86 +241,6 @@ namespace arms_ros2_control::command
     {
         enabled_.store(false);
         RCLCPP_INFO(node_->get_logger(), "🕹️🕶️🕹️ VR control DISABLED!");
-    }
-
-    void VRInputHandler::rightThumbstickCallback(const std_msgs::msg::Bool::SharedPtr msg)
-    {
-        // 只在OCS2状态下执行（状态值为3）
-        if (current_fsm_state_.load() != 3)
-        {
-            return;
-        }
-
-        // xr_target_node 已经进行上升沿检测，这里直接响应触发事件
-        if (msg->data)
-        {
-            // 确保切换到连续发布模式（更稳健，防止用户手动切换回单次模式）
-            if (target_manager_ && target_manager_->getCurrentMode() != MarkerState::CONTINUOUS)
-            {
-                target_manager_->togglePublishMode();
-                RCLCPP_INFO(node_->get_logger(), "🕹️🕶️🕹️ ArmsTargetManager switched to CONTINUOUS mode for VR control");
-            }
-
-            if (!is_update_mode_.load())
-            {
-                // 切换到更新模式 - 存储当前poses作为base poses
-                vr_base_left_position_ = left_position_;
-                vr_base_left_orientation_ = left_orientation_;
-                vr_base_right_position_ = right_position_;
-                vr_base_right_orientation_ = right_orientation_;
-
-                robot_base_left_position_ = robot_current_left_position_;
-                robot_base_left_orientation_ = robot_current_left_orientation_;
-                robot_base_right_position_ = robot_current_right_position_;
-                robot_base_right_orientation_ = robot_current_right_orientation_;
-
-                // 重置摇杆累积偏移
-                left_thumbstick_offset_ = Eigen::Vector3d::Zero();
-                right_thumbstick_offset_ = Eigen::Vector3d::Zero();
-                left_thumbstick_yaw_offset_ = 0.0;
-                right_thumbstick_yaw_offset_ = 0.0;
-
-                // 重置暂停状态，确保切换到 UPDATE 模式时恢复更新
-                bool left_was_paused = left_arm_paused_.load();
-                bool right_was_paused = right_arm_paused_.load();
-                if (left_was_paused)
-                {
-                    left_arm_paused_.store(false);
-                    RCLCPP_INFO(node_->get_logger(), "🟡 左臂暂停状态已重置 - 恢复更新！");
-                }
-                if (right_was_paused)
-                {
-                    right_arm_paused_.store(false);
-                    RCLCPP_INFO(node_->get_logger(), "🔵 右臂暂停状态已重置 - 恢复更新！");
-                }
-
-                is_update_mode_.store(true);
-                RCLCPP_INFO(node_->get_logger(), "🕹️🕶️🕹️ Switched to UPDATE mode - Base poses stored!");
-                RCLCPP_INFO(node_->get_logger(),
-                            "🕹️🕶️🕹️ VR Base Positions: Left [%.3f, %.3f, %.3f], Right [%.3f, %.3f, %.3f]",
-                            vr_base_left_position_.x(), vr_base_left_position_.y(), vr_base_left_position_.z(),
-                            vr_base_right_position_.x(), vr_base_right_position_.y(), vr_base_right_position_.z());
-                RCLCPP_INFO(node_->get_logger(),
-                            "🕹️🕶️🕹️ Robot Base Positions: Left [%.3f, %.3f, %.3f], Right [%.3f, %.3f, %.3f]",
-                            robot_base_left_position_.x(), robot_base_left_position_.y(), robot_base_left_position_.z(),
-                            robot_base_right_position_.x(), robot_base_right_position_.y(),
-                            robot_base_right_position_.z());
-                RCLCPP_INFO(node_->get_logger(), "🕹️🕶️🕹️ Thumbstick offsets reset!");
-            }
-            else
-            {
-                // 切换到存储模式
-                is_update_mode_.store(false);
-                RCLCPP_INFO(node_->get_logger(), "🕹️🕶️🕹️ Switched to STORAGE mode - Ready to store new base poses!");
-            }
-        }
-    }
-
-    void VRInputHandler::leftThumbstickCallback(const std_msgs::msg::Bool::SharedPtr /* msg */)
-    {
-        // 左摇杆按钮功能已移至 xr_target_node.py（用于切换镜像模式）
-        // 镜像模式的切换和相关逻辑在 processControllerState 中通过 mirror 字段同步处理
-        // 这里保留空回调函数以保持兼容性
     }
 
     void VRInputHandler::robotLeftPoseCallback(const geometry_msgs::msg::PoseStamped::SharedPtr msg)
@@ -637,232 +671,6 @@ namespace arms_ros2_control::command
         resultOri.normalize();
     }
 
-    void VRInputHandler::leftGripCallback(const std_msgs::msg::Bool::SharedPtr msg)
-    {
-        // xr_target_node 已经进行上升沿检测，这里直接响应触发事件
-        if (msg->data)
-        {
-            // 根据镜像模式决定切换哪个臂的模式
-            if (mirror_mode_.load())
-            {
-                // 镜像模式：左话题数据用于右臂
-                right_grip_mode_.store(!right_grip_mode_.load());
-
-                if (right_grip_mode_.load())
-                {
-                    RCLCPP_INFO(node_->get_logger(), "🟢 [Mirror] Left grip → Right arm mode: Z-height + Yaw rotation");
-                }
-                else
-                {
-                    RCLCPP_INFO(node_->get_logger(), "🟢 [Mirror] Left grip → Right arm mode: XY translation");
-                }
-            }
-            else
-            {
-                // 正常模式：左话题数据用于左臂
-                left_grip_mode_.store(!left_grip_mode_.load());
-
-                if (left_grip_mode_.load())
-                {
-                    RCLCPP_INFO(node_->get_logger(), "🟢 Left grip mode: Z-height + Yaw rotation (Y→Z, X→Yaw)");
-                }
-                else
-                {
-                    RCLCPP_INFO(node_->get_logger(), "🟢 Left grip mode: XY translation (Y→X, X→Y)");
-                }
-            }
-        }
-    }
-
-    void VRInputHandler::rightGripCallback(const std_msgs::msg::Bool::SharedPtr msg)
-    {
-        // xr_target_node 已经进行上升沿检测，这里直接响应触发事件
-        if (msg->data)
-        {
-            // 根据镜像模式决定切换哪个臂的模式
-            if (mirror_mode_.load())
-            {
-                // 镜像模式：右话题数据用于左臂
-                left_grip_mode_.store(!left_grip_mode_.load());
-
-                if (left_grip_mode_.load())
-                {
-                    RCLCPP_INFO(node_->get_logger(), "🟢 [Mirror] Right grip → Left arm mode: Z-height + Yaw rotation");
-                }
-                else
-                {
-                    RCLCPP_INFO(node_->get_logger(), "🟢 [Mirror] Right grip → Left arm mode: XY translation");
-                }
-            }
-            else
-            {
-                // 正常模式：右话题数据用于右臂
-                right_grip_mode_.store(!right_grip_mode_.load());
-
-                if (right_grip_mode_.load())
-                {
-                    RCLCPP_INFO(node_->get_logger(), "🟢 Right grip mode: Z-height + Yaw rotation (Y→Z, X→Yaw)");
-                }
-                else
-                {
-                    RCLCPP_INFO(node_->get_logger(), "🟢 Right grip mode: XY translation (Y→X, X→Y)");
-                }
-            }
-        }
-    }
-
-    void VRInputHandler::leftYButtonCallback(std_msgs::msg::Bool::SharedPtr msg)
-    {
-        // 只在UPDATE模式下启用（右手摇杆按钮按下后进入UPDATE模式）
-        if (!is_update_mode_.load())
-        {
-            return;
-        }
-
-        // xr_target_node 已经进行上升沿检测，这里直接响应触发事件
-        if (msg->data)
-        {
-            // 根据镜像模式决定控制哪个臂
-            if (mirror_mode_.load())
-            {
-                // 镜像模式：左话题数据用于右臂
-                if (right_arm_paused_.load())
-                {
-                    // 当前是暂停状态，执行恢复操作
-                    vr_base_left_position_ = left_position_;
-                    vr_base_left_orientation_ = left_orientation_;
-                    robot_base_right_position_ = robot_current_right_position_;
-                    robot_base_right_orientation_ = robot_current_right_orientation_;
-
-                    // 重置右摇杆累积偏移
-                    right_thumbstick_offset_ = Eigen::Vector3d::Zero();
-                    right_thumbstick_yaw_offset_ = 0.0;
-
-                    // 切换状态为运行
-                    right_arm_paused_.store(false);
-
-                    RCLCPP_INFO(node_->get_logger(), "🟡 [Mirror] 左Y按键 → 右臂更新已恢复！");
-                }
-                else
-                {
-                    // 当前是运行状态，执行暂停操作
-                    right_arm_paused_.store(true);
-                    RCLCPP_INFO(node_->get_logger(), "🟡 [Mirror] 左Y按键 → 右臂更新已暂停！");
-                }
-            }
-            else
-            {
-                // 正常模式：左话题数据用于左臂
-                if (left_arm_paused_.load())
-                {
-                    // 当前是暂停状态，执行恢复操作
-                    vr_base_left_position_ = left_position_;
-                    vr_base_left_orientation_ = left_orientation_;
-                    robot_base_left_position_ = robot_current_left_position_;
-                    robot_base_left_orientation_ = robot_current_left_orientation_;
-
-                    // 重置左摇杆累积偏移
-                    left_thumbstick_offset_ = Eigen::Vector3d::Zero();
-                    left_thumbstick_yaw_offset_ = 0.0;
-
-                    // 切换状态为运行
-                    left_arm_paused_.store(false);
-
-                    RCLCPP_INFO(node_->get_logger(), "🟡 左Y按键按下 - 左臂更新已恢复！");
-                    RCLCPP_INFO(node_->get_logger(),
-                                "🟡 VR Base Position: [%.3f, %.3f, %.3f]",
-                                vr_base_left_position_.x(), vr_base_left_position_.y(), vr_base_left_position_.z());
-                    RCLCPP_INFO(node_->get_logger(),
-                                "🟡 Robot Base Position: [%.3f, %.3f, %.3f]",
-                                robot_base_left_position_.x(), robot_base_left_position_.y(), robot_base_left_position_.z());
-                    RCLCPP_INFO(node_->get_logger(), "🟡 左摇杆偏移已重置！");
-                }
-                else
-                {
-                    // 当前是运行状态，执行暂停操作
-                    left_arm_paused_.store(true);
-                    RCLCPP_INFO(node_->get_logger(), "🟡 左Y按键按下 - 左臂更新已暂停！");
-                }
-            }
-        }
-    }
-
-    void VRInputHandler::rightBButtonCallback(std_msgs::msg::Bool::SharedPtr msg)
-    {
-        // 只在UPDATE模式下启用（右手摇杆按钮按下后进入UPDATE模式）
-        if (!is_update_mode_.load())
-        {
-            return;
-        }
-
-        // xr_target_node 已经进行上升沿检测，这里直接响应触发事件
-        if (msg->data)
-        {
-            // 根据镜像模式决定控制哪个臂
-            if (mirror_mode_.load())
-            {
-                // 镜像模式：右话题数据用于左臂
-                if (left_arm_paused_.load())
-                {
-                    // 当前是暂停状态，执行恢复操作
-                    vr_base_right_position_ = right_position_;
-                    vr_base_right_orientation_ = right_orientation_;
-                    robot_base_left_position_ = robot_current_left_position_;
-                    robot_base_left_orientation_ = robot_current_left_orientation_;
-
-                    // 重置左摇杆累积偏移
-                    left_thumbstick_offset_ = Eigen::Vector3d::Zero();
-                    left_thumbstick_yaw_offset_ = 0.0;
-
-                    // 切换状态为运行
-                    left_arm_paused_.store(false);
-
-                    RCLCPP_INFO(node_->get_logger(), "🔵 [Mirror] 右B按键 → 左臂更新已恢复！");
-                }
-                else
-                {
-                    // 当前是运行状态，执行暂停操作
-                    left_arm_paused_.store(true);
-                    RCLCPP_INFO(node_->get_logger(), "🔵 [Mirror] 右B按键 → 左臂更新已暂停！");
-                }
-            }
-            else
-            {
-                // 正常模式：右话题数据用于右臂
-                if (right_arm_paused_.load())
-                {
-                    // 当前是暂停状态，执行恢复操作
-                    vr_base_right_position_ = right_position_;
-                    vr_base_right_orientation_ = right_orientation_;
-                    robot_base_right_position_ = robot_current_right_position_;
-                    robot_base_right_orientation_ = robot_current_right_orientation_;
-
-                    // 重置右摇杆累积偏移
-                    right_thumbstick_offset_ = Eigen::Vector3d::Zero();
-                    right_thumbstick_yaw_offset_ = 0.0;
-
-                    // 切换状态为运行
-                    right_arm_paused_.store(false);
-
-                    RCLCPP_INFO(node_->get_logger(), "🔵 右B按键按下 - 右臂更新已恢复！");
-                    RCLCPP_INFO(node_->get_logger(),
-                                "🔵 VR Base Position: [%.3f, %.3f, %.3f]",
-                                vr_base_right_position_.x(), vr_base_right_position_.y(), vr_base_right_position_.z());
-                    RCLCPP_INFO(node_->get_logger(),
-                                "🔵 Robot Base Position: [%.3f, %.3f, %.3f]",
-                                robot_base_right_position_.x(), robot_base_right_position_.y(), robot_base_right_position_.z());
-                    RCLCPP_INFO(node_->get_logger(), "🔵 右摇杆偏移已重置！");
-                }
-                else
-                {
-                    // 当前是运行状态，执行暂停操作
-                    right_arm_paused_.store(true);
-                    RCLCPP_INFO(node_->get_logger(), "🔵 右B按键按下 - 右臂更新已暂停！");
-                }
-            }
-        }
-    }
-
     void VRInputHandler::thumbstickAxesCallback(const geometry_msgs::msg::Twist::SharedPtr msg)
     {
         // 存储左摇杆轴值（从 linear.x/y 读取）
@@ -1041,52 +849,295 @@ namespace arms_ros2_control::command
 
     void VRInputHandler::processButtonEvent(const std_msgs::msg::Int32::SharedPtr msg)
     {
-        // 处理按钮事件（button_event: 0=无事件, 1-6=按钮按下, 7=镜像模式切换）
-        // 创建Bool消息用于调用现有回调函数
+        // 处理按钮事件（button_event: 0=无事件, 1-6=按钮按下, 7=镜像模式切换, 9=左扳机, 10=右扳机）
+        // xr_target_node 已经进行上升沿检测，这里直接响应触发事件
 
-        // 处理按钮事件
         switch (msg->data)
         {
             case 1:  // 左摇杆按钮
             {
-                auto thumbstick_msg = std::make_shared<std_msgs::msg::Bool>();
-                thumbstick_msg->data = true;
-                leftThumbstickCallback(thumbstick_msg);
+                // 左摇杆按钮功能已移至 xr_target_node.py（用于切换镜像模式）
+                // 镜像模式的切换和相关逻辑在 case 7 中处理
+                // 这里保留空处理以保持兼容性
                 break;
             }
             case 2:  // 左握把按钮
             {
-                auto grip_msg = std::make_shared<std_msgs::msg::Bool>();
-                grip_msg->data = true;
-                leftGripCallback(grip_msg);
+                // 根据镜像模式决定切换哪个臂的模式
+                if (mirror_mode_.load())
+                {
+                    // 镜像模式：左话题数据用于右臂
+                    right_grip_mode_.store(!right_grip_mode_.load());
+
+                    if (right_grip_mode_.load())
+                    {
+                        RCLCPP_INFO(node_->get_logger(), "🟢 [Mirror] Left grip → Right arm mode: Z-height + Yaw rotation");
+                    }
+                    else
+                    {
+                        RCLCPP_INFO(node_->get_logger(), "🟢 [Mirror] Left grip → Right arm mode: XY translation");
+                    }
+                }
+                else
+                {
+                    // 正常模式：左话题数据用于左臂
+                    left_grip_mode_.store(!left_grip_mode_.load());
+
+                    if (left_grip_mode_.load())
+                    {
+                        RCLCPP_INFO(node_->get_logger(), "🟢 Left grip mode: Z-height + Yaw rotation (Y→Z, X→Yaw)");
+                    }
+                    else
+                    {
+                        RCLCPP_INFO(node_->get_logger(), "🟢 Left grip mode: XY translation (Y→X, X→Y)");
+                    }
+                }
                 break;
             }
             case 3:  // 左Y按钮
             {
-                auto y_button_msg = std::make_shared<std_msgs::msg::Bool>();
-                y_button_msg->data = true;
-                leftYButtonCallback(y_button_msg);
+                // 只在UPDATE模式下启用（右手摇杆按钮按下后进入UPDATE模式）
+                if (!is_update_mode_.load())
+                {
+                    break;
+                }
+
+                // 根据镜像模式决定控制哪个臂
+                if (mirror_mode_.load())
+                {
+                    // 镜像模式：左话题数据用于右臂
+                    if (right_arm_paused_.load())
+                    {
+                        // 当前是暂停状态，执行恢复操作
+                        vr_base_left_position_ = left_position_;
+                        vr_base_left_orientation_ = left_orientation_;
+                        robot_base_right_position_ = robot_current_right_position_;
+                        robot_base_right_orientation_ = robot_current_right_orientation_;
+
+                        // 重置右摇杆累积偏移
+                        right_thumbstick_offset_ = Eigen::Vector3d::Zero();
+                        right_thumbstick_yaw_offset_ = 0.0;
+
+                        // 切换状态为运行
+                        right_arm_paused_.store(false);
+
+                        RCLCPP_INFO(node_->get_logger(), "🟡 [Mirror] 左Y按键 → 右臂更新已恢复！");
+                    }
+                    else
+                    {
+                        // 当前是运行状态，执行暂停操作
+                        right_arm_paused_.store(true);
+                        RCLCPP_INFO(node_->get_logger(), "🟡 [Mirror] 左Y按键 → 右臂更新已暂停！");
+                    }
+                }
+                else
+                {
+                    // 正常模式：左话题数据用于左臂
+                    if (left_arm_paused_.load())
+                    {
+                        // 当前是暂停状态，执行恢复操作
+                        vr_base_left_position_ = left_position_;
+                        vr_base_left_orientation_ = left_orientation_;
+                        robot_base_left_position_ = robot_current_left_position_;
+                        robot_base_left_orientation_ = robot_current_left_orientation_;
+
+                        // 重置左摇杆累积偏移
+                        left_thumbstick_offset_ = Eigen::Vector3d::Zero();
+                        left_thumbstick_yaw_offset_ = 0.0;
+
+                        // 切换状态为运行
+                        left_arm_paused_.store(false);
+
+                        RCLCPP_INFO(node_->get_logger(), "🟡 左Y按键按下 - 左臂更新已恢复！");
+                        RCLCPP_INFO(node_->get_logger(),
+                                    "🟡 VR Base Position: [%.3f, %.3f, %.3f]",
+                                    vr_base_left_position_.x(), vr_base_left_position_.y(), vr_base_left_position_.z());
+                        RCLCPP_INFO(node_->get_logger(),
+                                    "🟡 Robot Base Position: [%.3f, %.3f, %.3f]",
+                                    robot_base_left_position_.x(), robot_base_left_position_.y(), robot_base_left_position_.z());
+                        RCLCPP_INFO(node_->get_logger(), "🟡 左摇杆偏移已重置！");
+                    }
+                    else
+                    {
+                        // 当前是运行状态，执行暂停操作
+                        left_arm_paused_.store(true);
+                        RCLCPP_INFO(node_->get_logger(), "🟡 左Y按键按下 - 左臂更新已暂停！");
+                    }
+                }
                 break;
             }
             case 4:  // 右摇杆按钮
             {
-                auto thumbstick_msg = std::make_shared<std_msgs::msg::Bool>();
-                thumbstick_msg->data = true;
-                rightThumbstickCallback(thumbstick_msg);
+                // 只在OCS2状态下执行（状态值为3）
+                if (current_fsm_state_.load() != 3)
+                {
+                    break;
+                }
+
+                // 确保切换到连续发布模式（更稳健，防止用户手动切换回单次模式）
+                if (target_manager_ && target_manager_->getCurrentMode() != MarkerState::CONTINUOUS)
+                {
+                    target_manager_->togglePublishMode();
+                    RCLCPP_INFO(node_->get_logger(), "🕹️🕶️🕹️ ArmsTargetManager switched to CONTINUOUS mode for VR control");
+                }
+
+                if (!is_update_mode_.load())
+                {
+                    // 切换到更新模式 - 存储当前poses作为base poses
+                    vr_base_left_position_ = left_position_;
+                    vr_base_left_orientation_ = left_orientation_;
+                    vr_base_right_position_ = right_position_;
+                    vr_base_right_orientation_ = right_orientation_;
+
+                    robot_base_left_position_ = robot_current_left_position_;
+                    robot_base_left_orientation_ = robot_current_left_orientation_;
+                    robot_base_right_position_ = robot_current_right_position_;
+                    robot_base_right_orientation_ = robot_current_right_orientation_;
+
+                    // 重置摇杆累积偏移
+                    left_thumbstick_offset_ = Eigen::Vector3d::Zero();
+                    right_thumbstick_offset_ = Eigen::Vector3d::Zero();
+                    left_thumbstick_yaw_offset_ = 0.0;
+                    right_thumbstick_yaw_offset_ = 0.0;
+
+                    // 重置暂停状态，确保切换到 UPDATE 模式时恢复更新
+                    bool left_was_paused = left_arm_paused_.load();
+                    bool right_was_paused = right_arm_paused_.load();
+                    if (left_was_paused)
+                    {
+                        left_arm_paused_.store(false);
+                        RCLCPP_INFO(node_->get_logger(), "🟡 左臂暂停状态已重置 - 恢复更新！");
+                    }
+                    if (right_was_paused)
+                    {
+                        right_arm_paused_.store(false);
+                        RCLCPP_INFO(node_->get_logger(), "🔵 右臂暂停状态已重置 - 恢复更新！");
+                    }
+
+                    is_update_mode_.store(true);
+                    RCLCPP_INFO(node_->get_logger(), "🕹️🕶️🕹️ Switched to UPDATE mode - Base poses stored!");
+                    RCLCPP_INFO(node_->get_logger(),
+                                "🕹️🕶️🕹️ VR Base Positions: Left [%.3f, %.3f, %.3f], Right [%.3f, %.3f, %.3f]",
+                                vr_base_left_position_.x(), vr_base_left_position_.y(), vr_base_left_position_.z(),
+                                vr_base_right_position_.x(), vr_base_right_position_.y(), vr_base_right_position_.z());
+                    RCLCPP_INFO(node_->get_logger(),
+                                "🕹️🕶️🕹️ Robot Base Positions: Left [%.3f, %.3f, %.3f], Right [%.3f, %.3f, %.3f]",
+                                robot_base_left_position_.x(), robot_base_left_position_.y(), robot_base_left_position_.z(),
+                                robot_base_right_position_.x(), robot_base_right_position_.y(),
+                                robot_base_right_position_.z());
+                    RCLCPP_INFO(node_->get_logger(), "🕹️🕶️🕹️ Thumbstick offsets reset!");
+                }
+                else
+                {
+                    // 切换到存储模式
+                    is_update_mode_.store(false);
+                    RCLCPP_INFO(node_->get_logger(), "🕹️🕶️🕹️ Switched to STORAGE mode - Ready to store new base poses!");
+                }
                 break;
             }
             case 5:  // 右握把按钮
             {
-                auto grip_msg = std::make_shared<std_msgs::msg::Bool>();
-                grip_msg->data = true;
-                rightGripCallback(grip_msg);
+                // 根据镜像模式决定切换哪个臂的模式
+                if (mirror_mode_.load())
+                {
+                    // 镜像模式：右话题数据用于左臂
+                    left_grip_mode_.store(!left_grip_mode_.load());
+
+                    if (left_grip_mode_.load())
+                    {
+                        RCLCPP_INFO(node_->get_logger(), "🟢 [Mirror] Right grip → Left arm mode: Z-height + Yaw rotation");
+                    }
+                    else
+                    {
+                        RCLCPP_INFO(node_->get_logger(), "🟢 [Mirror] Right grip → Left arm mode: XY translation");
+                    }
+                }
+                else
+                {
+                    // 正常模式：右话题数据用于右臂
+                    right_grip_mode_.store(!right_grip_mode_.load());
+
+                    if (right_grip_mode_.load())
+                    {
+                        RCLCPP_INFO(node_->get_logger(), "🟢 Right grip mode: Z-height + Yaw rotation (Y→Z, X→Yaw)");
+                    }
+                    else
+                    {
+                        RCLCPP_INFO(node_->get_logger(), "🟢 Right grip mode: XY translation (Y→X, X→Y)");
+                    }
+                }
                 break;
             }
             case 6:  // 右B按钮
             {
-                auto b_button_msg = std::make_shared<std_msgs::msg::Bool>();
-                b_button_msg->data = true;
-                rightBButtonCallback(b_button_msg);
+                // 只在UPDATE模式下启用（右手摇杆按钮按下后进入UPDATE模式）
+                if (!is_update_mode_.load())
+                {
+                    break;
+                }
+
+                // 根据镜像模式决定控制哪个臂
+                if (mirror_mode_.load())
+                {
+                    // 镜像模式：右话题数据用于左臂
+                    if (left_arm_paused_.load())
+                    {
+                        // 当前是暂停状态，执行恢复操作
+                        vr_base_right_position_ = right_position_;
+                        vr_base_right_orientation_ = right_orientation_;
+                        robot_base_left_position_ = robot_current_left_position_;
+                        robot_base_left_orientation_ = robot_current_left_orientation_;
+
+                        // 重置左摇杆累积偏移
+                        left_thumbstick_offset_ = Eigen::Vector3d::Zero();
+                        left_thumbstick_yaw_offset_ = 0.0;
+
+                        // 切换状态为运行
+                        left_arm_paused_.store(false);
+
+                        RCLCPP_INFO(node_->get_logger(), "🔵 [Mirror] 右B按键 → 左臂更新已恢复！");
+                    }
+                    else
+                    {
+                        // 当前是运行状态，执行暂停操作
+                        left_arm_paused_.store(true);
+                        RCLCPP_INFO(node_->get_logger(), "🔵 [Mirror] 右B按键 → 左臂更新已暂停！");
+                    }
+                }
+                else
+                {
+                    // 正常模式：右话题数据用于右臂
+                    if (right_arm_paused_.load())
+                    {
+                        // 当前是暂停状态，执行恢复操作
+                        vr_base_right_position_ = right_position_;
+                        vr_base_right_orientation_ = right_orientation_;
+                        robot_base_right_position_ = robot_current_right_position_;
+                        robot_base_right_orientation_ = robot_current_right_orientation_;
+
+                        // 重置右摇杆累积偏移
+                        right_thumbstick_offset_ = Eigen::Vector3d::Zero();
+                        right_thumbstick_yaw_offset_ = 0.0;
+
+                        // 切换状态为运行
+                        right_arm_paused_.store(false);
+
+                        RCLCPP_INFO(node_->get_logger(), "🔵 右B按键按下 - 右臂更新已恢复！");
+                        RCLCPP_INFO(node_->get_logger(),
+                                    "🔵 VR Base Position: [%.3f, %.3f, %.3f]",
+                                    vr_base_right_position_.x(), vr_base_right_position_.y(), vr_base_right_position_.z());
+                        RCLCPP_INFO(node_->get_logger(),
+                                    "🔵 Robot Base Position: [%.3f, %.3f, %.3f]",
+                                    robot_base_right_position_.x(), robot_base_right_position_.y(), robot_base_right_position_.z());
+                        RCLCPP_INFO(node_->get_logger(), "🔵 右摇杆偏移已重置！");
+                    }
+                    else
+                    {
+                        // 当前是运行状态，执行暂停操作
+                        right_arm_paused_.store(true);
+                        RCLCPP_INFO(node_->get_logger(), "🔵 右B按键按下 - 右臂更新已暂停！");
+                    }
+                }
                 break;
             }
             case 7:  // 镜像模式切换（toggle）
@@ -1119,6 +1170,85 @@ namespace arms_ros2_control::command
                                 "🕹️🕶️🕹️ Automatically switched to STORAGE mode - Please re-enter UPDATE mode to apply mirror changes");
                     RCLCPP_INFO(node_->get_logger(), "🕹️🕶️🕹️ Thumbstick offsets reset!");
                 }
+                break;
+            }
+            case 9:  // 左扳机按钮
+            {
+
+                // 根据镜像模式决定控制哪个臂
+                std::string target_controller_name;
+                bool is_target_left_arm; // true for left arm, false for right arm
+
+                if (mirror_mode_.load())
+                {
+                    // 镜像模式：左扳机控制右臂
+                    target_controller_name = right_gripper_controller_name_;
+                    is_target_left_arm = false;
+                }
+                else
+                {
+                    // 正常模式：左扳机控制左臂
+                    target_controller_name = left_gripper_controller_name_;
+                    is_target_left_arm = true;
+                }
+
+                if (target_controller_name.empty())
+                {
+                    RCLCPP_WARN(node_->get_logger(), "🕹️🕶️🕹️ No controller detected for %s arm, cannot process left trigger.",
+                                is_target_left_arm ? "left" : "right");
+                    break;
+                }
+
+                // 获取当前夹爪状态并切换
+                bool current_gripper_open = is_target_left_arm ? left_gripper_open_.load() : right_gripper_open_.load();
+                int32_t command = current_gripper_open ? 0 : 1; // 0=close, 1=open
+
+                publishGripperCommand(target_controller_name, command);
+
+                // 状态会通过订阅器回调自动更新，无需手动更新
+
+                RCLCPP_INFO(node_->get_logger(), "🔴 左扳机按下！%s夹爪已%s",
+                            is_target_left_arm ? "左" : "右", (command == 1) ? "打开" : "关闭");
+                break;
+            }
+            case 10: // 右扳机按钮
+            {
+
+
+                // 根据镜像模式决定控制哪个臂
+                std::string target_controller_name;
+                bool is_target_left_arm; // true for left arm, false for right arm
+
+                if (mirror_mode_.load())
+                {
+                    // 镜像模式：右扳机控制左臂
+                    target_controller_name = left_gripper_controller_name_;
+                    is_target_left_arm = true;
+                }
+                else
+                {
+                    // 正常模式：右扳机控制右臂
+                    target_controller_name = right_gripper_controller_name_;
+                    is_target_left_arm = false;
+                }
+
+                if (target_controller_name.empty())
+                {
+                    RCLCPP_WARN(node_->get_logger(), "🕹️🕶️🕹️ No controller detected for %s arm, cannot process right trigger.",
+                                is_target_left_arm ? "left" : "right");
+                    break;
+                }
+
+                // 获取当前夹爪状态并切换
+                bool current_gripper_open = is_target_left_arm ? left_gripper_open_.load() : right_gripper_open_.load();
+                int32_t command = current_gripper_open ? 0 : 1; // 0=close, 1=open
+
+                publishGripperCommand(target_controller_name, command);
+
+                // 状态会通过订阅器回调自动更新，无需手动更新
+
+                RCLCPP_INFO(node_->get_logger(), "🔵 右扳机按下！%s夹爪已%s",
+                            is_target_left_arm ? "左" : "右", (command == 1) ? "打开" : "关闭");
                 break;
             }
             case 0:  // 无事件

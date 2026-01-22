@@ -5,6 +5,8 @@
 
 #include <memory>
 #include <string>
+#include <vector>
+#include <map>
 #include <mutex>
 #include <atomic>
 #include <rclcpp/rclcpp.hpp>
@@ -42,13 +44,15 @@ namespace arms_ros2_control::command
          * @param pub_left_target 外部传入的左臂目标位姿发布器（统一管理）
          * @param pub_right_target 外部传入的右臂目标位姿发布器（统一管理）
          * @param updateRate 更新频率，默认为500Hz
+         * @param handControllers 手部/夹爪控制器名称列表（用于映射夹爪命令）
          */
         VRInputHandler(
             rclcpp::Node::SharedPtr node,
             ArmsTargetManager* targetManager,
             rclcpp::Publisher<geometry_msgs::msg::Pose>::SharedPtr pub_left_target,
             rclcpp::Publisher<geometry_msgs::msg::Pose>::SharedPtr pub_right_target,
-            double updateRate = 500.0);
+            double updateRate = 500.0,
+            const std::vector<std::string>& handControllers = {});
 
         ~VRInputHandler() = default;
 
@@ -117,18 +121,6 @@ namespace arms_ros2_control::command
         void vrRightCallback(geometry_msgs::msg::Pose::SharedPtr msg);
 
         /**
-         * 右摇杆回调函数
-         * @param msg 布尔消息，表示摇杆按下状态
-         */
-        void rightThumbstickCallback(std_msgs::msg::Bool::SharedPtr msg);
-
-        /**
-         * 左摇杆回调函数
-         * @param msg 布尔消息，表示摇杆按下状态
-         */
-        void leftThumbstickCallback(std_msgs::msg::Bool::SharedPtr msg);
-
-        /**
          * 摇杆轴值回调函数（合并处理左右摇杆）
          * @param msg Twist消息，linear.x/y 表示左摇杆，angular.x/y 表示右摇杆
          */
@@ -145,34 +137,35 @@ namespace arms_ros2_control::command
         void processRightThumbstickAxes();
 
         /**
-         * 左握把按钮回调函数
-         * @param msg 握把按钮状态消息
-         */
-        void leftGripCallback(std_msgs::msg::Bool::SharedPtr msg);
-
-        /**
-         * 右握把按钮回调函数
-         * @param msg 握把按钮状态消息
-         */
-        void rightGripCallback(std_msgs::msg::Bool::SharedPtr msg);
-
-        /**
-         * 左Y按键回调函数（用于设置左臂基准位姿）
-         * @param msg Y按键状态消息
-         */
-        void leftYButtonCallback(std_msgs::msg::Bool::SharedPtr msg);
-
-        /**
-         * 右B按键回调函数（用于设置右臂基准位姿）
-         * @param msg B按键状态消息
-         */
-        void rightBButtonCallback(std_msgs::msg::Bool::SharedPtr msg);
-
-        /**
          * 按钮事件回调函数（处理按钮事件数字）
-         * @param msg Int32消息，包含按钮事件数字 (0=无事件, 1-6=按钮按下, 7=mirror启用, 8=mirror禁用)
+         * @param msg Int32消息，包含按钮事件数字 (0=无事件, 1-6=按钮按下, 7=镜像模式切换, 9=左扳机, 10=右扳机)
          */
         void processButtonEvent(const std_msgs::msg::Int32::SharedPtr msg);
+
+        /**
+         * 从hand_controllers参数中提取左右控制器名称
+         * @param hand_controllers 控制器名称列表
+         */
+        void detectGripperControllers(const std::vector<std::string>& hand_controllers);
+
+        /**
+         * 发布夹爪命令到对应的控制器
+         * @param controller_name 控制器名称
+         * @param command 命令值 (0=close, 1=open)
+         */
+        void publishGripperCommand(const std::string& controller_name, int32_t command);
+
+        /**
+         * 左夹爪状态回调函数（同步夹爪状态）
+         * @param msg 夹爪命令消息 (0=close, 1=open)
+         */
+        void leftGripperStateCallback(const std_msgs::msg::Int32::SharedPtr msg);
+
+        /**
+         * 右夹爪状态回调函数（同步夹爪状态）
+         * @param msg 夹爪命令消息 (0=close, 1=open)
+         */
+        void rightGripperStateCallback(const std_msgs::msg::Int32::SharedPtr msg);
 
         /**
          * 更新marker位置（已废弃，保留用于兼容）
@@ -259,6 +252,9 @@ namespace arms_ros2_control::command
         rclcpp::Subscription<std_msgs::msg::Int32>::SharedPtr sub_controller_state_;
         // 摇杆轴值订阅器（合并订阅左右摇杆，使用 Twist 消息）
         rclcpp::Subscription<geometry_msgs::msg::Twist>::SharedPtr sub_thumbstick_axes_;
+        // 夹爪状态订阅器（用于同步夹爪状态）
+        rclcpp::Subscription<std_msgs::msg::Int32>::SharedPtr sub_left_gripper_state_;
+        rclcpp::Subscription<std_msgs::msg::Int32>::SharedPtr sub_right_gripper_state_;
         // 机器人 current_pose 订阅已移除，改为在 arms_target_manager_node 中统一处理
         // FSM命令订阅已移除，改为在 arms_target_manager_node 中统一处理
 
@@ -332,6 +328,17 @@ namespace arms_ros2_control::command
         // 摇杆累积Yaw旋转（弧度）
         double left_thumbstick_yaw_offset_ = 0.0;
         double right_thumbstick_yaw_offset_ = 0.0;
+
+        // Hand controllers mapping（类似ControlInputHandler）
+        std::vector<std::string> hand_controllers_;
+        // Publishers for gripper commands (created on demand)
+        std::map<std::string, rclcpp::Publisher<std_msgs::msg::Int32>::SharedPtr> gripper_command_publishers_;
+        // 检测到的左右控制器名称
+        std::string left_gripper_controller_name_;
+        std::string right_gripper_controller_name_;
+        // 夹爪状态跟踪
+        std::atomic<bool> left_gripper_open_;
+        std::atomic<bool> right_gripper_open_;
 
         // 常量
         static const std::string XR_NODE_NAME;
