@@ -73,8 +73,16 @@ namespace arms_ros2_control::command
 
         /**
          * 初始化interactive marker
+         * @param pub_left_target 左臂目标位姿发布器（外部统一创建）
+         * @param pub_left_target_stamped 左臂stamped发布器（外部统一创建）
+         * @param pub_right_target 右臂目标位姿发布器（外部统一创建，双臂模式需要）
+         * @param pub_right_target_stamped 右臂stamped发布器（外部统一创建，双臂模式需要）
          */
-        void initialize();
+        void initialize(
+            rclcpp::Publisher<geometry_msgs::msg::Pose>::SharedPtr pub_left_target,
+            rclcpp::Publisher<geometry_msgs::msg::PoseStamped>::SharedPtr pub_left_target_stamped,
+            rclcpp::Publisher<geometry_msgs::msg::Pose>::SharedPtr pub_right_target = nullptr,
+            rclcpp::Publisher<geometry_msgs::msg::PoseStamped>::SharedPtr pub_right_target_stamped = nullptr);
 
         /**
          * 设置marker位置

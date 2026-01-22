@@ -5,13 +5,14 @@
 
 #include <memory>
 #include <string>
-#include <mutex>
+#include <vector>
+#include <map>
 #include <atomic>
 #include <rclcpp/rclcpp.hpp>
 #include <geometry_msgs/msg/pose_stamped.hpp>
 #include <geometry_msgs/msg/pose.hpp>
 #include <geometry_msgs/msg/point.hpp>
-#include <std_msgs/msg/bool.hpp>
+#include <geometry_msgs/msg/twist.hpp>
 #include <Eigen/Core>
 #include <Eigen/Geometry>
 #include <std_msgs/msg/int32.hpp>
@@ -38,12 +39,18 @@ namespace arms_ros2_control::command
          * 构造函数
          * @param node ROS节点指针
          * @param targetManager ArmsTargetManager指针
+         * @param pub_left_target 外部传入的左臂目标位姿发布器（统一管理）
+         * @param pub_right_target 外部传入的右臂目标位姿发布器（统一管理）
          * @param updateRate 更新频率，默认为500Hz
+         * @param handControllers 手部/夹爪控制器名称列表（用于映射夹爪命令）
          */
         VRInputHandler(
             rclcpp::Node::SharedPtr node,
             ArmsTargetManager* targetManager,
-            double updateRate = 500.0);
+            rclcpp::Publisher<geometry_msgs::msg::Pose>::SharedPtr pub_left_target,
+            rclcpp::Publisher<geometry_msgs::msg::Pose>::SharedPtr pub_right_target,
+            double updateRate = 500.0,
+            const std::vector<std::string>& handControllers = {});
 
         ~VRInputHandler() = default;
 
@@ -103,71 +110,60 @@ namespace arms_ros2_control::command
          * VR左臂pose回调函数
          * @param msg VR pose消息
          */
-        void vrLeftCallback(geometry_msgs::msg::PoseStamped::SharedPtr msg);
+        void vrLeftCallback(geometry_msgs::msg::Pose::SharedPtr msg);
 
         /**
          * VR右臂pose回调函数
          * @param msg VR pose消息
          */
-        void vrRightCallback(geometry_msgs::msg::PoseStamped::SharedPtr msg);
+        void vrRightCallback(geometry_msgs::msg::Pose::SharedPtr msg);
 
         /**
-         * 右摇杆回调函数
-         * @param msg 布尔消息，表示摇杆按下状态
+         * 摇杆轴值回调函数（合并处理左右摇杆）
+         * @param msg Twist消息，linear.x/y 表示左摇杆，angular.x/y 表示右摇杆
          */
-        void rightThumbstickCallback(std_msgs::msg::Bool::SharedPtr msg);
+        void thumbstickAxesCallback(const geometry_msgs::msg::Twist::SharedPtr msg);
+        
+        /**
+         * 处理左摇杆轴值（内部辅助函数）
+         */
+        void processLeftThumbstickAxes();
+        
+        /**
+         * 处理右摇杆轴值（内部辅助函数）
+         */
+        void processRightThumbstickAxes();
 
         /**
-         * 左摇杆回调函数
-         * @param msg 布尔消息，表示摇杆按下状态
+         * 按钮事件回调函数（处理按钮事件数字）
+         * @param msg Int32消息，包含按钮事件数字 (0=无事件, 1-6=按钮按下, 7=镜像模式切换, 9=左扳机, 10=右扳机)
          */
-        void leftThumbstickCallback(std_msgs::msg::Bool::SharedPtr msg);
+        void processButtonEvent(const std_msgs::msg::Int32::SharedPtr msg);
 
         /**
-         * 左摇杆轴值回调函数
-         * @param msg 摇杆轴值消息 (x, y, z)
+         * 从hand_controllers参数中提取左右控制器名称
+         * @param hand_controllers 控制器名称列表
          */
-        void leftThumbstickAxesCallback(geometry_msgs::msg::Point::SharedPtr msg);
+        void detectGripperControllers(const std::vector<std::string>& hand_controllers);
 
         /**
-         * 右摇杆轴值回调函数
-         * @param msg 摇杆轴值消息 (x, y, z)
+         * 发布夹爪命令到对应的控制器
+         * @param controller_name 控制器名称
+         * @param command 命令值 (0=close, 1=open)
          */
-        void rightThumbstickAxesCallback(geometry_msgs::msg::Point::SharedPtr msg);
+        void publishGripperCommand(const std::string& controller_name, int32_t command);
 
         /**
-         * 左握把按钮回调函数
-         * @param msg 握把按钮状态消息
+         * 左夹爪状态回调函数（同步夹爪状态）
+         * @param msg 夹爪命令消息 (0=close, 1=open)
          */
-        void leftGripCallback(std_msgs::msg::Bool::SharedPtr msg);
+        void leftGripperStateCallback(const std_msgs::msg::Int32::SharedPtr msg);
 
         /**
-         * 右握把按钮回调函数
-         * @param msg 握把按钮状态消息
+         * 右夹爪状态回调函数（同步夹爪状态）
+         * @param msg 夹爪命令消息 (0=close, 1=open)
          */
-        void rightGripCallback(std_msgs::msg::Bool::SharedPtr msg);
-
-        /**
-         * 左Y按键回调函数（用于设置左臂基准位姿）
-         * @param msg Y按键状态消息
-         */
-        void leftYButtonCallback(std_msgs::msg::Bool::SharedPtr msg);
-
-        /**
-         * 右B按键回调函数（用于设置右臂基准位姿）
-         * @param msg B按键状态消息
-         */
-        void rightBButtonCallback(std_msgs::msg::Bool::SharedPtr msg);
-
-        /**
-         * 更新marker位置（已废弃，保留用于兼容）
-         * @param armType 手臂类型 ("left" 或 "right")
-         * @param position 位置
-         * @param orientation 方向
-         */
-        void updateMarkerPose(const std::string& armType,
-                              const Eigen::Vector3d& position,
-                              const Eigen::Quaterniond& orientation);
+        void rightGripperStateCallback(const std_msgs::msg::Int32::SharedPtr msg);
 
         /**
          * 直接发布目标位姿到left_target/right_target话题（解耦模式，无坐标转换）
@@ -180,11 +176,11 @@ namespace arms_ros2_control::command
                                      const Eigen::Quaterniond& orientation);
 
         /**
-         * 将PoseStamped消息转换为Eigen::Matrix4d
-         * @param msg PoseStamped消息
+         * 将Pose消息转换为Eigen::Matrix4d
+         * @param msg Pose消息
          * @return 4x4变换矩阵
          */
-        Eigen::Matrix4d poseMsgToMatrix(geometry_msgs::msg::PoseStamped::SharedPtr msg);
+        Eigen::Matrix4d poseMsgToMatrix(geometry_msgs::msg::Pose::SharedPtr msg);
 
         /**
          * 从4x4矩阵提取位置和方向
@@ -238,16 +234,15 @@ namespace arms_ros2_control::command
         rclcpp::Publisher<geometry_msgs::msg::Pose>::SharedPtr pub_right_target_;
 
         // 订阅器
-        rclcpp::Subscription<geometry_msgs::msg::PoseStamped>::SharedPtr sub_left_;
-        rclcpp::Subscription<geometry_msgs::msg::PoseStamped>::SharedPtr sub_right_;
-        rclcpp::Subscription<std_msgs::msg::Bool>::SharedPtr sub_right_thumbstick_;
-        rclcpp::Subscription<std_msgs::msg::Bool>::SharedPtr sub_left_thumbstick_;
-        rclcpp::Subscription<geometry_msgs::msg::Point>::SharedPtr sub_left_thumbstick_axes_;
-        rclcpp::Subscription<geometry_msgs::msg::Point>::SharedPtr sub_right_thumbstick_axes_;
-        rclcpp::Subscription<std_msgs::msg::Bool>::SharedPtr sub_left_grip_;
-        rclcpp::Subscription<std_msgs::msg::Bool>::SharedPtr sub_right_grip_;
-        rclcpp::Subscription<std_msgs::msg::Bool>::SharedPtr sub_left_y_button_;
-        rclcpp::Subscription<std_msgs::msg::Bool>::SharedPtr sub_right_b_button_;
+        rclcpp::Subscription<geometry_msgs::msg::Pose>::SharedPtr sub_left_;
+        rclcpp::Subscription<geometry_msgs::msg::Pose>::SharedPtr sub_right_;
+        // 按钮事件订阅器（Int32类型）
+        rclcpp::Subscription<std_msgs::msg::Int32>::SharedPtr sub_controller_state_;
+        // 摇杆轴值订阅器（合并订阅左右摇杆，使用 Twist 消息）
+        rclcpp::Subscription<geometry_msgs::msg::Twist>::SharedPtr sub_thumbstick_axes_;
+        // 夹爪状态订阅器（用于同步夹爪状态）
+        rclcpp::Subscription<std_msgs::msg::Int32>::SharedPtr sub_left_gripper_state_;
+        rclcpp::Subscription<std_msgs::msg::Int32>::SharedPtr sub_right_gripper_state_;
         // 机器人 current_pose 订阅已移除，改为在 arms_target_manager_node 中统一处理
         // FSM命令订阅已移除，改为在 arms_target_manager_node 中统一处理
 
@@ -267,36 +262,19 @@ namespace arms_ros2_control::command
         Eigen::Vector3d prev_calculated_right_position_ = Eigen::Vector3d::Zero();
         Eigen::Quaterniond prev_calculated_right_orientation_ = Eigen::Quaterniond::Identity();
 
-        // 用于变化检测的之前VR pose（存储模式）
-        Eigen::Vector3d prev_vr_left_position_ = Eigen::Vector3d::Zero();
-        Eigen::Quaterniond prev_vr_left_orientation_ = Eigen::Quaterniond::Identity();
-        Eigen::Vector3d prev_vr_right_position_ = Eigen::Vector3d::Zero();
-        Eigen::Quaterniond prev_vr_right_orientation_ = Eigen::Quaterniond::Identity();
-
         // 状态管理
         std::atomic<bool> enabled_;
         std::atomic<bool> is_update_mode_; // true = 更新模式, false = 存储模式
-        std::atomic<bool> last_thumbstick_state_;
         std::atomic<bool> mirror_mode_; // true = 镜像模式, false = 正常模式
-        std::atomic<bool> last_left_thumbstick_state_;
-        std::atomic<bool> last_left_grip_state_; // 左握把按钮上次状态
-        std::atomic<bool> last_right_grip_state_; // 右握把按钮上次状态
-        std::atomic<bool> last_left_y_button_state_; // 左Y按键上次状态
-        std::atomic<bool> last_right_b_button_state_; // 右B按键上次状态
         std::atomic<bool> left_arm_paused_; // 左臂是否暂停更新（Y按键控制）
         std::atomic<bool> right_arm_paused_; // 右臂是否暂停更新（B按键控制）
         std::atomic<bool> left_grip_mode_; // 左摇杆控制模式：false=XY平移, true=Z轴+Yaw
         std::atomic<bool> right_grip_mode_; // 右摇杆控制模式：false=XY平移, true=Z轴+Yaw
-        std::mutex state_mutex_;
         std::atomic<int32_t> current_fsm_state_; // 当前FSM状态：1=HOME, 2=HOLD, 3=OCS2, 100=REST
 
         // 时间控制
         rclcpp::Time last_update_time_;
         double update_rate_;
-
-        // 当前VR位置和方向（用于兼容性）
-        Eigen::Vector3d current_position_;
-        Eigen::Quaterniond current_orientation_;
 
         // VR base poses（摇杆按下时存储）
         Eigen::Vector3d vr_base_left_position_ = Eigen::Vector3d::Zero();
@@ -327,6 +305,17 @@ namespace arms_ros2_control::command
         // 摇杆累积Yaw旋转（弧度）
         double left_thumbstick_yaw_offset_ = 0.0;
         double right_thumbstick_yaw_offset_ = 0.0;
+
+        // Hand controllers mapping（类似ControlInputHandler）
+        std::vector<std::string> hand_controllers_;
+        // Publishers for gripper commands (created on demand)
+        std::map<std::string, rclcpp::Publisher<std_msgs::msg::Int32>::SharedPtr> gripper_command_publishers_;
+        // 检测到的左右控制器名称
+        std::string left_gripper_controller_name_;
+        std::string right_gripper_controller_name_;
+        // 夹爪状态跟踪
+        std::atomic<bool> left_gripper_open_;
+        std::atomic<bool> right_gripper_open_;
 
         // 常量
         static const std::string XR_NODE_NAME;
