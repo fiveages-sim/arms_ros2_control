@@ -106,14 +106,7 @@ namespace arms_controller_common
         for (auto i : ctrl_interfaces_.joint_position_state_interface_)
         {
             auto value = i.get().get_optional();
-            if (value.has_value())
-            {
-                start_pos_.push_back(value.value());
-            }
-            else
-            {
-                start_pos_.push_back(0.0);
-            }
+            start_pos_.push_back(value.value_or(0.0));
         }
 
         // Initialize trajectory manager
@@ -205,7 +198,7 @@ namespace arms_controller_common
             for (size_t i = 0; i < ctrl_interfaces_.joint_position_command_interface_.size() &&
                  i < next_positions.size(); ++i)
             {
-                std::ignore = ctrl_interfaces_.joint_position_command_interface_[i].get().set_value(next_positions[i]);
+                ctrl_interfaces_.setJointPositionCommand(i, next_positions[i]);
             }
         }
         else if (next_positions.empty())
@@ -224,7 +217,7 @@ namespace arms_controller_common
                 for (size_t i = 0; i < ctrl_interfaces_.joint_position_command_interface_.size() &&
                      i < current_target_.size(); ++i)
                 {
-                    std::ignore = ctrl_interfaces_.joint_position_command_interface_[i].get().set_value(current_target_[i]);
+                    ctrl_interfaces_.setJointPositionCommand(i, current_target_[i]);
                 }
             }
         }
@@ -345,19 +338,10 @@ namespace arms_controller_common
 
     void StateHome::startInterpolation()
     {
-        // Get current joint positions as new starting positions
         start_pos_.clear();
-        for (auto i : ctrl_interfaces_.joint_position_state_interface_)
+        for (size_t i = 0; i < ctrl_interfaces_.joint_position_state_interface_.size(); ++i)
         {
-            auto value = i.get().get_optional();
-            if (value.has_value())
-            {
-                start_pos_.push_back(value.value());
-            }
-            else
-            {
-                start_pos_.push_back(0.0);
-            }
+            start_pos_.push_back(ctrl_interfaces_.last_sent_joint_positions_[i]);
         }
 
         // Initialize trajectory manager with new target

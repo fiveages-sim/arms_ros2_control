@@ -181,7 +181,7 @@ void JoystickTeleop::joy_callback(sensor_msgs::msg::Joy::SharedPtr msg) {
     // Only process axes if joystick is enabled and not in FSM mode
     if (enabled_) {
         // Check if LB is pressed (FSM mode - only for arm control)
-        bool lb_pressed = (msg->buttons.size() > button_map_.lb_button) ? 
+        bool lb_pressed = (static_cast<size_t>(button_map_.lb_button) < msg->buttons.size()) ? 
                          msg->buttons[button_map_.lb_button] : false;
         
         if (current_mode_ == ARM_MODE) {

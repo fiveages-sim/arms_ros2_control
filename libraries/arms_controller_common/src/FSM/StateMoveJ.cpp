@@ -97,21 +97,17 @@ namespace arms_controller_common
             for (size_t i = 0; i < ctrl_interfaces_.joint_position_command_interface_.size() &&
                  i < start_pos_.size(); ++i)
             {
-                std::ignore = ctrl_interfaces_.joint_position_command_interface_[i].get().set_value(start_pos_[i]);
+                ctrl_interfaces_.setJointPositionCommand(i, start_pos_[i]);
             }
             return;
         }
-        // Single-node trajectory: if interpolation just started, update start position to current position
         else if (!interpolation_active_)
         {
             start_pos_.clear();
-            for (auto i : ctrl_interfaces_.joint_position_state_interface_)
+            for (size_t i = 0; i < ctrl_interfaces_.joint_position_state_interface_.size(); ++i)
             {
-                auto value = i.get().get_optional();
-                start_pos_.push_back(value.value_or(0.0));
+                start_pos_.push_back(ctrl_interfaces_.last_sent_joint_positions_[i]);
             }
-            
-            // Initialize trajectory manager for single-node trajectory
             trajectory_manager_.initSingleNode(
                 start_pos_,
                 target_pos_,
@@ -123,7 +119,7 @@ namespace arms_controller_common
             
             interpolation_active_ = true;
             RCLCPP_INFO(logger_,
-                        "Target position received, starting interpolation from current position");
+                        "Target position received, starting interpolation from last sent position");
         }
 
         // Get next trajectory point from unified manager (works for both single and multi-node)
@@ -146,7 +142,7 @@ namespace arms_controller_common
                 for (size_t i = 0; i < ctrl_interfaces_.joint_position_command_interface_.size() &&
                      i < start_pos_.size(); ++i)
                 {
-                    std::ignore = ctrl_interfaces_.joint_position_command_interface_[i].get().set_value(start_pos_[i]);
+                    ctrl_interfaces_.setJointPositionCommand(i, start_pos_[i]);
                 }
             }
             else
@@ -155,7 +151,7 @@ namespace arms_controller_common
                 for (size_t i = 0; i < ctrl_interfaces_.joint_position_command_interface_.size() &&
                      i < start_pos_.size(); ++i)
                 {
-                    std::ignore = ctrl_interfaces_.joint_position_command_interface_[i].get().set_value(start_pos_[i]);
+                    ctrl_interfaces_.setJointPositionCommand(i, start_pos_[i]);
                 }
             }
             return;
@@ -176,7 +172,7 @@ namespace arms_controller_common
             for (size_t i = 0; i < ctrl_interfaces_.joint_position_command_interface_.size() &&
                  i < start_pos_.size(); ++i)
             {
-                std::ignore = ctrl_interfaces_.joint_position_command_interface_[i].get().set_value(start_pos_[i]);
+                ctrl_interfaces_.setJointPositionCommand(i, start_pos_[i]);
             }
             return;
         }
@@ -233,7 +229,7 @@ namespace arms_controller_common
                 position_to_set = next_positions[i];
             }
             
-            std::ignore = ctrl_interfaces_.joint_position_command_interface_[i].get().set_value(position_to_set);
+            ctrl_interfaces_.setJointPositionCommand(i, position_to_set);
         }
 
         // In force control mode, calculate static torques

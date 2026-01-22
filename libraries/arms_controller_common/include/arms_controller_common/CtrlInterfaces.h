@@ -61,6 +61,25 @@ namespace arms_controller_common
         // PD control gains [kp, kd] - used when entering OCS2 state (optional, for ocs2_arm_controller)
         std::vector<double> pd_gains_;
 
+        std::vector<double> last_sent_joint_positions_;
+
+        void setJointPositionCommand(size_t index, double value)
+        {
+            std::ignore = joint_position_command_interface_[index].get().set_value(value);
+            last_sent_joint_positions_[index] = value;
+        }
+
+        void initializeLastSentPositions()
+        {
+            last_sent_joint_positions_.clear();
+            last_sent_joint_positions_.reserve(joint_position_state_interface_.size());
+            for (size_t i = 0; i < joint_position_state_interface_.size(); ++i)
+            {
+                auto value = joint_position_state_interface_[i].get().get_optional();
+                last_sent_joint_positions_.push_back(value.value_or(0.0));
+            }
+        }
+
         // Auto mode detection function - called once during initialization
         void detectAndSetControlMode()
         {
@@ -102,6 +121,7 @@ namespace arms_controller_common
             joint_position_state_interface_.clear();
             joint_velocity_state_interface_.clear();
             joint_force_state_interface_.clear();
+            last_sent_joint_positions_.clear();
         }
     };
 } // namespace arms_controller_common
