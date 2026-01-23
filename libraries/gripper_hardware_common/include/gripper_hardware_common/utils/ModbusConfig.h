@@ -149,6 +149,7 @@ namespace gripper_hardware_common
         {
             // Common Modbus configuration for all LinkerHand models
             // Modbus slave addresses
+            // According to O6 protocol: Right hand = 0x27, Left hand = 0x28
             static constexpr uint8_t RIGHT_HAND_SLAVE_ID = 0x27;  // Right hand Modbus ID
             static constexpr uint8_t LEFT_HAND_SLAVE_ID = 0x28;   // Left hand Modbus ID
             static constexpr uint8_t DEFAULT_SLAVE_ID = 0x01;     // Default slave address (can be configured)
@@ -161,9 +162,10 @@ namespace gripper_hardware_common
             static constexpr int DEFAULT_STOP_BITS = 1;
 
             // Function codes
-            static constexpr uint8_t READ_FUNCTION = 0x03;   // Read Holding Registers
-            static constexpr uint8_t WRITE_FUNCTION = 0x10;  // Write Multiple Registers
-            static constexpr uint8_t WRITE_SINGLE_FUNCTION = 0x06;  // Write Single Register
+            // According to O6/L6 protocol: FC 04 (Read Input Registers) and FC 16 (Write Holding Registers)
+            static constexpr uint8_t READ_FUNCTION = 0x04;   // Read Input Registers (FC 04)
+            static constexpr uint8_t WRITE_FUNCTION = 0x10;  // Write Multiple Registers (FC 16)
+            static constexpr uint8_t WRITE_SINGLE_FUNCTION = 0x06;  // Write Single Register (FC 06)
 
             // Register addresses (common for all LinkerHand models)
             // Position registers (0-6) - 7 joints (O7) or 6 joints (O6/L6)
