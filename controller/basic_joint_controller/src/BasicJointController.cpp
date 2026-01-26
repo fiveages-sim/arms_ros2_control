@@ -98,63 +98,34 @@ namespace basic_joint_controller
             state_interface_types_ =
                 auto_declare<std::vector<std::string>>("state_interfaces", state_interface_types_);
 
-            // State machine parameters
-            // Home state parameters (declared for parameter server, values updated dynamically via updateParam())
+            // Home state
             auto_declare<double>("home_duration", 3.0);
             auto_declare<std::string>("home_interpolation_type", "linear");
             auto_declare<double>("home_tanh_scale", 3.0);
-            move_duration_ = auto_declare<double>("move_duration", 3.0);
-            std::string movej_interpolation_type = auto_declare<std::string>("movej_interpolation_type", "linear");
-            double movej_tanh_scale = auto_declare<double>("movej_tanh_scale", 3.0);
-            auto_declare<double>("hold_position_threshold", 0.1);
-            // switch_command_base is declared for parameter server, retrieved in StateHome constructor
             auto_declare<long>("switch_command_base", 100);
 
-            // Create states using arms_controller_common
-            // StateHome - configurations will be loaded via init() method using auto_declare
-            // Parameters (home_duration, home_interpolation_type, home_tanh_scale, switch_command_base) 
-            // are retrieved from parameter server in constructor or updated dynamically via updateParam()
             state_list_.home = std::make_shared<arms_controller_common::StateHome>(
                 ctrl_interfaces_, nullptr, get_node());
-
-            // Initialize StateHome with configurations from parameters (home_1, home_2, home_3, etc.)
-            // Pass auto_declare as a lambda to allow StateHome to use it
             state_list_.home->init([this](const std::string& name, const std::vector<double>& default_value)
             {
                 return this->auto_declare<std::vector<double>>(name, default_value);
             });
 
-            // StateHold - extends common StateHold to support MOVEJ transition
+            // HOLD state
+            auto_declare<double>("hold_position_threshold", 0.1);
             state_list_.hold = std::make_shared<StateHold>(
                 ctrl_interfaces_, get_node());
 
-            // StateMoveJ - extends common StateMoveJ for basic_joint_controller
+            // MOVEJ state
+            auto_declare<double>("movej_duration", 3.0);
+            auto_declare<std::string>("movej_interpolation_type", "linear");
+            auto_declare<double>("movej_tanh_scale", 3.0);
+            auto_declare<double>("movej_trajectory_duration", 3.0);
+            auto_declare<double>("movej_trajectory_blend_ratio", 0.0);
+
             state_list_.movej = std::make_shared<StateMoveJ>(
-                ctrl_interfaces_, get_node()->get_logger(), move_duration_);
+                ctrl_interfaces_, get_node(), joint_names_);
 
-            // Configure interpolation type/shape
-            state_list_.movej->setInterpolationType(movej_interpolation_type);
-            state_list_.movej->setTanhScale(movej_tanh_scale);
-
-            // Set joint names from controller parameters
-            state_list_.movej->setJointNames(joint_names_);
-
-            // Set trajectory duration for multi-node trajectory planning
-            double trajectory_duration = auto_declare<double>("trajectory_duration", 3.0);
-            state_list_.movej->setTrajectoryDuration(trajectory_duration);
-            RCLCPP_INFO(get_node()->get_logger(), "Trajectory duration set to %.2f seconds", trajectory_duration);
-
-            // Set trajectory common joint blend ratio for multi-node trajectory planning
-            double joint_blend_ratio=auto_declare<double>("joint_trajectory_common_blend_ratio",0.0);
-            state_list_.movej->setCommonJointBlendRatios(joint_blend_ratio);
-            RCLCPP_INFO(get_node()->get_logger(),"Trajectory blend ratio set to %.2f ",joint_blend_ratio);
-
-            // Create joint limits manager
-            joint_limits_manager_ = std::make_shared<arms_controller_common::JointLimitsManager>(
-                get_node()->get_logger());
-            joint_limits_manager_->setJointNames(joint_names_);
-
-            // Target command parameters
             target_command_enabled_ = auto_declare<bool>("target_command_enabled", false);
             target_command_close_config_ = auto_declare<int32_t>("target_command_close_config", 1);
             target_command_open_config_ = auto_declare<int32_t>("target_command_open_config", 0);
@@ -185,37 +156,15 @@ namespace basic_joint_controller
                 ctrl_interfaces_.fsm_command_ = msg->data;
             });
 
-        // Setup subscriptions for target positions in StateMoveJ
-        // For basic_joint_controller, disable prefix topics (left/right/body)
-        if (state_list_.movej)
-        {
-            state_list_.movej->setupSubscriptions(get_node(), "target_joint_position", false);
-            // Setup trajectory subscription for multi-node trajectory planning (uses default topic name)
-            state_list_.movej->setupTrajectorySubscription(get_node());
 
-            // Set joint limit checker from joint limits manager
-            if (joint_limits_manager_)
-            {
-                state_list_.movej->setJointLimitChecker(
-                    joint_limits_manager_->createLimitChecker());
-            }
-        }
+        state_list_.movej->setupSubscriptions("target_joint_position", false);
+        state_list_.movej->setupTrajectorySubscription();
 
-        // Subscribe to robot_description topic to load joint limits from URDF
         robot_description_subscription_ = get_node()->create_subscription<std_msgs::msg::String>(
             "/robot_description", rclcpp::QoS(rclcpp::KeepLast(1)).transient_local(),
             [this](const std_msgs::msg::String::SharedPtr msg)
             {
-                if (joint_limits_manager_)
-                {
-                    joint_limits_manager_->parseFromURDF(msg->data, joint_names_);
-                    // Update limit checker after parsing
-                    if (state_list_.movej)
-                    {
-                        state_list_.movej->setJointLimitChecker(
-                            joint_limits_manager_->createLimitChecker());
-                    }
-                }
+                state_list_.movej->updateJointLimitsFromURDF(msg->data);
             });
 
         // Subscribe to target_command topic for dexterous hand control (if enabled)
@@ -291,29 +240,6 @@ namespace basic_joint_controller
             RCLCPP_DEBUG(get_node()->get_logger(), "Target command subscription disabled");
         }
 
-        // Also try to get robot_description from parameter server as fallback
-        try
-        {
-            std::string robot_description;
-            if (get_node()->get_parameter("robot_description", robot_description))
-            {
-                if (joint_limits_manager_)
-                {
-                    joint_limits_manager_->parseFromURDF(robot_description, joint_names_);
-                    // Update limit checker after parsing
-                    if (state_list_.movej)
-                    {
-                        state_list_.movej->setJointLimitChecker(
-                            joint_limits_manager_->createLimitChecker());
-                    }
-                }
-            }
-        }
-        catch (const std::exception& e)
-        {
-            RCLCPP_DEBUG(get_node()->get_logger(),
-                         "Could not get robot_description from parameter server: %s", e.what());
-        }
 
         return CallbackReturn::SUCCESS;
     }

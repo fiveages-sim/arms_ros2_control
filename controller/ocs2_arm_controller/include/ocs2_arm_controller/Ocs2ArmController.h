@@ -12,8 +12,6 @@
 #include <functional>
 
 #include <controller_interface/controller_interface.hpp>
-#include <std_msgs/msg/string.hpp>
-#include <std_msgs/msg/float64_multi_array.hpp>
 #include <std_msgs/msg/int32.hpp>
 #include <hardware_interface/loaned_command_interface.hpp>
 #include <hardware_interface/loaned_state_interface.hpp>
