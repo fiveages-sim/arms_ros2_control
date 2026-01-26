@@ -18,10 +18,9 @@ namespace basic_joint_controller
     {
     public:
         StateHold(arms_controller_common::CtrlInterfaces& ctrl_interfaces,
-                 const rclcpp::Logger& logger,
-                 double position_threshold = 0.1,
+                 std::shared_ptr<rclcpp_lifecycle::LifecycleNode> node = nullptr,
                  std::shared_ptr<arms_controller_common::GravityCompensation> gravity_compensation = nullptr)
-            : arms_controller_common::StateHold(ctrl_interfaces, logger, position_threshold, gravity_compensation)
+            : arms_controller_common::StateHold(ctrl_interfaces, node, gravity_compensation)
         {
         }
 

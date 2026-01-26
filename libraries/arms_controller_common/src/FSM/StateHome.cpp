@@ -3,22 +3,19 @@
 //
 #include "arms_controller_common/FSM/StateHome.h"
 #include <cmath>
-#include <algorithm>
-#include <iostream>
-#include <iomanip>
 
 namespace arms_controller_common
 {
     StateHome::StateHome(CtrlInterfaces& ctrl_interfaces,
-                         const rclcpp::Logger& logger,
-                         double duration,
-                         std::shared_ptr<GravityCompensation> gravity_compensation)
+                         const std::shared_ptr<GravityCompensation>& gravity_compensation,
+                         const std::shared_ptr<rclcpp_lifecycle::LifecycleNode>& node)
         : FSMState(FSMStateName::HOME, "home", ctrl_interfaces),
-          logger_(logger),
           gravity_compensation_(gravity_compensation),
-          duration_(duration),
-          trajectory_manager_(logger)
+          node_(node),
+          trajectory_manager_(node->get_logger())
     {
+        // Get switch_command_base from parameter server
+        switch_command_base_ = node->get_parameter("switch_command_base").as_int();
     }
 
     void StateHome::setHomePosition(const std::vector<double>& home_pos)
@@ -47,48 +44,20 @@ namespace arms_controller_common
         {
             return;
         }
-        
-        // Add rest pose as the second configuration (index 1) in home_configs_
-        // If home_configs_ is empty, add it as the first configuration
-        if (home_configs_.empty())
+
+        if (home_configs_.size() == 1)
         {
-            // If no home configs exist, add rest_pos as the first config
-            home_configs_.push_back(rest_pos);
-            current_target_ = rest_pos;
-            current_config_index_ = 0;
-            has_multiple_configs_ = false;
-            RCLCPP_WARN(logger_, 
-                       "Rest pose added but no home configurations exist. Using rest pose as first configuration.");
-        }
-        else if (home_configs_.size() == 1)
-        {
-            // If only one home config exists, add rest_pos as the second config
             home_configs_.push_back(rest_pos);
             has_multiple_configs_ = true;
-            RCLCPP_INFO(logger_, 
-                       "Rest pose added as second configuration (index 1). Total configurations: %zu", 
-                       home_configs_.size());
+            RCLCPP_INFO(node_->get_logger(),
+                        "Rest pose added as second configuration (index 1). Total configurations: %zu",
+                        home_configs_.size());
         }
         else
         {
-            // If multiple configs exist, replace or add the second one (index 1) with rest_pos
-            if (home_configs_.size() > 1)
-            {
-                // Replace existing second config with rest_pos
-                home_configs_[1] = rest_pos;
-                RCLCPP_INFO(logger_, 
-                           "Rest pose updated as second configuration (index 1). Total configurations: %zu", 
-                           home_configs_.size());
-            }
-            else
-            {
-                // This shouldn't happen (size should be >= 1 from previous checks), but handle it anyway
-                home_configs_.push_back(rest_pos);
-                has_multiple_configs_ = true;
-                RCLCPP_INFO(logger_, 
-                           "Rest pose added as second configuration (index 1). Total configurations: %zu", 
-                           home_configs_.size());
-            }
+            RCLCPP_ERROR(node_->get_logger(),
+                         "Cannot set rest pose: expected exactly 1 home configuration, but found %zu",
+                         home_configs_.size());
         }
     }
 
@@ -109,6 +78,9 @@ namespace arms_controller_common
             start_pos_.push_back(value.value_or(0.0));
         }
 
+        // Update parameters from node
+        updateParam();
+
         // Initialize trajectory manager
         if (!start_pos_.empty() && !current_target_.empty() && start_pos_.size() == current_target_.size())
         {
@@ -120,15 +92,15 @@ namespace arms_controller_common
                 ctrl_interfaces_.frequency_,
                 tanh_scale_))
             {
-                RCLCPP_ERROR(logger_,
-                            "Failed to initialize trajectory manager in StateHome::enter()");
+                RCLCPP_ERROR(node_->get_logger(),
+                             "Failed to initialize trajectory manager in StateHome::enter()");
             }
         }
         else
         {
-            RCLCPP_WARN(logger_,
-                       "Cannot initialize trajectory manager: start_pos size (%zu) != target_pos size (%zu)",
-                       start_pos_.size(), current_target_.size());
+            RCLCPP_WARN(node_->get_logger(),
+                        "Cannot initialize trajectory manager: start_pos size (%zu) != target_pos size (%zu)",
+                        start_pos_.size(), current_target_.size());
         }
 
         // Set kp and kd gains for force control if available
@@ -149,7 +121,7 @@ namespace arms_controller_common
             }
         }
 
-        RCLCPP_INFO(logger_,
+        RCLCPP_INFO(node_->get_logger(),
                     "Starting interpolation to home configuration %zu over %.1f seconds (type=%s)",
                     current_config_index_,
                     duration_,
@@ -173,25 +145,19 @@ namespace arms_controller_common
             else if (current_command >= switch_command_base_ + 1)
             {
                 // Switch to specific configuration
-                size_t target_index = static_cast<size_t>(current_command - (switch_command_base_ + 1));
-                if (target_index < home_configs_.size())
+                if (auto target_index = static_cast<size_t>(current_command - (switch_command_base_ + 1)); target_index < home_configs_.size())
                 {
                     selectConfiguration(target_index);
                 }
             }
-            // Note: fsm_command_ is read-only from topic, so we don't reset it here
-            // The command will be cleared by the publisher when needed
         }
-
-        // Rest pose is now part of home_configs_ (as index 1), so it's handled by the multi-config switching above
-        // No separate pose switching logic needed
 
         last_command_ = current_command;
 
         // Get next trajectory point from unified manager
         std::vector<double> next_positions = trajectory_manager_.getNextPoint();
-        
-        if (!next_positions.empty() && 
+
+        if (!next_positions.empty() &&
             next_positions.size() == ctrl_interfaces_.joint_position_command_interface_.size())
         {
             // Apply interpolated position to joints
@@ -207,8 +173,8 @@ namespace arms_controller_common
             static bool warned = false;
             if (!warned && !trajectory_manager_.isInitialized())
             {
-                RCLCPP_WARN_THROTTLE(logger_, *std::make_shared<rclcpp::Clock>(), 1000,
-                                    "Trajectory manager not initialized, maintaining current position");
+                RCLCPP_WARN_THROTTLE(node_->get_logger(), *std::make_shared<rclcpp::Clock>(), 1000,
+                                     "Trajectory manager not initialized, maintaining current position");
                 warned = true;
             }
             // Maintain current position if trajectory manager is not initialized
@@ -226,9 +192,9 @@ namespace arms_controller_common
             static bool warned = false;
             if (!warned)
             {
-                RCLCPP_WARN(logger_,
-                           "Trajectory manager returned positions with size mismatch: got %zu, expected %zu",
-                           next_positions.size(), ctrl_interfaces_.joint_position_command_interface_.size());
+                RCLCPP_WARN(node_->get_logger(),
+                            "Trajectory manager returned positions with size mismatch: got %zu, expected %zu",
+                            next_positions.size(), ctrl_interfaces_.joint_position_command_interface_.size());
                 warned = true;
             }
         }
@@ -237,9 +203,9 @@ namespace arms_controller_common
         {
             // Get interpolated joint positions
             std::vector<double> interpolated_positions;
-            for (size_t i = 0; i < ctrl_interfaces_.joint_position_command_interface_.size(); ++i)
+            for (auto i : ctrl_interfaces_.joint_position_command_interface_)
             {
-                auto value = ctrl_interfaces_.joint_position_command_interface_[i].get().get_optional();
+                auto value = i.get().get_optional();
                 interpolated_positions.push_back(value.value_or(0.0));
             }
 
@@ -261,24 +227,29 @@ namespace arms_controller_common
         trajectory_manager_.reset();
     }
 
-    void StateHome::setInterpolationType(const std::string& type)
+    void StateHome::updateParam()
     {
-        const std::string t = toLowerCopy(type);
-        if (t != "linear" && t != "tanh" && t != "doubles")
-        {
-            RCLCPP_WARN(logger_, "Unknown home interpolation type '%s', falling back to 'linear'", type.c_str());
-        }
-        interpolation_type_ = parseInterpolationType(type, InterpolationType::LINEAR);
-    }
+        // Update duration from node parameter
+        duration_ = node_->get_parameter("home_duration").as_double();
 
-    void StateHome::setTanhScale(double scale)
-    {
-        if (scale <= 0.0 || !std::isfinite(scale))
+        // Update tanh_scale from node parameter
+        double new_tanh_scale = node_->get_parameter("home_tanh_scale").as_double();
+        if (new_tanh_scale > 0.0 && std::isfinite(new_tanh_scale))
         {
-            RCLCPP_WARN(logger_, "Invalid home tanh scale %.3f, keeping %.3f", scale, tanh_scale_);
-            return;
+            tanh_scale_ = new_tanh_scale;
         }
-        tanh_scale_ = scale;
+        else
+        {
+            RCLCPP_WARN(node_->get_logger(),
+                        "Invalid home tanh scale %.3f from parameter, keeping current value %.3f",
+                        new_tanh_scale, tanh_scale_);
+        }
+
+        // Update interpolation_type from node parameter
+        std::string interpolation_type_str = node_->get_parameter("home_interpolation_type").as_string();
+        interpolation_type_ = parseInterpolationType(interpolation_type_str, InterpolationType::LINEAR);
+
+        // Future parameters can be added here
     }
 
     FSMStateName StateHome::checkChange()
@@ -298,7 +269,7 @@ namespace arms_controller_common
     {
         if (config_index >= home_configs_.size())
         {
-            RCLCPP_WARN(logger_,
+            RCLCPP_WARN(node_->get_logger(),
                         "Invalid configuration index %zu (max: %zu)",
                         config_index, home_configs_.size() - 1);
             return;
@@ -313,10 +284,10 @@ namespace arms_controller_common
     {
         if (config_index >= home_configs_.size())
         {
-            RCLCPP_WARN(logger_,
+            RCLCPP_WARN(node_->get_logger(),
                         "Invalid configuration index %zu (max: %zu), returning empty vector",
                         config_index, home_configs_.size() - 1);
-            return std::vector<double>();
+            return {};
         }
 
         return home_configs_[config_index];
@@ -326,7 +297,7 @@ namespace arms_controller_common
     {
         if (!has_multiple_configs_)
         {
-            RCLCPP_WARN(logger_, "Cannot switch: only one configuration available");
+            RCLCPP_WARN(node_->get_logger(), "Cannot switch: only one configuration available");
             return;
         }
 
@@ -344,6 +315,9 @@ namespace arms_controller_common
             start_pos_.push_back(ctrl_interfaces_.last_sent_joint_positions_[i]);
         }
 
+        // Update parameters from node
+        updateParam();
+
         // Initialize trajectory manager with new target
         if (!start_pos_.empty() && !current_target_.empty() && start_pos_.size() == current_target_.size())
         {
@@ -355,16 +329,16 @@ namespace arms_controller_common
                 ctrl_interfaces_.frequency_,
                 tanh_scale_
             );
-            
-            RCLCPP_INFO(logger_,
+
+            RCLCPP_INFO(node_->get_logger(),
                         "Starting interpolation to configuration %zu over %.1f seconds (type=%s)",
                         current_config_index_, duration_, toString(interpolation_type_));
         }
         else
         {
-            RCLCPP_WARN(logger_,
-                       "Cannot start interpolation: start_pos size (%zu) != target_pos size (%zu)",
-                       start_pos_.size(), current_target_.size());
+            RCLCPP_WARN(node_->get_logger(),
+                        "Cannot start interpolation: start_pos size (%zu) != target_pos size (%zu)",
+                        start_pos_.size(), current_target_.size());
         }
     }
 } // namespace arms_controller_common

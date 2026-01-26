@@ -22,7 +22,6 @@
 #include <arms_controller_common/FSM/StateHome.h>
 #include <arms_controller_common/FSM/StateHold.h>
 #include <arms_controller_common/CtrlInterfaces.h>
-#include <arms_controller_common/utils/JointLimitsManager.h>
 
 namespace basic_joint_controller
 {
@@ -81,11 +80,6 @@ namespace basic_joint_controller
         FSMStateName next_state_name_{FSMStateName::INVALID};
         FSMMode mode_{FSMMode::NORMAL};
 
-        // State machine parameters
-        double home_duration_{3.0};
-        double move_duration_{3.0};
-        double hold_position_threshold_{0.1};
-
         // Interface mapping
         std::unordered_map<std::string, std::vector<std::reference_wrapper<hardware_interface::LoanedCommandInterface>>*>
         command_interface_map_ = {
@@ -110,9 +104,6 @@ namespace basic_joint_controller
         rclcpp::Subscription<std_msgs::msg::Int32>::SharedPtr fsm_command_subscription_;
         rclcpp::Subscription<std_msgs::msg::String>::SharedPtr robot_description_subscription_;
         rclcpp::Subscription<std_msgs::msg::Int32>::SharedPtr target_command_subscription_;
-
-        // Joint limits manager (common utility)
-        std::shared_ptr<arms_controller_common::JointLimitsManager> joint_limits_manager_;
     };
 }
 

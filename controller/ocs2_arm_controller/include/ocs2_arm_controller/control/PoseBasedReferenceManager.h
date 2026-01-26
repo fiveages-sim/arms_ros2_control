@@ -36,15 +36,11 @@ namespace ocs2::mobile_manipulator
          * @param topicPrefix Topic前缀
          * @param referenceManagerPtr 参考管理器指针
          * @param interfacePtr 移动操作器接口指针
-         * @param trajectoryDuration 插值轨迹持续时间（秒），默认2.0秒
-         * @param moveLDuration moveL 插值轨迹持续时间（秒），默认2.0秒
          */
         PoseBasedReferenceManager(
             std::string topicPrefix,
             std::shared_ptr<ReferenceManagerInterface> referenceManagerPtr,
-            std::shared_ptr<MobileManipulatorInterface> interfacePtr,
-            double trajectoryDuration = 2.0,
-            double moveLDuration = 2.0);
+            std::shared_ptr<MobileManipulatorInterface> interfacePtr);
 
         ~PoseBasedReferenceManager() override = default;
 
@@ -72,6 +68,7 @@ namespace ocs2::mobile_manipulator
         void setCurrentEndEffectorPoses(const vector_t& left_ee_pose, const vector_t& right_ee_pose);
 
     private:
+        void updateParam();
         void leftPoseCallback(geometry_msgs::msg::Pose::SharedPtr msg);
         void rightPoseCallback(geometry_msgs::msg::Pose::SharedPtr msg);
         void leftPoseStampedCallback(geometry_msgs::msg::PoseStamped::SharedPtr msg);
@@ -126,6 +123,9 @@ namespace ocs2::mobile_manipulator
         std::shared_ptr<tf2_ros::TransformListener> tf_listener_;
         std::shared_ptr<rclcpp::Clock> clock_;
         std::string base_frame_;
+        
+        // Node引用（用于访问参数服务器）
+        rclcpp_lifecycle::LifecycleNode::SharedPtr node_;
         
         // Logger（从node获取，用于日志输出）
         rclcpp::Logger logger_;

@@ -7,6 +7,7 @@
 #include "arms_controller_common/utils/Interpolation.h"
 #include "arms_controller_common/utils/GravityCompensation.h"
 #include "arms_controller_common/utils/JointTrajectoryManager.h"
+#include "arms_controller_common/utils/JointLimitsManager.h"
 #include <vector>
 #include <memory>
 #include <mutex>
@@ -34,14 +35,14 @@ namespace arms_controller_common
         /**
          * @brief Constructor
          * @param ctrl_interfaces Control interfaces
-         * @param logger ROS logger
-         * @param duration Interpolation duration in seconds
+         * @param node ROS lifecycle node for parameter access
+         * @param joint_names Joint names (empty vector to auto-initialize from interfaces)
          * @param gravity_compensation Optional gravity compensation utility (nullptr if not needed)
          */
         explicit StateMoveJ(CtrlInterfaces& ctrl_interfaces,
-                           const rclcpp::Logger& logger,
-                           double duration = 3.0,
-                           std::shared_ptr<GravityCompensation> gravity_compensation = nullptr);
+                            const std::shared_ptr<rclcpp_lifecycle::LifecycleNode>& node = nullptr,
+                            const std::vector<std::string>& joint_names = {},
+                            const std::shared_ptr<GravityCompensation>& gravity_compensation = nullptr);
 
         void enter() override;
         void run(const rclcpp::Time& time, const rclcpp::Duration& period) override;
@@ -69,14 +70,22 @@ namespace arms_controller_common
 
         /**
          * @brief Setup ROS subscriptions for target position topics
-         * @param node ROS lifecycle node for creating subscriptions
          * @param topic_base_name Base name for topics (default: "target_joint_position")
          * @param enable_prefix_topics If true, automatically detect prefixes (left, right, body) and subscribe to corresponding topics
          *                             If false, only subscribe to the base topic (default: false)
          */
-        void setupSubscriptions(std::shared_ptr<rclcpp_lifecycle::LifecycleNode> node, 
-                               const std::string& topic_base_name = "target_joint_position",
-                               bool enable_prefix_topics = false);
+        void setupSubscriptions(const std::string& topic_base_name = "target_joint_position",
+                                bool enable_prefix_topics = false);
+
+        /**
+         * @brief Update joint limits from URDF
+         * 
+         * Updates joint limits by parsing the provided URDF string.
+         * Joint limits manager is automatically created in constructor.
+         * 
+         * @param robot_description URDF XML string
+         */
+        void updateJointLimitsFromURDF(const std::string& robot_description);
 
         /**
          * @brief Set joint limit checker callback function
@@ -86,25 +95,14 @@ namespace arms_controller_common
          * 
          * Example usage:
          * - For ocs2_arm_controller: Get limits from Pinocchio model
-         * - For basic_joint_controller: Get limits from URDF parsing
          * 
          * @param limit_checker Callback function: std::vector<double>(const std::vector<double>& target_pos)
          *                       Input: target position vector, Output: clamped position vector
          *                       If nullptr, joint limit checking is disabled
+         * 
+         * @note This will override any automatic limits set by enableJointLimitsFromURDF()
          */
         void setJointLimitChecker(std::function<std::vector<double>(const std::vector<double>&)> limit_checker);
-
-        /**
-         * @brief Select interpolation type used to compute phase from percent.
-         * @param type "tanh" or "linear" (case-insensitive). Unknown values fall back to "tanh".
-         */
-        void setInterpolationType(const std::string& type);
-
-        /**
-         * @brief Set tanh scale used when interpolation type is TANH.
-         * @note Larger values => faster start, slower tail. Must be > 0, otherwise it will be clamped to a default.
-         */
-        void setTanhScale(double scale);
 
         /**
          * @brief Set trajectory from ROS2 JointTrajectory message
@@ -116,71 +114,56 @@ namespace arms_controller_common
         void setTrajectory(const trajectory_msgs::msg::JointTrajectory& trajectory);
 
         /**
-         * @brief Set trajectory duration for multi-node trajectory planning
-         * @param duration Total trajectory duration in seconds
-         * @note This duration is used when planning multi-node trajectories
-         */
-        void setTrajectoryDuration(double duration);
-
-        void setCommonJointBlendRatios(double blend_ratio);
-
-        /**
          * @brief Setup ROS subscription for trajectory messages
-         * @param node ROS lifecycle node for creating subscription
          * @param topic_name Topic name for trajectory messages (default: "target_joint_trajectory")
          */
-        void setupTrajectorySubscription(
-            std::shared_ptr<rclcpp_lifecycle::LifecycleNode> node,
-            const std::string& topic_name = "target_joint_trajectory");
+        void setupTrajectorySubscription(const std::string& topic_name = "target_joint_trajectory");
 
     private:
-        rclcpp::Logger logger_;
+        void updateParam();
+
+        std::shared_ptr<rclcpp_lifecycle::LifecycleNode> node_;
         std::shared_ptr<GravityCompensation> gravity_compensation_;
-        
-        double duration_;                 // Interpolation duration in seconds
-        
-        std::vector<double> start_pos_;   // Starting position when entering state or starting new movement
-        std::vector<double> target_pos_;  // Target position to move to
-        
-        std::mutex target_mutex_;         // Mutex for thread-safe target position updates
-        bool has_target_{false};          // Whether a target position has been set
+
+        double duration_{3.0}; // Interpolation duration in seconds
+
+        std::vector<double> start_pos_; // Starting position when entering state or starting new movement
+        std::vector<double> target_pos_; // Target position to move to
+
+        std::mutex target_mutex_; // Mutex for thread-safe target position updates
+        bool has_target_{false}; // Whether a target position has been set
         bool interpolation_active_{false}; // Whether interpolation is currently active
-        bool state_active_{false};        // Whether the state is currently active (entered)
-        
+        bool state_active_{false}; // Whether the state is currently active (entered)
+
         // Joint filtering support
-        std::vector<std::string> joint_names_;  // Joint names extracted from interfaces
-        std::string active_prefix_;             // Active prefix for filtered control (empty means all joints)
-        std::vector<bool> joint_mask_;          // Mask indicating which joints to control (true = control, false = hold)
-        bool use_prefix_filter_{false};         // Whether to use prefix filtering
-        
+        std::vector<std::string> joint_names_; // Joint names extracted from interfaces
+        std::string active_prefix_; // Active prefix for filtered control (empty means all joints)
+        std::vector<bool> joint_mask_; // Mask indicating which joints to control (true = control, false = hold)
+        bool use_prefix_filter_{false}; // Whether to use prefix filtering
+
         // ROS subscriptions
-        std::shared_ptr<rclcpp_lifecycle::LifecycleNode> node_;     // ROS lifecycle node for subscriptions
-        std::string topic_base_name_;            // Base name for target position topics
+        std::string topic_base_name_; // Base name for target position topics
         rclcpp::Subscription<std_msgs::msg::Float64MultiArray>::SharedPtr target_position_subscription_;
         rclcpp::Subscription<std_msgs::msg::Float64MultiArray>::SharedPtr target_position_left_subscription_;
         rclcpp::Subscription<std_msgs::msg::Float64MultiArray>::SharedPtr target_position_right_subscription_;
         rclcpp::Subscription<std_msgs::msg::Float64MultiArray>::SharedPtr target_position_body_subscription_;
-        bool subscriptions_setup_{false};        // Whether subscriptions have been set up
 
         // Trajectory message subscription
         rclcpp::Subscription<trajectory_msgs::msg::JointTrajectory>::SharedPtr trajectory_subscription_;
-        bool trajectory_subscription_setup_{false};  // Whether trajectory subscription has been set up
 
         // Joint limit checking
-        std::function<std::vector<double>(const std::vector<double>&)> joint_limit_checker_;  // Optional joint limit checker callback
+        std::shared_ptr<JointLimitsManager> joint_limits_manager_;
+        // Optional joint limits manager for URDF-based limits
+        std::function<std::vector<double>(const std::vector<double>&)> joint_limit_checker_;
+        // Optional joint limit checker callback
 
         // Interpolation configuration
         InterpolationType interpolation_type_{InterpolationType::TANH};
         double tanh_scale_{3.0};
-        
+
         // Unified trajectory manager
         JointTrajectoryManager trajectory_manager_;
-        
-        /**
-         * @brief Initialize joint names from interfaces
-         */
-        void initializeJointNames();
-        
+
         /**
          * @brief Update joint mask based on prefix
          * @param prefix Joint name prefix to filter
@@ -193,7 +176,7 @@ namespace arms_controller_common
          * @param log_message Optional log message prefix (empty string to skip logging)
          * @return Clamped target position after applying joint limits
          */
-        std::vector<double> applyJointLimits(const std::vector<double>& target_pos, 
+        std::vector<double> applyJointLimits(const std::vector<double>& target_pos,
                                              const std::string& log_message = "");
 
         /**
@@ -219,8 +202,7 @@ namespace arms_controller_common
         std::vector<double> calculateSegmentDurations(
             const std::vector<std::vector<double>>& waypoints,
             double total_duration);
-        
-        static constexpr double TARGET_EPSILON = 1e-6;  // Tolerance for comparing target positions
+
+        static constexpr double TARGET_EPSILON = 1e-6; // Tolerance for comparing target positions
     };
 } // namespace arms_controller_common
-

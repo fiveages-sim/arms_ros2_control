@@ -12,8 +12,6 @@
 #include <functional>
 
 #include <controller_interface/controller_interface.hpp>
-#include <std_msgs/msg/string.hpp>
-#include <std_msgs/msg/float64_multi_array.hpp>
 #include <std_msgs/msg/int32.hpp>
 #include <hardware_interface/loaned_command_interface.hpp>
 #include <hardware_interface/loaned_state_interface.hpp>
@@ -69,17 +67,12 @@ namespace ocs2::mobile_manipulator
 
     private:
         std::shared_ptr<FSMState> getNextState(FSMStateName stateName) const;
-        void updateControlInputs();
 
         // Hardware parameters
         std::string command_prefix_;
         std::vector<std::string> joint_names_;
         std::vector<std::string> command_interface_types_;
         std::vector<std::string> state_interface_types_;
-
-        // Control input parameters
-        std::string control_input_name_;
-        std::vector<std::string> control_input_interface_types_;
 
         // Control interfaces
         CtrlInterfaces ctrl_interfaces_;

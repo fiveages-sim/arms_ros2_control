@@ -18,10 +18,10 @@ namespace basic_joint_controller
     {
     public:
         StateMoveJ(arms_controller_common::CtrlInterfaces& ctrl_interfaces,
-                  const rclcpp::Logger& logger,
-                  double duration = 3.0,
+                  std::shared_ptr<rclcpp_lifecycle::LifecycleNode> node = nullptr,
+                  const std::vector<std::string>& joint_names = {},
                   std::shared_ptr<arms_controller_common::GravityCompensation> gravity_compensation = nullptr)
-            : arms_controller_common::StateMoveJ(ctrl_interfaces, logger, duration, gravity_compensation)
+            : arms_controller_common::StateMoveJ(ctrl_interfaces, node, joint_names, gravity_compensation)
         {
         }
 

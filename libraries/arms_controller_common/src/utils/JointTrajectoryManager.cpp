@@ -390,7 +390,6 @@ namespace arms_controller_common
         if (duration > 0.0)
         {
             trajectory_duration_ = duration;
-            RCLCPP_INFO(logger_, "trajectory duration set to %.2f seconds", trajectory_duration_);
         }
         else
         {
