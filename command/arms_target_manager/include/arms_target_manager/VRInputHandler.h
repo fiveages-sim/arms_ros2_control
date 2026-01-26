@@ -17,6 +17,7 @@
 #include <Eigen/Geometry>
 #include <std_msgs/msg/int32.hpp>
 #include "arms_target_manager/ArmsTargetManager.h"
+#include "arms_controller_common/utils/FSMCommandPublisher.h"
 
 namespace arms_ros2_control::command
 {
@@ -49,7 +50,6 @@ namespace arms_ros2_control::command
             ArmsTargetManager* targetManager,
             rclcpp::Publisher<geometry_msgs::msg::Pose>::SharedPtr pub_left_target,
             rclcpp::Publisher<geometry_msgs::msg::Pose>::SharedPtr pub_right_target,
-            double updateRate = 500.0,
             const std::vector<std::string>& handControllers = {});
 
         ~VRInputHandler() = default;
@@ -166,6 +166,12 @@ namespace arms_ros2_control::command
         void rightGripperStateCallback(const std_msgs::msg::Int32::SharedPtr msg);
 
         /**
+         * 发送FSM状态切换命令
+         * @param command FSM命令值 (1=HOME, 2=HOLD, 3=OCS2, 100=切换姿态(REST), 0=重置)
+         */
+        void sendFsmCommand(int32_t command);
+
+        /**
          * 直接发布目标位姿到left_target/right_target话题（解耦模式，无坐标转换）
          * @param armType 手臂类型 ("left" 或 "right")
          * @param position 位置（已在目标坐标系下）
@@ -232,6 +238,8 @@ namespace arms_ros2_control::command
         // 发布器（用于直接发布到left_target/right_target）
         rclcpp::Publisher<geometry_msgs::msg::Pose>::SharedPtr pub_left_target_;
         rclcpp::Publisher<geometry_msgs::msg::Pose>::SharedPtr pub_right_target_;
+        // FSM命令发布器（使用通用工具类，自动处理command=100的特殊情况）
+        std::unique_ptr<arms_controller_common::FSMCommandPublisher> fsm_command_publisher_;
 
         // 订阅器
         rclcpp::Subscription<geometry_msgs::msg::Pose>::SharedPtr sub_left_;
@@ -271,10 +279,6 @@ namespace arms_ros2_control::command
         std::atomic<bool> left_grip_mode_; // 左摇杆控制模式：false=XY平移, true=Z轴+Yaw
         std::atomic<bool> right_grip_mode_; // 右摇杆控制模式：false=XY平移, true=Z轴+Yaw
         std::atomic<int32_t> current_fsm_state_; // 当前FSM状态：1=HOME, 2=HOLD, 3=OCS2, 100=REST
-
-        // 时间控制
-        rclcpp::Time last_update_time_;
-        double update_rate_;
 
         // VR base poses（摇杆按下时存储）
         Eigen::Vector3d vr_base_left_position_ = Eigen::Vector3d::Zero();

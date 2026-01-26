@@ -25,7 +25,6 @@ int main(int argc, char** argv)
     double linear_scale = node->declare_parameter("linear_scale", 0.005);
     double angular_scale = node->declare_parameter("angular_scale", 0.05);
 
-    double vr_update_rate = node->declare_parameter("vr_update_rate", 500.0);
     bool enable_vr = node->declare_parameter("enable_vr", true);
 
     // 获取 hand_controllers 参数（用于自动检测和验证）
@@ -77,8 +76,8 @@ int main(int argc, char** argv)
                 linear_scale, angular_scale);
 
     RCLCPP_INFO(node->get_logger(),
-                "VR control: enabled=%s, update_rate=%.1f Hz",
-                enable_vr ? "true" : "false", vr_update_rate);
+                "VR control: enabled=%s",
+                enable_vr ? "true" : "false");
 
     try
     {
@@ -108,7 +107,7 @@ int main(int argc, char** argv)
         if (enable_vr)
         {
             vr_handler = std::make_unique<VRInputHandler>(
-                node, target_manager.get(), pub_left_target, pub_right_target, vr_update_rate, hand_controllers);
+                node, target_manager.get(), pub_left_target, pub_right_target, hand_controllers);
         }
 
         // 创建 control input 订阅器（用于增量控制）

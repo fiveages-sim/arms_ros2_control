@@ -29,7 +29,6 @@ namespace arms_ros2_control::command
         ArmsTargetManager* targetManager,
         rclcpp::Publisher<geometry_msgs::msg::Pose>::SharedPtr pub_left_target,
         rclcpp::Publisher<geometry_msgs::msg::Pose>::SharedPtr pub_right_target,
-        double updateRate,
         const std::vector<std::string>& handControllers)
         : node_(std::move(node))
           , target_manager_(targetManager)
@@ -43,8 +42,6 @@ namespace arms_ros2_control::command
           , left_grip_mode_(false)
           , right_grip_mode_(false)
           , current_fsm_state_(2)  // 默认HOLD状态
-          , last_update_time_(node_->now())
-          , update_rate_(updateRate)
           , hand_controllers_(handControllers)
           , left_gripper_open_(false)
           , right_gripper_open_(false)
@@ -108,6 +105,11 @@ namespace arms_ros2_control::command
         };
         sub_thumbstick_axes_ = node_->create_subscription<geometry_msgs::msg::Twist>(
             "/xr/thumbstick_axes", 10, thumbstickAxesCallback);
+
+        // 创建 FSM 命令发布器（使用通用工具类，自动处理command=100的特殊情况）
+        auto pub_fsm_command = node_->create_publisher<std_msgs::msg::Int32>("/fsm_command", 10);
+        fsm_command_publisher_ = std::make_unique<arms_controller_common::FSMCommandPublisher>(
+            node_, pub_fsm_command);
 
         // 注意：FSM命令订阅已移除，改为在 arms_target_manager_node 中统一处理
         // 这样可以避免与 ArmsTargetManager 的订阅冲突
@@ -208,6 +210,15 @@ namespace arms_ros2_control::command
                      (msg->data == 1) ? "open" : "close");
     }
 
+    void VRInputHandler::sendFsmCommand(int32_t command)
+    {
+        // 使用通用工具类发布FSM命令（自动处理command=100的特殊情况）
+        if (fsm_command_publisher_)
+        {
+            fsm_command_publisher_->publishCommand(command);
+        }
+    }
+
     bool VRInputHandler::checkNodeExists(const std::shared_ptr<rclcpp::Node>& node, const std::string& targetNodeName)
     {
         std::vector<std::string> nodeNames = node->get_node_graph_interface()->get_node_names();
@@ -258,17 +269,6 @@ namespace arms_ros2_control::command
 
     void VRInputHandler::vrLeftCallback(const geometry_msgs::msg::Pose::SharedPtr msg)
     {
-        // 检查更新频率
-        auto currentTime = node_->now();
-        double timeSinceLastUpdate = (currentTime - last_update_time_).seconds();
-        double updateInterval = 1.0 / update_rate_;
-
-        if (timeSinceLastUpdate < updateInterval)
-        {
-            return;
-        }
-        last_update_time_ = currentTime;
-
         if (checkNodeExists(node_, XR_NODE_NAME) && !enabled_.load())
         {
             RCLCPP_INFO_THROTTLE(node_->get_logger(), *node_->get_clock(), 5000,
@@ -841,11 +841,11 @@ namespace arms_ros2_control::command
 
                     if (right_grip_mode_.load())
                     {
-                        RCLCPP_INFO(node_->get_logger(), "🟢 [Mirror] Left grip → Right arm mode: Z-height + Yaw rotation");
+                        RCLCPP_INFO(node_->get_logger(), "🔘 [左握把按钮] 按下 - 功能: 切换右臂摇杆控制模式 - 操作: 切换到 Z轴+Yaw旋转模式 (Y→Z, X→Yaw) [镜像模式]");
                     }
                     else
                     {
-                        RCLCPP_INFO(node_->get_logger(), "🟢 [Mirror] Left grip → Right arm mode: XY translation");
+                        RCLCPP_INFO(node_->get_logger(), "🔘 [左握把按钮] 按下 - 功能: 切换右臂摇杆控制模式 - 操作: 切换到 XY平移模式 (Y→X, X→Y) [镜像模式]");
                     }
                 }
                 else
@@ -855,11 +855,11 @@ namespace arms_ros2_control::command
 
                     if (left_grip_mode_.load())
                     {
-                        RCLCPP_INFO(node_->get_logger(), "🟢 Left grip mode: Z-height + Yaw rotation (Y→Z, X→Yaw)");
+                        RCLCPP_INFO(node_->get_logger(), "🔘 [左握把按钮] 按下 - 功能: 切换左臂摇杆控制模式 - 操作: 切换到 Z轴+Yaw旋转模式 (Y→Z, X→Yaw)");
                     }
                     else
                     {
-                        RCLCPP_INFO(node_->get_logger(), "🟢 Left grip mode: XY translation (Y→X, X→Y)");
+                        RCLCPP_INFO(node_->get_logger(), "🔘 [左握把按钮] 按下 - 功能: 切换左臂摇杆控制模式 - 操作: 切换到 XY平移模式 (Y→X, X→Y)");
                     }
                 }
                 break;
@@ -869,6 +869,7 @@ namespace arms_ros2_control::command
                 // 只在UPDATE模式下启用（右手摇杆按钮按下后进入UPDATE模式）
                 if (!is_update_mode_.load())
                 {
+                    RCLCPP_DEBUG(node_->get_logger(), "🔘 [左Y按钮] 按下 - 功能: 切换左臂更新状态 - 操作: 忽略（当前不在UPDATE模式）");
                     break;
                 }
 
@@ -891,13 +892,13 @@ namespace arms_ros2_control::command
                         // 切换状态为运行
                         right_arm_paused_.store(false);
 
-                        RCLCPP_INFO(node_->get_logger(), "🟡 [Mirror] 左Y按键 → 右臂更新已恢复！");
+                        RCLCPP_INFO(node_->get_logger(), "🔘 [左Y按钮] 按下 - 功能: 切换右臂更新状态 - 操作: 恢复右臂更新（重置基准位姿和摇杆偏移） [镜像模式]");
                     }
                     else
                     {
                         // 当前是运行状态，执行暂停操作
                         right_arm_paused_.store(true);
-                        RCLCPP_INFO(node_->get_logger(), "🟡 [Mirror] 左Y按键 → 右臂更新已暂停！");
+                        RCLCPP_INFO(node_->get_logger(), "🔘 [左Y按钮] 按下 - 功能: 切换右臂更新状态 - 操作: 暂停右臂更新 [镜像模式]");
                     }
                 }
                 else
@@ -918,20 +919,19 @@ namespace arms_ros2_control::command
                         // 切换状态为运行
                         left_arm_paused_.store(false);
 
-                        RCLCPP_INFO(node_->get_logger(), "🟡 左Y按键按下 - 左臂更新已恢复！");
-                        RCLCPP_INFO(node_->get_logger(),
-                                    "🟡 VR Base Position: [%.3f, %.3f, %.3f]",
+                        RCLCPP_INFO(node_->get_logger(), "🔘 [左Y按钮] 按下 - 功能: 切换左臂更新状态 - 操作: 恢复左臂更新（重置基准位姿和摇杆偏移）");
+                        RCLCPP_DEBUG(node_->get_logger(),
+                                    "   VR Base Position: [%.3f, %.3f, %.3f]",
                                     vr_base_left_position_.x(), vr_base_left_position_.y(), vr_base_left_position_.z());
-                        RCLCPP_INFO(node_->get_logger(),
-                                    "🟡 Robot Base Position: [%.3f, %.3f, %.3f]",
+                        RCLCPP_DEBUG(node_->get_logger(),
+                                    "   Robot Base Position: [%.3f, %.3f, %.3f]",
                                     robot_base_left_position_.x(), robot_base_left_position_.y(), robot_base_left_position_.z());
-                        RCLCPP_INFO(node_->get_logger(), "🟡 左摇杆偏移已重置！");
                     }
                     else
                     {
                         // 当前是运行状态，执行暂停操作
                         left_arm_paused_.store(true);
-                        RCLCPP_INFO(node_->get_logger(), "🟡 左Y按键按下 - 左臂更新已暂停！");
+                        RCLCPP_INFO(node_->get_logger(), "🔘 [左Y按钮] 按下 - 功能: 切换左臂更新状态 - 操作: 暂停左臂更新");
                     }
                 }
                 break;
@@ -941,6 +941,7 @@ namespace arms_ros2_control::command
                 // 只在OCS2状态下执行（状态值为3）
                 if (current_fsm_state_.load() != 3)
                 {
+                    RCLCPP_DEBUG(node_->get_logger(), "🔘 [右摇杆按钮] 按下 - 功能: 切换UPDATE/STORAGE模式 - 操作: 忽略（当前FSM状态不是OCS2）");
                     break;
                 }
 
@@ -948,7 +949,7 @@ namespace arms_ros2_control::command
                 if (target_manager_ && target_manager_->getCurrentMode() != MarkerState::CONTINUOUS)
                 {
                     target_manager_->togglePublishMode();
-                    RCLCPP_INFO(node_->get_logger(), "🕹️🕶️🕹️ ArmsTargetManager switched to CONTINUOUS mode for VR control");
+                    RCLCPP_DEBUG(node_->get_logger(), "   ArmsTargetManager已切换到CONTINUOUS模式");
                 }
 
                 if (!is_update_mode_.load())
@@ -976,32 +977,29 @@ namespace arms_ros2_control::command
                     if (left_was_paused)
                     {
                         left_arm_paused_.store(false);
-                        RCLCPP_INFO(node_->get_logger(), "🟡 左臂暂停状态已重置 - 恢复更新！");
                     }
                     if (right_was_paused)
                     {
                         right_arm_paused_.store(false);
-                        RCLCPP_INFO(node_->get_logger(), "🔵 右臂暂停状态已重置 - 恢复更新！");
                     }
 
                     is_update_mode_.store(true);
-                    RCLCPP_INFO(node_->get_logger(), "🕹️🕶️🕹️ Switched to UPDATE mode - Base poses stored!");
-                    RCLCPP_INFO(node_->get_logger(),
-                                "🕹️🕶️🕹️ VR Base Positions: Left [%.3f, %.3f, %.3f], Right [%.3f, %.3f, %.3f]",
+                    RCLCPP_INFO(node_->get_logger(), "🔘 [右摇杆按钮] 按下 - 功能: 切换UPDATE/STORAGE模式 - 操作: 切换到UPDATE模式（已存储基准位姿，重置摇杆偏移）");
+                    RCLCPP_DEBUG(node_->get_logger(),
+                                "   VR Base Positions: Left [%.3f, %.3f, %.3f], Right [%.3f, %.3f, %.3f]",
                                 vr_base_left_position_.x(), vr_base_left_position_.y(), vr_base_left_position_.z(),
                                 vr_base_right_position_.x(), vr_base_right_position_.y(), vr_base_right_position_.z());
-                    RCLCPP_INFO(node_->get_logger(),
-                                "🕹️🕶️🕹️ Robot Base Positions: Left [%.3f, %.3f, %.3f], Right [%.3f, %.3f, %.3f]",
+                    RCLCPP_DEBUG(node_->get_logger(),
+                                "   Robot Base Positions: Left [%.3f, %.3f, %.3f], Right [%.3f, %.3f, %.3f]",
                                 robot_base_left_position_.x(), robot_base_left_position_.y(), robot_base_left_position_.z(),
                                 robot_base_right_position_.x(), robot_base_right_position_.y(),
                                 robot_base_right_position_.z());
-                    RCLCPP_INFO(node_->get_logger(), "🕹️🕶️🕹️ Thumbstick offsets reset!");
                 }
                 else
                 {
                     // 切换到存储模式
                     is_update_mode_.store(false);
-                    RCLCPP_INFO(node_->get_logger(), "🕹️🕶️🕹️ Switched to STORAGE mode - Ready to store new base poses!");
+                    RCLCPP_INFO(node_->get_logger(), "🔘 [右摇杆按钮] 按下 - 功能: 切换UPDATE/STORAGE模式 - 操作: 切换到STORAGE模式（准备存储新的基准位姿）");
                 }
                 break;
             }
@@ -1015,11 +1013,11 @@ namespace arms_ros2_control::command
 
                     if (left_grip_mode_.load())
                     {
-                        RCLCPP_INFO(node_->get_logger(), "🟢 [Mirror] Right grip → Left arm mode: Z-height + Yaw rotation");
+                        RCLCPP_INFO(node_->get_logger(), "🔘 [右握把按钮] 按下 - 功能: 切换左臂摇杆控制模式 - 操作: 切换到 Z轴+Yaw旋转模式 (Y→Z, X→Yaw) [镜像模式]");
                     }
                     else
                     {
-                        RCLCPP_INFO(node_->get_logger(), "🟢 [Mirror] Right grip → Left arm mode: XY translation");
+                        RCLCPP_INFO(node_->get_logger(), "🔘 [右握把按钮] 按下 - 功能: 切换左臂摇杆控制模式 - 操作: 切换到 XY平移模式 (Y→X, X→Y) [镜像模式]");
                     }
                 }
                 else
@@ -1029,11 +1027,11 @@ namespace arms_ros2_control::command
 
                     if (right_grip_mode_.load())
                     {
-                        RCLCPP_INFO(node_->get_logger(), "🟢 Right grip mode: Z-height + Yaw rotation (Y→Z, X→Yaw)");
+                        RCLCPP_INFO(node_->get_logger(), "🔘 [右握把按钮] 按下 - 功能: 切换右臂摇杆控制模式 - 操作: 切换到 Z轴+Yaw旋转模式 (Y→Z, X→Yaw)");
                     }
                     else
                     {
-                        RCLCPP_INFO(node_->get_logger(), "🟢 Right grip mode: XY translation (Y→X, X→Y)");
+                        RCLCPP_INFO(node_->get_logger(), "🔘 [右握把按钮] 按下 - 功能: 切换右臂摇杆控制模式 - 操作: 切换到 XY平移模式 (Y→X, X→Y)");
                     }
                 }
                 break;
@@ -1043,6 +1041,7 @@ namespace arms_ros2_control::command
                 // 只在UPDATE模式下启用（右手摇杆按钮按下后进入UPDATE模式）
                 if (!is_update_mode_.load())
                 {
+                    RCLCPP_DEBUG(node_->get_logger(), "🔘 [右B按钮] 按下 - 功能: 切换右臂更新状态 - 操作: 忽略（当前不在UPDATE模式）");
                     break;
                 }
 
@@ -1065,13 +1064,13 @@ namespace arms_ros2_control::command
                         // 切换状态为运行
                         left_arm_paused_.store(false);
 
-                        RCLCPP_INFO(node_->get_logger(), "🔵 [Mirror] 右B按键 → 左臂更新已恢复！");
+                        RCLCPP_INFO(node_->get_logger(), "🔘 [右B按钮] 按下 - 功能: 切换左臂更新状态 - 操作: 恢复左臂更新（重置基准位姿和摇杆偏移） [镜像模式]");
                     }
                     else
                     {
                         // 当前是运行状态，执行暂停操作
                         left_arm_paused_.store(true);
-                        RCLCPP_INFO(node_->get_logger(), "🔵 [Mirror] 右B按键 → 左臂更新已暂停！");
+                        RCLCPP_INFO(node_->get_logger(), "🔘 [右B按钮] 按下 - 功能: 切换左臂更新状态 - 操作: 暂停左臂更新 [镜像模式]");
                     }
                 }
                 else
@@ -1092,20 +1091,19 @@ namespace arms_ros2_control::command
                         // 切换状态为运行
                         right_arm_paused_.store(false);
 
-                        RCLCPP_INFO(node_->get_logger(), "🔵 右B按键按下 - 右臂更新已恢复！");
-                        RCLCPP_INFO(node_->get_logger(),
-                                    "🔵 VR Base Position: [%.3f, %.3f, %.3f]",
+                        RCLCPP_INFO(node_->get_logger(), "🔘 [右B按钮] 按下 - 功能: 切换右臂更新状态 - 操作: 恢复右臂更新（重置基准位姿和摇杆偏移）");
+                        RCLCPP_DEBUG(node_->get_logger(),
+                                    "   VR Base Position: [%.3f, %.3f, %.3f]",
                                     vr_base_right_position_.x(), vr_base_right_position_.y(), vr_base_right_position_.z());
-                        RCLCPP_INFO(node_->get_logger(),
-                                    "🔵 Robot Base Position: [%.3f, %.3f, %.3f]",
+                        RCLCPP_DEBUG(node_->get_logger(),
+                                    "   Robot Base Position: [%.3f, %.3f, %.3f]",
                                     robot_base_right_position_.x(), robot_base_right_position_.y(), robot_base_right_position_.z());
-                        RCLCPP_INFO(node_->get_logger(), "🔵 右摇杆偏移已重置！");
                     }
                     else
                     {
                         // 当前是运行状态，执行暂停操作
                         right_arm_paused_.store(true);
-                        RCLCPP_INFO(node_->get_logger(), "🔵 右B按键按下 - 右臂更新已暂停！");
+                        RCLCPP_INFO(node_->get_logger(), "🔘 [右B按钮] 按下 - 功能: 切换右臂更新状态 - 操作: 暂停右臂更新");
                     }
                 }
                 break;
@@ -1120,11 +1118,12 @@ namespace arms_ros2_control::command
                 if (new_mirror_mode)
                 {
                     RCLCPP_INFO(node_->get_logger(),
-                                "🕹️🕶️🕹️ MIRROR mode ENABLED - Left controller controls right arm, right controller controls left arm");
+                                "🔘 [左摇杆按钮] 按下 - 功能: 切换镜像模式 - 操作: 启用镜像模式（左手柄控制右臂，右手柄控制左臂）");
                 }
                 else
                 {
-                    RCLCPP_INFO(node_->get_logger(), "🕹️🕶️🕹️ MIRROR mode DISABLED - Normal control restored");
+                    RCLCPP_INFO(node_->get_logger(),
+                                "🔘 [左摇杆按钮] 按下 - 功能: 切换镜像模式 - 操作: 禁用镜像模式（恢复正常控制）");
                 }
                 
                 // 切换镜像模式后，自动切换到STORAGE模式，避免跳变
@@ -1137,14 +1136,12 @@ namespace arms_ros2_control::command
                     left_thumbstick_yaw_offset_ = 0.0;
                     right_thumbstick_yaw_offset_ = 0.0;
                     RCLCPP_WARN(node_->get_logger(),
-                                "🕹️🕶️🕹️ Automatically switched to STORAGE mode - Please re-enter UPDATE mode to apply mirror changes");
-                    RCLCPP_INFO(node_->get_logger(), "🕹️🕶️🕹️ Thumbstick offsets reset!");
+                                "   自动切换到STORAGE模式 - 请重新进入UPDATE模式以应用镜像模式更改");
                 }
                 break;
             }
             case 9:  // 左扳机按钮
             {
-
                 // 根据镜像模式决定控制哪个臂
                 std::string target_controller_name;
                 bool is_target_left_arm; // true for left arm, false for right arm
@@ -1164,8 +1161,8 @@ namespace arms_ros2_control::command
 
                 if (target_controller_name.empty())
                 {
-                    RCLCPP_WARN(node_->get_logger(), "🕹️🕶️🕹️ No controller detected for %s arm, cannot process left trigger.",
-                                is_target_left_arm ? "left" : "right");
+                    RCLCPP_WARN(node_->get_logger(), "🔘 [左扳机按钮] 按下 - 功能: 控制夹爪开合 - 操作: 失败（未检测到%s臂控制器）",
+                                is_target_left_arm ? "左" : "右");
                     break;
                 }
 
@@ -1177,14 +1174,13 @@ namespace arms_ros2_control::command
 
                 // 状态会通过订阅器回调自动更新，无需手动更新
 
-                RCLCPP_INFO(node_->get_logger(), "🔴 左扳机按下！%s夹爪已%s",
-                            is_target_left_arm ? "左" : "右", (command == 1) ? "打开" : "关闭");
+                RCLCPP_INFO(node_->get_logger(), "🔘 [左扳机按钮] 按下 - 功能: 控制夹爪开合 - 操作: %s夹爪已%s%s",
+                            is_target_left_arm ? "左" : "右", (command == 1) ? "打开" : "关闭",
+                            mirror_mode_.load() ? " [镜像模式]" : "");
                 break;
             }
             case 10: // 右扳机按钮
             {
-
-
                 // 根据镜像模式决定控制哪个臂
                 std::string target_controller_name;
                 bool is_target_left_arm; // true for left arm, false for right arm
@@ -1204,8 +1200,8 @@ namespace arms_ros2_control::command
 
                 if (target_controller_name.empty())
                 {
-                    RCLCPP_WARN(node_->get_logger(), "🕹️🕶️🕹️ No controller detected for %s arm, cannot process right trigger.",
-                                is_target_left_arm ? "left" : "right");
+                    RCLCPP_WARN(node_->get_logger(), "🔘 [右扳机按钮] 按下 - 功能: 控制夹爪开合 - 操作: 失败（未检测到%s臂控制器）",
+                                is_target_left_arm ? "左" : "右");
                     break;
                 }
 
@@ -1217,8 +1213,58 @@ namespace arms_ros2_control::command
 
                 // 状态会通过订阅器回调自动更新，无需手动更新
 
-                RCLCPP_INFO(node_->get_logger(), "🔵 右扳机按下！%s夹爪已%s",
-                            is_target_left_arm ? "左" : "右", (command == 1) ? "打开" : "关闭");
+                RCLCPP_INFO(node_->get_logger(), "🔘 [右扳机按钮] 按下 - 功能: 控制夹爪开合 - 操作: %s夹爪已%s%s",
+                            is_target_left_arm ? "左" : "右", (command == 1) ? "打开" : "关闭",
+                            mirror_mode_.load() ? " [镜像模式]" : "");
+                break;
+            }
+            case 11: // 右A按钮（FSM状态控制）
+            {
+                // 根据当前FSM状态发送相应的转换命令
+                int32_t current_state = current_fsm_state_.load();
+                
+                if (current_state == 2)  // HOLD
+                {
+                    // HOLD → OCS2
+                    sendFsmCommand(3);
+                    RCLCPP_INFO(node_->get_logger(), "🔘 [右A按钮] 按下 - 功能: FSM状态前进 - 操作: HOLD → OCS2");
+                }
+                else if (current_state == 1)  // HOME
+                {
+                    // HOME → HOLD
+                    sendFsmCommand(2);
+                    RCLCPP_INFO(node_->get_logger(), "🔘 [右A按钮] 按下 - 功能: FSM状态前进 - 操作: HOME → HOLD");
+                }
+                else if (current_state == 3)  // OCS2
+                {
+                    // OCS2无法继续前进
+                    RCLCPP_WARN(node_->get_logger(), "🔘 [右A按钮] 按下 - 功能: FSM状态前进 - 操作: 失败（已在OCS2状态，无法继续前进）");
+                }
+                break;
+            }
+            case 12: // 左X按钮（FSM状态控制）
+            {
+                // 根据当前FSM状态发送相应的转换命令
+                int32_t current_state = current_fsm_state_.load();
+                
+                if (current_state == 3)  // OCS2
+                {
+                    // OCS2 → HOLD
+                    sendFsmCommand(2);
+                    RCLCPP_INFO(node_->get_logger(), "🔘 [左X按钮] 按下 - 功能: FSM状态后退/切换 - 操作: OCS2 → HOLD");
+                }
+                else if (current_state == 2)  // HOLD
+                {
+                    // HOLD → HOME
+                    sendFsmCommand(1);
+                    RCLCPP_INFO(node_->get_logger(), "🔘 [左X按钮] 按下 - 功能: FSM状态后退/切换 - 操作: HOLD → HOME");
+                }
+                else if (current_state == 1)  // HOME
+                {
+                    // HOME状态下，X按钮切换姿态 (HOME ↔ REST)
+                    sendFsmCommand(100);
+                    RCLCPP_INFO(node_->get_logger(), "🔘 [左X按钮] 按下 - 功能: FSM状态后退/切换 - 操作: 在HOME状态切换姿态 (HOME ↔ REST)");
+                }
                 break;
             }
             case 0:  // 无事件
