@@ -17,15 +17,13 @@ namespace ocs2::mobile_manipulator
     PoseBasedReferenceManager::PoseBasedReferenceManager(
         std::string topicPrefix,
         std::shared_ptr<ReferenceManagerInterface> referenceManagerPtr,
-        std::shared_ptr<MobileManipulatorInterface> interfacePtr,
-        double trajectoryDuration,
-        double moveLDuration)
+        std::shared_ptr<MobileManipulatorInterface> interfacePtr)
         : ReferenceManagerDecorator(std::move(referenceManagerPtr)),
           topic_prefix_(std::move(topicPrefix)),
           interface_(std::move(interfacePtr)),
           logger_(rclcpp::get_logger("PoseBasedReferenceManager")),
-          trajectory_duration_(trajectoryDuration),
-          moveL_duration_(moveLDuration)
+          trajectory_duration_(2.0),
+          moveL_duration_(2.0)
     {
         dual_arm_mode_ = interface_->dual_arm_;
 
@@ -39,11 +37,17 @@ namespace ocs2::mobile_manipulator
 
     void PoseBasedReferenceManager::subscribe(const rclcpp_lifecycle::LifecycleNode::SharedPtr& node)
     {
+        // 保存node引用用于访问参数服务器
+        node_ = node;
+        
         // 保存node的logger用于后续日志输出
         logger_ = node->get_logger();
 
         // 保存clock用于时间戳
         clock_ = node->get_clock();
+        
+        // 初始化参数（从参数服务器获取）
+        updateParam();
 
         // 初始化TF2 buffer和listener
         tf_buffer_ = std::make_shared<tf2_ros::Buffer>(node->get_clock());
@@ -268,6 +272,12 @@ namespace ocs2::mobile_manipulator
         referenceManagerPtr_->setTargetTrajectories(std::move(target_trajectories));
     }
 
+    void PoseBasedReferenceManager::updateParam()
+    {
+        trajectory_duration_ = node_->get_parameter("movel_trajectory_duration").as_double();
+        moveL_duration_ = node_->get_parameter("movel_duration").as_double();
+    }
+
     void PoseBasedReferenceManager::leftPoseCallback(const geometry_msgs::msg::Pose::SharedPtr msg)
     {
         // 转换pose到状态向量（单臂和双臂模式都使用前7维）
@@ -314,6 +324,8 @@ namespace ocs2::mobile_manipulator
 
     void PoseBasedReferenceManager::leftPoseStampedPoseCallback(const geometry_msgs::msg::Pose::SharedPtr msg)
     {
+        updateParam();
+        
         // 保存上一帧缓存（用于插值起点）
         const vector_t previous_left_target_state = left_target_state_;
 
@@ -347,6 +359,8 @@ namespace ocs2::mobile_manipulator
 
     void PoseBasedReferenceManager::rightPoseStampedPoseCallback(const geometry_msgs::msg::Pose::SharedPtr msg)
     {
+        updateParam();
+        
         // 保存上一帧缓存（用于插值起点）
         const vector_t previous_left_target_state = left_target_state_;
         const vector_t previous_right_target_state = right_target_state_;
@@ -427,6 +441,8 @@ namespace ocs2::mobile_manipulator
 
     void PoseBasedReferenceManager::dualTargetStampedCallback(const nav_msgs::msg::Path::SharedPtr msg)
     {
+        updateParam();
+        
         if (!dual_arm_mode_)
         {
             RCLCPP_WARN(logger_, "Dual target stamped callback called but dual arm mode is not enabled");
@@ -527,6 +543,8 @@ namespace ocs2::mobile_manipulator
 
     void PoseBasedReferenceManager::pathCallback(const nav_msgs::msg::Path::SharedPtr msg)
     {
+        updateParam();
+        
         if (msg->poses.empty())
         {
             RCLCPP_WARN(logger_, "Received empty path");

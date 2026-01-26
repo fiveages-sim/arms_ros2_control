@@ -99,11 +99,6 @@ namespace ocs2::mobile_manipulator
             state_interface_types_ =
                 auto_declare<std::vector<std::string>>("state_interfaces", state_interface_types_);
 
-            // Control input parameters
-            control_input_name_ = auto_declare<std::string>("control_input_name", control_input_name_);
-            control_input_interface_types_ =
-                auto_declare<std::vector<std::string>>("control_input_interfaces", control_input_interface_types_);
-
             // State machine parameters
             home_pos_ = auto_declare<std::vector<double>>("home_pos", home_pos_);
             rest_pos_ = auto_declare<std::vector<double>>("rest_pos", rest_pos_);

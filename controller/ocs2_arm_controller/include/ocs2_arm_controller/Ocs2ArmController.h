@@ -67,17 +67,12 @@ namespace ocs2::mobile_manipulator
 
     private:
         std::shared_ptr<FSMState> getNextState(FSMStateName stateName) const;
-        void updateControlInputs();
 
         // Hardware parameters
         std::string command_prefix_;
         std::vector<std::string> joint_names_;
         std::vector<std::string> command_interface_types_;
         std::vector<std::string> state_interface_types_;
-
-        // Control input parameters
-        std::string control_input_name_;
-        std::vector<std::string> control_input_interface_types_;
 
         // Control interfaces
         CtrlInterfaces ctrl_interfaces_;

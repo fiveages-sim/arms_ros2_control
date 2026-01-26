@@ -62,14 +62,11 @@ namespace ocs2::mobile_manipulator
             visualizer_->initialize();
             RCLCPP_INFO(node_->get_logger(), "Future time offset: %.2f seconds", future_time_offset_);
             
-            double trajectory_duration = auto_declare("movel_trajectory_duration", 2.0);
-            double moveL_duration = auto_declare("movel_duration", 2.0);
-            
-            RCLCPP_INFO(node_->get_logger(), "MOVEL Trajectory duration: %.2f seconds", trajectory_duration);
-            RCLCPP_INFO(node_->get_logger(), "MoveL duration: %.2f seconds", moveL_duration);
+            auto_declare("movel_trajectory_duration", 2.0);
+            auto_declare("movel_duration", 2.0);
             
             pose_reference_manager_ = std::make_shared<PoseBasedReferenceManager>(
-                robot_name_, interface_->getReferenceManagerPtr(), interface_, trajectory_duration, moveL_duration);
+                robot_name_, interface_->getReferenceManagerPtr(), interface_);
             pose_reference_manager_->subscribe(node_);
             
             mpc_ = std::make_unique<GaussNewtonDDP_MPC>(
