@@ -82,7 +82,7 @@ namespace basic_joint_controller
         FSMMode mode_{FSMMode::NORMAL};
 
         // State machine parameters
-        double home_duration_{3.0};
+        // Note: home_duration, home_interpolation_type, home_tanh_scale are updated dynamically via StateHome::updateParam()
         double move_duration_{3.0};
         double hold_position_threshold_{0.1};
 

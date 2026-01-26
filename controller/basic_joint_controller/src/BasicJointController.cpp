@@ -99,26 +99,23 @@ namespace basic_joint_controller
                 auto_declare<std::vector<std::string>>("state_interfaces", state_interface_types_);
 
             // State machine parameters
-            home_duration_ = auto_declare<double>("home_duration", 3.0);
+            // Home state parameters (declared for parameter server, values updated dynamically via updateParam())
+            auto_declare<double>("home_duration", 3.0);
+            auto_declare<std::string>("home_interpolation_type", "linear");
+            auto_declare<double>("home_tanh_scale", 3.0);
             move_duration_ = auto_declare<double>("move_duration", 3.0);
-            std::string home_interpolation_type = auto_declare<std::string>("home_interpolation_type", "linear");
-            double home_tanh_scale = auto_declare<double>("home_tanh_scale", 3.0);
             std::string movej_interpolation_type = auto_declare<std::string>("movej_interpolation_type", "linear");
             double movej_tanh_scale = auto_declare<double>("movej_tanh_scale", 3.0);
             hold_position_threshold_ = auto_declare<double>("hold_position_threshold", 0.1);
-            long switch_command_base = auto_declare<long>("switch_command_base", 100);
-
-            // Get logger for FSM states
-            rclcpp::Logger logger = get_node()->get_logger();
+            // switch_command_base is declared for parameter server, retrieved in StateHome constructor
+            auto_declare<long>("switch_command_base", 100);
 
             // Create states using arms_controller_common
             // StateHome - configurations will be loaded via init() method using auto_declare
+            // Parameters (home_duration, home_interpolation_type, home_tanh_scale, switch_command_base) 
+            // are retrieved from parameter server in constructor or updated dynamically via updateParam()
             state_list_.home = std::make_shared<arms_controller_common::StateHome>(
-                ctrl_interfaces_, logger, home_duration_);
-
-            // Configure interpolation type/shape
-            state_list_.home->setInterpolationType(home_interpolation_type);
-            state_list_.home->setTanhScale(home_tanh_scale);
+                ctrl_interfaces_, nullptr, get_node());
 
             // Initialize StateHome with configurations from parameters (home_1, home_2, home_3, etc.)
             // Pass auto_declare as a lambda to allow StateHome to use it
@@ -127,16 +124,13 @@ namespace basic_joint_controller
                 return this->auto_declare<std::vector<double>>(name, default_value);
             });
 
-            // Set configuration switch command base
-            state_list_.home->setSwitchCommandBase(switch_command_base);
-
             // StateHold - extends common StateHold to support MOVEJ transition
             state_list_.hold = std::make_shared<StateHold>(
-                ctrl_interfaces_, logger, hold_position_threshold_);
+                ctrl_interfaces_, get_node()->get_logger(), hold_position_threshold_);
 
             // StateMoveJ - extends common StateMoveJ for basic_joint_controller
             state_list_.movej = std::make_shared<StateMoveJ>(
-                ctrl_interfaces_, logger, move_duration_);
+                ctrl_interfaces_, get_node()->get_logger(), move_duration_);
 
             // Configure interpolation type/shape
             state_list_.movej->setInterpolationType(movej_interpolation_type);

@@ -9,8 +9,8 @@
 #include "arms_controller_common/utils/JointTrajectoryManager.h"
 #include <vector>
 #include <memory>
-#include <functional>
 #include <rclcpp/rclcpp.hpp>
+#include <rclcpp_lifecycle/lifecycle_node.hpp>
 
 namespace arms_controller_common
 {
@@ -29,14 +29,12 @@ namespace arms_controller_common
         /**
          * @brief Constructor
          * @param ctrl_interfaces Control interfaces
-         * @param logger ROS logger
-         * @param duration Interpolation duration in seconds
          * @param gravity_compensation Optional gravity compensation utility (nullptr if not needed)
+         * @param node ROS node for dynamic parameter access and logger (required)
          */
         explicit StateHome(CtrlInterfaces& ctrl_interfaces,
-                          const rclcpp::Logger& logger,
-                          double duration = 3.0,
-                          std::shared_ptr<GravityCompensation> gravity_compensation = nullptr);
+                          const std::shared_ptr<GravityCompensation>& gravity_compensation = nullptr,
+                          const std::shared_ptr<rclcpp_lifecycle::LifecycleNode>& node = nullptr);
 
         /**
          * @brief Set single home configuration
@@ -76,7 +74,7 @@ namespace arms_controller_common
                 if (!config.empty())
                 {
                     home_configs_.push_back(config);
-                    RCLCPP_INFO(logger_,
+                    RCLCPP_INFO(node_->get_logger(),
                                 "Found home configuration %d with %zu joints", i, config.size());
                 }
                 else
@@ -85,13 +83,13 @@ namespace arms_controller_common
                     if (i == 1)
                     {
                         // No configurations found at all
-                        RCLCPP_WARN(logger_,
+                        RCLCPP_WARN(node_->get_logger(),
                                     "No home configurations found (home_1, home_2, etc.)");
                     }
                     else
                     {
                         // Found some configurations but reached the end
-                        RCLCPP_INFO(logger_,
+                        RCLCPP_INFO(node_->get_logger(),
                                     "Found %zu home configuration(s) (home_1 to home_%d)", 
                                     home_configs_.size(), i - 1);
                     }
@@ -109,7 +107,7 @@ namespace arms_controller_common
                 current_config_index_ = 0;
                 has_multiple_configs_ = home_configs_.size() > 1;
                 
-                RCLCPP_INFO(logger_,
+                RCLCPP_INFO(node_->get_logger(),
                             "StateHome initialized with %zu configuration(s)", home_configs_.size());
             }
             // Note: Warning message is already logged in the loop above when home_1 is not found
@@ -130,12 +128,6 @@ namespace arms_controller_common
          */
         void setRestPose(const std::vector<double>& rest_pos);
 
-        /**
-         * @brief Set configuration switch command base (for multi-config switching)
-         * @param switch_command_base Base command value (default: 100)
-         */
-        void setSwitchCommandBase(int32_t switch_command_base) { switch_command_base_ = switch_command_base; }
-
         void enter() override;
         void run(const rclcpp::Time& time, const rclcpp::Duration& period) override;
         void exit() override;
@@ -155,42 +147,37 @@ namespace arms_controller_common
         std::vector<double> getConfiguration(size_t config_index) const;
 
         /**
-         * @brief Select interpolation type used to compute phase from percent.
-         * @param type "tanh" or "linear" (case-insensitive). Unknown values fall back to "tanh".
+         * @brief Update parameters from ROS node
+         * Updates duration, tanh_scale, and interpolation_type from node parameters.
+         * This method can be extended to update additional parameters in the future.
          */
-        void setInterpolationType(const std::string& type);
-
-        /**
-         * @brief Set tanh scale used when interpolation type is TANH.
-         * @note Larger values => faster start, slower tail. Must be > 0, otherwise it will be clamped to a default.
-         */
-        void setTanhScale(double scale);
+        void updateParam();
 
     private:
         void switchConfiguration();
         void startInterpolation();
 
-        rclcpp::Logger logger_;
         std::shared_ptr<GravityCompensation> gravity_compensation_;
 
         // Home configurations
-        std::vector<std::vector<double>> home_configs_;  // Multiple home configurations (rest pose is index 1)
-        std::vector<double> start_pos_;                  // Starting position
-        std::vector<double> current_target_;            // Current target configuration
-        size_t current_config_index_{0};                // Current configuration index
+        std::vector<std::vector<double>> home_configs_;     // Multiple home configurations (rest pose is index 1)
+        std::vector<double> start_pos_;                     // Starting position
+        std::vector<double> current_target_;                // Current target configuration
+        size_t current_config_index_{0};                    // Current configuration index
 
         // Interpolation
-        double duration_;                               // Interpolation duration in seconds
+        double duration_{3.0};                              // Interpolation duration in seconds (default value, will be updated by updateParam())
         InterpolationType interpolation_type_{InterpolationType::TANH};
         double tanh_scale_{3.0};
+        std::shared_ptr<rclcpp_lifecycle::LifecycleNode> node_; // ROS node for parameter access
 
         // Unified trajectory manager
         JointTrajectoryManager trajectory_manager_;
 
         // Configuration switching
-        int32_t switch_command_base_{100};             // Base command for multi-config switching
-        int32_t last_command_{0};                      // Last command value for edge detection
-        bool has_multiple_configs_{false};             // Whether multiple configurations are available
+        long switch_command_base_{100};                     // Base command for multi-config switching
+        int32_t last_command_{0};                           // Last command value for edge detection
+        bool has_multiple_configs_{false};                  // Whether multiple configurations are available
     };
 } // namespace arms_controller_common
 

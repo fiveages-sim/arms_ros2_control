@@ -127,10 +127,11 @@ namespace ocs2::mobile_manipulator
             // Hold state parameters
             auto_declare<double>("hold_position_threshold", 0.1); // Default: 0.1 rad (~5.7 degrees)
 
-            // Home state parameters
-            double home_duration = auto_declare<double>("home_duration", 3.0); // Default: 3.0 seconds
-            int switch_command_base = auto_declare<int>("switch_command_base", 100);
-            // Default: 100 for multi-home switching
+            // Home state parameters (declared for parameter server, values updated dynamically via updateParam())
+            auto_declare<double>("home_duration", 3.0);
+            auto_declare<std::string>("home_interpolation_type", "linear");
+            auto_declare<double>("home_tanh_scale", 3.0);
+            auto_declare<int>("switch_command_base", 100);
 
             // Declare trajectory_duration parameter (used by both CtrlComponent and StateMoveJ)
             // This must be declared before CtrlComponent is created
@@ -154,49 +155,21 @@ namespace ocs2::mobile_manipulator
                             "Gravity compensation initialized from OCS2 Pinocchio model");
             }
 
-            // Get logger for FSM states
-            rclcpp::Logger logger = get_node()->get_logger();
-
             // Create StateHome using common implementation
+            // Parameters (home_duration, home_interpolation_type, home_tanh_scale) are updated dynamically via updateParam()
             state_list_.home = std::make_shared<StateHome>(
-                ctrl_interfaces_, logger, home_duration, gravity_compensation);
+                ctrl_interfaces_, gravity_compensation, get_node());
 
-            // Home interpolation parameters
-            std::string home_interpolation_type = auto_declare<std::string>("home_interpolation_type", "linear");
-            double home_tanh_scale = auto_declare<double>("home_tanh_scale", 3.0);
-            state_list_.home->setInterpolationType(home_interpolation_type);
-            state_list_.home->setTanhScale(home_tanh_scale);
-
-            // Try to load multiple home configurations (home_1, home_2, etc.)
-            // This supports the new multi-home configuration mechanism
-            // init() returns true if at least one configuration (home_1) was loaded
             bool configs_loaded = state_list_.home->init(
                 [this](const std::string& name, const std::vector<double>& default_value)
                 {
                     return this->auto_declare<std::vector<double>>(name, default_value);
                 });
 
-            state_list_.home->setSwitchCommandBase(switch_command_base);
-
-            if (configs_loaded)
+            // Fallback to legacy single home_pos configuration if no multi-home configs were loaded
+            if (!configs_loaded && !home_pos_.empty())
             {
-                // Multi-home configuration was loaded successfully
-                RCLCPP_INFO(get_node()->get_logger(),
-                            "Using multi-home configuration (home_1, home_2, etc.) with switch_command_base=%d",
-                            switch_command_base);
-            }
-            else if (!home_pos_.empty())
-            {
-                // Fallback to legacy single home_pos configuration (backward compatibility)
                 state_list_.home->setHomePosition(home_pos_);
-                RCLCPP_INFO(get_node()->get_logger(),
-                            "Using legacy home_pos configuration with %zu joints (switch_command_base=%d)",
-                            home_pos_.size(), switch_command_base);
-            }
-            else
-            {
-                RCLCPP_WARN(get_node()->get_logger(),
-                            "No home configuration found (neither home_1 nor home_pos)");
             }
 
             // Configure rest pose if available
@@ -218,7 +191,7 @@ namespace ocs2::mobile_manipulator
 
             // Create StateHold using common implementation
             state_list_.hold = std::make_shared<StateHold>(
-                ctrl_interfaces_, logger, hold_position_threshold, gravity_compensation);
+                ctrl_interfaces_, get_node()->get_logger(), hold_position_threshold, gravity_compensation);
 
             // MoveJ state parameters
             double move_duration = auto_declare<double>("move_duration", 3.0);
@@ -227,7 +200,7 @@ namespace ocs2::mobile_manipulator
 
             // Create StateMoveJ using common implementation
             state_list_.movej = std::make_shared<StateMoveJ>(
-                ctrl_interfaces_, logger, move_duration, gravity_compensation);
+                ctrl_interfaces_, get_node()->get_logger(), move_duration, gravity_compensation);
 
             // Configure interpolation type/shape
             state_list_.movej->setInterpolationType(movej_interpolation_type);
