@@ -187,11 +187,11 @@ namespace ocs2::mobile_manipulator
             state_list_.ocs2 = std::make_shared<StateOCS2>(ctrl_interfaces_, get_node(), ctrl_comp_);
 
             // Hold state parameters
-            double hold_position_threshold = auto_declare<double>("hold_position_threshold", 0.1);
+            auto_declare<double>("hold_position_threshold", 0.1);
 
             // Create StateHold using common implementation
             state_list_.hold = std::make_shared<StateHold>(
-                ctrl_interfaces_, get_node()->get_logger(), hold_position_threshold, gravity_compensation);
+                ctrl_interfaces_, get_node(), gravity_compensation);
 
             // MoveJ state parameters
             double move_duration = auto_declare<double>("move_duration", 3.0);

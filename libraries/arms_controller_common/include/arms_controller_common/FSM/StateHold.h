@@ -8,6 +8,7 @@
 #include <vector>
 #include <memory>
 #include <rclcpp/rclcpp.hpp>
+#include <rclcpp_lifecycle/lifecycle_node.hpp>
 
 namespace arms_controller_common
 {
@@ -25,14 +26,12 @@ namespace arms_controller_common
         /**
          * @brief Constructor
          * @param ctrl_interfaces Control interfaces
-         * @param logger ROS logger
-         * @param position_threshold Position difference threshold (radians). If <= 0, threshold checking is automatically disabled.
+         * @param node ROS lifecycle node for parameter access
          * @param gravity_compensation Optional gravity compensation utility (nullptr if not needed)
          */
-        StateHold(CtrlInterfaces& ctrl_interfaces,
-                 const rclcpp::Logger& logger,
-                 double position_threshold = 0.1,
-                 std::shared_ptr<GravityCompensation> gravity_compensation = nullptr);
+        explicit StateHold(CtrlInterfaces& ctrl_interfaces,
+                         std::shared_ptr<rclcpp_lifecycle::LifecycleNode> node = nullptr,
+                         const std::shared_ptr<GravityCompensation>& gravity_compensation = nullptr);
 
         void enter() override;
         void run(const rclcpp::Time& time, const rclcpp::Duration& period) override;
@@ -40,10 +39,12 @@ namespace arms_controller_common
         FSMStateName checkChange() override;
 
     private:
-        rclcpp::Logger logger_;
+        void updateParam();
+
+        std::shared_ptr<rclcpp_lifecycle::LifecycleNode> node_;
         std::shared_ptr<GravityCompensation> gravity_compensation_;
         std::vector<double> hold_positions_;           // Positions recorded when entering
-        double joint_position_threshold_;              // Threshold for joint position difference (radians). If <= 0, checking is disabled.
+        double joint_position_threshold_{0.1};         // Threshold for joint position difference (radians). If <= 0, checking is disabled.
         bool first_threshold_check_passed_;            // Flag to track if first threshold check has passed
     };
 } // namespace arms_controller_common

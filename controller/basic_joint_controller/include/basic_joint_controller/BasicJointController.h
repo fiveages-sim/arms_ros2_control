@@ -83,8 +83,8 @@ namespace basic_joint_controller
 
         // State machine parameters
         // Note: home_duration, home_interpolation_type, home_tanh_scale are updated dynamically via StateHome::updateParam()
+        // Note: hold_position_threshold is updated dynamically via StateHold::updateParam()
         double move_duration_{3.0};
-        double hold_position_threshold_{0.1};
 
         // Interface mapping
         std::unordered_map<std::string, std::vector<std::reference_wrapper<hardware_interface::LoanedCommandInterface>>*>

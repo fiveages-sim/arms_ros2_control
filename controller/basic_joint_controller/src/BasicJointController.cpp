@@ -106,7 +106,7 @@ namespace basic_joint_controller
             move_duration_ = auto_declare<double>("move_duration", 3.0);
             std::string movej_interpolation_type = auto_declare<std::string>("movej_interpolation_type", "linear");
             double movej_tanh_scale = auto_declare<double>("movej_tanh_scale", 3.0);
-            hold_position_threshold_ = auto_declare<double>("hold_position_threshold", 0.1);
+            auto_declare<double>("hold_position_threshold", 0.1);
             // switch_command_base is declared for parameter server, retrieved in StateHome constructor
             auto_declare<long>("switch_command_base", 100);
 
@@ -126,7 +126,7 @@ namespace basic_joint_controller
 
             // StateHold - extends common StateHold to support MOVEJ transition
             state_list_.hold = std::make_shared<StateHold>(
-                ctrl_interfaces_, get_node()->get_logger(), hold_position_threshold_);
+                ctrl_interfaces_, get_node());
 
             // StateMoveJ - extends common StateMoveJ for basic_joint_controller
             state_list_.movej = std::make_shared<StateMoveJ>(

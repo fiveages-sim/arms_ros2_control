@@ -3,35 +3,28 @@
 //
 #include "arms_controller_common/FSM/StateHold.h"
 #include <cmath>
+#include <utility>
 
 namespace arms_controller_common
 {
     StateHold::StateHold(CtrlInterfaces& ctrl_interfaces,
-                        const rclcpp::Logger& logger,
-                        double position_threshold,
-                        std::shared_ptr<GravityCompensation> gravity_compensation)
+                        std::shared_ptr<rclcpp_lifecycle::LifecycleNode> node,
+                        const std::shared_ptr<GravityCompensation>& gravity_compensation)
         : FSMState(FSMStateName::HOLD, "HOLD", ctrl_interfaces),
-          logger_(logger),
+          node_(std::move(node)),
           gravity_compensation_(gravity_compensation),
-          joint_position_threshold_(position_threshold),
           first_threshold_check_passed_(false)
     {
-        if (position_threshold > 0.0)
-        {
-            RCLCPP_INFO(logger_,
-                       "StateHold initialized with position threshold: %.4f rad (%.2f degrees), threshold checking enabled",
-                       joint_position_threshold_, joint_position_threshold_ * 180.0 / M_PI);
-        }
-        else
-        {
-            RCLCPP_INFO(logger_,
-                       "StateHold initialized with position threshold: %.4f rad, threshold checking disabled",
-                       position_threshold);
-        }
+    }
+
+    void StateHold::updateParam()
+    {
+        joint_position_threshold_ = node_->get_parameter("hold_position_threshold").as_double();
     }
 
     void StateHold::enter()
     {
+        updateParam();
         size_t num_joints = ctrl_interfaces_.joint_position_state_interface_.size();
         hold_positions_.resize(num_joints);
         first_threshold_check_passed_ = false;
@@ -40,13 +33,14 @@ namespace arms_controller_common
             hold_positions_[i] = ctrl_interfaces_.last_sent_joint_positions_[i];
         }
         
-        RCLCPP_INFO(logger_,
+        RCLCPP_INFO(node_->get_logger(),
                    "HOLD state entered, using last sent joint positions for %zu joints (avoids jumps)", 
                    hold_positions_.size());
     }
 
     void StateHold::run(const rclcpp::Time& time, const rclcpp::Duration& /* period */)
     {
+        updateParam();
         if (joint_position_threshold_ > 0.0)
         {
             double max_diff = 0.0;
@@ -75,14 +69,14 @@ namespace arms_controller_common
                 if (!exceeds_threshold)
                 {
                     first_threshold_check_passed_ = true;
-                    RCLCPP_INFO(logger_,
+                    RCLCPP_INFO(node_->get_logger(),
                                "HOLD state: first threshold check passed (max diff: %.4f rad <= threshold: %.4f rad). "
                                "Automatic adjustment enabled.",
                                max_diff, joint_position_threshold_);
                 }
                 else
                 {
-                    RCLCPP_WARN_THROTTLE(logger_, *std::make_shared<rclcpp::Clock>(), 1000,
+                    RCLCPP_WARN_THROTTLE(node_->get_logger(), *node_->get_clock(), 1000,
                                        "HOLD state: first threshold check failed (max diff: %.4f rad > threshold: %.4f rad). "
                                        "Waiting for threshold to be satisfied before enabling automatic adjustment.",
                                        max_diff, joint_position_threshold_);
@@ -107,7 +101,7 @@ namespace arms_controller_common
                     
                     if (first_warn || time_since_last_warn.seconds() >= 1.0)
                     {
-                        RCLCPP_WARN(logger_,
+                        RCLCPP_WARN(node_->get_logger(),
                                    "HOLD state: position difference (max: %.4f rad) exceeds threshold (%.4f rad). "
                                    "Updating hold positions to current positions for safety.",
                                    max_diff, joint_position_threshold_);
@@ -131,9 +125,9 @@ namespace arms_controller_common
         if (ctrl_interfaces_.control_mode_ == ControlMode::MIX && gravity_compensation_)
         {
             std::vector<double> current_positions;
-            for (size_t i = 0; i < ctrl_interfaces_.joint_position_state_interface_.size(); ++i)
+            for (auto i : ctrl_interfaces_.joint_position_state_interface_)
             {
-                auto value = ctrl_interfaces_.joint_position_state_interface_[i].get().get_optional();
+                auto value = i.get().get_optional();
                 current_positions.push_back(value.value_or(0.0));
             }
 
