@@ -172,6 +172,12 @@ namespace arms_ros2_control::command
         void sendFsmCommand(int32_t command);
 
         /**
+         * 统一计算并发布目标位姿（解耦：合并手柄+摇杆，处理暂停逻辑）
+         * @param arm 目标臂 ("left" 或 "right")
+         */
+        void calculateAndPublishTarget(const std::string& arm);
+
+        /**
          * 直接发布目标位姿到left_target/right_target话题（解耦模式，无坐标转换）
          * @param armType 手臂类型 ("left" 或 "right")
          * @param position 位置（已在目标坐标系下）
@@ -269,6 +275,12 @@ namespace arms_ros2_control::command
         Eigen::Quaterniond prev_calculated_left_orientation_ = Eigen::Quaterniond::Identity();
         Eigen::Vector3d prev_calculated_right_position_ = Eigen::Vector3d::Zero();
         Eigen::Quaterniond prev_calculated_right_orientation_ = Eigen::Quaterniond::Identity();
+
+        // 冻结的手柄位姿（暂停时使用：手柄冻结，摇杆仍可用）
+        Eigen::Vector3d frozen_left_position_ = Eigen::Vector3d::Zero();
+        Eigen::Quaterniond frozen_left_orientation_ = Eigen::Quaterniond::Identity();
+        Eigen::Vector3d frozen_right_position_ = Eigen::Vector3d::Zero();
+        Eigen::Quaterniond frozen_right_orientation_ = Eigen::Quaterniond::Identity();
 
         // 状态管理
         std::atomic<bool> enabled_;
