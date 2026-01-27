@@ -276,12 +276,6 @@ namespace arms_ros2_control::command
         Eigen::Vector3d prev_calculated_right_position_ = Eigen::Vector3d::Zero();
         Eigen::Quaterniond prev_calculated_right_orientation_ = Eigen::Quaterniond::Identity();
 
-        // 冻结的手柄位姿（暂停时使用：手柄冻结，摇杆仍可用）
-        Eigen::Vector3d frozen_left_position_ = Eigen::Vector3d::Zero();
-        Eigen::Quaterniond frozen_left_orientation_ = Eigen::Quaterniond::Identity();
-        Eigen::Vector3d frozen_right_position_ = Eigen::Vector3d::Zero();
-        Eigen::Quaterniond frozen_right_orientation_ = Eigen::Quaterniond::Identity();
-
         // 状态管理
         std::atomic<bool> enabled_;
         std::atomic<bool> is_update_mode_; // true = 更新模式, false = 存储模式

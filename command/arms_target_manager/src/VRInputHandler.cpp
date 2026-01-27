@@ -34,10 +34,6 @@ namespace arms_ros2_control::command
           , target_manager_(targetManager)
           , pub_left_target_(std::move(pub_left_target))
           , pub_right_target_(std::move(pub_right_target))
-          , frozen_left_position_(Eigen::Vector3d::Zero())
-          , frozen_left_orientation_(Eigen::Quaterniond::Identity())
-          , frozen_right_position_(Eigen::Vector3d::Zero())
-          , frozen_right_orientation_(Eigen::Quaterniond::Identity())
           , enabled_(false)
           , is_update_mode_(false)
           , mirror_mode_(false)
@@ -343,15 +339,16 @@ namespace arms_ros2_control::command
 
         if (arm_paused)
         {
+            // 暂停时使用 vr_base（已冻结的基准位姿）
             if (use_left_hand)
             {
-                hand_pos = frozen_left_position_;
-                hand_ori = frozen_left_orientation_;
+                hand_pos = vr_base_left_position_;
+                hand_ori = vr_base_left_orientation_;
             }
             else
             {
-                hand_pos = frozen_right_position_;
-                hand_ori = frozen_right_orientation_;
+                hand_pos = vr_base_right_position_;
+                hand_ori = vr_base_right_orientation_;
             }
         }
         else
@@ -778,9 +775,7 @@ namespace arms_ros2_control::command
                     // 镜像模式：左Y → 右臂（左手柄）
                     if (right_arm_paused_.load())
                     {
-                        // 恢复：保存当前手柄位姿作为新的冻结基准，重置基准和偏移
-                        frozen_left_position_ = left_position_;
-                        frozen_left_orientation_ = left_orientation_;
+                        // 恢复：重置基准坐标系和偏移
                         vr_base_left_position_ = left_position_;
                         vr_base_left_orientation_ = left_orientation_;
                         robot_base_right_position_ = robot_current_right_position_;
@@ -789,13 +784,18 @@ namespace arms_ros2_control::command
                         right_thumbstick_yaw_offset_ = 0.0;
 
                         right_arm_paused_.store(false);
-                        RCLCPP_INFO(node_->get_logger(), "🔘 [左Y按钮] 按下 - 功能: 切换右臂更新状态 - 操作: 恢复右臂更新 [镜像模式]");
+                        RCLCPP_INFO(node_->get_logger(), "🔘 [左Y按钮] 按下 - 功能: 切换右臂更新状态 - 操作: 恢复右臂更新（重置基准位姿和摇杆偏移） [镜像模式]");
                     }
                     else
                     {
-                        // 暂停：保存当前手柄位姿作为冻结基准
-                        frozen_left_position_ = left_position_;
-                        frozen_left_orientation_ = left_orientation_;
+                        // 暂停：重置基准坐标系和偏移（冻结手柄位姿）
+                        vr_base_left_position_ = left_position_;
+                        vr_base_left_orientation_ = left_orientation_;
+                        robot_base_right_position_ = robot_current_right_position_;
+                        robot_base_right_orientation_ = robot_current_right_orientation_;
+                        right_thumbstick_offset_ = Eigen::Vector3d::Zero();
+                        right_thumbstick_yaw_offset_ = 0.0;
+
                         right_arm_paused_.store(true);
                         RCLCPP_INFO(node_->get_logger(), "🔘 [左Y按钮] 按下 - 功能: 切换右臂更新状态 - 操作: 暂停右臂更新（手柄冻结，摇杆仍可用） [镜像模式]");
                     }
@@ -805,9 +805,7 @@ namespace arms_ros2_control::command
                     // 正常模式：左Y → 左臂（左手柄）
                     if (left_arm_paused_.load())
                     {
-                        // 恢复：保存当前手柄位姿作为新的冻结基准，重置基准和偏移
-                        frozen_left_position_ = left_position_;
-                        frozen_left_orientation_ = left_orientation_;
+                        // 恢复：重置基准坐标系和偏移
                         vr_base_left_position_ = left_position_;
                         vr_base_left_orientation_ = left_orientation_;
                         robot_base_left_position_ = robot_current_left_position_;
@@ -826,9 +824,14 @@ namespace arms_ros2_control::command
                     }
                     else
                     {
-                        // 暂停：保存当前手柄位姿作为冻结基准
-                        frozen_left_position_ = left_position_;
-                        frozen_left_orientation_ = left_orientation_;
+                        // 暂停：重置基准坐标系和偏移（冻结手柄位姿）
+                        vr_base_left_position_ = left_position_;
+                        vr_base_left_orientation_ = left_orientation_;
+                        robot_base_left_position_ = robot_current_left_position_;
+                        robot_base_left_orientation_ = robot_current_left_orientation_;
+                        left_thumbstick_offset_ = Eigen::Vector3d::Zero();
+                        left_thumbstick_yaw_offset_ = 0.0;
+
                         left_arm_paused_.store(true);
                         RCLCPP_INFO(node_->get_logger(), "🔘 [左Y按钮] 按下 - 功能: 切换左臂更新状态 - 操作: 暂停左臂更新（手柄冻结，摇杆仍可用）");
                     }
@@ -950,9 +953,7 @@ namespace arms_ros2_control::command
                     // 镜像模式：右B → 左臂（右手柄）
                     if (left_arm_paused_.load())
                     {
-                        // 恢复：保存当前手柄位姿作为新的冻结基准，重置基准和偏移
-                        frozen_right_position_ = right_position_;
-                        frozen_right_orientation_ = right_orientation_;
+                        // 恢复：重置基准坐标系和偏移
                         vr_base_right_position_ = right_position_;
                         vr_base_right_orientation_ = right_orientation_;
                         robot_base_left_position_ = robot_current_left_position_;
@@ -961,13 +962,18 @@ namespace arms_ros2_control::command
                         left_thumbstick_yaw_offset_ = 0.0;
 
                         left_arm_paused_.store(false);
-                        RCLCPP_INFO(node_->get_logger(), "🔘 [右B按钮] 按下 - 功能: 切换左臂更新状态 - 操作: 恢复左臂更新 [镜像模式]");
+                        RCLCPP_INFO(node_->get_logger(), "🔘 [右B按钮] 按下 - 功能: 切换左臂更新状态 - 操作: 恢复左臂更新（重置基准位姿和摇杆偏移） [镜像模式]");
                     }
                     else
                     {
-                        // 暂停：保存当前手柄位姿作为冻结基准
-                        frozen_right_position_ = right_position_;
-                        frozen_right_orientation_ = right_orientation_;
+                        // 暂停：重置基准坐标系和偏移（冻结手柄位姿）
+                        vr_base_right_position_ = right_position_;
+                        vr_base_right_orientation_ = right_orientation_;
+                        robot_base_left_position_ = robot_current_left_position_;
+                        robot_base_left_orientation_ = robot_current_left_orientation_;
+                        left_thumbstick_offset_ = Eigen::Vector3d::Zero();
+                        left_thumbstick_yaw_offset_ = 0.0;
+
                         left_arm_paused_.store(true);
                         RCLCPP_INFO(node_->get_logger(), "🔘 [右B按钮] 按下 - 功能: 切换左臂更新状态 - 操作: 暂停左臂更新（手柄冻结，摇杆仍可用） [镜像模式]");
                     }
@@ -977,9 +983,7 @@ namespace arms_ros2_control::command
                     // 正常模式：右B → 右臂（右手柄）
                     if (right_arm_paused_.load())
                     {
-                        // 恢复：保存当前手柄位姿作为新的冻结基准，重置基准和偏移
-                        frozen_right_position_ = right_position_;
-                        frozen_right_orientation_ = right_orientation_;
+                        // 恢复：重置基准坐标系和偏移
                         vr_base_right_position_ = right_position_;
                         vr_base_right_orientation_ = right_orientation_;
                         robot_base_right_position_ = robot_current_right_position_;
@@ -998,9 +1002,14 @@ namespace arms_ros2_control::command
                     }
                     else
                     {
-                        // 暂停：保存当前手柄位姿作为冻结基准
-                        frozen_right_position_ = right_position_;
-                        frozen_right_orientation_ = right_orientation_;
+                        // 暂停：重置基准坐标系和偏移（冻结手柄位姿）
+                        vr_base_right_position_ = right_position_;
+                        vr_base_right_orientation_ = right_orientation_;
+                        robot_base_right_position_ = robot_current_right_position_;
+                        robot_base_right_orientation_ = robot_current_right_orientation_;
+                        right_thumbstick_offset_ = Eigen::Vector3d::Zero();
+                        right_thumbstick_yaw_offset_ = 0.0;
+
                         right_arm_paused_.store(true);
                         RCLCPP_INFO(node_->get_logger(), "🔘 [右B按钮] 按下 - 功能: 切换右臂更新状态 - 操作: 暂停右臂更新（手柄冻结，摇杆仍可用）");
                     }
