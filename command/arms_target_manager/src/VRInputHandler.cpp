@@ -313,8 +313,11 @@ namespace arms_ros2_control::command
                     Eigen::Vector3d vr_position = arm_paused ? paused_left_position_ : left_position_;
                     Eigen::Quaterniond vr_orientation = arm_paused ? paused_left_orientation_ : left_orientation_;
                     
+                    // 将右摇杆累积偏移（局部坐标系）转换到世界坐标系（与手柄移动保持一致）
+                    // 摇杆偏移量是在局部坐标系下的（相对于进入UPDATE时手柄的朝向）
+                    Eigen::Vector3d thumbstick_offset_world = vr_base_left_orientation_ * right_thumbstick_offset_;
                     // 应用右摇杆累积偏移到VR位姿（暂停时使用暂停时刻的位姿）
-                    Eigen::Vector3d position_with_offset = vr_position + right_thumbstick_offset_;
+                    Eigen::Vector3d position_with_offset = vr_position + thumbstick_offset_world;
 
                     // 应用右摇杆累积Yaw旋转到VR姿态
                     Eigen::Quaterniond orientation_with_yaw = vr_orientation;
@@ -354,8 +357,11 @@ namespace arms_ros2_control::command
                     Eigen::Vector3d vr_position = arm_paused ? paused_left_position_ : left_position_;
                     Eigen::Quaterniond vr_orientation = arm_paused ? paused_left_orientation_ : left_orientation_;
                     
+                    // 将左摇杆累积偏移（局部坐标系）转换到世界坐标系（与手柄移动保持一致）
+                    // 摇杆偏移量是在局部坐标系下的（相对于进入UPDATE时手柄的朝向）
+                    Eigen::Vector3d thumbstick_offset_world = vr_base_left_orientation_ * left_thumbstick_offset_;
                     // 应用左摇杆累积偏移到VR位姿（暂停时使用暂停时刻的位姿）
-                    Eigen::Vector3d position_with_offset = vr_position + left_thumbstick_offset_;
+                    Eigen::Vector3d position_with_offset = vr_position + thumbstick_offset_world;
 
                     // 应用左摇杆累积Yaw旋转到VR姿态
                     Eigen::Quaterniond orientation_with_yaw = vr_orientation;
@@ -432,8 +438,11 @@ namespace arms_ros2_control::command
                     Eigen::Vector3d vr_position = arm_paused ? paused_right_position_ : right_position_;
                     Eigen::Quaterniond vr_orientation = arm_paused ? paused_right_orientation_ : right_orientation_;
                     
+                    // 将左摇杆累积偏移（局部坐标系）转换到世界坐标系（与手柄移动保持一致）
+                    // 摇杆偏移量是在局部坐标系下的（相对于进入UPDATE时手柄的朝向）
+                    Eigen::Vector3d thumbstick_offset_world = vr_base_right_orientation_ * left_thumbstick_offset_;
                     // 应用左摇杆累积偏移到VR位姿（暂停时使用暂停时刻的位姿）
-                    Eigen::Vector3d position_with_offset = vr_position + left_thumbstick_offset_;
+                    Eigen::Vector3d position_with_offset = vr_position + thumbstick_offset_world;
 
                     // 应用左摇杆累积Yaw旋转到VR姿态
                     Eigen::Quaterniond orientation_with_yaw = vr_orientation;
@@ -473,8 +482,11 @@ namespace arms_ros2_control::command
                     Eigen::Vector3d vr_position = arm_paused ? paused_right_position_ : right_position_;
                     Eigen::Quaterniond vr_orientation = arm_paused ? paused_right_orientation_ : right_orientation_;
                     
+                    // 将右摇杆累积偏移（局部坐标系）转换到世界坐标系（与手柄移动保持一致）
+                    // 摇杆偏移量是在局部坐标系下的（相对于进入UPDATE时手柄的朝向）
+                    Eigen::Vector3d thumbstick_offset_world = vr_base_right_orientation_ * right_thumbstick_offset_;
                     // 应用右摇杆累积偏移到VR位姿（暂停时使用暂停时刻的位姿）
-                    Eigen::Vector3d position_with_offset = vr_position + right_thumbstick_offset_;
+                    Eigen::Vector3d position_with_offset = vr_position + thumbstick_offset_world;
 
                     // 应用右摇杆累积Yaw旋转到VR姿态
                     Eigen::Quaterniond orientation_with_yaw = vr_orientation;
