@@ -19,17 +19,18 @@ namespace arms_ros2_control::command
 {
     // 静态常量定义
     const std::string VRInputHandler::XR_NODE_NAME = "/xr_target_node";
-    const double VRInputHandler::POSITION_THRESHOLD = 0.01; // 1cm threshold for position changes
+    const double VRInputHandler::POSITION_THRESHOLD = 0.002; // 2mm threshold for position changes (reduced for better responsiveness with smaller scale factors)
     const double VRInputHandler::ORIENTATION_THRESHOLD = 0.005; // threshold for orientation changes (quaternion angle)
-    const double VRInputHandler::LINEAR_SCALE = 0.005; // 与joystick的linear_scale一致
-    const double VRInputHandler::ANGULAR_SCALE = 0.05; // 与joystick的angular_scale一致
 
     VRInputHandler::VRInputHandler(
         rclcpp::Node::SharedPtr node,
         ArmsTargetManager* targetManager,
         rclcpp::Publisher<geometry_msgs::msg::Pose>::SharedPtr pub_left_target,
         rclcpp::Publisher<geometry_msgs::msg::Pose>::SharedPtr pub_right_target,
-        const std::vector<std::string>& handControllers)
+        const std::vector<std::string>& handControllers,
+        double linear_scale,
+        double angular_scale,
+        double vr_pose_scale)
         : node_(std::move(node))
           , target_manager_(targetManager)
           , pub_left_target_(std::move(pub_left_target))
@@ -45,6 +46,9 @@ namespace arms_ros2_control::command
           , hand_controllers_(handControllers)
           , left_gripper_open_(false)
           , right_gripper_open_(false)
+          , linear_scale_(linear_scale)
+          , angular_scale_(angular_scale)
+          , vr_pose_scale_(vr_pose_scale)
     {
         // 检测左右控制器名称
         detectGripperControllers(hand_controllers_);
@@ -118,8 +122,10 @@ namespace arms_ros2_control::command
         RCLCPP_INFO(node_->get_logger(), "🕹️🕶️🕹️ VRInputHandler created");
         RCLCPP_INFO(node_->get_logger(), "🕹️🕶️🕹️ Subscribed to button event topic: /xr/controller_state (Int32)");
         RCLCPP_INFO(node_->get_logger(), "🕹️🕶️🕹️ Subscribed to thumbstick axes topic: /xr/thumbstick_axes (ThumbstickAxes)");
-        RCLCPP_INFO(node_->get_logger(), "🕹️🕶️🕹️ Thumbstick scaling: linear=%.3f, angular=%.3f", LINEAR_SCALE,
-                    ANGULAR_SCALE);
+        RCLCPP_INFO(node_->get_logger(), "🕹️🕶️🕹️ Thumbstick scaling: linear=%.3f, angular=%.3f (from target_manager.yaml)",
+                    linear_scale_, angular_scale_);
+        RCLCPP_INFO(node_->get_logger(), "🕹️🕶️🕹️ VR pose scaling: %.3f (from target_manager.yaml)",
+                    vr_pose_scale_);
         RCLCPP_INFO(node_->get_logger(),
                     "🕹️🕶️🕹️ Grip button toggles thumbstick mode: XY-translation ↔ Z-height + Yaw-rotation");
         RCLCPP_INFO(node_->get_logger(), "🕹️🕶️🕹️ VR control is DISABLED by default.");
@@ -288,6 +294,8 @@ namespace arms_ros2_control::command
         // 1. 更新手柄位姿数据（总是更新，无论是否暂停）
         left_ee_pose_ = poseMsgToMatrix(msg);
         matrixToPosOri(left_ee_pose_, left_position_, left_orientation_);
+        // 应用VR手柄位置缩放系数
+        left_position_ *= vr_pose_scale_;
 
         // 2. 根据镜像模式确定目标臂
         std::string target_arm = mirror_mode_.load() ? "right" : "left";
@@ -307,6 +315,8 @@ namespace arms_ros2_control::command
         // 1. 更新手柄位姿数据（总是更新，无论是否暂停）
         right_ee_pose_ = poseMsgToMatrix(msg);
         matrixToPosOri(right_ee_pose_, right_position_, right_orientation_);
+        // 应用VR手柄位置缩放系数
+        right_position_ *= vr_pose_scale_;
 
         // 2. 根据镜像模式确定目标臂
         std::string target_arm = mirror_mode_.load() ? "left" : "right";
@@ -560,8 +570,8 @@ namespace arms_ros2_control::command
                 if (right_grip_mode_.load())
                 {
                     // 高度旋转模式：Y轴→Z高度，X轴→Yaw旋转
-                    double delta_z = left_thumbstick_axes_.y() * LINEAR_SCALE;
-                    double delta_yaw = left_thumbstick_axes_.x() * ANGULAR_SCALE;
+                    double delta_z = left_thumbstick_axes_.y() * linear_scale_;
+                    double delta_yaw = left_thumbstick_axes_.x() * angular_scale_;
 
                     // 累积Z轴偏移和Yaw旋转（使用右臂参数）
                     right_thumbstick_offset_.z() -= delta_z;
@@ -575,8 +585,8 @@ namespace arms_ros2_control::command
                 else
                 {
                     // XY平移模式：Y轴→前后(X)，X轴→左右(Y)
-                    double delta_x = left_thumbstick_axes_.y() * LINEAR_SCALE;
-                    double delta_y = left_thumbstick_axes_.x() * LINEAR_SCALE;
+                    double delta_x = left_thumbstick_axes_.y() * linear_scale_;
+                    double delta_y = left_thumbstick_axes_.x() * linear_scale_;
 
                     // 累积XY偏移（使用右臂参数）
                     right_thumbstick_offset_.x() -= delta_x;
@@ -596,8 +606,8 @@ namespace arms_ros2_control::command
                 if (left_grip_mode_.load())
                 {
                     // 高度旋转模式：Y轴→Z高度，X轴→Yaw旋转
-                    double delta_z = left_thumbstick_axes_.y() * LINEAR_SCALE;
-                    double delta_yaw = left_thumbstick_axes_.x() * ANGULAR_SCALE;
+                    double delta_z = left_thumbstick_axes_.y() * linear_scale_;
+                    double delta_yaw = left_thumbstick_axes_.x() * angular_scale_;
 
                     // 累积Z轴偏移和Yaw旋转
                     left_thumbstick_offset_.z() -= delta_z;
@@ -612,8 +622,8 @@ namespace arms_ros2_control::command
                 else
                 {
                     // XY平移模式：Y轴→前后(X)，X轴→左右(Y)
-                    double delta_x = left_thumbstick_axes_.y() * LINEAR_SCALE;
-                    double delta_y = left_thumbstick_axes_.x() * LINEAR_SCALE;
+                    double delta_x = left_thumbstick_axes_.y() * linear_scale_;
+                    double delta_y = left_thumbstick_axes_.x() * linear_scale_;
 
                     // 累积XY偏移
                     left_thumbstick_offset_.x() -= delta_x;
@@ -643,8 +653,8 @@ namespace arms_ros2_control::command
                 if (left_grip_mode_.load())
                 {
                     // 高度旋转模式：Y轴→Z高度，X轴→Yaw旋转
-                    double delta_z = right_thumbstick_axes_.y() * LINEAR_SCALE;
-                    double delta_yaw = right_thumbstick_axes_.x() * ANGULAR_SCALE;
+                    double delta_z = right_thumbstick_axes_.y() * linear_scale_;
+                    double delta_yaw = right_thumbstick_axes_.x() * angular_scale_;
 
                     // 累积Z轴偏移和Yaw旋转（使用左臂参数）
                     left_thumbstick_offset_.z() -= delta_z;
@@ -658,8 +668,8 @@ namespace arms_ros2_control::command
                 else
                 {
                     // XY平移模式：Y轴→前后(X)，X轴→左右(Y)
-                    double delta_x = right_thumbstick_axes_.y() * LINEAR_SCALE;
-                    double delta_y = right_thumbstick_axes_.x() * LINEAR_SCALE;
+                    double delta_x = right_thumbstick_axes_.y() * linear_scale_;
+                    double delta_y = right_thumbstick_axes_.x() * linear_scale_;
 
                     // 累积XY偏移（使用左臂参数）
                     left_thumbstick_offset_.x() -= delta_x;
@@ -679,8 +689,8 @@ namespace arms_ros2_control::command
                 if (right_grip_mode_.load())
                 {
                     // 高度旋转模式：Y轴→Z高度，X轴→Yaw旋转
-                    double delta_z = right_thumbstick_axes_.y() * LINEAR_SCALE;
-                    double delta_yaw = right_thumbstick_axes_.x() * ANGULAR_SCALE;
+                    double delta_z = right_thumbstick_axes_.y() * linear_scale_;
+                    double delta_yaw = right_thumbstick_axes_.x() * angular_scale_;
 
                     // 累积Z轴偏移和Yaw旋转
                     right_thumbstick_offset_.z() -= delta_z;
@@ -695,8 +705,8 @@ namespace arms_ros2_control::command
                 else
                 {
                     // XY平移模式：Y轴→前后(X)，X轴→左右(Y)
-                    double delta_x = right_thumbstick_axes_.y() * LINEAR_SCALE;
-                    double delta_y = right_thumbstick_axes_.x() * LINEAR_SCALE;
+                    double delta_x = right_thumbstick_axes_.y() * linear_scale_;
+                    double delta_y = right_thumbstick_axes_.x() * linear_scale_;
 
                     // 累积XY偏移
                     right_thumbstick_offset_.x() -= delta_x;
