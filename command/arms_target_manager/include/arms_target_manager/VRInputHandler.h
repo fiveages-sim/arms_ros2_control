@@ -42,21 +42,20 @@ namespace arms_ros2_control::command
          * @param targetManager ArmsTargetManager指针
          * @param pub_left_target 外部传入的左臂目标位姿发布器（统一管理）
          * @param pub_right_target 外部传入的右臂目标位姿发布器（统一管理）
-         * @param updateRate 更新频率，默认为500Hz
          * @param handControllers 手部/夹爪控制器名称列表（用于映射夹爪命令）
-         * @param linear_scale 摇杆位置缩放因子（来自 target_manager.yaml 的 vr_thumbstick_linear_scale）
-         * @param angular_scale 摇杆旋转缩放因子（来自 target_manager.yaml 的 vr_thumbstick_angular_scale）
-         * @param vr_pose_scale VR手柄位姿位置缩放因子（来自 target_manager.yaml 的 vr_pose_scale）
+         * @param vr_thumbstick_linear_scale VR摇杆线性缩放因子（单位 m/step）
+         * @param vr_thumbstick_angular_scale VR摇杆角度缩放因子（单位 rad/step）
+         * @param vr_pose_scale VR手柄位姿位置缩放因子（用于缩放VR手柄的位置数据）
          */
         VRInputHandler(
             rclcpp::Node::SharedPtr node,
             ArmsTargetManager* targetManager,
             rclcpp::Publisher<geometry_msgs::msg::Pose>::SharedPtr pub_left_target,
             rclcpp::Publisher<geometry_msgs::msg::Pose>::SharedPtr pub_right_target,
-            const std::vector<std::string>& handControllers = {},
-            double linear_scale = 0.005,
-            double angular_scale = 0.05,
-            double vr_pose_scale = 1.0);
+            const std::vector<std::string>& handControllers,
+            double vr_thumbstick_linear_scale,
+            double vr_thumbstick_angular_scale,
+            double vr_pose_scale);
 
         ~VRInputHandler() = default;
 
@@ -176,12 +175,6 @@ namespace arms_ros2_control::command
          * @param command FSM命令值 (1=HOME, 2=HOLD, 3=OCS2, 100=切换姿态(REST), 0=重置)
          */
         void sendFsmCommand(int32_t command);
-
-        /**
-         * 统一计算并发布目标位姿（解耦：合并手柄+摇杆，处理暂停逻辑）
-         * @param arm 目标臂 ("left" 或 "right")
-         */
-        void calculateAndPublishTarget(const std::string& arm);
 
         /**
          * 直接发布目标位姿到left_target/right_target话题（解耦模式，无坐标转换）
@@ -333,16 +326,14 @@ namespace arms_ros2_control::command
         std::atomic<bool> left_gripper_open_;
         std::atomic<bool> right_gripper_open_;
 
+        // VR控制缩放参数（从配置文件读取）
+        double vr_thumbstick_linear_scale_; // 摇杆位置缩放因子（单位 m/step）
+        double vr_thumbstick_angular_scale_; // 摇杆旋转缩放因子（单位 rad/step）
+        double vr_pose_scale_; // VR手柄位姿位置缩放因子
+
         // 常量
         static const std::string XR_NODE_NAME;
         static const double POSITION_THRESHOLD;
         static const double ORIENTATION_THRESHOLD;
-
-        // VR 摇杆缩放因子（来自 target_manager.yaml 的 vr_thumbstick_linear_scale / vr_thumbstick_angular_scale）
-        double linear_scale_;
-        double angular_scale_;
-        
-        // VR 手柄位姿位置缩放因子（来自 target_manager.yaml 的 vr_pose_scale）
-        double vr_pose_scale_;
     };
 } // namespace arms_ros2_control::command

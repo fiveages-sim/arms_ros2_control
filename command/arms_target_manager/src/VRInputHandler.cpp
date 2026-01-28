@@ -19,7 +19,7 @@ namespace arms_ros2_control::command
 {
     // 静态常量定义
     const std::string VRInputHandler::XR_NODE_NAME = "/xr_target_node";
-    const double VRInputHandler::POSITION_THRESHOLD = 0.002; // 2mm threshold for position changes (reduced for better responsiveness with smaller scale factors)
+    const double VRInputHandler::POSITION_THRESHOLD = 0.01; // 1cm threshold for position changes
     const double VRInputHandler::ORIENTATION_THRESHOLD = 0.005; // threshold for orientation changes (quaternion angle)
 
     VRInputHandler::VRInputHandler(
@@ -28,8 +28,8 @@ namespace arms_ros2_control::command
         rclcpp::Publisher<geometry_msgs::msg::Pose>::SharedPtr pub_left_target,
         rclcpp::Publisher<geometry_msgs::msg::Pose>::SharedPtr pub_right_target,
         const std::vector<std::string>& handControllers,
-        double linear_scale,
-        double angular_scale,
+        double vr_thumbstick_linear_scale,
+        double vr_thumbstick_angular_scale,
         double vr_pose_scale)
         : node_(std::move(node))
           , target_manager_(targetManager)
@@ -46,8 +46,8 @@ namespace arms_ros2_control::command
           , hand_controllers_(handControllers)
           , left_gripper_open_(false)
           , right_gripper_open_(false)
-          , linear_scale_(linear_scale)
-          , angular_scale_(angular_scale)
+          , vr_thumbstick_linear_scale_(vr_thumbstick_linear_scale)
+          , vr_thumbstick_angular_scale_(vr_thumbstick_angular_scale)
           , vr_pose_scale_(vr_pose_scale)
     {
         // 检测左右控制器名称
@@ -122,10 +122,9 @@ namespace arms_ros2_control::command
         RCLCPP_INFO(node_->get_logger(), "🕹️🕶️🕹️ VRInputHandler created");
         RCLCPP_INFO(node_->get_logger(), "🕹️🕶️🕹️ Subscribed to button event topic: /xr/controller_state (Int32)");
         RCLCPP_INFO(node_->get_logger(), "🕹️🕶️🕹️ Subscribed to thumbstick axes topic: /xr/thumbstick_axes (ThumbstickAxes)");
-        RCLCPP_INFO(node_->get_logger(), "🕹️🕶️🕹️ Thumbstick scaling: linear=%.3f, angular=%.3f (from target_manager.yaml)",
-                    linear_scale_, angular_scale_);
-        RCLCPP_INFO(node_->get_logger(), "🕹️🕶️🕹️ VR pose scaling: %.3f (from target_manager.yaml)",
-                    vr_pose_scale_);
+        RCLCPP_INFO(node_->get_logger(), "🕹️🕶️🕹️ Thumbstick scaling: linear=%.3f, angular=%.3f", vr_thumbstick_linear_scale_,
+                    vr_thumbstick_angular_scale_);
+        RCLCPP_INFO(node_->get_logger(), "🕹️🕶️🕹️ VR pose scale: %.3f", vr_pose_scale_);
         RCLCPP_INFO(node_->get_logger(),
                     "🕹️🕶️🕹️ Grip button toggles thumbstick mode: XY-translation ↔ Z-height + Yaw-rotation");
         RCLCPP_INFO(node_->get_logger(), "🕹️🕶️🕹️ VR control is DISABLED by default.");
@@ -263,7 +262,6 @@ namespace arms_ros2_control::command
         auto pose_msg = std::make_shared<geometry_msgs::msg::Pose>(msg->pose);
         Eigen::Matrix4d pose = poseMsgToMatrix(pose_msg);
         matrixToPosOri(pose, robot_current_left_position_, robot_current_left_orientation_);
-        // 执行完后：位置赋给 robot_current_left_position_，姿态赋给 robot_current_left_orientation_
     }
 
     void VRInputHandler::robotRightPoseCallback(const geometry_msgs::msg::PoseStamped::SharedPtr msg)
@@ -272,7 +270,6 @@ namespace arms_ros2_control::command
         auto pose_msg = std::make_shared<geometry_msgs::msg::Pose>(msg->pose);
         Eigen::Matrix4d pose = poseMsgToMatrix(pose_msg);
         matrixToPosOri(pose, robot_current_right_position_, robot_current_right_orientation_);
-        // 执行完后：位置赋给 robot_current_right_position_，姿态赋给 robot_current_right_orientation_
     }
 
     void VRInputHandler::vrLeftCallback(const geometry_msgs::msg::Pose::SharedPtr msg)
@@ -291,133 +288,238 @@ namespace arms_ros2_control::command
             return;
         }
 
-        // 1. 更新手柄位姿数据（总是更新，无论是否暂停）
+        // 左话题接收的是左手柄数据
         left_ee_pose_ = poseMsgToMatrix(msg);
         matrixToPosOri(left_ee_pose_, left_position_, left_orientation_);
-        // 应用VR手柄位置缩放系数
+        // 应用VR pose位置缩放
         left_position_ *= vr_pose_scale_;
 
-        // 2. 根据镜像模式确定目标臂
-        std::string target_arm = mirror_mode_.load() ? "right" : "left";
-
-        // 3. 检查该臂是否暂停
-        bool target_arm_paused = (target_arm == "left") ? left_arm_paused_.load() : right_arm_paused_.load();
-
-        // 4. 只有在未暂停时才触发发布（暂停时手柄移动不应影响机械臂，摇杆由摇杆回调独立触发）
-        if (!target_arm_paused)
+        if (enabled_.load())
         {
-            calculateAndPublishTarget(target_arm);
+            // 根据镜像模式决定使用哪个臂的状态和参数
+            bool is_mirror = mirror_mode_.load();
+            bool arm_paused = is_mirror ? right_arm_paused_.load() : left_arm_paused_.load();
+
+            // 检查目标臂是否暂停更新
+            if (arm_paused)
+            {
+                // 暂停更新：不计算和发布目标位姿，直接返回
+                return;
+            }
+
+            if (is_update_mode_.load())
+            {
+                // 更新模式：基于差值计算pose并更新marker
+                Eigen::Vector3d calculatedPos;
+                Eigen::Quaterniond calculatedOri;
+
+                if (is_mirror)
+                {
+                    // 镜像模式：左话题数据用于右臂
+                    // 应用右摇杆累积偏移到VR当前位置
+                    Eigen::Vector3d position_with_offset = left_position_ + right_thumbstick_offset_;
+
+                    // 应用右摇杆累积Yaw旋转到VR当前姿态
+                    Eigen::Quaterniond orientation_with_yaw = left_orientation_;
+                    if (std::abs(right_thumbstick_yaw_offset_) > 0.001)
+                    {
+                        Eigen::AngleAxisd yawRotation(right_thumbstick_yaw_offset_, Eigen::Vector3d::UnitZ());
+                        orientation_with_yaw = Eigen::Quaterniond(yawRotation) * left_orientation_;
+                        orientation_with_yaw.normalize();
+                    }
+
+                    calculatePoseFromDifference(position_with_offset, orientation_with_yaw,
+                                                vr_base_left_position_, vr_base_left_orientation_,
+                                                robot_base_right_position_, robot_base_right_orientation_,
+                                                calculatedPos, calculatedOri);
+
+                    // 检查计算的pose是否发生显著变化
+                    if (hasPoseChanged(calculatedPos, calculatedOri, prev_calculated_right_position_,
+                                       prev_calculated_right_orientation_))
+                    {
+                        // 调试输出
+                        RCLCPP_DEBUG(node_->get_logger(), "🕹️🕶️🕹️ [Mirror] Left VR → Right Arm");
+                        RCLCPP_DEBUG(node_->get_logger(), "🕹️🕶️🕹️ Right Calculated: [%.3f, %.3f, %.3f]",
+                                     calculatedPos.x(), calculatedPos.y(), calculatedPos.z());
+
+                        // 发布到右臂
+                        publishTargetPoseDirect("right", calculatedPos, calculatedOri);
+
+                        // 更新之前计算的右臂pose
+                        prev_calculated_right_position_ = calculatedPos;
+                        prev_calculated_right_orientation_ = calculatedOri;
+                    }
+                }
+                else
+                {
+                    // 正常模式：左话题数据用于左臂
+                    // 应用左摇杆累积偏移到VR当前位置
+                    Eigen::Vector3d position_with_offset = left_position_ + left_thumbstick_offset_;
+
+                    // 应用左摇杆累积Yaw旋转到VR当前姿态
+                    Eigen::Quaterniond orientation_with_yaw = left_orientation_;
+                    if (std::abs(left_thumbstick_yaw_offset_) > 0.001)
+                    {
+                        Eigen::AngleAxisd yawRotation(left_thumbstick_yaw_offset_, Eigen::Vector3d::UnitZ());
+                        orientation_with_yaw = Eigen::Quaterniond(yawRotation) * left_orientation_;
+                        orientation_with_yaw.normalize();
+                    }
+
+                    calculatePoseFromDifference(position_with_offset, orientation_with_yaw,
+                                                vr_base_left_position_, vr_base_left_orientation_,
+                                                robot_base_left_position_, robot_base_left_orientation_,
+                                                calculatedPos, calculatedOri);
+
+                    // 检查计算的pose是否发生显著变化
+                    if (hasPoseChanged(calculatedPos, calculatedOri, prev_calculated_left_position_,
+                                       prev_calculated_left_orientation_))
+                    {
+                        // 调试输出
+                        RCLCPP_DEBUG(node_->get_logger(), "🕹️🕶️🕹️ Left VR Base: [%.3f, %.3f, %.3f]",
+                                     vr_base_left_position_.x(), vr_base_left_position_.y(), vr_base_left_position_.z());
+                        RCLCPP_DEBUG(node_->get_logger(), "🕹️🕶️🕹️ Left VR Current: [%.3f, %.3f, %.3f]",
+                                     left_position_.x(), left_position_.y(), left_position_.z());
+                        RCLCPP_DEBUG(node_->get_logger(), "🕹️🕶️🕹️ Left Thumbstick Offset: [%.3f, %.3f, %.3f]",
+                                     left_thumbstick_offset_.x(), left_thumbstick_offset_.y(), left_thumbstick_offset_.z());
+                        RCLCPP_DEBUG(node_->get_logger(), "🕹️🕶️🕹️ Left Robot Base: [%.3f, %.3f, %.3f]",
+                                     robot_base_left_position_.x(), robot_base_left_position_.y(),
+                                     robot_base_left_position_.z());
+                        RCLCPP_DEBUG(node_->get_logger(), "🕹️🕶️🕹️ Left Calculated: [%.3f, %.3f, %.3f]",
+                                     calculatedPos.x(), calculatedPos.y(), calculatedPos.z());
+
+                        // 发布到左臂
+                        publishTargetPoseDirect("left", calculatedPos, calculatedOri);
+
+                        // 更新之前计算的左臂pose
+                        prev_calculated_left_position_ = calculatedPos;
+                        prev_calculated_left_orientation_ = calculatedOri;
+                    }
+                }
+            }
+            else
+            {
+                // 存储模式：只存储VR pose，不更新marker
+                // 不计算和发布目标位姿
+            }
         }
     }
 
     void VRInputHandler::vrRightCallback(const geometry_msgs::msg::Pose::SharedPtr msg)
     {
-        // 1. 更新手柄位姿数据（总是更新，无论是否暂停）
+        // 右话题接收的是右手柄数据
         right_ee_pose_ = poseMsgToMatrix(msg);
         matrixToPosOri(right_ee_pose_, right_position_, right_orientation_);
-        // 应用VR手柄位置缩放系数
+        // 应用VR pose位置缩放
         right_position_ *= vr_pose_scale_;
 
-        // 2. 根据镜像模式确定目标臂
-        std::string target_arm = mirror_mode_.load() ? "left" : "right";
-
-        // 3. 检查该臂是否暂停
-        bool target_arm_paused = (target_arm == "left") ? left_arm_paused_.load() : right_arm_paused_.load();
-
-        // 4. 只有在未暂停时才触发发布（暂停时手柄移动不应影响机械臂，摇杆由摇杆回调独立触发）
-        if (!target_arm_paused)
+        if (enabled_.load())
         {
-            calculateAndPublishTarget(target_arm);
-        }
-    }
+            // 根据镜像模式决定使用哪个臂的状态和参数
+            bool is_mirror = mirror_mode_.load();
+            bool arm_paused = is_mirror ? left_arm_paused_.load() : right_arm_paused_.load();
 
-    void VRInputHandler::calculateAndPublishTarget(const std::string& arm)
-    {
-        if (!enabled_.load() || !is_update_mode_.load())
-        {
-            return;
-        }
-
-        // 目标机械臂：表示要控制的是左臂还是右臂（始终绑定到机械臂）
-        bool is_left_arm = (arm == "left");
-        bool is_mirror = mirror_mode_.load();
-        // 使用的手柄：表示应该使用哪个VR手柄的数据（镜像模式下会与机械臂相反）
-        // 正常模式：左臂→左手柄，右臂→右手柄
-        // 镜像模式：左臂→右手柄，右臂→左手柄
-        bool use_left_hand = (is_left_arm && !is_mirror) || (!is_left_arm && is_mirror);
-
-        bool arm_paused = is_left_arm ? left_arm_paused_.load() : right_arm_paused_.load();
-
-        Eigen::Vector3d hand_pos;
-        Eigen::Quaterniond hand_ori;
-
-        if (arm_paused)
-        {
-            // 暂停时使用 vr_base（已冻结的基准位姿）
-            if (use_left_hand)
+            // 检查目标臂是否暂停更新
+            if (arm_paused)
             {
-                hand_pos = vr_base_left_position_;
-                hand_ori = vr_base_left_orientation_;
+                // 暂停更新：不计算和发布目标位姿，直接返回
+                return;
+            }
+
+            if (is_update_mode_.load())
+            {
+                // 更新模式：基于差值计算pose并更新marker
+                Eigen::Vector3d calculatedPos;
+                Eigen::Quaterniond calculatedOri;
+
+                if (is_mirror)
+                {
+                    // 镜像模式：右话题数据用于左臂
+                    // 应用左摇杆累积偏移到VR当前位置
+                    Eigen::Vector3d position_with_offset = right_position_ + left_thumbstick_offset_;
+
+                    // 应用左摇杆累积Yaw旋转到VR当前姿态
+                    Eigen::Quaterniond orientation_with_yaw = right_orientation_;
+                    if (std::abs(left_thumbstick_yaw_offset_) > 0.001)
+                    {
+                        Eigen::AngleAxisd yawRotation(left_thumbstick_yaw_offset_, Eigen::Vector3d::UnitZ());
+                        orientation_with_yaw = Eigen::Quaterniond(yawRotation) * right_orientation_;
+                        orientation_with_yaw.normalize();
+                    }
+
+                    calculatePoseFromDifference(position_with_offset, orientation_with_yaw,
+                                                vr_base_right_position_, vr_base_right_orientation_,
+                                                robot_base_left_position_, robot_base_left_orientation_,
+                                                calculatedPos, calculatedOri);
+
+                    // 检查计算的pose是否发生显著变化
+                    if (hasPoseChanged(calculatedPos, calculatedOri, prev_calculated_left_position_,
+                                       prev_calculated_left_orientation_))
+                    {
+                        // 调试输出
+                        RCLCPP_DEBUG(node_->get_logger(), "🕹️🕶️🕹️ [Mirror] Right VR → Left Arm");
+                        RCLCPP_DEBUG(node_->get_logger(), "🕹️🕶️🕹️ Left Calculated: [%.3f, %.3f, %.3f]",
+                                     calculatedPos.x(), calculatedPos.y(), calculatedPos.z());
+
+                        // 发布到左臂
+                        publishTargetPoseDirect("left", calculatedPos, calculatedOri);
+
+                        // 更新之前计算的左臂pose
+                        prev_calculated_left_position_ = calculatedPos;
+                        prev_calculated_left_orientation_ = calculatedOri;
+                    }
+                }
+                else
+                {
+                    // 正常模式：右话题数据用于右臂
+                    // 应用右摇杆累积偏移到VR当前位置
+                    Eigen::Vector3d position_with_offset = right_position_ + right_thumbstick_offset_;
+
+                    // 应用右摇杆累积Yaw旋转到VR当前姿态
+                    Eigen::Quaterniond orientation_with_yaw = right_orientation_;
+                    if (std::abs(right_thumbstick_yaw_offset_) > 0.001)
+                    {
+                        Eigen::AngleAxisd yawRotation(right_thumbstick_yaw_offset_, Eigen::Vector3d::UnitZ());
+                        orientation_with_yaw = Eigen::Quaterniond(yawRotation) * right_orientation_;
+                        orientation_with_yaw.normalize();
+                    }
+
+                    calculatePoseFromDifference(position_with_offset, orientation_with_yaw,
+                                                vr_base_right_position_, vr_base_right_orientation_,
+                                                robot_base_right_position_, robot_base_right_orientation_,
+                                                calculatedPos, calculatedOri);
+
+                    // 检查计算的pose是否发生显著变化
+                    if (hasPoseChanged(calculatedPos, calculatedOri, prev_calculated_right_position_,
+                                       prev_calculated_right_orientation_))
+                    {
+                        // 调试输出
+                        RCLCPP_DEBUG(node_->get_logger(), "🕹️🕶️🕹️ Right VR Base: [%.3f, %.3f, %.3f]",
+                                     vr_base_right_position_.x(), vr_base_right_position_.y(), vr_base_right_position_.z());
+                        RCLCPP_DEBUG(node_->get_logger(), "🕹️🕶️🕹️ Right VR Current: [%.3f, %.3f, %.3f]",
+                                     right_position_.x(), right_position_.y(), right_position_.z());
+                        RCLCPP_DEBUG(node_->get_logger(), "🕹️🕶️🕹️ Right Thumbstick Offset: [%.3f, %.3f, %.3f]",
+                                     right_thumbstick_offset_.x(), right_thumbstick_offset_.y(),
+                                     right_thumbstick_offset_.z());
+                        RCLCPP_DEBUG(node_->get_logger(), "🕹️🕶️🕹️ Right Robot Base: [%.3f, %.3f, %.3f]",
+                                     robot_base_right_position_.x(), robot_base_right_position_.y(),
+                                     robot_base_right_position_.z());
+                        RCLCPP_DEBUG(node_->get_logger(), "🕹️🕶️🕹️ Right Calculated: [%.3f, %.3f, %.3f]",
+                                     calculatedPos.x(), calculatedPos.y(), calculatedPos.z());
+
+                        // 发布到右臂
+                        publishTargetPoseDirect("right", calculatedPos, calculatedOri);
+
+                        // 更新之前计算的右臂pose
+                        prev_calculated_right_position_ = calculatedPos;
+                        prev_calculated_right_orientation_ = calculatedOri;
+                    }
+                }
             }
             else
             {
-                hand_pos = vr_base_right_position_;
-                hand_ori = vr_base_right_orientation_;
+                // 存储模式：只存储VR pose，不更新marker
+                // 不计算和发布目标位姿
             }
-        }
-        else
-        {
-            hand_pos = use_left_hand ? left_position_ : right_position_;
-            hand_ori = use_left_hand ? left_orientation_ : right_orientation_;
-        }
-
-        // 摇杆偏移应该绑定到机械臂，而不是手柄（镜像模式下手柄和机械臂的对应关系会改变）
-        Eigen::Vector3d thumbstick_offset = is_left_arm ? left_thumbstick_offset_ : right_thumbstick_offset_;
-        double yaw_offset = is_left_arm ? left_thumbstick_yaw_offset_ : right_thumbstick_yaw_offset_;
-
-        Eigen::Vector3d final_pos = hand_pos + thumbstick_offset;
-
-        Eigen::Quaterniond final_ori = hand_ori;
-        if (std::abs(yaw_offset) > 0.001)
-        {
-            Eigen::AngleAxisd yawRotation(yaw_offset, Eigen::Vector3d::UnitZ());
-            final_ori = Eigen::Quaterniond(yawRotation) * hand_ori;
-            final_ori.normalize();
-        }
-
-        // VR基准位姿：使用手柄数据（use_left_hand），因为这是VR手柄进入UPDATE模式时的基准位姿
-        // 镜像模式下，左臂可能使用右手柄的基准位姿
-        Eigen::Vector3d vr_base_pos = use_left_hand ? vr_base_left_position_ : vr_base_right_position_;
-        Eigen::Quaterniond vr_base_ori = use_left_hand ? vr_base_left_orientation_ : vr_base_right_orientation_;
-        // 机器人基准位姿：使用机械臂数据（is_left_arm），因为这是机器人机械臂的基准位姿
-        // 镜像模式下，手柄和机械臂的对应关系会改变，但机械臂的基准位姿始终绑定到对应的机械臂
-        Eigen::Vector3d robot_base_pos = is_left_arm ? robot_base_left_position_ : robot_base_right_position_;
-        Eigen::Quaterniond robot_base_ori = is_left_arm ? robot_base_left_orientation_ : robot_base_right_orientation_;
-
-        Eigen::Vector3d calculatedPos;
-        Eigen::Quaterniond calculatedOri;
-
-        calculatePoseFromDifference(final_pos, final_ori,
-                                    vr_base_pos, vr_base_ori,
-                                    robot_base_pos, robot_base_ori,
-                                    calculatedPos, calculatedOri);
-
-        // 引用成员变量，下方 prev_pos/prev_ori 赋值即更新 prev_calculated_*_
-        Eigen::Vector3d& prev_pos = is_left_arm ? prev_calculated_left_position_ : prev_calculated_right_position_;
-        Eigen::Quaterniond& prev_ori = is_left_arm ? prev_calculated_left_orientation_ : prev_calculated_right_orientation_;
-
-        if (hasPoseChanged(calculatedPos, calculatedOri, prev_pos, prev_ori))
-        {
-            RCLCPP_DEBUG(node_->get_logger(), "🕹️🕶️🕹️ %s Arm Target: [%.3f, %.3f, %.3f]%s%s",
-                         is_left_arm ? "Left" : "Right",
-                         calculatedPos.x(), calculatedPos.y(), calculatedPos.z(),
-                         is_mirror ? " [Mirror]" : "",
-                         arm_paused ? " [PAUSED-Thumbstick Only]" : "");
-
-            publishTargetPoseDirect(arm, calculatedPos, calculatedOri);
-
-            prev_pos = calculatedPos;
-            prev_ori = calculatedOri;
         }
     }
 
@@ -579,8 +681,8 @@ namespace arms_ros2_control::command
                 if (right_grip_mode_.load())
                 {
                     // 高度旋转模式：Y轴→Z高度，X轴→Yaw旋转
-                    double delta_z = left_thumbstick_axes_.y() * linear_scale_;
-                    double delta_yaw = left_thumbstick_axes_.x() * angular_scale_;
+                    double delta_z = left_thumbstick_axes_.y() * vr_thumbstick_linear_scale_;
+                    double delta_yaw = left_thumbstick_axes_.x() * vr_thumbstick_angular_scale_;
 
                     // 累积Z轴偏移和Yaw旋转（使用右臂参数）
                     right_thumbstick_offset_.z() -= delta_z;
@@ -594,8 +696,8 @@ namespace arms_ros2_control::command
                 else
                 {
                     // XY平移模式：Y轴→前后(X)，X轴→左右(Y)
-                    double delta_x = left_thumbstick_axes_.y() * linear_scale_;
-                    double delta_y = left_thumbstick_axes_.x() * linear_scale_;
+                    double delta_x = left_thumbstick_axes_.y() * vr_thumbstick_linear_scale_;
+                    double delta_y = left_thumbstick_axes_.x() * vr_thumbstick_linear_scale_;
 
                     // 累积XY偏移（使用右臂参数）
                     right_thumbstick_offset_.x() -= delta_x;
@@ -606,8 +708,6 @@ namespace arms_ros2_control::command
                                  left_thumbstick_axes_.y(), delta_x,
                                  left_thumbstick_axes_.x(), delta_y);
                 }
-                // 触发右臂更新（即使暂停也触发，暂停时摇杆仍可用）
-                calculateAndPublishTarget("right");
             }
             else
             {
@@ -615,8 +715,8 @@ namespace arms_ros2_control::command
                 if (left_grip_mode_.load())
                 {
                     // 高度旋转模式：Y轴→Z高度，X轴→Yaw旋转
-                    double delta_z = left_thumbstick_axes_.y() * linear_scale_;
-                    double delta_yaw = left_thumbstick_axes_.x() * angular_scale_;
+                    double delta_z = left_thumbstick_axes_.y() * vr_thumbstick_linear_scale_;
+                    double delta_yaw = left_thumbstick_axes_.x() * vr_thumbstick_angular_scale_;
 
                     // 累积Z轴偏移和Yaw旋转
                     left_thumbstick_offset_.z() -= delta_z;
@@ -631,8 +731,8 @@ namespace arms_ros2_control::command
                 else
                 {
                     // XY平移模式：Y轴→前后(X)，X轴→左右(Y)
-                    double delta_x = left_thumbstick_axes_.y() * linear_scale_;
-                    double delta_y = left_thumbstick_axes_.x() * linear_scale_;
+                    double delta_x = left_thumbstick_axes_.y() * vr_thumbstick_linear_scale_;
+                    double delta_y = left_thumbstick_axes_.x() * vr_thumbstick_linear_scale_;
 
                     // 累积XY偏移
                     left_thumbstick_offset_.x() -= delta_x;
@@ -642,8 +742,6 @@ namespace arms_ros2_control::command
                                  left_thumbstick_axes_.y(), delta_x,
                                  left_thumbstick_axes_.x(), delta_y);
                 }
-                // 触发左臂更新（即使暂停也触发，暂停时摇杆仍可用）
-                calculateAndPublishTarget("left");
             }
         }
     }
@@ -662,8 +760,8 @@ namespace arms_ros2_control::command
                 if (left_grip_mode_.load())
                 {
                     // 高度旋转模式：Y轴→Z高度，X轴→Yaw旋转
-                    double delta_z = right_thumbstick_axes_.y() * linear_scale_;
-                    double delta_yaw = right_thumbstick_axes_.x() * angular_scale_;
+                    double delta_z = right_thumbstick_axes_.y() * vr_thumbstick_linear_scale_;
+                    double delta_yaw = right_thumbstick_axes_.x() * vr_thumbstick_angular_scale_;
 
                     // 累积Z轴偏移和Yaw旋转（使用左臂参数）
                     left_thumbstick_offset_.z() -= delta_z;
@@ -677,8 +775,8 @@ namespace arms_ros2_control::command
                 else
                 {
                     // XY平移模式：Y轴→前后(X)，X轴→左右(Y)
-                    double delta_x = right_thumbstick_axes_.y() * linear_scale_;
-                    double delta_y = right_thumbstick_axes_.x() * linear_scale_;
+                    double delta_x = right_thumbstick_axes_.y() * vr_thumbstick_linear_scale_;
+                    double delta_y = right_thumbstick_axes_.x() * vr_thumbstick_linear_scale_;
 
                     // 累积XY偏移（使用左臂参数）
                     left_thumbstick_offset_.x() -= delta_x;
@@ -689,8 +787,6 @@ namespace arms_ros2_control::command
                                  right_thumbstick_axes_.y(), delta_x,
                                  right_thumbstick_axes_.x(), delta_y);
                 }
-                // 触发左臂更新（即使暂停也触发，暂停时摇杆仍可用）
-                calculateAndPublishTarget("left");
             }
             else
             {
@@ -698,8 +794,8 @@ namespace arms_ros2_control::command
                 if (right_grip_mode_.load())
                 {
                     // 高度旋转模式：Y轴→Z高度，X轴→Yaw旋转
-                    double delta_z = right_thumbstick_axes_.y() * linear_scale_;
-                    double delta_yaw = right_thumbstick_axes_.x() * angular_scale_;
+                    double delta_z = right_thumbstick_axes_.y() * vr_thumbstick_linear_scale_;
+                    double delta_yaw = right_thumbstick_axes_.x() * vr_thumbstick_angular_scale_;
 
                     // 累积Z轴偏移和Yaw旋转
                     right_thumbstick_offset_.z() -= delta_z;
@@ -714,8 +810,8 @@ namespace arms_ros2_control::command
                 else
                 {
                     // XY平移模式：Y轴→前后(X)，X轴→左右(Y)
-                    double delta_x = right_thumbstick_axes_.y() * linear_scale_;
-                    double delta_y = right_thumbstick_axes_.x() * linear_scale_;
+                    double delta_x = right_thumbstick_axes_.y() * vr_thumbstick_linear_scale_;
+                    double delta_y = right_thumbstick_axes_.x() * vr_thumbstick_linear_scale_;
 
                     // 累积XY偏移
                     right_thumbstick_offset_.x() -= delta_x;
@@ -725,8 +821,6 @@ namespace arms_ros2_control::command
                                  right_thumbstick_axes_.y(), delta_x,
                                  right_thumbstick_axes_.x(), delta_y);
                 }
-                // 触发右臂更新（即使暂停也触发，暂停时摇杆仍可用）
-                calculateAndPublishTarget("right");
             }
         }
     }
@@ -791,48 +885,49 @@ namespace arms_ros2_control::command
                 // 根据镜像模式决定控制哪个臂
                 if (mirror_mode_.load())
                 {
-                    // 镜像模式：左Y → 右臂（左手柄）
+                    // 镜像模式：左话题数据用于右臂
                     if (right_arm_paused_.load())
                     {
-                        // 恢复：重置基准坐标系和偏移
+                        // 当前是暂停状态，执行恢复操作
                         vr_base_left_position_ = left_position_;
                         vr_base_left_orientation_ = left_orientation_;
                         robot_base_right_position_ = robot_current_right_position_;
                         robot_base_right_orientation_ = robot_current_right_orientation_;
+
+                        // 重置右摇杆累积偏移
                         right_thumbstick_offset_ = Eigen::Vector3d::Zero();
                         right_thumbstick_yaw_offset_ = 0.0;
 
+                        // 切换状态为运行
                         right_arm_paused_.store(false);
+
                         RCLCPP_INFO(node_->get_logger(), "🔘 [左Y按钮] 按下 - 功能: 切换右臂更新状态 - 操作: 恢复右臂更新（重置基准位姿和摇杆偏移） [镜像模式]");
                     }
                     else
                     {
-                        // 暂停：重置基准坐标系和偏移（冻结手柄位姿）
-                        vr_base_left_position_ = left_position_;
-                        vr_base_left_orientation_ = left_orientation_;
-                        robot_base_right_position_ = robot_current_right_position_;
-                        robot_base_right_orientation_ = robot_current_right_orientation_;
-                        right_thumbstick_offset_ = Eigen::Vector3d::Zero();
-                        right_thumbstick_yaw_offset_ = 0.0;
-
+                        // 当前是运行状态，执行暂停操作
                         right_arm_paused_.store(true);
-                        RCLCPP_INFO(node_->get_logger(), "🔘 [左Y按钮] 按下 - 功能: 切换右臂更新状态 - 操作: 暂停右臂更新（手柄冻结，摇杆仍可用） [镜像模式]");
+                        RCLCPP_INFO(node_->get_logger(), "🔘 [左Y按钮] 按下 - 功能: 切换右臂更新状态 - 操作: 暂停右臂更新 [镜像模式]");
                     }
                 }
                 else
                 {
-                    // 正常模式：左Y → 左臂（左手柄）
+                    // 正常模式：左话题数据用于左臂
                     if (left_arm_paused_.load())
                     {
-                        // 恢复：重置基准坐标系和偏移
+                        // 当前是暂停状态，执行恢复操作
                         vr_base_left_position_ = left_position_;
                         vr_base_left_orientation_ = left_orientation_;
                         robot_base_left_position_ = robot_current_left_position_;
                         robot_base_left_orientation_ = robot_current_left_orientation_;
+
+                        // 重置左摇杆累积偏移
                         left_thumbstick_offset_ = Eigen::Vector3d::Zero();
                         left_thumbstick_yaw_offset_ = 0.0;
 
+                        // 切换状态为运行
                         left_arm_paused_.store(false);
+
                         RCLCPP_INFO(node_->get_logger(), "🔘 [左Y按钮] 按下 - 功能: 切换左臂更新状态 - 操作: 恢复左臂更新（重置基准位姿和摇杆偏移）");
                         RCLCPP_DEBUG(node_->get_logger(),
                                     "   VR Base Position: [%.3f, %.3f, %.3f]",
@@ -843,16 +938,9 @@ namespace arms_ros2_control::command
                     }
                     else
                     {
-                        // 暂停：重置基准坐标系和偏移（冻结手柄位姿）
-                        vr_base_left_position_ = left_position_;
-                        vr_base_left_orientation_ = left_orientation_;
-                        robot_base_left_position_ = robot_current_left_position_;
-                        robot_base_left_orientation_ = robot_current_left_orientation_;
-                        left_thumbstick_offset_ = Eigen::Vector3d::Zero();
-                        left_thumbstick_yaw_offset_ = 0.0;
-
+                        // 当前是运行状态，执行暂停操作
                         left_arm_paused_.store(true);
-                        RCLCPP_INFO(node_->get_logger(), "🔘 [左Y按钮] 按下 - 功能: 切换左臂更新状态 - 操作: 暂停左臂更新（手柄冻结，摇杆仍可用）");
+                        RCLCPP_INFO(node_->get_logger(), "🔘 [左Y按钮] 按下 - 功能: 切换左臂更新状态 - 操作: 暂停左臂更新");
                     }
                 }
                 break;
@@ -969,48 +1057,49 @@ namespace arms_ros2_control::command
                 // 根据镜像模式决定控制哪个臂
                 if (mirror_mode_.load())
                 {
-                    // 镜像模式：右B → 左臂（右手柄）
+                    // 镜像模式：右话题数据用于左臂
                     if (left_arm_paused_.load())
                     {
-                        // 恢复：重置基准坐标系和偏移
+                        // 当前是暂停状态，执行恢复操作
                         vr_base_right_position_ = right_position_;
                         vr_base_right_orientation_ = right_orientation_;
                         robot_base_left_position_ = robot_current_left_position_;
                         robot_base_left_orientation_ = robot_current_left_orientation_;
+
+                        // 重置左摇杆累积偏移
                         left_thumbstick_offset_ = Eigen::Vector3d::Zero();
                         left_thumbstick_yaw_offset_ = 0.0;
 
+                        // 切换状态为运行
                         left_arm_paused_.store(false);
+
                         RCLCPP_INFO(node_->get_logger(), "🔘 [右B按钮] 按下 - 功能: 切换左臂更新状态 - 操作: 恢复左臂更新（重置基准位姿和摇杆偏移） [镜像模式]");
                     }
                     else
                     {
-                        // 暂停：重置基准坐标系和偏移（冻结手柄位姿）
-                        vr_base_right_position_ = right_position_;
-                        vr_base_right_orientation_ = right_orientation_;
-                        robot_base_left_position_ = robot_current_left_position_;
-                        robot_base_left_orientation_ = robot_current_left_orientation_;
-                        left_thumbstick_offset_ = Eigen::Vector3d::Zero();
-                        left_thumbstick_yaw_offset_ = 0.0;
-
+                        // 当前是运行状态，执行暂停操作
                         left_arm_paused_.store(true);
-                        RCLCPP_INFO(node_->get_logger(), "🔘 [右B按钮] 按下 - 功能: 切换左臂更新状态 - 操作: 暂停左臂更新（手柄冻结，摇杆仍可用） [镜像模式]");
+                        RCLCPP_INFO(node_->get_logger(), "🔘 [右B按钮] 按下 - 功能: 切换左臂更新状态 - 操作: 暂停左臂更新 [镜像模式]");
                     }
                 }
                 else
                 {
-                    // 正常模式：右B → 右臂（右手柄）
+                    // 正常模式：右话题数据用于右臂
                     if (right_arm_paused_.load())
                     {
-                        // 恢复：重置基准坐标系和偏移
+                        // 当前是暂停状态，执行恢复操作
                         vr_base_right_position_ = right_position_;
                         vr_base_right_orientation_ = right_orientation_;
                         robot_base_right_position_ = robot_current_right_position_;
                         robot_base_right_orientation_ = robot_current_right_orientation_;
+
+                        // 重置右摇杆累积偏移
                         right_thumbstick_offset_ = Eigen::Vector3d::Zero();
                         right_thumbstick_yaw_offset_ = 0.0;
 
+                        // 切换状态为运行
                         right_arm_paused_.store(false);
+
                         RCLCPP_INFO(node_->get_logger(), "🔘 [右B按钮] 按下 - 功能: 切换右臂更新状态 - 操作: 恢复右臂更新（重置基准位姿和摇杆偏移）");
                         RCLCPP_DEBUG(node_->get_logger(),
                                     "   VR Base Position: [%.3f, %.3f, %.3f]",
@@ -1021,16 +1110,9 @@ namespace arms_ros2_control::command
                     }
                     else
                     {
-                        // 暂停：重置基准坐标系和偏移（冻结手柄位姿）
-                        vr_base_right_position_ = right_position_;
-                        vr_base_right_orientation_ = right_orientation_;
-                        robot_base_right_position_ = robot_current_right_position_;
-                        robot_base_right_orientation_ = robot_current_right_orientation_;
-                        right_thumbstick_offset_ = Eigen::Vector3d::Zero();
-                        right_thumbstick_yaw_offset_ = 0.0;
-
+                        // 当前是运行状态，执行暂停操作
                         right_arm_paused_.store(true);
-                        RCLCPP_INFO(node_->get_logger(), "🔘 [右B按钮] 按下 - 功能: 切换右臂更新状态 - 操作: 暂停右臂更新（手柄冻结，摇杆仍可用）");
+                        RCLCPP_INFO(node_->get_logger(), "🔘 [右B按钮] 按下 - 功能: 切换右臂更新状态 - 操作: 暂停右臂更新");
                     }
                 }
                 break;
