@@ -338,8 +338,12 @@ namespace arms_ros2_control::command
             return;
         }
 
+        // 目标机械臂：表示要控制的是左臂还是右臂（始终绑定到机械臂）
         bool is_left_arm = (arm == "left");
         bool is_mirror = mirror_mode_.load();
+        // 使用的手柄：表示应该使用哪个VR手柄的数据（镜像模式下会与机械臂相反）
+        // 正常模式：左臂→左手柄，右臂→右手柄
+        // 镜像模式：左臂→右手柄，右臂→左手柄
         bool use_left_hand = (is_left_arm && !is_mirror) || (!is_left_arm && is_mirror);
 
         bool arm_paused = is_left_arm ? left_arm_paused_.load() : right_arm_paused_.load();
@@ -367,8 +371,9 @@ namespace arms_ros2_control::command
             hand_ori = use_left_hand ? left_orientation_ : right_orientation_;
         }
 
-        Eigen::Vector3d thumbstick_offset = use_left_hand ? left_thumbstick_offset_ : right_thumbstick_offset_;
-        double yaw_offset = use_left_hand ? left_thumbstick_yaw_offset_ : right_thumbstick_yaw_offset_;
+        // 摇杆偏移应该绑定到机械臂，而不是手柄（镜像模式下手柄和机械臂的对应关系会改变）
+        Eigen::Vector3d thumbstick_offset = is_left_arm ? left_thumbstick_offset_ : right_thumbstick_offset_;
+        double yaw_offset = is_left_arm ? left_thumbstick_yaw_offset_ : right_thumbstick_yaw_offset_;
 
         Eigen::Vector3d final_pos = hand_pos + thumbstick_offset;
 
@@ -380,8 +385,12 @@ namespace arms_ros2_control::command
             final_ori.normalize();
         }
 
+        // VR基准位姿：使用手柄数据（use_left_hand），因为这是VR手柄进入UPDATE模式时的基准位姿
+        // 镜像模式下，左臂可能使用右手柄的基准位姿
         Eigen::Vector3d vr_base_pos = use_left_hand ? vr_base_left_position_ : vr_base_right_position_;
         Eigen::Quaterniond vr_base_ori = use_left_hand ? vr_base_left_orientation_ : vr_base_right_orientation_;
+        // 机器人基准位姿：使用机械臂数据（is_left_arm），因为这是机器人机械臂的基准位姿
+        // 镜像模式下，手柄和机械臂的对应关系会改变，但机械臂的基准位姿始终绑定到对应的机械臂
         Eigen::Vector3d robot_base_pos = is_left_arm ? robot_base_left_position_ : robot_base_right_position_;
         Eigen::Quaterniond robot_base_ori = is_left_arm ? robot_base_left_orientation_ : robot_base_right_orientation_;
 
