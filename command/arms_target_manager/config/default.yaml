@@ -6,6 +6,15 @@
     # 角度控制缩放因子（用于手柄/键盘控制）
     angular_scale: 0.05
     
+    # VR摇杆：线性缩放因子（单位 m/step）
+    vr_thumbstick_linear_scale: 0.005
+    
+    # VR摇杆：角度缩放因子（单位 rad/step）
+    vr_thumbstick_angular_scale: 0.05
+    
+    # VR手柄位姿：位置缩放因子（用于缩放VR手柄的位置数据）
+    vr_pose_scale: 1.0
+    
     # 是否启用VR输入处理
     enable_vr: false
 
