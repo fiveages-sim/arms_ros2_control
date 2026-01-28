@@ -300,13 +300,6 @@ namespace arms_ros2_control::command
             bool is_mirror = mirror_mode_.load();
             bool arm_paused = is_mirror ? right_arm_paused_.load() : left_arm_paused_.load();
 
-            // 检查目标臂是否暂停更新
-            if (arm_paused)
-            {
-                // 暂停更新：不计算和发布目标位姿，直接返回
-                return;
-            }
-
             if (is_update_mode_.load())
             {
                 // 更新模式：基于差值计算pose并更新marker
@@ -316,15 +309,19 @@ namespace arms_ros2_control::command
                 if (is_mirror)
                 {
                     // 镜像模式：左话题数据用于右臂
-                    // 应用右摇杆累积偏移到VR当前位置
-                    Eigen::Vector3d position_with_offset = left_position_ + right_thumbstick_offset_;
+                    // 如果暂停，使用暂停时刻的VR位姿；否则使用当前VR位姿
+                    Eigen::Vector3d vr_position = arm_paused ? paused_left_position_ : left_position_;
+                    Eigen::Quaterniond vr_orientation = arm_paused ? paused_left_orientation_ : left_orientation_;
+                    
+                    // 应用右摇杆累积偏移到VR位姿（暂停时使用暂停时刻的位姿）
+                    Eigen::Vector3d position_with_offset = vr_position + right_thumbstick_offset_;
 
-                    // 应用右摇杆累积Yaw旋转到VR当前姿态
-                    Eigen::Quaterniond orientation_with_yaw = left_orientation_;
+                    // 应用右摇杆累积Yaw旋转到VR姿态
+                    Eigen::Quaterniond orientation_with_yaw = vr_orientation;
                     if (std::abs(right_thumbstick_yaw_offset_) > 0.001)
                     {
                         Eigen::AngleAxisd yawRotation(right_thumbstick_yaw_offset_, Eigen::Vector3d::UnitZ());
-                        orientation_with_yaw = Eigen::Quaterniond(yawRotation) * left_orientation_;
+                        orientation_with_yaw = Eigen::Quaterniond(yawRotation) * vr_orientation;
                         orientation_with_yaw.normalize();
                     }
 
@@ -353,15 +350,19 @@ namespace arms_ros2_control::command
                 else
                 {
                     // 正常模式：左话题数据用于左臂
-                    // 应用左摇杆累积偏移到VR当前位置
-                    Eigen::Vector3d position_with_offset = left_position_ + left_thumbstick_offset_;
+                    // 如果暂停，使用暂停时刻的VR位姿；否则使用当前VR位姿
+                    Eigen::Vector3d vr_position = arm_paused ? paused_left_position_ : left_position_;
+                    Eigen::Quaterniond vr_orientation = arm_paused ? paused_left_orientation_ : left_orientation_;
+                    
+                    // 应用左摇杆累积偏移到VR位姿（暂停时使用暂停时刻的位姿）
+                    Eigen::Vector3d position_with_offset = vr_position + left_thumbstick_offset_;
 
-                    // 应用左摇杆累积Yaw旋转到VR当前姿态
-                    Eigen::Quaterniond orientation_with_yaw = left_orientation_;
+                    // 应用左摇杆累积Yaw旋转到VR姿态
+                    Eigen::Quaterniond orientation_with_yaw = vr_orientation;
                     if (std::abs(left_thumbstick_yaw_offset_) > 0.001)
                     {
                         Eigen::AngleAxisd yawRotation(left_thumbstick_yaw_offset_, Eigen::Vector3d::UnitZ());
-                        orientation_with_yaw = Eigen::Quaterniond(yawRotation) * left_orientation_;
+                        orientation_with_yaw = Eigen::Quaterniond(yawRotation) * vr_orientation;
                         orientation_with_yaw.normalize();
                     }
 
@@ -418,13 +419,6 @@ namespace arms_ros2_control::command
             bool is_mirror = mirror_mode_.load();
             bool arm_paused = is_mirror ? left_arm_paused_.load() : right_arm_paused_.load();
 
-            // 检查目标臂是否暂停更新
-            if (arm_paused)
-            {
-                // 暂停更新：不计算和发布目标位姿，直接返回
-                return;
-            }
-
             if (is_update_mode_.load())
             {
                 // 更新模式：基于差值计算pose并更新marker
@@ -434,15 +428,19 @@ namespace arms_ros2_control::command
                 if (is_mirror)
                 {
                     // 镜像模式：右话题数据用于左臂
-                    // 应用左摇杆累积偏移到VR当前位置
-                    Eigen::Vector3d position_with_offset = right_position_ + left_thumbstick_offset_;
+                    // 如果暂停，使用暂停时刻的VR位姿；否则使用当前VR位姿
+                    Eigen::Vector3d vr_position = arm_paused ? paused_right_position_ : right_position_;
+                    Eigen::Quaterniond vr_orientation = arm_paused ? paused_right_orientation_ : right_orientation_;
+                    
+                    // 应用左摇杆累积偏移到VR位姿（暂停时使用暂停时刻的位姿）
+                    Eigen::Vector3d position_with_offset = vr_position + left_thumbstick_offset_;
 
-                    // 应用左摇杆累积Yaw旋转到VR当前姿态
-                    Eigen::Quaterniond orientation_with_yaw = right_orientation_;
+                    // 应用左摇杆累积Yaw旋转到VR姿态
+                    Eigen::Quaterniond orientation_with_yaw = vr_orientation;
                     if (std::abs(left_thumbstick_yaw_offset_) > 0.001)
                     {
                         Eigen::AngleAxisd yawRotation(left_thumbstick_yaw_offset_, Eigen::Vector3d::UnitZ());
-                        orientation_with_yaw = Eigen::Quaterniond(yawRotation) * right_orientation_;
+                        orientation_with_yaw = Eigen::Quaterniond(yawRotation) * vr_orientation;
                         orientation_with_yaw.normalize();
                     }
 
@@ -471,15 +469,19 @@ namespace arms_ros2_control::command
                 else
                 {
                     // 正常模式：右话题数据用于右臂
-                    // 应用右摇杆累积偏移到VR当前位置
-                    Eigen::Vector3d position_with_offset = right_position_ + right_thumbstick_offset_;
+                    // 如果暂停，使用暂停时刻的VR位姿；否则使用当前VR位姿
+                    Eigen::Vector3d vr_position = arm_paused ? paused_right_position_ : right_position_;
+                    Eigen::Quaterniond vr_orientation = arm_paused ? paused_right_orientation_ : right_orientation_;
+                    
+                    // 应用右摇杆累积偏移到VR位姿（暂停时使用暂停时刻的位姿）
+                    Eigen::Vector3d position_with_offset = vr_position + right_thumbstick_offset_;
 
-                    // 应用右摇杆累积Yaw旋转到VR当前姿态
-                    Eigen::Quaterniond orientation_with_yaw = right_orientation_;
+                    // 应用右摇杆累积Yaw旋转到VR姿态
+                    Eigen::Quaterniond orientation_with_yaw = vr_orientation;
                     if (std::abs(right_thumbstick_yaw_offset_) > 0.001)
                     {
                         Eigen::AngleAxisd yawRotation(right_thumbstick_yaw_offset_, Eigen::Vector3d::UnitZ());
-                        orientation_with_yaw = Eigen::Quaterniond(yawRotation) * right_orientation_;
+                        orientation_with_yaw = Eigen::Quaterniond(yawRotation) * vr_orientation;
                         orientation_with_yaw.normalize();
                     }
 
@@ -900,14 +902,20 @@ namespace arms_ros2_control::command
 
                         // 切换状态为运行
                         right_arm_paused_.store(false);
+                        // 清除暂停时刻的VR位姿记录（恢复后不再使用）
+                        paused_left_position_ = Eigen::Vector3d::Zero();
+                        paused_left_orientation_ = Eigen::Quaterniond::Identity();
 
                         RCLCPP_INFO(node_->get_logger(), "🔘 [左Y按钮] 按下 - 功能: 切换右臂更新状态 - 操作: 恢复右臂更新（重置基准位姿和摇杆偏移） [镜像模式]");
                     }
                     else
                     {
                         // 当前是运行状态，执行暂停操作
+                        // 记录暂停时刻的VR位姿（镜像模式：左话题数据用于右臂）
+                        paused_left_position_ = left_position_;
+                        paused_left_orientation_ = left_orientation_;
                         right_arm_paused_.store(true);
-                        RCLCPP_INFO(node_->get_logger(), "🔘 [左Y按钮] 按下 - 功能: 切换右臂更新状态 - 操作: 暂停右臂更新 [镜像模式]");
+                        RCLCPP_INFO(node_->get_logger(), "🔘 [左Y按钮] 按下 - 功能: 切换右臂更新状态 - 操作: 暂停右臂更新（已记录暂停时刻VR位姿，摇杆可继续控制） [镜像模式]");
                     }
                 }
                 else
@@ -927,6 +935,9 @@ namespace arms_ros2_control::command
 
                         // 切换状态为运行
                         left_arm_paused_.store(false);
+                        // 清除暂停时刻的VR位姿记录（恢复后不再使用）
+                        paused_left_position_ = Eigen::Vector3d::Zero();
+                        paused_left_orientation_ = Eigen::Quaterniond::Identity();
 
                         RCLCPP_INFO(node_->get_logger(), "🔘 [左Y按钮] 按下 - 功能: 切换左臂更新状态 - 操作: 恢复左臂更新（重置基准位姿和摇杆偏移）");
                         RCLCPP_DEBUG(node_->get_logger(),
@@ -939,8 +950,11 @@ namespace arms_ros2_control::command
                     else
                     {
                         // 当前是运行状态，执行暂停操作
+                        // 记录暂停时刻的VR位姿（正常模式：左话题数据用于左臂）
+                        paused_left_position_ = left_position_;
+                        paused_left_orientation_ = left_orientation_;
                         left_arm_paused_.store(true);
-                        RCLCPP_INFO(node_->get_logger(), "🔘 [左Y按钮] 按下 - 功能: 切换左臂更新状态 - 操作: 暂停左臂更新");
+                        RCLCPP_INFO(node_->get_logger(), "🔘 [左Y按钮] 按下 - 功能: 切换左臂更新状态 - 操作: 暂停左臂更新（已记录暂停时刻VR位姿，摇杆可继续控制）");
                     }
                 }
                 break;
@@ -986,10 +1000,16 @@ namespace arms_ros2_control::command
                     if (left_was_paused)
                     {
                         left_arm_paused_.store(false);
+                        // 清除暂停时刻的VR位姿记录
+                        paused_left_position_ = Eigen::Vector3d::Zero();
+                        paused_left_orientation_ = Eigen::Quaterniond::Identity();
                     }
                     if (right_was_paused)
                     {
                         right_arm_paused_.store(false);
+                        // 清除暂停时刻的VR位姿记录
+                        paused_right_position_ = Eigen::Vector3d::Zero();
+                        paused_right_orientation_ = Eigen::Quaterniond::Identity();
                     }
 
                     is_update_mode_.store(true);
@@ -1072,14 +1092,20 @@ namespace arms_ros2_control::command
 
                         // 切换状态为运行
                         left_arm_paused_.store(false);
+                        // 清除暂停时刻的VR位姿记录（恢复后不再使用）
+                        paused_right_position_ = Eigen::Vector3d::Zero();
+                        paused_right_orientation_ = Eigen::Quaterniond::Identity();
 
                         RCLCPP_INFO(node_->get_logger(), "🔘 [右B按钮] 按下 - 功能: 切换左臂更新状态 - 操作: 恢复左臂更新（重置基准位姿和摇杆偏移） [镜像模式]");
                     }
                     else
                     {
                         // 当前是运行状态，执行暂停操作
+                        // 记录暂停时刻的VR位姿（镜像模式：右话题数据用于左臂）
+                        paused_right_position_ = right_position_;
+                        paused_right_orientation_ = right_orientation_;
                         left_arm_paused_.store(true);
-                        RCLCPP_INFO(node_->get_logger(), "🔘 [右B按钮] 按下 - 功能: 切换左臂更新状态 - 操作: 暂停左臂更新 [镜像模式]");
+                        RCLCPP_INFO(node_->get_logger(), "🔘 [右B按钮] 按下 - 功能: 切换左臂更新状态 - 操作: 暂停左臂更新（已记录暂停时刻VR位姿，摇杆可继续控制） [镜像模式]");
                     }
                 }
                 else
@@ -1099,6 +1125,9 @@ namespace arms_ros2_control::command
 
                         // 切换状态为运行
                         right_arm_paused_.store(false);
+                        // 清除暂停时刻的VR位姿记录（恢复后不再使用）
+                        paused_right_position_ = Eigen::Vector3d::Zero();
+                        paused_right_orientation_ = Eigen::Quaterniond::Identity();
 
                         RCLCPP_INFO(node_->get_logger(), "🔘 [右B按钮] 按下 - 功能: 切换右臂更新状态 - 操作: 恢复右臂更新（重置基准位姿和摇杆偏移）");
                         RCLCPP_DEBUG(node_->get_logger(),
@@ -1111,8 +1140,11 @@ namespace arms_ros2_control::command
                     else
                     {
                         // 当前是运行状态，执行暂停操作
+                        // 记录暂停时刻的VR位姿（正常模式：右话题数据用于右臂）
+                        paused_right_position_ = right_position_;
+                        paused_right_orientation_ = right_orientation_;
                         right_arm_paused_.store(true);
-                        RCLCPP_INFO(node_->get_logger(), "🔘 [右B按钮] 按下 - 功能: 切换右臂更新状态 - 操作: 暂停右臂更新");
+                        RCLCPP_INFO(node_->get_logger(), "🔘 [右B按钮] 按下 - 功能: 切换右臂更新状态 - 操作: 暂停右臂更新（已记录暂停时刻VR位姿，摇杆可继续控制）");
                     }
                 }
                 break;
@@ -1144,6 +1176,11 @@ namespace arms_ros2_control::command
                     right_thumbstick_offset_ = Eigen::Vector3d::Zero();
                     left_thumbstick_yaw_offset_ = 0.0;
                     right_thumbstick_yaw_offset_ = 0.0;
+                    // 清除暂停时刻的VR位姿记录（镜像模式切换后不再适用）
+                    paused_left_position_ = Eigen::Vector3d::Zero();
+                    paused_left_orientation_ = Eigen::Quaterniond::Identity();
+                    paused_right_position_ = Eigen::Vector3d::Zero();
+                    paused_right_orientation_ = Eigen::Quaterniond::Identity();
                     RCLCPP_WARN(node_->get_logger(),
                                 "   自动切换到STORAGE模式 - 请重新进入UPDATE模式以应用镜像模式更改");
                 }

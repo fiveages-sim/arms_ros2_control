@@ -315,6 +315,12 @@ namespace arms_ros2_control::command
         double left_thumbstick_yaw_offset_ = 0.0;
         double right_thumbstick_yaw_offset_ = 0.0;
 
+        // 暂停时刻的VR位姿（用于暂停时继续使用摇杆控制）
+        Eigen::Vector3d paused_left_position_ = Eigen::Vector3d::Zero();
+        Eigen::Quaterniond paused_left_orientation_ = Eigen::Quaterniond::Identity();
+        Eigen::Vector3d paused_right_position_ = Eigen::Vector3d::Zero();
+        Eigen::Quaterniond paused_right_orientation_ = Eigen::Quaterniond::Identity();
+
         // Hand controllers mapping（类似ControlInputHandler）
         std::vector<std::string> hand_controllers_;
         // Publishers for gripper commands (created on demand)
