@@ -11,7 +11,6 @@ from launch_ros.actions import Node
 # Import robot_common_launch utilities
 from robot_common_launch import (
     get_robot_package_path,
-    get_planning_urdf_path,
     get_info_file_name,
     detect_controllers,
     create_controller_spawners,
@@ -36,33 +35,6 @@ def launch_setup(context, *args, **kwargs):
     # Launch mode (needed early for planning_robot_state_publisher)
     launch_mode, rviz_only, use_rviz = parse_launch_mode(context)
 
-    # Planning robot state publisher for OCS2 planning URDF
-    planning_urdf_path = get_planning_urdf_path(robot_name, robot_type)
-
-    planning_robot_state_publisher = None
-    if planning_urdf_path is not None:
-        try:
-            # Read the planning URDF file directly (not through xacro)
-            with open(planning_urdf_path, 'r') as urdf_file:
-                planning_urdf_content = urdf_file.read()
-
-            planning_robot_description = {"robot_description": planning_urdf_content}
-            planning_robot_state_publisher = Node(
-                package='robot_state_publisher',
-                executable='robot_state_publisher',
-                name='planning_robot_state_publisher',
-                output='screen',
-                parameters=[planning_robot_description],
-                remappings=[
-                    ('/tf', '/ocs2_tf'),
-                    ('/tf_static', '/ocs2_tf_static'),
-                    ('/robot_description', '/ocs2_robot_description'),
-                ],
-            )
-        except Exception as e:
-            print(f"[WARN] Failed to create planning robot state publisher: {e}")
-    else:
-        print(f"[WARN] No planning URDF available for robot '{robot_name}'")
 
     # 使用通用的 controller manager launch 文件 (包含 Gazebo 支持、robot_state_publisher 和机器人描述生成)
     controller_manager_launch = IncludeLaunchDescription(
