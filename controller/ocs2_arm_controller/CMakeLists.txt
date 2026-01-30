@@ -20,6 +20,8 @@ set(CONTROLLER_INCLUDE_DEPENDS
         tf2_ros
         tf2_geometry_msgs
         nav_msgs
+        geometry_msgs
+        arms_ros2_control_msgs
 )
 
 # find dependencies
