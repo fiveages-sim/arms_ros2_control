@@ -4,23 +4,28 @@
 
 #include "ocs2_arm_controller/control/Visualizer.h"
 #include <limits>
+#include <fstream>
+#include <string>
 #include <ocs2_ros_interfaces/common/RosMsgHelpers.h>
 #include <pinocchio/algorithm/frames.hpp>
 #include <pinocchio/algorithm/kinematics.hpp>
 #include <ocs2_core/misc/LoadData.h>
 #include <boost/property_tree/ptree.hpp>
 #include <boost/property_tree/info_parser.hpp>
+#include <std_msgs/msg/string.hpp>
 
 namespace ocs2::mobile_manipulator
 {
     Visualizer::Visualizer(const std::shared_ptr<rclcpp_lifecycle::LifecycleNode>& node,
                            const std::shared_ptr<MobileManipulatorInterface>& interface,
-                           const std::string& robot_name)
+                           const std::string& robot_name,
+                           const std::string& urdf_file)
         : node_(node),
           interface_(interface),
           enable_self_collision_(true),
           dual_arm_mode_(false),
           robot_name_(robot_name),
+          urdf_file_(urdf_file),
           trajectory_line_width_(0.005),
           left_arm_color_({0.0, 0.4470, 0.7410}),
           right_arm_color_({0.6350, 0.0780, 0.1840})
@@ -47,6 +52,39 @@ namespace ocs2::mobile_manipulator
         {
             right_end_effector_pose_publisher_ = node_->create_publisher<geometry_msgs::msg::PoseStamped>(
                 "right_current_pose", 1);
+        }
+        
+        // Create robot description publisher and publish URDF
+        if (!urdf_file_.empty())
+        {
+            robot_description_publisher_ = node_->create_publisher<std_msgs::msg::String>(
+                "/ocs2_robot_description", rclcpp::QoS(1).transient_local());
+            
+            // Read and publish URDF file
+            try
+            {
+                std::ifstream urdf_stream(urdf_file_);
+                if (urdf_stream.is_open())
+                {
+                    std::string urdf_content((std::istreambuf_iterator<char>(urdf_stream)),
+                                            std::istreambuf_iterator<char>());
+                    urdf_stream.close();
+                    
+                    std_msgs::msg::String urdf_msg;
+                    urdf_msg.data = urdf_content;
+                    robot_description_publisher_->publish(urdf_msg);
+                    
+                    RCLCPP_INFO(node_->get_logger(), "Published OCS2 robot description from: %s", urdf_file_.c_str());
+                }
+                else
+                {
+                    RCLCPP_WARN(node_->get_logger(), "Failed to open URDF file: %s", urdf_file_.c_str());
+                }
+            }
+            catch (const std::exception& e)
+            {
+                RCLCPP_ERROR(node_->get_logger(), "Failed to read and publish URDF: %s", e.what());
+            }
         }
 
         // Get self-collision geometry interface from MobileManipulatorInterface and initialize visualization

@@ -58,7 +58,7 @@ namespace ocs2::mobile_manipulator
 
             setupPublisher();
 
-            visualizer_ = std::make_unique<Visualizer>(node_, interface_, robot_name_);
+            visualizer_ = std::make_unique<Visualizer>(node_, interface_, robot_name_, urdf_file);
             visualizer_->initialize();
             RCLCPP_INFO(node_->get_logger(), "Future time offset: %.2f seconds", future_time_offset_);
             
