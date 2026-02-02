@@ -1093,17 +1093,73 @@ void PoseBasedReferenceManager::rightCircleCurveCallback(
   publishCurrentTargets("right");
 };
 
+// 使用已有的变换转换位姿
+static geometry_msgs::msg::Pose
+transformPose(const geometry_msgs::msg::Pose &pose,
+              const geometry_msgs::msg::TransformStamped &transform) {
+  geometry_msgs::msg::PoseStamped pose_stamped;
+  pose_stamped.pose = pose;
+  pose_stamped.header.frame_id = transform.header.frame_id;
+  pose_stamped.header.stamp = transform.header.stamp;
+
+  geometry_msgs::msg::PoseStamped transformed;
+  tf2::doTransform(pose_stamped, transformed, transform);
+
+  return transformed.pose;
+};
+
+// 转换向量（只旋转不平移）
+static geometry_msgs::msg::Vector3
+transformVector3(const geometry_msgs::msg::Vector3 &vector,
+                 const geometry_msgs::msg::TransformStamped &transform) {
+  geometry_msgs::msg::Vector3Stamped vector_in, vector_out;
+  vector_in.vector = vector;
+  vector_in.header.frame_id = transform.header.frame_id;
+  vector_in.header.stamp = transform.header.stamp;
+
+  tf2::doTransform(vector_in, vector_out, transform);
+  return vector_out.vector;
+};
+
 void PoseBasedReferenceManager::transCircleMessageToBaseFrame(
     arms_ros2_control_msgs::msg::CircleMessage::SharedPtr msg,
     arms_ros2_control_msgs::msg::CircleMessage::SharedPtr base_msg) {
-//把输入的圆弧参数转换成base_frame
-if (msg->frame_id=base_frame_)
-{
-  base_frame_ = msg;
-  return;
-}
-//如果不是极坐标系，需要对其中的参数进行转换
+  // 把输入的圆弧参数转换成base_frame
+  if (msg->frame_id == base_frame_) {
+    *base_msg = *msg;
+    return;
+  }
+  // 如果不是极坐标系，需要对其中的参数进行转换
+  try {
+    // 复制所有的参数
+    *base_msg = *msg;
 
+    // 获取变换
+    geometry_msgs::msg::TransformStamped transform =
+        tf_buffer_->lookupTransform(base_frame_, msg->frame_id,
+                                    tf2::TimePointZero);
+    // 根据不同的方法转换不同的数据
+    if (msg->use_three_point_method) {
+      // 转换三点法中的两个点
+      base_msg->midpoint = transformPose(msg->midpoint, transform);
+      base_msg->endpoint = transformPose(msg->endpoint, transform);
+    } else {
+      // 转换参数法中的圆心
+      geometry_msgs::msg::Pose center_pose;
+      center_pose.position = msg->center;
+      center_pose.orientation = geometry_msgs::msg::Quaternion();
+      auto transformed_center = transformPose(center_pose, transform);
+      base_msg->center = transformed_center.position;
+
+      // 转换旋转轴（只旋转不平移）
+      base_msg->axis = transformVector3(msg->axis, transform);
+    }
+    // 更新坐标系ID
+    base_msg->frame_id = base_frame_;
+  } catch (const tf2::TransformException &ex) {
+    RCLCPP_WARN(logger_, "无法将pose从 %s 转换到 %s: %s", msg->frame_id.c_str(),
+                base_frame_.c_str(), ex.what());
+  }
 };
 
 // 下面是经过坐标系转换的函数
