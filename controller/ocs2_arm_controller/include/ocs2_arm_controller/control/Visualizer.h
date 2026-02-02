@@ -13,6 +13,7 @@
 #include <visualization_msgs/msg/marker_array.hpp>
 #include <geometry_msgs/msg/pose_array.hpp>
 #include <geometry_msgs/msg/pose_stamped.hpp>
+#include <std_msgs/msg/string.hpp>
 
 #include "ocs2_oc/oc_data/PrimalSolution.h"
 
@@ -23,7 +24,8 @@ namespace ocs2::mobile_manipulator
     public:
         Visualizer(const std::shared_ptr<rclcpp_lifecycle::LifecycleNode>& node,
                    const std::shared_ptr<MobileManipulatorInterface>& interface,
-                   const std::string& robot_name);
+                   const std::string& robot_name,
+                   const std::string& urdf_file = "");
 
         ~Visualizer() = default;
 
@@ -88,6 +90,10 @@ namespace ocs2::mobile_manipulator
         bool dual_arm_mode_;
         std::string robot_name_;
         std::string base_frame_;
+        std::string urdf_file_;
+        
+        // Robot description publisher
+        rclcpp::Publisher<std_msgs::msg::String>::SharedPtr robot_description_publisher_;
 
         // Visualization parameters
         double trajectory_line_width_;
