@@ -1197,9 +1197,9 @@ namespace ocs2::mobile_manipulator
         state_trajectory.reserve(kNumSamples);
         planning::TrajectPoint point;
         vector_t current_right_state = vector_t::Zero(7);
-        vector_t xt = vector_t::Zero(14);
         for (size_t i = 0; i < kNumSamples; ++i)
         {
+            vector_t xt = vector_t::Zero(14);
             const double t = static_cast<double>(i) * dt;
             point = right_circle_curve_->calculatePointAtTInRealTime(t);
 
