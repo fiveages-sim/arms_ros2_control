@@ -7,7 +7,12 @@ find_package(geometry_msgs REQUIRED)
 rosidl_generate_interfaces(${PROJECT_NAME}
         "msg/Inputs.msg"
         "msg/CircleMessage.msg"
-        DEPENDENCIES geometry_msgs
+        "srv/ExecuteCircle.srv"
+        DEPENDENCIES std_msgs geometry_msgs
 )
+# 添加export依赖
+ament_export_dependencies(rosidl_default_runtime)
+ament_export_dependencies(std_msgs)
+ament_export_dependencies(geometry_msgs)
 
 ament_package()

@@ -4,6 +4,8 @@
 #pragma once
 
 #include <arms_ros2_control_msgs/msg/circle_message.hpp>
+#include <arms_ros2_control_msgs/srv/execute_circle.hpp>
+// #include <arms_ros2_control_msgs/srv/circle_result.hpp>
 #include <functional>
 #include <geometry_msgs/msg/pose.hpp>
 #include <geometry_msgs/msg/pose_stamped.hpp>
@@ -159,22 +161,69 @@ namespace ocs2::mobile_manipulator
         // 圆弧指针
         std::shared_ptr<planning::CircularCurver> left_circle_curve_;
         std::shared_ptr<planning::CircularCurver> right_circle_curve_;
-        // 新增圆形的订阅
-        rclcpp::Subscription<arms_ros2_control_msgs::msg::CircleMessage>::SharedPtr
-        left_circle_subscriber_;
-        rclcpp::Subscription<arms_ros2_control_msgs::msg::CircleMessage>::SharedPtr
-        right_circle_subscriber_;
+
+        // 新增Service相关成员
+        rclcpp::Service<arms_ros2_control_msgs::srv::ExecuteCircle>::SharedPtr
+        left_circle_service_;
+        rclcpp::Service<arms_ros2_control_msgs::srv::ExecuteCircle>::SharedPtr
+        right_circle_service_;
+
+        // Service回调函数
+        void handleLeftCircleService(
+            const std::shared_ptr<rmw_request_id_t> request_header,
+            const std::shared_ptr<arms_ros2_control_msgs::srv::ExecuteCircle::Request> request,
+            std::shared_ptr<arms_ros2_control_msgs::srv::ExecuteCircle::Response> response);
+
+        void handleRightCircleService(
+            const std::shared_ptr<rmw_request_id_t> request_header,
+            const std::shared_ptr<arms_ros2_control_msgs::srv::ExecuteCircle::Request> request,
+            std::shared_ptr<arms_ros2_control_msgs::srv::ExecuteCircle::Response> response);
+
+        // 新增：Service执行状态
+        struct ServiceExecutionState
+        {
+            bool is_executing = false;
+            std::chrono::steady_clock::time_point start_time;
+            double total_duration = 0.0;
+            vector_t start_state;
+            std::shared_ptr<planning::CircularCurver> curve;
+            std::string arm_name;
+
+            // 轨迹参数
+            scalar_array_t time_trajectory;
+            vector_array_t state_trajectory;
+            size_t current_point_index = 0;
+
+            // 线程安全
+            std::mutex mutex;
+        };
+
+        ServiceExecutionState left_service_state_;
+        ServiceExecutionState right_service_state_;
+
+        // 定时器：用于Service执行过程中的轨迹更新
+        // rclcpp::TimerBase::SharedPtr execution_timer_;
+        // void executionTimerCallback();
+
+        // 辅助函数
+        void startServiceExecution(ServiceExecutionState& state,
+                                   const vector_t& start_pose,
+                                   const arms_ros2_control_msgs::msg::CircleMessage& msg,
+                                   const std::string& arm_name);
+
+        void sendPlannedTrajectoryToOCS2(const scalar_array_t &time_traj,const vector_array_t& pose_trajectory,const std::string& arm_name);
+
+        bool validateCircleRequest(vector_t start_pose,
+                                   const arms_ros2_control_msgs::srv::ExecuteCircle::Request::SharedPtr request,
+                                   std::string& error_message);
+
+
         //新增圆弧callback
         //单纯规划，不管坐标系
-        void transCircleMessageToBaseFrame(arms_ros2_control_msgs::msg::CircleMessage::SharedPtr msg,
+        void transCircleMessageToBaseFrame(const arms_ros2_control_msgs::msg::CircleMessage& msg,
                                            arms_ros2_control_msgs::msg::CircleMessage::SharedPtr base_msg);
         bool initCircleCurve(vector_t start_pose, arms_ros2_control_msgs::msg::CircleMessage::SharedPtr msg,
                              std::shared_ptr<planning::CircularCurver> circle_ptr);
-        void leftCircleCurveCallback(arms_ros2_control_msgs::msg::CircleMessage::SharedPtr msg);
-        void rightCircleCurveCallback(arms_ros2_control_msgs::msg::CircleMessage::SharedPtr msg);
-        //下面是经过坐标系转换的函数
-        void leftCircleCurveBaseFrameCallback(arms_ros2_control_msgs::msg::CircleMessage::SharedPtr msg);
-        void rightCircleCurveBaseFrameCallback(arms_ros2_control_msgs::msg::CircleMessage::SharedPtr msg);
-        double min_vel = 1.0e-6;
+        double min_val = 1.0e-6;
     };
 } // namespace ocs2::mobile_manipulator

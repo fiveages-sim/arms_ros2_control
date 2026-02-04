@@ -37,6 +37,15 @@ namespace ocs2::mobile_manipulator
         // 初始化圆弧指针
         left_circle_curve_ = std::make_shared<planning::CircularCurver>();
         right_circle_curve_ = std::make_shared<planning::CircularCurver>();
+        // 初始化Service状态
+        left_service_state_.arm_name = "left";
+        left_service_state_.curve = left_circle_curve_;
+
+        if (dual_arm_mode_)
+        {
+            right_service_state_.arm_name = "right";
+            right_service_state_.curve = right_circle_curve_;
+        }
     }
 
     void PoseBasedReferenceManager::subscribe(
@@ -100,29 +109,40 @@ namespace ocs2::mobile_manipulator
                 node->create_subscription<geometry_msgs::msg::PoseStamped>(
                     "right_target/stamped", 1, rightStampedCallback);
         }
-
-        // 左臂圆弧CircleMessage订阅者
-        auto leftCircleCallback =
-            [this](const arms_ros2_control_msgs::msg::CircleMessage::SharedPtr msg)
+        // 删除圆弧订阅者，添加Service
+        // 左臂圆弧Service
+        auto leftServiceCallback =
+            [this](const std::shared_ptr<rmw_request_id_t> request_header,
+                   const std::shared_ptr<arms_ros2_control_msgs::srv::ExecuteCircle::Request> request,
+                   std::shared_ptr<arms_ros2_control_msgs::srv::ExecuteCircle::Response> response)
         {
-            leftCircleCurveBaseFrameCallback(msg);
+            this->handleLeftCircleService(request_header, request, response);
         };
-        left_circle_subscriber_ =
-            node->create_subscription<arms_ros2_control_msgs::msg::CircleMessage>(
-                "left_circle", 1, leftCircleCallback);
-        // 右臂圆弧CircleMessage订阅者
+
+        left_circle_service_ = node->create_service<arms_ros2_control_msgs::srv::ExecuteCircle>(
+            "execute_left_circle",
+            leftServiceCallback);
+
+        // 右臂圆弧Service（仅双臂机器人）
         if (dual_arm_mode_)
         {
-            auto rightCircleCallback =
-                [this](
-                const arms_ros2_control_msgs::msg::CircleMessage::SharedPtr msg)
+            auto rightServiceCallback =
+                [this](const std::shared_ptr<rmw_request_id_t> request_header,
+                       const std::shared_ptr<arms_ros2_control_msgs::srv::ExecuteCircle::Request> request,
+                       std::shared_ptr<arms_ros2_control_msgs::srv::ExecuteCircle::Response> response)
             {
-                rightCircleCurveBaseFrameCallback(msg);
+                this->handleRightCircleService(request_header, request, response);
             };
-            right_circle_subscriber_ =
-                node->create_subscription<arms_ros2_control_msgs::msg::CircleMessage>(
-                    "right_circle", 1, rightCircleCallback);
+
+            right_circle_service_ = node->create_service<arms_ros2_control_msgs::srv::ExecuteCircle>(
+                "execute_right_circle",
+                rightServiceCallback);
         }
+
+        // 创建执行定时器
+        // execution_timer_ = node->create_wall_timer(
+        //     std::chrono::milliseconds(40), // 25Hz，与之前的采样率一致
+        //     [this]() { this->executionTimerCallback(); });
 
         // 双目标PoseStamped订阅者（仅双臂机器人，用于同时更新左右两个目标）
         // Path长度为2，第一个是左臂，第二个是右臂
@@ -974,12 +994,12 @@ namespace ocs2::mobile_manipulator
             planning::TrajectoryParameter time_mode_para(msg->use_slerp_for_orientation,
                                                          msg->duration);
 
-            if (fabs(msg->max_linear_velocity) > min_vel &&
-                fabs(msg->max_linear_acceleration) > min_vel &&
-                fabs(msg->max_linear_jerk) > min_vel &&
-                fabs(msg->max_angular_velocity) > min_vel &&
-                fabs(msg->max_angular_acceleration) > min_vel &&
-                fabs(msg->max_angular_jerk) > min_vel)
+            if (fabs(msg->max_linear_velocity) > min_val &&
+                fabs(msg->max_linear_acceleration) > min_val &&
+                fabs(msg->max_linear_jerk) > min_val &&
+                fabs(msg->max_angular_velocity) > min_val &&
+                fabs(msg->max_angular_acceleration) > min_val &&
+                fabs(msg->max_angular_jerk) > min_val)
             {
                 // 如果用户设置了参数
                 time_mode_para.max_linear_vel = msg->max_linear_velocity;
@@ -1086,156 +1106,6 @@ namespace ocs2::mobile_manipulator
         return true;
     };
 
-    void PoseBasedReferenceManager::leftCircleCurveCallback(
-        arms_ros2_control_msgs::msg::CircleMessage::SharedPtr msg)
-    {
-        // 保存上一帧缓存（用于插值起点）
-        const vector_t previous_left_target_state = left_target_state_;
-        const vector_t previous_right_target_state = right_target_state_;
-        // 初始化圆形参数
-        if (!initCircleCurve(previous_left_target_state, msg, left_circle_curve_))
-        {
-            RCLCPP_WARN(logger_, "Left circular curve init error!");
-            return;
-        }
-
-        // 插补一系列点
-        const double movec_totaltime = left_circle_curve_->getTotalTime();
-        // 采样间隔（秒）
-        constexpr double kSampleInterval = 0.04; // 0.04秒一个采样点（25Hz）
-
-        // 根据时间长度动态计算采样点数量
-        const size_t kNumSamples = std::max(
-            static_cast<size_t>(std::ceil(movec_totaltime / kSampleInterval)) + 1,
-            static_cast<size_t>(2) // 至少2个采样点
-        );
-        // 起始时间
-        const double t0 = current_observation_.time;
-        const double dt = movec_totaltime / static_cast<double>(kNumSamples - 1);
-        scalar_array_t time_trajectory;
-        time_trajectory.reserve(kNumSamples);
-        vector_array_t state_trajectory;
-        state_trajectory.reserve(kNumSamples);
-        planning::TrajectPoint point;
-        vector_t current_left_state = vector_t::Zero(7);
-        for (size_t i = 0; i < kNumSamples; ++i)
-        {
-            const double t = static_cast<double>(i) * dt;
-            point = left_circle_curve_->calculatePointAtTInRealTime(t);
-            vector_t xt;
-            current_left_state(0) = point.cart_pos(0);
-            current_left_state(1) = point.cart_pos(1);
-            current_left_state(2) = point.cart_pos(2);
-            current_left_state(3) = point.quaternion_point.q.x;
-            current_left_state(4) = point.quaternion_point.q.y;
-            current_left_state(5) = point.quaternion_point.q.z;
-            current_left_state(6) = point.quaternion_point.q.w;
-            if (dual_arm_mode_)
-            {
-                xt = vector_t::Zero(14);
-                xt.segment(0, 7) = current_left_state;
-                xt.segment(7, 7) = previous_right_target_state;
-            }
-            else
-            {
-                xt = current_left_state;
-            }
-
-            time_trajectory.push_back(t0 + t);
-            state_trajectory.push_back(std::move(xt));
-        }
-
-        vector_array_t input_trajectory(
-            kNumSamples,
-            vector_t::Zero(interface_->getManipulatorModelInfo().inputDim));
-        TargetTrajectories target_trajectories(time_trajectory, state_trajectory,
-                                               input_trajectory);
-        referenceManagerPtr_->setTargetTrajectories(std::move(target_trajectories));
-
-        // 更新左臂的目标点
-        point = left_circle_curve_->calculatePointAtTInRealTime(movec_totaltime);
-        left_target_state_(0) = point.cart_pos(0);
-        left_target_state_(1) = point.cart_pos(1);
-        left_target_state_(2) = point.cart_pos(2);
-        left_target_state_(3) = point.quaternion_point.q.x;
-        left_target_state_(4) = point.quaternion_point.q.y;
-        left_target_state_(5) = point.quaternion_point.q.z;
-        left_target_state_(6) = point.quaternion_point.q.w;
-        // 发布当前目标（只发布左臂）
-        publishCurrentTargets("left");
-    };
-
-    void PoseBasedReferenceManager::rightCircleCurveCallback(
-        arms_ros2_control_msgs::msg::CircleMessage::SharedPtr msg)
-    {
-        // 保存上一帧缓存（用于插值起点）
-        const vector_t previous_left_target_state = left_target_state_;
-        const vector_t previous_right_target_state = right_target_state_;
-        // 初始化圆形参数
-        if (!initCircleCurve(previous_right_target_state, msg, right_circle_curve_))
-        {
-            RCLCPP_WARN(logger_, "Right circular curve init error!");
-            return;
-        }
-
-        // 插补一系列点
-        const double movec_totaltime = right_circle_curve_->getTotalTime();
-        // 采样间隔（秒）
-        constexpr double kSampleInterval = 0.04; // 0.04秒一个采样点（25Hz）
-
-        // 根据时间长度动态计算采样点数量
-        const size_t kNumSamples = std::max(
-            static_cast<size_t>(std::ceil(movec_totaltime / kSampleInterval)) + 1,
-            static_cast<size_t>(2) // 至少2个采样点
-        );
-        // 起始时间
-        const double t0 = current_observation_.time;
-        const double dt = movec_totaltime / static_cast<double>(kNumSamples - 1);
-        scalar_array_t time_trajectory;
-        time_trajectory.reserve(kNumSamples);
-        vector_array_t state_trajectory;
-        state_trajectory.reserve(kNumSamples);
-        planning::TrajectPoint point;
-        vector_t current_right_state = vector_t::Zero(7);
-        for (size_t i = 0; i < kNumSamples; ++i)
-        {
-            vector_t xt = vector_t::Zero(14);
-            const double t = static_cast<double>(i) * dt;
-            point = right_circle_curve_->calculatePointAtTInRealTime(t);
-
-            current_right_state(0) = point.cart_pos(0);
-            current_right_state(1) = point.cart_pos(1);
-            current_right_state(2) = point.cart_pos(2);
-            current_right_state(3) = point.quaternion_point.q.x;
-            current_right_state(4) = point.quaternion_point.q.y;
-            current_right_state(5) = point.quaternion_point.q.z;
-            current_right_state(6) = point.quaternion_point.q.w;
-            xt.segment(0, 7) = previous_left_target_state;
-            xt.segment(7, 7) = current_right_state;
-
-            time_trajectory.push_back(t0 + t);
-            state_trajectory.push_back(std::move(xt));
-        }
-
-        vector_array_t input_trajectory(
-            kNumSamples,
-            vector_t::Zero(interface_->getManipulatorModelInfo().inputDim));
-        TargetTrajectories target_trajectories(time_trajectory, state_trajectory,
-                                               input_trajectory);
-        referenceManagerPtr_->setTargetTrajectories(std::move(target_trajectories));
-
-        // 更新右臂的目标点
-        point = right_circle_curve_->calculatePointAtTInRealTime(movec_totaltime);
-        right_target_state_(0) = point.cart_pos(0);
-        right_target_state_(1) = point.cart_pos(1);
-        right_target_state_(2) = point.cart_pos(2);
-        right_target_state_(3) = point.quaternion_point.q.x;
-        right_target_state_(4) = point.quaternion_point.q.y;
-        right_target_state_(5) = point.quaternion_point.q.z;
-        right_target_state_(6) = point.quaternion_point.q.w;
-        // 发布当前目标（只发布右臂）
-        publishCurrentTargets("right");
-    };
 
     // 使用已有的变换转换位姿
     static geometry_msgs::msg::Pose
@@ -1267,72 +1137,459 @@ namespace ocs2::mobile_manipulator
         return vector_out.vector;
     };
 
-    void PoseBasedReferenceManager::transCircleMessageToBaseFrame(
-        arms_ros2_control_msgs::msg::CircleMessage::SharedPtr msg,
-        arms_ros2_control_msgs::msg::CircleMessage::SharedPtr base_msg)
+    void PoseBasedReferenceManager::transCircleMessageToBaseFrame(const
+                                                                  arms_ros2_control_msgs::msg::CircleMessage& msg,
+                                                                  arms_ros2_control_msgs::msg::CircleMessage::SharedPtr
+                                                                  base_msg)
     {
         // 把输入的圆弧参数转换成base_frame
-        if (msg->frame_id == base_frame_)
+        if (msg.frame_id == base_frame_)
         {
-            *base_msg = *msg;
+            *base_msg = msg;
             return;
         }
         // 如果不是极坐标系，需要对其中的参数进行转换
         try
         {
             // 复制所有的参数
-            *base_msg = *msg;
+            *base_msg = msg;
 
             // 获取变换
             geometry_msgs::msg::TransformStamped transform =
-                tf_buffer_->lookupTransform(base_frame_, msg->frame_id,
+                tf_buffer_->lookupTransform(base_frame_, msg.frame_id,
                                             tf2::TimePointZero);
             // 根据不同的方法转换不同的数据
-            if (msg->use_three_point_method)
+            if (msg.use_three_point_method)
             {
                 // 转换三点法中的两个点
-                base_msg->midpoint = transformPose(msg->midpoint, transform);
-                base_msg->endpoint = transformPose(msg->endpoint, transform);
+                base_msg->midpoint = transformPose(msg.midpoint, transform);
+                base_msg->endpoint = transformPose(msg.endpoint, transform);
             }
             else
             {
                 // 转换参数法中的圆心
                 geometry_msgs::msg::Pose center_pose;
-                center_pose.position = msg->center;
+                center_pose.position = msg.center;
                 center_pose.orientation = geometry_msgs::msg::Quaternion();
                 auto transformed_center = transformPose(center_pose, transform);
                 base_msg->center = transformed_center.position;
 
                 // 转换旋转轴（只旋转不平移）
-                base_msg->axis = transformVector3(msg->axis, transform);
+                base_msg->axis = transformVector3(msg.axis, transform);
             }
             // 更新坐标系ID
             base_msg->frame_id = base_frame_;
         }
         catch (const tf2::TransformException& ex)
         {
-            RCLCPP_WARN(logger_, "无法将pose从 %s 转换到 %s: %s", msg->frame_id.c_str(),
+            RCLCPP_WARN(logger_, "无法将pose从 %s 转换到 %s: %s", msg.frame_id.c_str(),
                         base_frame_.c_str(), ex.what());
         }
     };
 
-    // 下面是经过坐标系转换的函数
-    void PoseBasedReferenceManager::leftCircleCurveBaseFrameCallback(
-        arms_ros2_control_msgs::msg::CircleMessage::SharedPtr msg)
+
+    void PoseBasedReferenceManager::handleLeftCircleService(
+        const std::shared_ptr<rmw_request_id_t> request_header,
+        const std::shared_ptr<arms_ros2_control_msgs::srv::ExecuteCircle::Request> request,
+        std::shared_ptr<arms_ros2_control_msgs::srv::ExecuteCircle::Response> response)
     {
+        (void)request_header; // 不使用
+
+        RCLCPP_INFO(logger_, "Received left arm arc execution request");
+        // 获取起始状态
+        const vector_t start_state = left_target_state_;
+        // 验证请求
+        std::string error_message;
+        if (!validateCircleRequest(start_state, request, error_message))
+        {
+            response->success = false;
+            response->message = "Request verification failed: " + error_message;
+            RCLCPP_WARN(logger_, "%s", response->message.c_str());
+            return;
+        }
+        //由于没有ocs2运行结束的反馈，先不加线程锁
+        // // 检查是否正在执行
+        // {
+        //     std::lock_guard<std::mutex> lock(left_service_state_.mutex);
+        //     if (left_service_state_.is_executing)
+        //     {
+        //         response->success = false;
+        //         response->message =
+        //             "The left arm is executing another circular arc trajectory. Please wait for it to complete";
+        //         RCLCPP_WARN(logger_, "%s", response->message.c_str());
+        //         return;
+        //     }
+        // }
+
+        // 转换坐标系
         arms_ros2_control_msgs::msg::CircleMessage::SharedPtr base_frame_msg =
             std::make_shared<arms_ros2_control_msgs::msg::CircleMessage>();
-        transCircleMessageToBaseFrame(msg, base_frame_msg);
-        leftCircleCurveCallback(base_frame_msg);
-    };
+        transCircleMessageToBaseFrame(request->circle_params, base_frame_msg);
 
-    void PoseBasedReferenceManager::rightCircleCurveBaseFrameCallback(
-        arms_ros2_control_msgs::msg::CircleMessage::SharedPtr msg)
+
+        // 开始执行
+        startServiceExecution(left_service_state_, start_state, *base_frame_msg, "left");
+        sendPlannedTrajectoryToOCS2(left_service_state_.time_trajectory, left_service_state_.state_trajectory, "left");
+
+
+        response->success = true;
+        response->message = "The left arm starts to execute a circular arc trajectory, with an estimated time of: " +
+            std::to_string(left_service_state_.total_duration) + "s";
+        response->estimated_duration = left_service_state_.total_duration;
+
+        RCLCPP_INFO(logger_, "%s", response->message.c_str());
+    }
+
+    void PoseBasedReferenceManager::handleRightCircleService(
+        const std::shared_ptr<rmw_request_id_t> request_header,
+        const std::shared_ptr<arms_ros2_control_msgs::srv::ExecuteCircle::Request> request,
+        std::shared_ptr<arms_ros2_control_msgs::srv::ExecuteCircle::Response> response)
     {
+        (void)request_header; // 不使用
+
+        if (!dual_arm_mode_)
+        {
+            response->success = false;
+            response->message = "The robot is not in a dual-arm mode and does not support right arm arc";
+            RCLCPP_WARN(logger_, "%s", response->message.c_str());
+            return;
+        }
+
+        RCLCPP_INFO(logger_, "Received right arm arc execution request");
+        // 获取起始状态
+        const vector_t start_state = right_target_state_;
+        // 验证请求
+        std::string error_message;
+        if (!validateCircleRequest(start_state, request, error_message))
+        {
+            response->success = false;
+            response->message = "Request verification failed: " + error_message;
+            RCLCPP_WARN(logger_, "%s", response->message.c_str());
+            return;
+        }
+        //由于没有合适的反馈，暂时不加线程锁
+        // // 检查是否正在执行
+        // {
+        //     std::lock_guard<std::mutex> lock(right_service_state_.mutex);
+        //     if (right_service_state_.is_executing)
+        //     {
+        //         response->success = false;
+        //         response->message =
+        //             "The right arm is executing another circular arc trajectory. Please wait for it to complete";
+        //         RCLCPP_WARN(logger_, "%s", response->message.c_str());
+        //         return;
+        //     }
+        // }
+
+        // 转换坐标系
         arms_ros2_control_msgs::msg::CircleMessage::SharedPtr base_frame_msg =
             std::make_shared<arms_ros2_control_msgs::msg::CircleMessage>();
-        transCircleMessageToBaseFrame(msg, base_frame_msg);
+        transCircleMessageToBaseFrame(request->circle_params, base_frame_msg);
 
-        rightCircleCurveCallback(base_frame_msg);
-    };
+
+        // 开始执行
+        startServiceExecution(right_service_state_, start_state, *base_frame_msg, "right");
+        sendPlannedTrajectoryToOCS2(right_service_state_.time_trajectory, right_service_state_.state_trajectory,
+                                    "right");
+        response->success = true;
+        response->message = "The right arm starts to execute a circular arc trajectory, with an estimated time of: " +
+            std::to_string(right_service_state_.total_duration) + "s";
+        response->estimated_duration = right_service_state_.total_duration;
+
+        RCLCPP_INFO(logger_, "%s", response->message.c_str());
+    }
+
+    bool PoseBasedReferenceManager::validateCircleRequest(vector_t start_pose,
+                                                          const
+                                                          arms_ros2_control_msgs::srv::ExecuteCircle::Request::SharedPtr
+                                                          request,
+                                                          std::string& error_message)
+    {
+        const auto& msg = request->circle_params;
+        //检查起点的位姿
+        if (start_pose.size() < 7)
+        {
+            error_message =
+                "The starting point of the arc has not been entered. Please update the starting point of the arc！";
+            return false;
+        }
+        bool all_start_pose_is_zero = true;
+        for (int i = 0; i < 7; i++)
+        {
+            if (fabs(start_pose(i)) > min_val)
+            {
+                all_start_pose_is_zero = false;
+            }
+            if (std::isnan(start_pose(i)))
+            {
+                error_message = "Please check the starting point！";
+                return false;
+            }
+        }
+        if (all_start_pose_is_zero)
+        {
+            error_message = "Please check the starting point！";
+            return false;
+        }
+
+        // 检查时间模式下的时间参数
+        if (msg.time_mode && msg.duration < 0.001)
+        {
+            error_message = "In time mode, a valid time parameter (duration > 0.001) must be provided";
+            return false;
+        }
+
+        // 检查速度模式下的速度参数
+        if (!msg.time_mode)
+        {
+            if (fabs(msg.max_linear_velocity) < min_val)
+            {
+                error_message = "In speed mode, the maximum linear speed must be provided";
+                return false;
+            }
+            if (fabs(msg.max_angular_velocity) < min_val)
+            {
+                error_message =
+                    "When using attitude interpolation in velocity mode, the maximum angular velocity must be provided";
+                return false;
+            }
+            if (fabs(msg.max_linear_acceleration) < min_val)
+            {
+                error_message = "In speed mode, the maximum linear acceleration must be provided";
+                return false;
+            }
+            if (fabs(msg.max_angular_acceleration) < min_val)
+            {
+                error_message =
+                    "When using pose interpolation in velocity mode, the maximum angular acceleration must be provided";
+                return false;
+            }
+            if (fabs(msg.max_linear_jerk) < min_val)
+            {
+                error_message = "In speed mode, the maximum linear acceleration must be provided";
+                return false;
+            }
+            if (fabs(msg.max_angular_jerk) < min_val)
+            {
+                error_message =
+                    "When using attitude interpolation in velocity mode, the maximum angular jerk must be provided";
+                return false;
+            }
+        }
+
+
+        if (msg.use_three_point_method)
+        {
+            //检查输入的中间点和终点是不是有问题
+            if (fabs(msg.midpoint.position.x) < min_val && fabs(msg.midpoint.position.y) < min_val && fabs(
+                    msg.midpoint.position.z) < min_val && fabs(msg.midpoint.orientation.x) < min_val &&
+                fabs(msg.midpoint.orientation.y) < min_val && fabs(msg.midpoint.orientation.z) < min_val && fabs(
+                    msg.midpoint.orientation.w) < min_val)
+            {
+                error_message = "The midpoint of the arc must be inputted";
+                return false;
+            }
+            if (std::isnan(msg.midpoint.position.x) || std::isnan(msg.midpoint.position.y) || std::isnan(
+                msg.midpoint.position.z) || std::isnan(msg.midpoint.orientation.x) || std::isnan(
+                msg.midpoint.orientation.y) || std::isnan(msg.midpoint.orientation.z) || std::isnan(
+                msg.midpoint.orientation.w))
+            {
+                error_message = "The midpoint of the arc must be inputted";
+                return false;
+            }
+            if (fabs(msg.endpoint.position.x) < min_val && fabs(msg.endpoint.position.y) < min_val && fabs(
+                    msg.endpoint.position.z) < min_val && fabs(msg.endpoint.orientation.x) < min_val &&
+                fabs(msg.endpoint.orientation.y) < min_val && fabs(msg.endpoint.orientation.z) < min_val && fabs(
+                    msg.endpoint.orientation.w) < min_val)
+            {
+                error_message = "The endpoint of the arc must be inputted";
+                return false;
+            }
+            if (std::isnan(msg.endpoint.position.x) || std::isnan(msg.endpoint.position.y) || std::isnan(
+                msg.endpoint.position.z) || std::isnan(msg.endpoint.orientation.x) || std::isnan(
+                msg.endpoint.orientation.y) || std::isnan(msg.endpoint.orientation.z) || std::isnan(
+                msg.endpoint.orientation.w))
+            {
+                error_message = "The endpoint of the arc must be inputted";
+                return false;
+            }
+
+            if (fabs(msg.midpoint.position.x - start_pose(0)) < min_val && fabs(msg.midpoint.position.y - start_pose(1))
+                < min_val && fabs(msg.midpoint.position.z - start_pose(2)) < min_val && fabs(
+                    msg.midpoint.orientation.x - start_pose(3)) < min_val && fabs(
+                    msg.midpoint.orientation.y - start_pose(4)) < min_val && fabs(
+                    msg.midpoint.orientation.z - start_pose(5)) < min_val && fabs(
+                    msg.midpoint.orientation.w - start_pose(6)) < min_val)
+            {
+                error_message = "The starting point and the middle point of the arc are equal！";
+                return false;
+            }
+
+            if (fabs(msg.endpoint.position.x - start_pose(0)) < min_val && fabs(msg.endpoint.position.y - start_pose(1))
+                < min_val && fabs(msg.endpoint.position.z - start_pose(2)) < min_val && fabs(
+                    msg.endpoint.orientation.x - start_pose(3)) < min_val && fabs(
+                    msg.endpoint.orientation.y - start_pose(4)) < min_val && fabs(
+                    msg.endpoint.orientation.z - start_pose(5)) < min_val && fabs(
+                    msg.endpoint.orientation.w - start_pose(6)) < min_val)
+            {
+                error_message = "The starting point and the end point of the arc are equal！";
+                return false;
+            }
+        }
+        else
+        {
+            if (fabs(msg.axis.x) < min_val && fabs(msg.axis.y) < min_val && fabs(msg.axis.z) < min_val)
+            {
+                error_message = "Please input the axis of rotation for the circular arc";
+                return false;
+            }
+
+            if (msg.rotate_angle < min_val)
+            {
+                error_message = "Please input the axis of rotation for the circular arc";
+                return false;
+            }
+        }
+
+        return true;
+    }
+
+    void PoseBasedReferenceManager::startServiceExecution(
+        ServiceExecutionState& state,
+        const vector_t& start_pose,
+        const arms_ros2_control_msgs::msg::CircleMessage& msg,
+        const std::string& arm_name)
+    {
+        std::lock_guard<std::mutex> lock(state.mutex);
+
+        // 初始化圆弧曲线
+        if (!initCircleCurve(start_pose,
+                             std::make_shared<arms_ros2_control_msgs::msg::CircleMessage>(msg),
+                             state.curve))
+        {
+            RCLCPP_ERROR(logger_, "Initialization failure of the circular arc curve of the %s arm", arm_name.c_str());
+            return;
+        }
+
+        // 获取总时间
+        state.total_duration = state.curve->getTotalTime();
+
+        // 预计算轨迹点
+        constexpr double kSampleInterval = 0.04; // 25Hz
+        const size_t kNumSamples = std::max(
+            static_cast<size_t>(std::ceil(state.total_duration / kSampleInterval)) + 1,
+            static_cast<size_t>(2)
+        );
+
+        // 清空之前的轨迹
+        state.time_trajectory.clear();
+        state.state_trajectory.clear();
+        state.time_trajectory.reserve(kNumSamples);
+        state.state_trajectory.reserve(kNumSamples);
+
+        const double dt = state.total_duration / static_cast<double>(kNumSamples - 1);
+
+        // 预计算所有轨迹点
+        planning::TrajectPoint point;
+        for (size_t i = 0; i < kNumSamples; ++i)
+        {
+            const double t = static_cast<double>(i) * dt;
+            point = state.curve->calculatePointAtTInRealTime(t);
+
+            vector_t state_vec = vector_t::Zero(7);
+            state_vec(0) = point.cart_pos(0);
+            state_vec(1) = point.cart_pos(1);
+            state_vec(2) = point.cart_pos(2);
+            state_vec(3) = point.quaternion_point.q.x;
+            state_vec(4) = point.quaternion_point.q.y;
+            state_vec(5) = point.quaternion_point.q.z;
+            state_vec(6) = point.quaternion_point.q.w;
+
+            state.time_trajectory.push_back(t);
+            state.state_trajectory.push_back(state_vec);
+        }
+
+        // 设置执行状态
+        state.start_state = start_pose;
+        state.start_time = std::chrono::steady_clock::now();
+        state.current_point_index = 0;
+        // state.is_executing = true;
+    }
+
+    void PoseBasedReferenceManager::sendPlannedTrajectoryToOCS2(const scalar_array_t& time_traj,
+                                                                const vector_array_t& pose_trajectory,
+                                                                const std::string& arm_name)
+    {
+        const vector_t previous_left_target_state = left_target_state_;
+        const vector_t previous_right_target_state = right_target_state_;
+        size_t time_size = time_traj.size();
+        size_t traj_size = pose_trajectory.size();
+        if (traj_size != time_size)
+        {
+            RCLCPP_WARN(logger_, "The number of input times matches the number of trajectories");
+            return;
+        }
+        // 起始时间
+        const double t0 = current_observation_.time;
+        scalar_array_t time_trajectory;
+        time_trajectory.reserve(time_size);
+        vector_array_t state_trajectory;
+        state_trajectory.reserve(time_size);
+        if (dual_arm_mode_)
+        {
+            if (arm_name == "left")
+            {
+                for (size_t i = 0; i < time_size; i++)
+                {
+                    vector_t current_state = vector_t::Zero(14);
+                    current_state.segment(0, 7) = pose_trajectory[i];
+                    current_state.segment(7, 7) = previous_right_target_state; // 保持右臂不变
+                    time_trajectory.push_back(t0 + time_traj[i]);
+                    state_trajectory.push_back(current_state);
+                }
+            }
+            else if (arm_name == "right")
+            {
+                for (size_t i = 0; i < time_size; i++)
+                {
+                    vector_t current_state = vector_t::Zero(14);
+                    current_state.segment(0, 7) = previous_left_target_state;
+                    current_state.segment(7, 7) = pose_trajectory[i];
+                    time_trajectory.push_back(t0 + time_traj[i]);
+                    state_trajectory.push_back(current_state);
+                }
+            }
+        }
+        else
+        {
+            for (size_t i = 0; i < time_size; i++)
+            {
+                vector_t current_state = vector_t::Zero(7);
+                current_state = pose_trajectory[i]; // 保持右臂不变
+                time_trajectory.push_back(t0 + time_traj[i]);
+                state_trajectory.push_back(current_state);
+            }
+        }
+
+        vector_array_t input_trajectory(
+            time_size,
+            vector_t::Zero(interface_->getManipulatorModelInfo().inputDim));
+        TargetTrajectories target_trajectories(time_trajectory, state_trajectory,
+                                               input_trajectory);
+        referenceManagerPtr_->setTargetTrajectories(std::move(target_trajectories));
+
+
+        if (arm_name == "left")
+        {
+            left_target_state_ = pose_trajectory.back();
+            // 发布当前目标（只发布左臂）
+            publishCurrentTargets("left");
+        }
+        else if (arm_name == "right")
+        {
+            right_target_state_ = pose_trajectory.back();
+            // 发布当前目标（只发布左臂）
+            publishCurrentTargets("right");
+        }
+    }
 } // namespace ocs2::mobile_manipulator
