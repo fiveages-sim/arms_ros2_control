@@ -71,6 +71,11 @@ target_link_libraries(${PROJECT_NAME} PUBLIC
 # ============== 导出插件 ==============
 pluginlib_export_plugin_description_file(hardware_interface arx_x5_ros2_control.xml)
 
+# ============== 设置 RPATH ==============
+# 确保运行时能找到 SDK 库
+set(CMAKE_INSTALL_RPATH_USE_LINK_PATH TRUE)
+set(CMAKE_INSTALL_RPATH "${CMAKE_INSTALL_PREFIX}/lib")
+
 # ============== 安装 ==============
 install(
   DIRECTORY include/
@@ -83,6 +88,15 @@ install(
   ARCHIVE DESTINATION lib
   LIBRARY DESTINATION lib
   RUNTIME DESTINATION bin
+)
+
+# 安装 ARX5 SDK 库到 lib 目录
+install(
+  FILES
+    ${ARX5_SDK_DIR}/build/libArxJointController.so
+    ${ARX5_LIB_DIR}/libhardware.so
+    ${ARX5_LIB_DIR}/libsolver.so
+  DESTINATION lib
 )
 
 ament_export_targets(export_${PROJECT_NAME} HAS_LIBRARY_TARGET)
