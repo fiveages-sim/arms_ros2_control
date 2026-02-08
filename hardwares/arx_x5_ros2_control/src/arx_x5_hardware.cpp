@@ -4,6 +4,13 @@
 
 namespace arx_x5_ros2_control {
 
+/**
+ * @brief 将字符串转换为大写形式
+ * @param str 输入字符串
+ * @return 转换后的大写字符串
+ *
+ * 用于参数解析时统一字符串格式，如 "left" -> "LEFT"
+ */
 std::string ArxX5Hardware::normalizeString(const std::string& str)
 {
     std::string result = str;
@@ -11,6 +18,18 @@ std::string ArxX5Hardware::normalizeString(const std::string& str)
     return result;
 }
 
+/**
+ * @brief 声明 ROS2 节点参数
+ *
+ * 从 URDF 的 hardware_parameters 中读取初始值，并声明为 ROS2 参数。
+ * 这样可以通过 `ros2 param set` 动态修改参数值。
+ *
+ * 声明的参数包括：
+ * - arm_config: 臂配置 ("LEFT", "RIGHT", "DUAL")
+ * - robot_model / can_interface: 单臂模式配置
+ * - left_robot_model / right_robot_model: 双臂模式型号配置
+ * - left_can_interface / right_can_interface: 双臂模式 CAN 接口配置
+ */
 void ArxX5Hardware::declare_node_parameters()
 {
     // 目标：优先使用 hardware_interface 的 info_.hardware_parameters 作为"初始值来源"，
@@ -63,6 +82,21 @@ void ArxX5Hardware::declare_node_parameters()
     ensure_string_param("right_can_interface", "can1", hw_find("right_can_interface"));
 }
 
+/**
+ * @brief 硬件接口初始化回调
+ * @param params 硬件组件参数，包含 URDF 中定义的关节和参数信息
+ * @return SUCCESS 表示初始化成功，ERROR 表示失败
+ *
+ * 生命周期：在 ros2_control 加载硬件插件时调用（unconfigured -> inactive 之前）
+ *
+ * 主要工作：
+ * 1. 调用父类初始化
+ * 2. 获取 ROS2 节点和日志器
+ * 3. 声明并读取配置参数（arm_config, robot_model, can_interface 等）
+ * 4. 解析 URDF 中的关节信息，区分机械臂关节和夹爪关节
+ * 5. 根据单臂/双臂模式分配关节到左臂或右臂
+ * 6. 初始化状态和命令数组
+ */
 hardware_interface::CallbackReturn ArxX5Hardware::on_init(
     const hardware_interface::HardwareComponentInterfaceParams& params) {
 
@@ -208,6 +242,18 @@ hardware_interface::CallbackReturn ArxX5Hardware::on_init(
     return hardware_interface::CallbackReturn::SUCCESS;
 }
 
+/**
+ * @brief 导出状态接口
+ * @return 状态接口列表
+ *
+ * 生命周期：在 on_init 之后、on_activate 之前调用
+ *
+ * 导出的状态接口供控制器读取硬件状态：
+ * - 每个机械臂关节导出 position, velocity, effort 三个状态
+ * - 每个夹爪关节导出 position, velocity, effort 三个状态
+ *
+ * 控制器通过这些接口获取关节的实时位置、速度和力矩反馈
+ */
 std::vector<hardware_interface::StateInterface> ArxX5Hardware::export_state_interfaces() {
     std::vector<hardware_interface::StateInterface> state_interfaces;
 
@@ -236,6 +282,18 @@ std::vector<hardware_interface::StateInterface> ArxX5Hardware::export_state_inte
     return state_interfaces;
 }
 
+/**
+ * @brief 导出命令接口
+ * @return 命令接口列表
+ *
+ * 生命周期：在 on_init 之后、on_activate 之前调用
+ *
+ * 导出的命令接口供控制器写入目标命令：
+ * - 每个机械臂关节导出 position 命令接口
+ * - 每个夹爪关节导出 position 命令接口
+ *
+ * 控制器通过这些接口发送目标位置指令给硬件
+ */
 std::vector<hardware_interface::CommandInterface> ArxX5Hardware::export_command_interfaces() {
     std::vector<hardware_interface::CommandInterface> command_interfaces;
 
@@ -256,6 +314,23 @@ std::vector<hardware_interface::CommandInterface> ArxX5Hardware::export_command_
     return command_interfaces;
 }
 
+/**
+ * @brief 硬件激活回调
+ * @param previous_state 之前的生命周期状态（未使用）
+ * @return SUCCESS 表示激活成功，ERROR 表示失败
+ *
+ * 生命周期：inactive -> active 状态转换时调用
+ *
+ * 主要工作：
+ * 1. 根据配置创建 ARX SDK 控制器实例
+ *    - 单臂模式：创建一个控制器
+ *    - 双臂模式：创建左右两个控制器
+ * 2. 连接到真实硬件（通过 CAN 接口）
+ * 3. 读取当前关节状态作为初始值
+ * 4. 将初始位置同时设为命令值（避免激活时跳变）
+ *
+ * 错误处理：如果连接失败，清理已创建的控制器并返回 ERROR
+ */
 hardware_interface::CallbackReturn ArxX5Hardware::on_activate(
     const rclcpp_lifecycle::State& /*previous_state*/) {
 
@@ -346,6 +421,19 @@ hardware_interface::CallbackReturn ArxX5Hardware::on_activate(
     }
 }
 
+/**
+ * @brief 硬件停用回调
+ * @param previous_state 之前的生命周期状态（未使用）
+ * @return SUCCESS 表示停用成功
+ *
+ * 生命周期：active -> inactive 状态转换时调用
+ *
+ * 主要工作：
+ * 1. 释放 ARX SDK 控制器实例
+ * 2. 断开与硬件的连接
+ *
+ * 停用后硬件将停止接收命令，关节保持当前位置
+ */
 hardware_interface::CallbackReturn ArxX5Hardware::on_deactivate(
     const rclcpp_lifecycle::State& /*previous_state*/) {
 
@@ -363,6 +451,22 @@ hardware_interface::CallbackReturn ArxX5Hardware::on_deactivate(
     return hardware_interface::CallbackReturn::SUCCESS;
 }
 
+/**
+ * @brief 从硬件读取状态
+ * @param time 当前时间（未使用）
+ * @param period 控制周期（未使用）
+ * @return OK 表示读取成功，ERROR 表示失败
+ *
+ * 调用频率：由 ros2_control 的控制循环决定（通常 100-1000 Hz）
+ *
+ * 主要工作：
+ * 1. 从 ARX SDK 获取关节状态（位置、速度、力矩）
+ * 2. 更新状态数组，供控制器通过状态接口读取
+ * 3. 双臂模式下分别读取左右臂状态
+ * 4. 同时更新夹爪状态
+ *
+ * 数据流：ARX SDK -> position_states_/velocity_states_/effort_states_ -> 控制器
+ */
 hardware_interface::return_type ArxX5Hardware::read(
     const rclcpp::Time& /*time*/,
     const rclcpp::Duration& /*period*/) {
@@ -434,6 +538,23 @@ hardware_interface::return_type ArxX5Hardware::read(
     return hardware_interface::return_type::OK;
 }
 
+/**
+ * @brief 向硬件写入命令
+ * @param time 当前时间（未使用）
+ * @param period 控制周期（未使用）
+ * @return OK 表示写入成功，ERROR 表示失败
+ *
+ * 调用频率：由 ros2_control 的控制循环决定（通常 100-1000 Hz）
+ *
+ * 主要工作：
+ * 1. 从命令数组读取目标位置（由控制器通过命令接口写入）
+ * 2. 构建 ARX SDK 的 JointState 命令结构
+ * 3. 发送命令到 ARX SDK，驱动电机运动
+ * 4. 双臂模式下分别向左右臂发送命令
+ * 5. 同时发送夹爪命令
+ *
+ * 数据流：控制器 -> position_commands_ -> ARX SDK -> 电机
+ */
 hardware_interface::return_type ArxX5Hardware::write(
     const rclcpp::Time& /*time*/,
     const rclcpp::Duration& /*period*/) {
@@ -497,5 +618,12 @@ hardware_interface::return_type ArxX5Hardware::write(
 
 }  // namespace arx_x5_ros2_control
 
-// 注册插件
+/**
+ * @brief 注册硬件接口插件
+ *
+ * 将 ArxX5Hardware 类注册为 ros2_control 的 SystemInterface 插件。
+ * ros2_control 通过 pluginlib 动态加载此硬件接口。
+ *
+ * 配合 arx_x5_ros2_control.xml 插件描述文件使用。
+ */
 PLUGINLIB_EXPORT_CLASS(arx_x5_ros2_control::ArxX5Hardware, hardware_interface::SystemInterface)
