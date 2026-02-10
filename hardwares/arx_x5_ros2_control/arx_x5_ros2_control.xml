@@ -1,9 +1,0 @@
-<library path="arx_x5_ros2_control">
-  <class name="arx_x5_ros2_control/ArxX5Hardware"
-         type="arx_x5_ros2_control::ArxX5Hardware"
-         base_class_type="hardware_interface::SystemInterface">
-    <description>
-      ROS2 Control Hardware Interface for ARX X5 Robot Arm using arx5-sdk
-    </description>
-  </class>
-</library>
