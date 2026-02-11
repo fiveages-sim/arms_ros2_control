@@ -146,8 +146,8 @@ namespace adaptive_gripper_controller
                     force_threshold_triggered_ = false;
                     target_position_ = open_position_;
                     RCLCPP_INFO(get_node()->get_logger(),
-                                "Opening gripper via target_command to position: %.6f (switch mode with force feedback)",
-                                target_position_);
+                                "Opening gripper via target_command to position: %.6f (switch mode%s)",
+                                target_position_, has_effort_interface_ ? " with force feedback" : "");
                 }
                 else
                 {
@@ -155,8 +155,8 @@ namespace adaptive_gripper_controller
                     force_threshold_triggered_ = false; // 重置力反馈触发标志
                     target_position_ = closed_position_;
                     RCLCPP_INFO(get_node()->get_logger(),
-                                "Closing gripper via target_command to position: %.6f (switch mode with force feedback)",
-                                target_position_);
+                                "Closing gripper via target_command to position: %.6f (switch mode%s)",
+                                target_position_, has_effort_interface_ ? " with force feedback" : "");
                 }
             });
 
