@@ -59,7 +59,6 @@ ros2_ws/
 
 本包已在以下ROS2发行版中测试并验证可用：
 
-- **ROS2 Humble** (Ubuntu 22.04)
 - **ROS2 Jazzy** (Ubuntu 24.04)
 
 
@@ -146,24 +145,12 @@ colcon build --packages-up-to ocs2_arm_controller cr5_description arms_teleop ad
 
 ### 3. 使用Gazebo仿真启动
 
-#### 对于ROS2 Humble：
-* 安装Gazebo Harmonic
-    ```bash
-    sudo apt-get install ros-humble-ros-gzharmonic
-    ```
-* 编译增强的gz_ros2_control包
-    ```bash
-    cd ~/ros2_ws
-    colcon build --packages-up-to gz_ros2_control --symlink-install
-    ```
-
-#### 对于ROS2 Jazzy：
 * 安装Gazebo Harmonic
     ```bash
     sudo apt-get install ros-jazzy-ros-gz ros-jazzy-gz-ros2-control
     ```
 
-#### 启动控制器（适用于两个发行版）：
+#### 启动控制器：
 这里使用了Agibot G1作为其他机器人的示例。
 * 编译机器人描述
   ```bash
