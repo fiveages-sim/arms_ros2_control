@@ -30,6 +30,6 @@
 	path = libraries/ocs2_humanoid
 	url = git@github.com:fiveages-sim/ocs2-humanoid.git
 	branch = main
-[submodule "hardwares/arx_x5_ros2_control"]
-	path = hardwares/arx_x5_ros2_control
+[submodule "hardwares/arx_ros2_control"]
+	path = hardwares/arx_ros2_control
 	url = git@github.com:fiveages-sim/arx-ros2-control.git
