@@ -5,6 +5,11 @@
 #include "basic_joint_controller/BasicJointController.h"
 #include "basic_joint_controller/FSM/StateHold.h"
 #include "basic_joint_controller/FSM/StateMoveJ.h"
+#include "lina_planning/planning/path_planner/movel.h"
+#include "lina_planning/planning/kinematics/fiveages_w2_fk.h"
+#include "lina_planning/planning/common/quaternion.h"
+#include "lina_planning/planning/common/trajectory_init_parameters.h" // for TrajectoryParameter
+#include <eigen3/Eigen/Dense>
 #include <arms_controller_common/FSM/StateHome.h>
 
 #include <std_msgs/msg/float64_multi_array.hpp>
@@ -167,6 +172,21 @@ namespace basic_joint_controller
                 state_list_.movej->updateJointLimitsFromURDF(msg->data);
             });
 
+        // --- initialize moveL planner and body IK solver and hand off to state ---
+        movel_planner_ = std::make_shared<planning::moveL>();
+        body_ik_solver_ = std::make_shared<planning::FiveAgesW2IK>();
+        if (state_list_.movej)
+        {
+            state_list_.movej->setMoveLPlanner(movel_planner_);
+            state_list_.movej->setBodyIKSolver(body_ik_solver_);
+        }
+
+        // subscribe to body cartesian target (pose) for waist linear motion
+        movel_body_target_sub_ = get_node()->create_subscription<geometry_msgs::msg::PoseStamped>(
+            "/body_movel_target", 10,
+            std::bind(&BasicJointController::movelCallback, this, std::placeholders::_1));
+
+
         // Subscribe to target_command topic for dexterous hand control (if enabled)
         // Only effective when in MOVEJ state - directly sets target position without switching states
         if (target_command_enabled_)
@@ -324,6 +344,37 @@ namespace basic_joint_controller
         default:
             return state_list_.invalid;
         }
+    }
+
+    // callback for cartesian moveL target
+    void BasicJointController::movelCallback(const geometry_msgs::msg::PoseStamped::SharedPtr msg)
+    {
+        if (!state_list_.movej)
+        {
+            return;
+        }
+
+        // only process when in MOVEJ state (moveL piggybacks on MOVEJ)
+        if (current_state_ && current_state_->state_name != FSMStateName::MOVEJ)
+        {
+            RCLCPP_DEBUG(get_node()->get_logger(),
+                         "Received moveL target but controller not in MOVEJ state, ignoring");
+            return;
+        }
+
+        // convert pose to planning types
+        Eigen::Vector3d target_pos(msg->pose.position.x,
+                                   msg->pose.position.y,
+                                   msg->pose.position.z);
+        planning::Quaternion target_ori(msg->pose.orientation.w,
+                                        msg->pose.orientation.x,
+                                        msg->pose.orientation.y,
+                                        msg->pose.orientation.z);
+
+        // use default trajectory parameters (could be read from ROS params if desired)
+        planning::TrajectoryParameter param;
+        state_list_.movej->setMoveLTarget(target_pos, target_ori, param);
+        RCLCPP_INFO(get_node()->get_logger(), "moveL target received and forwarded to StateMoveJ");
     }
 } // namespace basic_joint_controller
 

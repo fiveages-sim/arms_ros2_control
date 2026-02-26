@@ -4,6 +4,12 @@
 #include "arms_controller_common/FSM/StateMoveJ.h"
 #include <cmath>
 
+// planners/kinematics required for cartesian moveL support
+#include "lina_planning/planning/path_planner/movel.h"
+#include "lina_planning/planning/kinematics/fiveages_w2_fk.h"
+#include "lina_planning/planning/kinematics/fiveages_w2_ik.h"
+
+
 namespace arms_controller_common
 {
     StateMoveJ::StateMoveJ(CtrlInterfaces& ctrl_interfaces,
@@ -19,6 +25,15 @@ namespace arms_controller_common
     {
         joint_limits_manager_ = std::make_shared<JointLimitsManager>(node_->get_logger());
         joint_limits_manager_->setJointNames(joint_names_);
+        // compute body joint indices if names already provided
+        for (size_t i = 0; i < joint_names_.size(); ++i)
+        {
+            const std::string& name = joint_names_[i];
+            if (name.find("body") != std::string::npos || name.find("waist") != std::string::npos)
+            {
+                body_joint_indices_.push_back(i);
+            }
+        }
     }
 
     void StateMoveJ::updateParam()
@@ -87,9 +102,60 @@ namespace arms_controller_common
     {
         std::lock_guard lock(target_mutex_);
 
-        // Check if multi-node trajectory is initialized (from setTrajectory)
-        if (trajectory_manager_.isInitialized())
+        // if we are executing a cartesian (moveL) command, handle it first
+        if (is_movel_mode_ && movel_planner_ && body_ik_solver_)
         {
+            // advance planner by one step
+            planning::TrajectPoint pt = movel_planner_->run();
+
+            // build frame from the cartesian point (Quaternion first, then Position)
+            planning::Frame frame(pt.quaternion_point.q, pt.cart_pos);
+
+            // current body joints used as seed for IK
+            Eigen::Vector4d current_q = Eigen::Vector4d::Zero();
+            for (size_t k = 0; k < body_joint_indices_.size() && k < 4; ++k)
+            {
+                size_t idx = body_joint_indices_[k];
+                current_q[k] = ctrl_interfaces_.last_sent_joint_positions_[idx];
+            }
+
+            Eigen::Vector4d q_out;
+            if (body_ik_solver_->ik_of_body_joint4(current_q, frame, q_out))
+            {
+                // write waist/body joint commands
+                for (size_t k = 0; k < body_joint_indices_.size() && k < 4; ++k)
+                {
+                    size_t idx = body_joint_indices_[k];
+                    ctrl_interfaces_.setJointPositionCommand(idx, q_out[k]);
+                }
+            }
+            else
+            {
+                RCLCPP_WARN(node_->get_logger(), "body IK failed during moveL execution");
+            }
+
+            // hold other joints at their last commanded positions
+            for (size_t i = 0; i < ctrl_interfaces_.joint_position_command_interface_.size(); ++i)
+            {
+                if (std::find(body_joint_indices_.begin(), body_joint_indices_.end(), i) ==
+                    body_joint_indices_.end())
+                {
+                    ctrl_interfaces_.setJointPositionCommand(i,
+                                                             ctrl_interfaces_.last_sent_joint_positions_[i]);
+                }
+            }
+
+            if (movel_planner_->isMotionOver())
+            {
+                is_movel_mode_ = false;
+                motion_mode_ = MotionMode::MOVEJ; // revert mode
+                RCLCPP_INFO(node_->get_logger(), "moveL trajectory completed, returning to MOVEJ mode");
+            }
+            return; // skip regular movej logic while moving linearly
+        }
+        else if (trajectory_manager_.isInitialized())
+        {
+            // Check if multi-node trajectory is initialized (from setTrajectory)
             // Multi-node trajectory is active, directly execute it
             if (!interpolation_active_)
             {
@@ -281,6 +347,13 @@ namespace arms_controller_common
         active_prefix_.clear();
         joint_mask_.clear();
 
+        // reset moveL state
+        is_movel_mode_ = false;
+        motion_mode_ = MotionMode::MOVEJ;
+        if (movel_planner_)
+        {
+            movel_planner_->run_completed = true;
+        }
         RCLCPP_DEBUG(node_->get_logger(), "StateMoveJ exited, all state variables reset");
     }
 
@@ -387,7 +460,6 @@ namespace arms_controller_common
             return;
         }
 
-
         // Update joint mask based on prefix
         updateJointMask(prefix);
 
@@ -468,6 +540,74 @@ namespace arms_controller_common
         }
     }
 
+    // moveL helper (inserted after prefix function)
+    void StateMoveJ::setMoveLTarget(const Eigen::Vector3d& target_pos,
+                                    const planning::Quaternion& target_ori,
+                                    const planning::TrajectoryParameter& param)
+    {
+        updateParam();
+        std::lock_guard lock(target_mutex_);
+
+        if (!state_active_)
+        {
+            RCLCPP_WARN(node_->get_logger(),
+                        "Cannot set moveL target: StateMoveJ is not active. Enter MOVEJ first.");
+            return;
+        }
+        if (!movel_planner_)
+        {
+            RCLCPP_WARN(node_->get_logger(), "moveL planner not configured");
+            return;
+        }
+        if (body_joint_indices_.empty() || !body_ik_solver_)
+        {
+            RCLCPP_WARN(node_->get_logger(),
+                        "Body joint indices or IK solver not available for moveL");
+            return;
+        }
+
+        // compute starting frame from current body joint positions via forward kinematics
+        Eigen::Vector4d q_body = Eigen::Vector4d::Zero();
+        for (size_t k = 0; k < body_joint_indices_.size() && k < 4; ++k)
+        {
+            size_t idx = body_joint_indices_[k];
+            q_body[k] = ctrl_interfaces_.last_sent_joint_positions_[idx];
+        }
+        planning::FiveAgesW2FK fk_solver;
+        planning::Frame start_frame = fk_solver.base_to_body_joint4(q_body);
+
+        planning::TrajectPoint start_tp;
+        start_tp.cart_pos = start_frame.p;
+        start_tp.quaternion_point.q = start_frame.q;
+        start_tp.is_joint_point = false;
+
+        planning::TrajectPoint end_tp;
+        end_tp.cart_pos = target_pos;
+        planning::QuaternionPoint qp;
+        qp.q = target_ori;
+        end_tp.quaternion_point = qp;
+        end_tp.is_joint_point = false;
+
+        planning::TrajectoryInitParameters init_param;
+        init_param.start_point = start_tp;
+        init_param.end_point = end_tp;
+        init_param.parameter = param;
+        init_param.period = 1.0 / ctrl_interfaces_.frequency_;
+
+        if (!movel_planner_->init(init_param))
+        {
+            RCLCPP_WARN(node_->get_logger(), "moveL planner initialization failed");
+            return;
+        }
+
+        // enable movel mode
+        movel_elapsed_time_ = 0.0;
+        is_movel_mode_ = true;
+        motion_mode_ = MotionMode::MOVEL;
+        RCLCPP_INFO(node_->get_logger(), "Started moveL trajectory");
+    }
+
+
     void StateMoveJ::setJointNames(const std::vector<std::string>& joint_names)
     {
         joint_names_ = joint_names;
@@ -479,8 +619,21 @@ namespace arms_controller_common
         }
 
         RCLCPP_INFO(node_->get_logger(), "Set %zu joint names", joint_names_.size());
+        // determine body/waist joint indices for moveL
+        body_joint_indices_.clear();
+        for (size_t i = 0; i < joint_names_.size(); ++i)
+        {
+            const std::string& name = joint_names_[i];
+            if (name.find("body") != std::string::npos || name.find("waist") != std::string::npos)
+            {
+                body_joint_indices_.push_back(i);
+            }
+        }
+        if (!body_joint_indices_.empty())
+        {
+            RCLCPP_INFO(node_->get_logger(), "Detected %zu body/waist joints for moveL", body_joint_indices_.size());
+        }
     }
-
 
     void StateMoveJ::updateJointMask(const std::string& prefix)
     {

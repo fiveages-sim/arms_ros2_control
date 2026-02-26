@@ -17,6 +17,16 @@
 #include <rclcpp_lifecycle/lifecycle_node.hpp>
 #include <std_msgs/msg/float64_multi_array.hpp>
 #include <trajectory_msgs/msg/joint_trajectory.hpp>
+#include <eigen3/Eigen/Dense>
+
+// forward declarations for motion‑space planners and kinematics
+namespace planning
+{
+    class moveL;
+    class FiveAgesW2IK;
+    class TrajectoryParameter;
+    class Quaternion;
+}
 
 namespace arms_controller_common
 {
@@ -119,6 +129,37 @@ namespace arms_controller_common
          */
         void setupTrajectorySubscription(const std::string& topic_name = "target_joint_trajectory");
 
+        // ---------- added for moveL / waist motion ----------
+        /**
+         * @brief Switch to MOVEJ vs MOVEL mode (default MOVEJ)
+         */
+        enum class MotionMode
+        {
+            MOVEJ,
+            MOVEL
+        };
+
+        /**
+         * @brief Set motion type for next command
+         */
+        void setMotionMode(MotionMode mode) { motion_mode_ = mode; }
+
+        /**
+         * @brief Provide planner and IK solver instances (typically set by controller)
+         */
+        void setMoveLPlanner(const std::shared_ptr<planning::moveL>& planner) { movel_planner_ = planner; }
+        void setBodyIKSolver(const std::shared_ptr<planning::FiveAgesW2IK>& solver) { body_ik_solver_ = solver; }
+
+        /**
+         * @brief Request a cartesian (moveL) command for waist joints
+         * @param target_pos desired end‑effector position (cartesian) in body frame
+         * @param target_ori desired orientation quaternion
+         * @param param optional Cartesian trajectory parameters (velocity/acc/etc)
+         */
+        void setMoveLTarget(const Eigen::Vector3d& target_pos,
+                            const planning::Quaternion& target_ori,
+                            const planning::TrajectoryParameter& param = planning::TrajectoryParameter());
+
     private:
         void updateParam();
 
@@ -204,5 +245,18 @@ namespace arms_controller_common
             double total_duration);
 
         static constexpr double TARGET_EPSILON = 1e-6; // Tolerance for comparing target positions
+
+        // ----- moveL related members -----
+        MotionMode motion_mode_{MotionMode::MOVEJ};
+        bool is_movel_mode_{false};
+        // indices of joints that belong to body/waist (determined from joint_names_)
+        std::vector<size_t> body_joint_indices_;
+
+        // planning/IK helpers (owned externally)
+        std::shared_ptr<planning::moveL> movel_planner_;
+        std::shared_ptr<planning::FiveAgesW2IK> body_ik_solver_;
+
+        // time tracking for cartesian motion
+        double movel_elapsed_time_{0.0};
     };
 } // namespace arms_controller_common
