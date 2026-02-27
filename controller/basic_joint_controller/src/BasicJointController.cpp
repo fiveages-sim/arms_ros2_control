@@ -353,7 +353,6 @@ namespace basic_joint_controller
         {
             return;
         }
-
         // only process when in MOVEJ state (moveL piggybacks on MOVEJ)
         if (current_state_ && current_state_->state_name != FSMStateName::MOVEJ)
         {
@@ -370,10 +369,7 @@ namespace basic_joint_controller
                                         msg->pose.orientation.x,
                                         msg->pose.orientation.y,
                                         msg->pose.orientation.z);
-
-        // use default trajectory parameters (could be read from ROS params if desired)
-        planning::TrajectoryParameter param;
-        state_list_.movej->setMoveLTarget(target_pos, target_ori, param);
+        state_list_.movej->setMoveLTarget(target_pos, target_ori);
         RCLCPP_INFO(get_node()->get_logger(), "moveL target received and forwarded to StateMoveJ");
     }
 } // namespace basic_joint_controller

@@ -149,6 +149,10 @@ namespace arms_controller_common
             {
                 is_movel_mode_ = false;
                 motion_mode_ = MotionMode::MOVEJ; // revert mode
+                //设置target为movel完成后的位置（不是恢复到之前的位置）
+                target_pos_ = ctrl_interfaces_.last_sent_joint_positions_;
+                has_target_ = false;
+                start_pos_ = target_pos_;
                 RCLCPP_INFO(node_->get_logger(), "moveL trajectory completed, returning to MOVEJ mode");
             }
             return; // skip regular movej logic while moving linearly
@@ -542,8 +546,7 @@ namespace arms_controller_common
 
     // moveL helper (inserted after prefix function)
     void StateMoveJ::setMoveLTarget(const Eigen::Vector3d& target_pos,
-                                    const planning::Quaternion& target_ori,
-                                    const planning::TrajectoryParameter& param)
+                                    const planning::Quaternion& target_ori)
     {
         updateParam();
         std::lock_guard lock(target_mutex_);
@@ -587,7 +590,7 @@ namespace arms_controller_common
         qp.q = target_ori;
         end_tp.quaternion_point = qp;
         end_tp.is_joint_point = false;
-
+        planning::TrajectoryParameter param(true,duration_);
         planning::TrajectoryInitParameters init_param;
         init_param.start_point = start_tp;
         init_param.end_point = end_tp;

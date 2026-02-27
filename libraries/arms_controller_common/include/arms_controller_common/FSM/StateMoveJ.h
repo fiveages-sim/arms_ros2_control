@@ -157,8 +157,7 @@ namespace arms_controller_common
          * @param param optional Cartesian trajectory parameters (velocity/acc/etc)
          */
         void setMoveLTarget(const Eigen::Vector3d& target_pos,
-                            const planning::Quaternion& target_ori,
-                            const planning::TrajectoryParameter& param = planning::TrajectoryParameter());
+                            const planning::Quaternion& target_ori);
 
     private:
         void updateParam();
