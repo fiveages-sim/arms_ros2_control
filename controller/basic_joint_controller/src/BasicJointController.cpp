@@ -142,6 +142,16 @@ namespace basic_joint_controller
                             target_command_close_config_, target_command_open_config_);
             }
 
+            // ✅ 读取简单的 body_movel 配置
+            body_movel_enabled_ = auto_declare<bool>("body_movel_enabled", false);
+
+            if (body_movel_enabled_)
+            {
+                RCLCPP_INFO(get_node()->get_logger(),
+                           "Body movel enabled for controller %s",
+                           controller_name_.c_str());
+            }
+
             return CallbackReturn::SUCCESS;
         }
         catch (const std::exception& e)
@@ -181,11 +191,50 @@ namespace basic_joint_controller
             state_list_.movej->setBodyIKSolver(body_ik_solver_);
         }
 
-        // subscribe to body cartesian target (pose) for waist linear motion
-        movel_body_target_sub_ = get_node()->create_subscription<geometry_msgs::msg::PoseStamped>(
-            "/body_movel_target", 10,
-            std::bind(&BasicJointController::movelCallback, this, std::placeholders::_1));
+        // ✅ 简单实现 body_movel 订阅
+        if (body_movel_enabled_)
+        {
+            // 构建话题名: /body_joint_controller/body_movel_target
+            std::string body_movel_topic = "/" + controller_name_ + "/body_movel_target";
 
+            movel_body_target_sub_ = get_node()->create_subscription<geometry_msgs::msg::Pose>(
+                body_movel_topic, 10,
+                [this](const geometry_msgs::msg::Pose::SharedPtr msg)
+                {
+                    // 只有在 MOVEJ 状态时才处理
+                    if (current_state_ && current_state_->state_name != FSMStateName::MOVEJ)
+                    {
+                        RCLCPP_WARN_THROTTLE(get_node()->get_logger(),
+                                             *get_node()->get_clock(), 5000,
+                                             "Body movel target ignored: controller not in MOVEJ state");
+                        return;
+                    }
+
+                    // 转换并设置目标
+                    Eigen::Vector3d target_pos(
+                        msg->position.x,
+                        msg->position.y,
+                        msg->position.z);
+
+                    planning::Quaternion target_ori(
+                        msg->orientation.w,
+                        msg->orientation.x,
+                        msg->orientation.y,
+                        msg->orientation.z);
+
+                    if (state_list_.movej)
+                    {
+                        state_list_.movej->setMoveLTarget(target_pos, target_ori);
+                        RCLCPP_INFO(get_node()->get_logger(),
+                                   "Body moveL target received: pos(%.3f, %.3f, %.3f)",
+                                   target_pos.x(), target_pos.y(), target_pos.z());
+                    }
+                });
+
+            RCLCPP_INFO(get_node()->get_logger(),
+                       "Subscribed to body movel topic: %s",
+                       body_movel_topic.c_str());
+        }
 
         // Subscribe to target_command topic for dexterous hand control (if enabled)
         // Only effective when in MOVEJ state - directly sets target position without switching states
@@ -346,32 +395,6 @@ namespace basic_joint_controller
         }
     }
 
-    // callback for cartesian moveL target
-    void BasicJointController::movelCallback(const geometry_msgs::msg::PoseStamped::SharedPtr msg)
-    {
-        if (!state_list_.movej)
-        {
-            return;
-        }
-        // only process when in MOVEJ state (moveL piggybacks on MOVEJ)
-        if (current_state_ && current_state_->state_name != FSMStateName::MOVEJ)
-        {
-            RCLCPP_DEBUG(get_node()->get_logger(),
-                         "Received moveL target but controller not in MOVEJ state, ignoring");
-            return;
-        }
-
-        // convert pose to planning types
-        Eigen::Vector3d target_pos(msg->pose.position.x,
-                                   msg->pose.position.y,
-                                   msg->pose.position.z);
-        planning::Quaternion target_ori(msg->pose.orientation.w,
-                                        msg->pose.orientation.x,
-                                        msg->pose.orientation.y,
-                                        msg->pose.orientation.z);
-        state_list_.movej->setMoveLTarget(target_pos, target_ori);
-        RCLCPP_INFO(get_node()->get_logger(), "moveL target received and forwarded to StateMoveJ");
-    }
 } // namespace basic_joint_controller
 
 #include "pluginlib/class_list_macros.hpp"

@@ -15,6 +15,7 @@
 #include <std_msgs/msg/string.hpp>
 #include <std_msgs/msg/int32.hpp>
 #include <geometry_msgs/msg/pose_stamped.hpp>
+#include <geometry_msgs/msg/pose.hpp>
 #include <hardware_interface/loaned_command_interface.hpp>
 #include <hardware_interface/loaned_state_interface.hpp>
 
@@ -42,14 +43,6 @@ namespace basic_joint_controller
     // Forward declarations
     class StateHold; // Extended StateHold with MOVEJ transition
     class StateMoveJ; // Extended StateMoveJ for basic_joint_controller
-
-    // // planning/kinematics helpers used by controller
-    // namespace planning {
-    //     class moveL;
-    //     class FiveAgesW2IK;
-    //     class Quaternion;
-    //     struct TrajectoryParameter;
-    // }
 
     struct FSMStateList
     {
@@ -123,13 +116,12 @@ namespace basic_joint_controller
         rclcpp::Subscription<std_msgs::msg::Int32>::SharedPtr target_command_subscription_;
 
         // moveL/cartesian body motion
-        rclcpp::Subscription<geometry_msgs::msg::PoseStamped>::SharedPtr movel_body_target_sub_;
+        bool body_movel_enabled_{false};
+        rclcpp::Subscription<geometry_msgs::msg::Pose>::SharedPtr movel_body_target_sub_;
 
         // planning helpers - created in configure
         std::shared_ptr<planning::moveL> movel_planner_;
         std::shared_ptr<planning::FiveAgesW2IK> body_ik_solver_;
 
-        // callback for cartesian move
-        void movelCallback(const geometry_msgs::msg::PoseStamped::SharedPtr msg);
     };
 }
