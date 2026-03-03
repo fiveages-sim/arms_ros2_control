@@ -24,6 +24,9 @@ int main(int argc, char** argv)
     std::string marker_fixed_frame = node->declare_parameter("marker_fixed_frame", "base_link");
     double linear_scale = node->declare_parameter("linear_scale", 0.005);
     double angular_scale = node->declare_parameter("angular_scale", 0.05);
+    double vr_thumbstick_linear_scale = node->declare_parameter("vr_thumbstick_linear_scale", 0.005);
+    double vr_thumbstick_angular_scale = node->declare_parameter("vr_thumbstick_angular_scale", 0.05);
+    double vr_pose_scale = node->declare_parameter("vr_pose_scale", 1.0);
 
     bool enable_vr = node->declare_parameter("enable_vr", true);
 
@@ -72,12 +75,21 @@ int main(int argc, char** argv)
                 control_base_frame.c_str(),
                 marker_fixed_frame.c_str());
     RCLCPP_INFO(node->get_logger(),
-                "Control scales: linear=%.3f, angular=%.3f (deadzone handled at input source)",
+                "Joystick/keyboard scales: linear=%.3f, angular=%.3f (deadzone handled at input source)",
                 linear_scale, angular_scale);
 
     RCLCPP_INFO(node->get_logger(),
                 "VR control: enabled=%s",
                 enable_vr ? "true" : "false");
+    if (enable_vr)
+    {
+        RCLCPP_INFO(node->get_logger(),
+                    "VR thumbstick scales: linear=%.3f, angular=%.3f (from target_manager.yaml)",
+                    vr_thumbstick_linear_scale, vr_thumbstick_angular_scale);
+        RCLCPP_INFO(node->get_logger(),
+                    "VR pose scale: %.3f (from target_manager.yaml)",
+                    vr_pose_scale);
+    }
 
     try
     {
@@ -102,12 +114,13 @@ int main(int argc, char** argv)
         auto control_handler = std::make_unique<ControlInputHandler>(
             node, target_manager.get(), linear_scale, angular_scale, hand_controllers);
 
-        // 创建VRInputHandler（如果启用，传入统一的发布器和hand_controllers参数）
+        // 创建VRInputHandler（如果启用，传入统一的发布器、hand_controllers 及 target_manager.yaml 的 scale 参数）
         std::unique_ptr<VRInputHandler> vr_handler = nullptr;
         if (enable_vr)
         {
             vr_handler = std::make_unique<VRInputHandler>(
-                node, target_manager.get(), pub_left_target, pub_right_target, hand_controllers);
+                node, target_manager.get(), pub_left_target, pub_right_target, hand_controllers,
+                vr_thumbstick_linear_scale, vr_thumbstick_angular_scale, vr_pose_scale);
         }
 
         // 创建 control input 订阅器（用于增量控制）
