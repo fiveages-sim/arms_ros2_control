@@ -62,7 +62,6 @@ ros2_ws/
 
 This package has been tested and verified to work with the following ROS2 distributions:
 
-- **ROS2 Humble** (Ubuntu 22.04)
 - **ROS2 Jazzy** (Ubuntu 24.04)
 
 ## Quick Start
@@ -147,24 +146,12 @@ colcon build --packages-up-to ocs2_arm_controller cr5_description arms_teleop ad
 
 ### 3. Launch with Gazebo Simulation
 
-#### For ROS2 Humble:
-* Install Gazebo Harmonic
-    ```bash
-    sudo apt-get install ros-humble-ros-gzharmonic
-    ```
-* Compile the enhanced gz_ros2_control package
-    ```bash
-    cd ~/ros2_ws
-    colcon build --packages-up-to gz_ros2_control --symlink-install
-    ```
-
-#### For ROS2 Jazzy:
 * Install Gazebo Harmonic
     ```bash
     sudo apt-get install ros-jazzy-ros-gz ros-jazzy-gz-ros2-control
     ```
 
-#### Launch controller (for both distributions):
+#### Launch controller:
 Here I used Agibot G1 as an example for other robots.
 * Compile robot descriptions
   ```bash
