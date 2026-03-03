@@ -26,7 +26,8 @@ int main(int argc, char** argv)
     double angular_scale = node->declare_parameter("angular_scale", 0.05);
     double vr_thumbstick_linear_scale = node->declare_parameter("vr_thumbstick_linear_scale", 0.005);
     double vr_thumbstick_angular_scale = node->declare_parameter("vr_thumbstick_angular_scale", 0.05);
-    double vr_pose_scale = node->declare_parameter("vr_pose_scale", 1.0);
+    // VR/头显参考link（通常为机器人base_link），可在各机器人target_manager.yaml中配置
+    std::string reference_link = node->declare_parameter("reference_link", "base_link");
 
     bool enable_vr = node->declare_parameter("enable_vr", true);
 
@@ -79,16 +80,18 @@ int main(int argc, char** argv)
                 linear_scale, angular_scale);
 
     RCLCPP_INFO(node->get_logger(),
-                "VR control: enabled=%s",
-                enable_vr ? "true" : "false");
+            "VR control: enabled=%s",
+            enable_vr ? "true" : "false");
     if (enable_vr)
     {
         RCLCPP_INFO(node->get_logger(),
                     "VR thumbstick scales: linear=%.3f, angular=%.3f (from target_manager.yaml)",
                     vr_thumbstick_linear_scale, vr_thumbstick_angular_scale);
         RCLCPP_INFO(node->get_logger(),
-                    "VR pose scale: %.3f (from target_manager.yaml)",
-                    vr_pose_scale);
+                    "VR pose scale: left=1.0, right=1.0 (fixed, not configurable)");
+        RCLCPP_INFO(node->get_logger(),
+                    "VR reference_link: %s (from target_manager.yaml, default=base_link)",
+                    reference_link.c_str());
     }
 
     try
@@ -118,9 +121,11 @@ int main(int argc, char** argv)
         std::unique_ptr<VRInputHandler> vr_handler = nullptr;
         if (enable_vr)
         {
+            // VR 手柄位姿缩放因子固定为 1.0（左右手独立），不再通过参数配置
             vr_handler = std::make_unique<VRInputHandler>(
                 node, target_manager.get(), pub_left_target, pub_right_target, hand_controllers,
-                vr_thumbstick_linear_scale, vr_thumbstick_angular_scale, vr_pose_scale);
+                vr_thumbstick_linear_scale, vr_thumbstick_angular_scale,
+                1.0, 1.0, reference_link);
         }
 
         // 创建 control input 订阅器（用于增量控制）

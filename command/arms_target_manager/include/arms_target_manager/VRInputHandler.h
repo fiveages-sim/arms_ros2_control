@@ -16,6 +16,8 @@
 #include <Eigen/Core>
 #include <Eigen/Geometry>
 #include <std_msgs/msg/int32.hpp>
+#include <tf2_ros/buffer.h>
+#include <tf2_ros/transform_listener.h>
 #include "arms_target_manager/ArmsTargetManager.h"
 #include "arms_controller_common/utils/FSMCommandPublisher.h"
 
@@ -45,7 +47,9 @@ namespace arms_ros2_control::command
          * @param handControllers 手部/夹爪控制器名称列表（用于映射夹爪命令）
          * @param vr_thumbstick_linear_scale VR摇杆线性缩放因子（单位 m/step）
          * @param vr_thumbstick_angular_scale VR摇杆角度缩放因子（单位 rad/step）
-         * @param vr_pose_scale VR手柄位姿位置缩放因子（用于缩放VR手柄的位置数据）
+         * @param left_vr_pose_scale 左手柄位姿位置缩放因子（用于缩放左手柄的位置数据）
+         * @param right_vr_pose_scale 右手柄位姿位置缩放因子（用于缩放右手柄的位置数据）
+         * @param reference_link 参考link名称（例如 base_link），用于VR/头显关联
          */
         VRInputHandler(
             rclcpp::Node::SharedPtr node,
@@ -55,7 +59,9 @@ namespace arms_ros2_control::command
             const std::vector<std::string>& handControllers,
             double vr_thumbstick_linear_scale,
             double vr_thumbstick_angular_scale,
-            double vr_pose_scale);
+            double left_vr_pose_scale,
+            double right_vr_pose_scale,
+            const std::string& reference_link);
 
         ~VRInputHandler() = default;
 
@@ -116,12 +122,18 @@ namespace arms_ros2_control::command
          * @param msg VR pose消息
          */
         void vrLeftCallback(geometry_msgs::msg::Pose::SharedPtr msg);
-
+        
         /**
          * VR右臂pose回调函数
          * @param msg VR pose消息
          */
         void vrRightCallback(geometry_msgs::msg::Pose::SharedPtr msg);
+
+        /**
+         * VR头显pose回调函数
+         * @param msg VR 头显 pose 消息
+         */
+        void vrHeadCallback(geometry_msgs::msg::Pose::SharedPtr msg);
 
         /**
          * 摇杆轴值回调函数（合并处理左右摇杆）
@@ -249,6 +261,7 @@ namespace arms_ros2_control::command
         // 订阅器
         rclcpp::Subscription<geometry_msgs::msg::Pose>::SharedPtr sub_left_;
         rclcpp::Subscription<geometry_msgs::msg::Pose>::SharedPtr sub_right_;
+        rclcpp::Subscription<geometry_msgs::msg::Pose>::SharedPtr sub_head_;
         // 按钮事件订阅器（Int32类型）
         rclcpp::Subscription<std_msgs::msg::Int32>::SharedPtr sub_controller_state_;
         // 摇杆轴值订阅器（合并订阅左右摇杆，使用 Twist 消息）
@@ -263,11 +276,16 @@ namespace arms_ros2_control::command
         Eigen::Matrix4d left_ee_pose_ = Eigen::Matrix4d::Identity();
         Eigen::Matrix4d right_ee_pose_ = Eigen::Matrix4d::Identity();
 
-        // VR位置和方向参数
-        Eigen::Vector3d left_position_ = Eigen::Vector3d::Zero();
+        // VR位置和方向参数（世界/机器人坐标系下）
+        // *_position_raw_ 表示未应用缩放系数的原始VR位姿
+        Eigen::Vector3d vr_left_position_raw_ = Eigen::Vector3d::Zero();
+        Eigen::Vector3d vr_right_position_raw_ = Eigen::Vector3d::Zero();
         Eigen::Quaterniond left_orientation_ = Eigen::Quaterniond::Identity();
+        Eigen::Vector3d left_position_ = Eigen::Vector3d::Zero();
         Eigen::Vector3d right_position_ = Eigen::Vector3d::Zero();
         Eigen::Quaterniond right_orientation_ = Eigen::Quaterniond::Identity();
+        Eigen::Vector3d vr_head_position_ = Eigen::Vector3d::Zero();
+        Eigen::Quaterniond vr_head_orientation_ = Eigen::Quaterniond::Identity();
 
         // 用于变化检测的之前pose（更新模式）
         Eigen::Vector3d prev_calculated_left_position_ = Eigen::Vector3d::Zero();
@@ -332,10 +350,22 @@ namespace arms_ros2_control::command
         std::atomic<bool> left_gripper_open_;
         std::atomic<bool> right_gripper_open_;
 
-        // VR控制缩放参数（从配置文件读取）
+        // VR控制缩放参数（从配置文件读取 / 固定配置）
         double vr_thumbstick_linear_scale_; // 摇杆位置缩放因子（单位 m/step）
         double vr_thumbstick_angular_scale_; // 摇杆旋转缩放因子（单位 rad/step）
-        double vr_pose_scale_; // VR手柄位姿位置缩放因子
+        double left_vr_pose_scale_;  // 左手柄位姿位置缩放因子
+        double right_vr_pose_scale_; // 右手柄位姿位置缩放因子
+
+        // 参考link名称（用于将VR头显/手柄关联到机器人某个link），从target_manager.yaml读取，默认"base_link"
+        std::string reference_link_;
+
+        // 机器人末端当前使用的参考坐标系（来自 left_current_pose/right_current_pose 的 frame_id）
+        std::string ee_frame_id_;
+        bool ee_frame_id_initialized_ = false;
+
+        // TF组件（用于在不同link/frame之间转换）
+        std::shared_ptr<tf2_ros::Buffer> tf_buffer_;
+        std::shared_ptr<tf2_ros::TransformListener> tf_listener_;
 
         // 常量
         static const std::string XR_NODE_NAME;
