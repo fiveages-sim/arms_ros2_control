@@ -26,6 +26,7 @@ int main(int argc, char** argv)
     double angular_scale = node->declare_parameter("angular_scale", 0.05);
     double vr_thumbstick_linear_scale = node->declare_parameter("vr_thumbstick_linear_scale", 0.005);
     double vr_thumbstick_angular_scale = node->declare_parameter("vr_thumbstick_angular_scale", 0.05);
+    double vr_pose_scale = node->declare_parameter("vr_pose_scale", 1.0);
     // VR/头显参考link（通常为机器人base_link），可在各机器人target_manager.yaml中配置
     std::string reference_link = node->declare_parameter("reference_link", "base_link");
 
@@ -125,7 +126,7 @@ int main(int argc, char** argv)
             vr_handler = std::make_unique<VRInputHandler>(
                 node, target_manager.get(), pub_left_target, pub_right_target, hand_controllers,
                 vr_thumbstick_linear_scale, vr_thumbstick_angular_scale,
-                1.0, 1.0, reference_link);
+                vr_pose_scale, reference_link);
         }
 
         // 创建 control input 订阅器（用于增量控制）

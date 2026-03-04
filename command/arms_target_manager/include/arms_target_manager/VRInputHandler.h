@@ -16,6 +16,7 @@
 #include <Eigen/Core>
 #include <Eigen/Geometry>
 #include <std_msgs/msg/int32.hpp>
+#include <nav_msgs/msg/path.hpp>
 #include <tf2_ros/buffer.h>
 #include <tf2_ros/transform_listener.h>
 #include "arms_target_manager/ArmsTargetManager.h"
@@ -47,8 +48,7 @@ namespace arms_ros2_control::command
          * @param handControllers 手部/夹爪控制器名称列表（用于映射夹爪命令）
          * @param vr_thumbstick_linear_scale VR摇杆线性缩放因子（单位 m/step）
          * @param vr_thumbstick_angular_scale VR摇杆角度缩放因子（单位 rad/step）
-         * @param left_vr_pose_scale 左手柄位姿位置缩放因子（用于缩放左手柄的位置数据）
-         * @param right_vr_pose_scale 右手柄位姿位置缩放因子（用于缩放右手柄的位置数据）
+         * @param vr_pose_scale 手柄位姿位置缩放因子（左右共用，可由组合键动态校准）
          * @param reference_link 参考link名称（例如 base_link），用于VR/头显关联
          */
         VRInputHandler(
@@ -59,8 +59,7 @@ namespace arms_ros2_control::command
             const std::vector<std::string>& handControllers,
             double vr_thumbstick_linear_scale,
             double vr_thumbstick_angular_scale,
-            double left_vr_pose_scale,
-            double right_vr_pose_scale,
+            double vr_pose_scale,
             const std::string& reference_link);
 
         ~VRInputHandler() = default;
@@ -255,6 +254,7 @@ namespace arms_ros2_control::command
         // 发布器（用于直接发布到left_target/right_target）
         rclcpp::Publisher<geometry_msgs::msg::Pose>::SharedPtr pub_left_target_;
         rclcpp::Publisher<geometry_msgs::msg::Pose>::SharedPtr pub_right_target_;
+        rclcpp::Publisher<nav_msgs::msg::Path>::SharedPtr pub_dual_target_stamped_;
         // FSM命令发布器（使用通用工具类，自动处理command=100的特殊情况）
         std::unique_ptr<arms_controller_common::FSMCommandPublisher> fsm_command_publisher_;
 
@@ -353,8 +353,7 @@ namespace arms_ros2_control::command
         // VR控制缩放参数（从配置文件读取 / 固定配置）
         double vr_thumbstick_linear_scale_; // 摇杆位置缩放因子（单位 m/step）
         double vr_thumbstick_angular_scale_; // 摇杆旋转缩放因子（单位 rad/step）
-        double left_vr_pose_scale_;  // 左手柄位姿位置缩放因子
-        double right_vr_pose_scale_; // 右手柄位姿位置缩放因子
+        double vr_pose_scale_;  // 手柄位姿位置缩放因子（左右共用，可由组合键动态校准）
 
         // 参考link名称（用于将VR头显/手柄关联到机器人某个link），从target_manager.yaml读取，默认"base_link"
         std::string reference_link_;

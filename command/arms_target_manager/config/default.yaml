@@ -11,6 +11,9 @@
     
     # VR摇杆：角度缩放因子（单位 rad/step）
     vr_thumbstick_angular_scale: 0.05
+
+    # VR手柄位姿缩放因子（左右共用，可由组合键动态校准，范围建议 [0.75, 1.5]）
+    vr_pose_scale: 1.0
     
     # 是否启用VR输入处理
     enable_vr: false
