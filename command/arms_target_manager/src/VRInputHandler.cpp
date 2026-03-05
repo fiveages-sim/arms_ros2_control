@@ -10,15 +10,81 @@
 #include <geometry_msgs/msg/point.hpp>
 #include <geometry_msgs/msg/twist.hpp>
 #include <std_msgs/msg/int32.hpp>
+#include <std_msgs/msg/float64_multi_array.hpp>
 #include <nav_msgs/msg/path.hpp>
 #include <Eigen/Core>
 #include <Eigen/Geometry>
 #include <algorithm>
 #include <cctype>
+#include <cmath>
 #include <tf2_geometry_msgs/tf2_geometry_msgs.hpp>
 
 namespace arms_ros2_control::command
 {
+    // ── 手部关节角计算辅助函数 ──────────────────────────────────────────────────
+
+    using Joint = std::array<double, 3>;
+    using Joints = std::array<Joint, 25>;
+
+    static Eigen::Vector3d toVec(const Joint& j)
+    {
+        return {j[0], j[1], j[2]};
+    }
+
+    /**
+     * 计算关节弯曲角 (°)：向量 parent→joint 与 joint→child 之间的夹角。
+     * 对应 Python 的 bend_angle()。
+     */
+    static double bendAngle(const Joints& pos, int parent, int joint, int child)
+    {
+        Eigen::Vector3d v_in  = toVec(pos[joint]) - toVec(pos[parent]);
+        Eigen::Vector3d v_out = toVec(pos[child])  - toVec(pos[joint]);
+        double norm = v_in.norm() * v_out.norm();
+        if (norm < 1e-9) return 0.0;
+        double cos_a = std::clamp(v_in.dot(v_out) / norm, -1.0, 1.0);
+        return std::acos(cos_a) * 180.0 / M_PI;
+    }
+
+    /**
+     * 计算两平面夹角 (°)，取锐角 [0°, 90°]。
+     * 平面1 由关节 a,b,c 确定；平面2 由关节 d,e,f 确定。
+     * 对应 Python 的 plane_angle()。
+     */
+    static double planeAngle(const Joints& pos, int a, int b, int c, int d, int e, int f)
+    {
+        Eigen::Vector3d n1 = (toVec(pos[b]) - toVec(pos[a])).cross(toVec(pos[c]) - toVec(pos[a]));
+        Eigen::Vector3d n2 = (toVec(pos[e]) - toVec(pos[d])).cross(toVec(pos[f]) - toVec(pos[d]));
+        double norm = n1.norm() * n2.norm();
+        if (norm < 1e-9) return std::numeric_limits<double>::quiet_NaN();
+        double cos_val = std::clamp(n1.dot(n2) / norm, -1.0, 1.0);
+        return std::acos(std::abs(cos_val)) * 180.0 / M_PI;
+    }
+
+    /**
+     * 将角度按 [lo, hi] 范围归一化到 [0, 1]。
+     * 对应 Python 的 normalize_finger()。
+     */
+    static double normalizeFingerAngle(double angle_deg, double lo, double hi)
+    {
+        return std::clamp((angle_deg - lo) / (hi - lo), 0.0, 1.0);
+    }
+
+    /**
+     * 由关节位置数组计算所有手指的归一化角度。
+     */
+    static VRInputHandler::HandFingerAngles computeFingerAngles(const Joints& pos)
+    {
+        VRInputHandler::HandFingerAngles fa;
+        fa.thumb       = normalizeFingerAngle(bendAngle (pos,  1,  2,  3),  0.0,  50.0);
+        fa.thumb_plane = normalizeFingerAngle(planeAngle(pos,  0,  2,  6,  0,  6, 21), 20.0, 90.0);
+        fa.index       = normalizeFingerAngle(bendAngle (pos,  6,  7,  8),  0.0,  90.0);
+        fa.middle      = normalizeFingerAngle(bendAngle (pos, 11, 12, 13),  0.0,  90.0);
+        fa.ring        = normalizeFingerAngle(bendAngle (pos, 16, 17, 18),  0.0,  90.0);
+        fa.pinky       = normalizeFingerAngle(bendAngle (pos, 21, 22, 23),  0.0, 90.0);
+        return fa;
+    }
+
+    // ────────────────────────────────────────────────────────────────────────────
     // 静态常量定义
     const std::string VRInputHandler::XR_NODE_NAME = "/xr_target_node";
     const double VRInputHandler::POSITION_THRESHOLD = 0.01; // 1cm threshold for position changes
@@ -124,6 +190,26 @@ namespace arms_ros2_control::command
         };
         sub_thumbstick_axes_ = node_->create_subscription<geometry_msgs::msg::Twist>(
             "/xr/thumbstick_axes", 10, thumbstickAxesCallback);
+
+        // 手部关节位置订阅器
+        sub_left_hand_ = node_->create_subscription<std_msgs::msg::Float64MultiArray>(
+            "/xr/left_hand", 10,
+            [this](const std_msgs::msg::Float64MultiArray::SharedPtr msg) {
+                this->leftHandCallback(msg);
+            });
+        sub_right_hand_ = node_->create_subscription<std_msgs::msg::Float64MultiArray>(
+            "/xr/right_hand", 10,
+            [this](const std_msgs::msg::Float64MultiArray::SharedPtr msg) {
+                this->rightHandCallback(msg);
+            });
+        RCLCPP_INFO(node_->get_logger(), "🖐️ Subscribed to /xr/left_hand and /xr/right_hand");
+
+        // 灵巧手关节位置发布器
+        pub_left_hand_joints_ = node_->create_publisher<std_msgs::msg::Float64MultiArray>(
+            "/left_hand_controller/target_joint_position", 10);
+        pub_right_hand_joints_ = node_->create_publisher<std_msgs::msg::Float64MultiArray>(
+            "/right_hand_controller/target_joint_position", 10);
+        RCLCPP_INFO(node_->get_logger(), "🖐️ Publishing to /left(right)_hand_controller/target_joint_position");
 
         // 创建双臂目标位姿发布器（用于尺度校准后发送校准目标）
         pub_dual_target_stamped_ = node_->create_publisher<nav_msgs::msg::Path>(
@@ -1637,5 +1723,68 @@ namespace arms_ros2_control::command
                 }
             }
         }
+    }
+    void VRInputHandler::leftHandCallback(const std_msgs::msg::Float64MultiArray::SharedPtr msg)
+    {
+        if (msg->data.size() != 75)
+        {
+            RCLCPP_WARN_ONCE(node_->get_logger(),
+                "🖐️ /xr/left_hand: 期望75个元素, 收到 %zu", msg->data.size());
+            return;
+        }
+        for (int i = 0; i < 25; ++i)
+        {
+            left_hand_joints_[i] = {msg->data[i * 3], msg->data[i * 3 + 1], msg->data[i * 3 + 2]};
+        }
+        left_finger_angles_ = computeFingerAngles(left_hand_joints_);
+
+        std_msgs::msg::Float64MultiArray cmd_l;
+        cmd_l.data = {
+            left_finger_angles_.thumb,
+            left_finger_angles_.thumb_plane,
+            left_finger_angles_.index,
+            left_finger_angles_.middle,
+            left_finger_angles_.ring,
+            left_finger_angles_.pinky,
+        };
+        pub_left_hand_joints_->publish(cmd_l);
+
+        RCLCPP_INFO(node_->get_logger(),
+            "🖐️ L 拇=%.2f 拇面=%.2f 食=%.2f 中=%.2f 无=%.2f 小=%.2f",
+            left_finger_angles_.thumb, left_finger_angles_.thumb_plane,
+            left_finger_angles_.index, left_finger_angles_.middle,
+            left_finger_angles_.ring,  left_finger_angles_.pinky);
+    }
+
+    void VRInputHandler::rightHandCallback(const std_msgs::msg::Float64MultiArray::SharedPtr msg)
+    {
+        if (msg->data.size() != 75)
+        {
+            RCLCPP_WARN_ONCE(node_->get_logger(),
+                "🖐️ /xr/right_hand: 期望75个元素, 收到 %zu", msg->data.size());
+            return;
+        }
+        for (int i = 0; i < 25; ++i)
+        {
+            right_hand_joints_[i] = {msg->data[i * 3], msg->data[i * 3 + 1], msg->data[i * 3 + 2]};
+        }
+        right_finger_angles_ = computeFingerAngles(right_hand_joints_);
+
+        std_msgs::msg::Float64MultiArray cmd_r;
+        cmd_r.data = {
+            right_finger_angles_.thumb,
+            right_finger_angles_.thumb_plane,
+            right_finger_angles_.index,
+            right_finger_angles_.middle,
+            right_finger_angles_.ring,
+            right_finger_angles_.pinky,
+        };
+        pub_right_hand_joints_->publish(cmd_r);
+
+        RCLCPP_INFO(node_->get_logger(),
+            "🖐️ R 拇=%.2f 拇面=%.2f 食=%.2f 中=%.2f 无=%.2f 小=%.2f",
+            right_finger_angles_.thumb, right_finger_angles_.thumb_plane,
+            right_finger_angles_.index, right_finger_angles_.middle,
+            right_finger_angles_.ring,  right_finger_angles_.pinky);
     }
 } // namespace arms_ros2_control::command

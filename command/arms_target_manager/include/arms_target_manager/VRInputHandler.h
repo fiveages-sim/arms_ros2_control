@@ -16,6 +16,7 @@
 #include <Eigen/Core>
 #include <Eigen/Geometry>
 #include <std_msgs/msg/int32.hpp>
+#include <std_msgs/msg/float64_multi_array.hpp>
 #include <nav_msgs/msg/path.hpp>
 #include <tf2_ros/buffer.h>
 #include <tf2_ros/transform_listener.h>
@@ -39,6 +40,17 @@ namespace arms_ros2_control::command
     class VRInputHandler
     {
     public:
+        /** 各手指归一化弯曲角 [0, 1]，与 Python 端计算逻辑一致 */
+        struct HandFingerAngles {
+            double thumb       = 0.0;  // bend_angle(1,2,3)，范围 [0°, 50°]
+            double thumb_plane = 0.0;  // plane_angle(0,2,6 | 0,6,21)，范围 [20°, 90°]
+            double index       = 0.0;  // bend_angle(5,6,7)，范围 [0°, 70°]
+            double middle      = 0.0;  // bend_angle(10,11,12)，范围 [0°, 80°]
+            double ring        = 0.0;  // bend_angle(15,16,17)，范围 [0°, 90°]
+            double pinky       = 0.0;  // bend_angle(20,21,22)，范围 [0°, 100°]
+        };
+
+
         /**
          * 构造函数
          * @param node ROS节点指针
@@ -176,6 +188,16 @@ namespace arms_ros2_control::command
         void leftGripperStateCallback(const std_msgs::msg::Int32::SharedPtr msg);
 
         /**
+         * 左手关节位置回调（75个float64，25关节×xyz，机械臂坐标系）
+         */
+        void leftHandCallback(const std_msgs::msg::Float64MultiArray::SharedPtr msg);
+
+        /**
+         * 右手关节位置回调（75个float64，25关节×xyz，机械臂坐标系）
+         */
+        void rightHandCallback(const std_msgs::msg::Float64MultiArray::SharedPtr msg);
+
+        /**
          * 右夹爪状态回调函数（同步夹爪状态）
          * @param msg 夹爪命令消息 (0=close, 1=open)
          */
@@ -255,6 +277,9 @@ namespace arms_ros2_control::command
         rclcpp::Publisher<geometry_msgs::msg::Pose>::SharedPtr pub_left_target_;
         rclcpp::Publisher<geometry_msgs::msg::Pose>::SharedPtr pub_right_target_;
         rclcpp::Publisher<nav_msgs::msg::Path>::SharedPtr pub_dual_target_stamped_;
+        // 灵巧手关节位置发布器（6个归一化值）
+        rclcpp::Publisher<std_msgs::msg::Float64MultiArray>::SharedPtr pub_left_hand_joints_;
+        rclcpp::Publisher<std_msgs::msg::Float64MultiArray>::SharedPtr pub_right_hand_joints_;
         // FSM命令发布器（使用通用工具类，自动处理command=100的特殊情况）
         std::unique_ptr<arms_controller_common::FSMCommandPublisher> fsm_command_publisher_;
 
@@ -269,6 +294,9 @@ namespace arms_ros2_control::command
         // 夹爪状态订阅器（用于同步夹爪状态）
         rclcpp::Subscription<std_msgs::msg::Int32>::SharedPtr sub_left_gripper_state_;
         rclcpp::Subscription<std_msgs::msg::Int32>::SharedPtr sub_right_gripper_state_;
+        // 手部关节位置订阅器（25关节×xyz，展平为75个float64）
+        rclcpp::Subscription<std_msgs::msg::Float64MultiArray>::SharedPtr sub_left_hand_;
+        rclcpp::Subscription<std_msgs::msg::Float64MultiArray>::SharedPtr sub_right_hand_;
         // 机器人 current_pose 订阅已移除，改为在 arms_target_manager_node 中统一处理
         // FSM命令订阅已移除，改为在 arms_target_manager_node 中统一处理
 
@@ -320,6 +348,13 @@ namespace arms_ros2_control::command
         Eigen::Quaterniond robot_current_left_orientation_ = Eigen::Quaterniond::Identity();
         Eigen::Vector3d robot_current_right_position_ = Eigen::Vector3d::Zero();
         Eigen::Quaterniond robot_current_right_orientation_ = Eigen::Quaterniond::Identity();
+
+        // 手部关节位置（25×3，机械臂坐标系），按行存储：joints[i] = row i
+        std::array<std::array<double, 3>, 25> left_hand_joints_{};
+        std::array<std::array<double, 3>, 25> right_hand_joints_{};
+
+        HandFingerAngles left_finger_angles_{};
+        HandFingerAngles right_finger_angles_{};
 
         // 摇杆轴值（归一化 -1.0 ~ 1.0）
         Eigen::Vector2d left_thumbstick_axes_ = Eigen::Vector2d::Zero();
