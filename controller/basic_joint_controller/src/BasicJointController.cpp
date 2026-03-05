@@ -148,8 +148,28 @@ namespace basic_joint_controller
             if (body_movel_enabled_)
             {
                 RCLCPP_INFO(get_node()->get_logger(),
-                           "Body movel enabled for controller %s",
-                           controller_name_.c_str());
+                            "Body movel enabled for controller %s",
+                            controller_name_.c_str());
+            }
+            // 读取腰部升降配置
+            waist_lifting_enabled_ = auto_declare<bool>("waist_lifting_enabled", false);
+
+            // 声明腰部参数
+            if (waist_lifting_enabled_)
+            {
+                auto_declare<double>("waist_lifting_duration", 3.0);
+                std::string waist_lifting_type_ = auto_declare<std::string>("waist_lifting_type", "three_joint");
+                if (waist_lifting_type_ == "three_joint")
+                {
+                    auto_declare<double>("waist_l1", 0.322);
+                    auto_declare<double>("waist_l2", 0.355);
+                    auto_declare<std::vector<double>>("waist_rotation_direction", {1.0, 1.0, 1.0});
+                    auto_declare<std::vector<double>>("waist_angle_offset", {0.0, 0.0, 0.0});
+                }
+
+                RCLCPP_INFO(get_node()->get_logger(),
+                            "Waist lifting enabled for controller %s",
+                            controller_name_.c_str());
             }
 
             return CallbackReturn::SUCCESS;
@@ -226,14 +246,53 @@ namespace basic_joint_controller
                     {
                         state_list_.movej->setMoveLTarget(target_pos, target_ori);
                         RCLCPP_INFO(get_node()->get_logger(),
-                                   "Body moveL target received: pos(%.3f, %.3f, %.3f)",
-                                   target_pos.x(), target_pos.y(), target_pos.z());
+                                    "Body moveL target received: pos(%.3f, %.3f, %.3f)",
+                                    target_pos.x(), target_pos.y(), target_pos.z());
                     }
                 });
 
             RCLCPP_INFO(get_node()->get_logger(),
-                       "Subscribed to body movel topic: %s",
-                       body_movel_topic.c_str());
+                        "Subscribed to body movel topic: %s",
+                        body_movel_topic.c_str());
+        }
+
+        // 创建腰部升降规划器并传递给 StateMoveJ
+        if (waist_lifting_enabled_)
+        {
+            // 订阅腰部升降话题
+            std::string waist_lifting_topic = "/" + controller_name_ + "/waist_lifting";
+
+            waist_lifting_subscription_ = get_node()->create_subscription<std_msgs::msg::Float64>(
+                waist_lifting_topic, 10,
+                [this](const std_msgs::msg::Float64::SharedPtr msg)
+                {
+                    // 只有在 MOVEJ 状态时才处理
+                    if (!current_state_ || current_state_->state_name != FSMStateName::MOVEJ)
+                    {
+                        RCLCPP_WARN_THROTTLE(get_node()->get_logger(),
+                                             *get_node()->get_clock(), 5000,
+                                             "Waist lifting ignored: controller not in MOVEJ state");
+                        return;
+                    }
+
+                    // 通过 StateMoveJ 启动腰部升降
+                    if (state_list_.movej)
+                    {
+                        bool success = state_list_.movej->startWaistLifting(
+                            msg->data); //腰部升降距离
+
+                        if (success)
+                        {
+                            RCLCPP_INFO(get_node()->get_logger(),
+                                        "Waist lifting command received: distance=%.3f",
+                                        msg->data);
+                        }
+                    }
+                });
+
+            RCLCPP_INFO(get_node()->get_logger(),
+                        "Subscribed to waist lifting topic: %s",
+                        waist_lifting_topic.c_str());
         }
 
         // Subscribe to target_command topic for dexterous hand control (if enabled)
@@ -394,7 +453,6 @@ namespace basic_joint_controller
             return state_list_.invalid;
         }
     }
-
 } // namespace basic_joint_controller
 
 #include "pluginlib/class_list_macros.hpp"

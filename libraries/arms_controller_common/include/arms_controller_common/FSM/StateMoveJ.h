@@ -18,6 +18,7 @@
 #include <std_msgs/msg/float64_multi_array.hpp>
 #include <trajectory_msgs/msg/joint_trajectory.hpp>
 #include <eigen3/Eigen/Dense>
+#include "arms_controller_common/utils/WaistLiftingPlaner.h"
 
 // forward declarations for motion‑space planners and kinematics
 namespace planning
@@ -136,7 +137,8 @@ namespace arms_controller_common
         enum class MotionMode
         {
             MOVEJ,
-            MOVEL
+            MOVEL,
+            WAISTLIFTING
         };
 
         /**
@@ -159,6 +161,8 @@ namespace arms_controller_common
         void setMoveLTarget(const Eigen::Vector3d& target_pos,
                             const planning::Quaternion& target_ori);
 
+        bool startWaistLifting(double lifting_distance);
+        
     private:
         void updateParam();
 
@@ -254,6 +258,30 @@ namespace arms_controller_common
         // planning/IK helpers (owned externally)
         std::shared_ptr<planning::moveL> movel_planner_;
         std::shared_ptr<planning::FiveAgesW2IK> body_ik_solver_;
+
+        // Waist lifting support
+        std::shared_ptr<arms_controller_common::WaistLiftingPlaner> waist_lifting_planer_;
+        bool waist_lifting_active_{false};
+        double waist_lifting_duration_{3.0};
+
+        std::vector<std::string> waist_joint_names_; // 腰部关节名称（前三个关节）
+        void setWaistLiftingPlaner();
+        
+        /**
+         * @brief Update waist lifting limits from joint limits manager
+        */
+        void updateWaistLiftingLimits();
+        size_t waist_joint_count_ = 3;
+        /**
+         * @brief Get current waist joint angles
+         * @return Current waist joint angles as Eigen::Vector3d
+         */
+       
+    /**
+     * @brief Get current waist joint angles
+     */
+    Eigen::VectorXd getCurrentWaistAngles();
+    std::vector<double> applyWaistJointLimits(const std::vector<double>& waist_positions);
 
         // time tracking for cartesian motion
         double movel_elapsed_time_{0.0};

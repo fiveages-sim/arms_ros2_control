@@ -14,6 +14,7 @@
 #include <controller_interface/controller_interface.hpp>
 #include <std_msgs/msg/string.hpp>
 #include <std_msgs/msg/int32.hpp>
+#include <std_msgs/msg/float64.hpp>
 #include <geometry_msgs/msg/pose_stamped.hpp>
 #include <geometry_msgs/msg/pose.hpp>
 #include <hardware_interface/loaned_command_interface.hpp>
@@ -123,5 +124,7 @@ namespace basic_joint_controller
         std::shared_ptr<planning::moveL> movel_planner_;
         std::shared_ptr<planning::FiveAgesW2IK> body_ik_solver_;
 
+        bool waist_lifting_enabled_{false};
+        rclcpp::Subscription<std_msgs::msg::Float64>::SharedPtr waist_lifting_subscription_;
     };
 }
