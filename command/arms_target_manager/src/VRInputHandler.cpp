@@ -173,31 +173,30 @@ namespace arms_ros2_control::command
         // 清空之前的检测结果
         left_gripper_controller_name_.clear();
         right_gripper_controller_name_.clear();
+        left_is_dexterous_hand_ = false;
+        right_is_dexterous_hand_ = false;
 
-        // 从hand_controllers参数中提取左右控制器名称
         for (const auto& controller_name : hand_controllers)
         {
-            // 转换为小写以便比较
             std::string name_lower = controller_name;
             std::transform(name_lower.begin(), name_lower.end(), name_lower.begin(), ::tolower);
 
-            // 检测左控制器
+            // 名称含 "hand" → 灵巧手（target_joint_position）；含 "gripper" → 普通夹爪（target_command）
+            const bool is_dexterous = name_lower.find("hand") != std::string::npos;
+
             if (name_lower.find("left") != std::string::npos)
             {
                 left_gripper_controller_name_ = controller_name;
-                RCLCPP_DEBUG(node_->get_logger(), "🕹️🕶️🕹️ Detected left gripper controller: %s", controller_name.c_str());
+                left_is_dexterous_hand_ = is_dexterous;
+                RCLCPP_DEBUG(node_->get_logger(), "🕹️🕶️🕹️ Detected left %s controller: %s",
+                             is_dexterous ? "dexterous hand" : "gripper", controller_name.c_str());
             }
-            // 检测右控制器
             else if (name_lower.find("right") != std::string::npos)
             {
                 right_gripper_controller_name_ = controller_name;
-                RCLCPP_DEBUG(node_->get_logger(), "🕹️🕶️🕹️ Detected right gripper controller: %s", controller_name.c_str());
-            }
-            // 单臂模式：如果只有一个控制器且名称中没有left/right，假设是左控制器
-            else if (hand_controllers.size() == 1 && left_gripper_controller_name_.empty())
-            {
-                left_gripper_controller_name_ = controller_name;
-                RCLCPP_DEBUG(node_->get_logger(), "🕹️🕶️🕹️ Detected single-arm gripper controller (assumed left): %s", controller_name.c_str());
+                right_is_dexterous_hand_ = is_dexterous;
+                RCLCPP_DEBUG(node_->get_logger(), "🕹️🕶️🕹️ Detected right %s controller: %s",
+                             is_dexterous ? "dexterous hand" : "gripper", controller_name.c_str());
             }
         }
     }

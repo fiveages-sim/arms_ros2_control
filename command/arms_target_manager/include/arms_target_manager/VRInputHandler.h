@@ -346,6 +346,9 @@ namespace arms_ros2_control::command
         // 检测到的左右控制器名称
         std::string left_gripper_controller_name_;
         std::string right_gripper_controller_name_;
+        // 控制器类型：true = 灵巧手（target_joint_position），false = 普通夹爪（target_command）
+        bool left_is_dexterous_hand_ = false;
+        bool right_is_dexterous_hand_ = false;
         // 夹爪状态跟踪
         std::atomic<bool> left_gripper_open_;
         std::atomic<bool> right_gripper_open_;
