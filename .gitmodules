@@ -33,3 +33,7 @@
 [submodule "hardwares/arx_ros2_control"]
 	path = hardwares/arx_ros2_control
 	url = git@github.com:fiveages-sim/arx-ros2-control.git
+	branch = main
+[submodule "hardwares/ubtech_ros2_control"]
+	path = hardwares/ubtech_ros2_control
+	url = git@github.com:fiveages-sim/ubtech-ros2-control.git
