@@ -129,6 +129,7 @@ namespace arms_controller_common
 
         std::vector<double> start_pos_; // Starting position when entering state or starting new movement
         std::vector<double> target_pos_; // Target position to move to
+        std::vector<double> hold_positions_; // Position cache used to hold uncommanded joints
 
         std::mutex target_mutex_; // Mutex for thread-safe target position updates
         bool has_target_{false}; // Whether a target position has been set
@@ -202,6 +203,11 @@ namespace arms_controller_common
         std::vector<double> calculateSegmentDurations(
             const std::vector<std::vector<double>>& waypoints,
             double total_duration);
+
+        /**
+         * @brief Capture the latest commanded/observed joint positions for hold behavior
+         */
+        void refreshHoldPositions();
 
         static constexpr double TARGET_EPSILON = 1e-6; // Tolerance for comparing target positions
     };
