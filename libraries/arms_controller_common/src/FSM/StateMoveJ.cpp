@@ -6,6 +6,16 @@
 
 namespace arms_controller_common
 {
+    void StateMoveJ::refreshHoldPositions()
+    {
+        size_t num_joints = ctrl_interfaces_.joint_position_state_interface_.size();
+        hold_positions_.resize(num_joints);
+        for (size_t i = 0; i < num_joints; ++i)
+        {
+            hold_positions_[i] = ctrl_interfaces_.last_sent_joint_positions_[i];
+        }
+    }
+
     StateMoveJ::StateMoveJ(CtrlInterfaces& ctrl_interfaces,
                            const std::shared_ptr<rclcpp_lifecycle::LifecycleNode>& node,
                            const std::vector<std::string>& joint_names,
@@ -48,6 +58,7 @@ namespace arms_controller_common
             auto value = i.get().get_optional();
             start_pos_.push_back(value.value_or(0.0));
         }
+        refreshHoldPositions();
 
         interpolation_active_ = false;
 
@@ -102,9 +113,9 @@ namespace arms_controller_common
         {
             // No valid target, maintain current position
             for (size_t i = 0; i < ctrl_interfaces_.joint_position_command_interface_.size() &&
-                 i < start_pos_.size(); ++i)
+                 i < hold_positions_.size(); ++i)
             {
-                ctrl_interfaces_.setJointPositionCommand(i, start_pos_[i]);
+                ctrl_interfaces_.setJointPositionCommand(i, hold_positions_[i]);
             }
             return;
         }
@@ -186,17 +197,10 @@ namespace arms_controller_common
         }
 
         // Apply interpolated position to joints (with joint mask filtering for multi-node trajectory)
-        // For joints not in the mask, use current real-time position to avoid jumping back
-        std::vector<double> current_real_time_positions;
-        if (use_prefix_filter_ && !joint_mask_.empty())
+        // For joints not in the mask, keep them at cached hold positions
+        if (hold_positions_.size() != ctrl_interfaces_.joint_position_command_interface_.size())
         {
-            // Get current real-time positions for joints that are not controlled
-            current_real_time_positions.reserve(joint_names_.size());
-            for (auto i : ctrl_interfaces_.joint_position_state_interface_)
-            {
-                auto value = i.get().get_optional();
-                current_real_time_positions.push_back(value.value_or(0.0));
-            }
+            refreshHoldPositions();
         }
 
         for (size_t i = 0; i < ctrl_interfaces_.joint_position_command_interface_.size() &&
@@ -217,9 +221,9 @@ namespace arms_controller_common
                 }
                 else
                 {
-                    if (i < current_real_time_positions.size())
+                    if (i < hold_positions_.size())
                     {
-                        position_to_set = current_real_time_positions[i];
+                        position_to_set = hold_positions_[i];
                     }
                     else
                     {
@@ -440,6 +444,7 @@ namespace arms_controller_common
         has_target_ = true;
         use_prefix_filter_ = true;
         active_prefix_ = prefix;
+        refreshHoldPositions();
 
         // Reset interpolation if we're already in the state
         if (interpolation_active_)
@@ -714,6 +719,7 @@ namespace arms_controller_common
         use_prefix_filter_ = true; // Enable joint filtering for multi-node trajectory
         joint_mask_.clear();
         joint_mask_.resize(joint_names_.size(), false); // Default: hold all joints
+        refreshHoldPositions();
 
         size_t controlled_joints = 0;
         for (size_t idx : joint_indices)
