@@ -25,15 +25,6 @@ namespace arms_controller_common
     {
         joint_limits_manager_ = std::make_shared<JointLimitsManager>(node_->get_logger());
         joint_limits_manager_->setJointNames(joint_names_);
-        // compute body joint indices if names already provided
-        for (size_t i = 0; i < joint_names_.size(); ++i)
-        {
-            const std::string& name = joint_names_[i];
-            if (name.find("body") != std::string::npos || name.find("waist") != std::string::npos)
-            {
-                body_joint_indices_.push_back(i);
-            }
-        }
     }
 
     void StateMoveJ::updateParam()
@@ -128,17 +119,18 @@ namespace arms_controller_common
                                                                  ctrl_interfaces_.last_sent_joint_positions_[i]);
                     }
 
+                    //实时更新当前位置，避免因为奇异而停止
+                    target_pos_ = ctrl_interfaces_.last_sent_joint_positions_;
+                    has_target_ = false;
+                    start_pos_ = target_pos_;
+
                     if (waist_lifting_planer_->isMotionOver())
                     {
                         waist_lifting_active_ = false;
-                motion_mode_ = MotionMode::MOVEJ; // revert mode
-                //设置target为movel完成后的位置（不是恢复到之前的位置）
-                target_pos_ = ctrl_interfaces_.last_sent_joint_positions_;
-                has_target_ = false;
-                start_pos_ = target_pos_;
-                RCLCPP_INFO(node_->get_logger(), "waist lifting trajectory completed, returning to MOVEJ mode");
+                        motion_mode_ = MotionMode::MOVEJ; // revert mode
+                        //设置target为movel完成后的位置（不是恢复到之前的位置）
+                        RCLCPP_INFO(node_->get_logger(), "waist lifting trajectory completed, returning to MOVEJ mode");
                     }
-                    
                 }
                 else
                 {
@@ -146,75 +138,21 @@ namespace arms_controller_common
                                 "Waist lifting planner returned %zu positions, expected at least %zu",
                                 next_waist_pos.size(), waist_joint_count_);
                     waist_lifting_active_ = false;
-                     motion_mode_ = MotionMode::MOVEJ;
+                    motion_mode_ = MotionMode::MOVEJ;
                 }
             }
             else
             {
                 RCLCPP_WARN(node_->get_logger(), "Failed to calculate next waist lifting point");
                 waist_lifting_active_ = false;
-                 motion_mode_ = MotionMode::MOVEJ;
+                waist_lifting_planer_->setCurrentVelToZero();//奇异了，报错停止，然后把当前实际的速度设为0
+                motion_mode_ = MotionMode::MOVEJ;
             }
 
             return;
         }
 
-        // if we are executing a cartesian (moveL) command, handle it first
-        if (is_movel_mode_ && movel_planner_ && body_ik_solver_)
-        {
-            // advance planner by one step
-            planning::TrajectPoint pt = movel_planner_->run();
-
-            // build frame from the cartesian point (Quaternion first, then Position)
-            planning::Frame frame(pt.quaternion_point.q, pt.cart_pos);
-
-            // current body joints used as seed for IK
-            Eigen::Vector4d current_q = Eigen::Vector4d::Zero();
-            for (size_t k = 0; k < body_joint_indices_.size() && k < 4; ++k)
-            {
-                size_t idx = body_joint_indices_[k];
-                current_q[k] = ctrl_interfaces_.last_sent_joint_positions_[idx];
-            }
-
-            Eigen::Vector4d q_out;
-            if (body_ik_solver_->ik_of_body_joint4(current_q, frame, q_out))
-            {
-                // write waist/body joint commands
-                for (size_t k = 0; k < body_joint_indices_.size() && k < 4; ++k)
-                {
-                    size_t idx = body_joint_indices_[k];
-                    ctrl_interfaces_.setJointPositionCommand(idx, q_out[k]);
-                }
-            }
-            else
-            {
-                RCLCPP_WARN(node_->get_logger(), "body IK failed during moveL execution");
-            }
-
-            // hold other joints at their last commanded positions
-            for (size_t i = 0; i < ctrl_interfaces_.joint_position_command_interface_.size(); ++i)
-            {
-                if (std::find(body_joint_indices_.begin(), body_joint_indices_.end(), i) ==
-                    body_joint_indices_.end())
-                {
-                    ctrl_interfaces_.setJointPositionCommand(i,
-                                                             ctrl_interfaces_.last_sent_joint_positions_[i]);
-                }
-            }
-
-            if (movel_planner_->isMotionOver())
-            {
-                is_movel_mode_ = false;
-                motion_mode_ = MotionMode::MOVEJ; // revert mode
-                //设置target为movel完成后的位置（不是恢复到之前的位置）
-                target_pos_ = ctrl_interfaces_.last_sent_joint_positions_;
-                has_target_ = false;
-                start_pos_ = target_pos_;
-                RCLCPP_INFO(node_->get_logger(), "moveL trajectory completed, returning to MOVEJ mode");
-            }
-            return; // skip regular movej logic while moving linearly
-        }
-        else if (trajectory_manager_.isInitialized())
+        if (trajectory_manager_.isInitialized())
         {
             // Check if multi-node trajectory is initialized (from setTrajectory)
             // Multi-node trajectory is active, directly execute it
@@ -408,13 +346,8 @@ namespace arms_controller_common
         active_prefix_.clear();
         joint_mask_.clear();
 
-        // reset moveL state
-        is_movel_mode_ = false;
         motion_mode_ = MotionMode::MOVEJ;
-        if (movel_planner_)
-        {
-            movel_planner_->run_completed = true;
-        }
+
         waist_lifting_active_ = false;
         waist_lifting_planer_.reset();
         RCLCPP_DEBUG(node_->get_logger(), "StateMoveJ exited, all state variables reset");
@@ -603,73 +536,6 @@ namespace arms_controller_common
         }
     }
 
-    // moveL helper (inserted after prefix function)
-    void StateMoveJ::setMoveLTarget(const Eigen::Vector3d& target_pos,
-                                    const planning::Quaternion& target_ori)
-    {
-        updateParam();
-        std::lock_guard lock(target_mutex_);
-
-        if (!state_active_)
-        {
-            RCLCPP_WARN(node_->get_logger(),
-                        "Cannot set moveL target: StateMoveJ is not active. Enter MOVEJ first.");
-            return;
-        }
-        if (!movel_planner_)
-        {
-            RCLCPP_WARN(node_->get_logger(), "moveL planner not configured");
-            return;
-        }
-        if (body_joint_indices_.empty() || !body_ik_solver_)
-        {
-            RCLCPP_WARN(node_->get_logger(),
-                        "Body joint indices or IK solver not available for moveL");
-            return;
-        }
-
-        // compute starting frame from current body joint positions via forward kinematics
-        Eigen::Vector4d q_body = Eigen::Vector4d::Zero();
-        for (size_t k = 0; k < body_joint_indices_.size() && k < 4; ++k)
-        {
-            size_t idx = body_joint_indices_[k];
-            q_body[k] = ctrl_interfaces_.last_sent_joint_positions_[idx];
-        }
-        planning::FiveAgesW2FK fk_solver;
-        planning::Frame start_frame = fk_solver.base_to_body_joint4(q_body);
-
-        planning::TrajectPoint start_tp;
-        start_tp.cart_pos = start_frame.p;
-        start_tp.quaternion_point.q = start_frame.q;
-        start_tp.is_joint_point = false;
-
-        planning::TrajectPoint end_tp;
-        end_tp.cart_pos = target_pos;
-        planning::QuaternionPoint qp;
-        qp.q = target_ori;
-        end_tp.quaternion_point = qp;
-        end_tp.is_joint_point = false;
-        planning::TrajectoryParameter param(true, duration_);
-        planning::TrajectoryInitParameters init_param;
-        init_param.start_point = start_tp;
-        init_param.end_point = end_tp;
-        init_param.parameter = param;
-        init_param.period = 1.0 / ctrl_interfaces_.frequency_;
-
-        if (!movel_planner_->init(init_param))
-        {
-            RCLCPP_WARN(node_->get_logger(), "moveL planner initialization failed");
-            return;
-        }
-
-        // enable movel mode
-        movel_elapsed_time_ = 0.0;
-        is_movel_mode_ = true;
-        motion_mode_ = MotionMode::MOVEL;
-        RCLCPP_INFO(node_->get_logger(), "Started moveL trajectory");
-    }
-
-
     void StateMoveJ::setJointNames(const std::vector<std::string>& joint_names)
     {
         joint_names_ = joint_names;
@@ -681,20 +547,6 @@ namespace arms_controller_common
         }
 
         RCLCPP_INFO(node_->get_logger(), "Set %zu joint names", joint_names_.size());
-        // determine body/waist joint indices for moveL
-        body_joint_indices_.clear();
-        for (size_t i = 0; i < joint_names_.size(); ++i)
-        {
-            const std::string& name = joint_names_[i];
-            if (name.find("body") != std::string::npos || name.find("waist") != std::string::npos)
-            {
-                body_joint_indices_.push_back(i);
-            }
-        }
-        if (!body_joint_indices_.empty())
-        {
-            RCLCPP_INFO(node_->get_logger(), "Detected %zu body/waist joints for moveL", body_joint_indices_.size());
-        }
     }
 
     void StateMoveJ::updateJointMask(const std::string& prefix)
@@ -1200,12 +1052,12 @@ namespace arms_controller_common
         RCLCPP_INFO(node_->get_logger(), "Subscribed to trajectory topic: %s", full_topic.c_str());
     }
 
-    bool StateMoveJ::startWaistLifting(double lifting_distance)
+    bool StateMoveJ::moveWaistLifting(double lifting_distance)
     {
-            if (!waist_lifting_planer_)  // 只在没有规划器时创建
-    {
-        setWaistLiftingPlaner();
-    }
+        if (!waist_lifting_planer_) // 只在没有规划器时创建
+        {
+            setWaistLiftingPlaner();
+        }
         std::lock_guard lock(target_mutex_);
 
         if (!waist_lifting_planer_)
@@ -1256,7 +1108,82 @@ namespace arms_controller_common
                     (waist_lifting_planer_->isBodyThreeJoint()? "THREE_JOINT" : "SINGLE_JOINT"),
                     lifting_distance, waist_lifting_duration_, waist_joint_count_);
 
-        
+
+        return true;
+    };
+
+    bool StateMoveJ::setWaistLiftingCommond(int command)
+    {
+        if (!waist_lifting_planer_) // 只在没有规划器时创建
+        {
+            setWaistLiftingPlaner();
+        }
+        std::lock_guard lock(target_mutex_);
+
+        if (!waist_lifting_planer_)
+        {
+            RCLCPP_WARN(node_->get_logger(), "Waist lifting planner not initialized");
+            return false;
+        }
+
+        // 获取当前腰部关节角度
+        Eigen::VectorXd current_angles = getCurrentWaistAngles();
+        Eigen::Vector3d angles3d;
+        if (waist_lifting_planer_->isBodyThreeJoint() && current_angles.size() >= 3)
+        {
+            angles3d << current_angles(0), current_angles(1), current_angles(2);
+        }
+        else if (!waist_lifting_planer_->isBodyThreeJoint() && current_angles.size() >= 1)
+        {
+            angles3d << current_angles(0), 0.0, 0.0;
+        }
+        else
+        {
+            RCLCPP_WARN(node_->get_logger(),
+                        "Invalid waist lifting type or insufficient joint angles");
+            return false;
+        }
+        double speedj_time = 100000000.0;
+        double target_speed = 0.0;
+        if (command == 0)
+        {
+            speedj_time = 0.0;
+            target_speed = 0.0;
+        }
+        else if (command == 1)
+        {
+            target_speed = default_waist_para_(0);
+        }
+        else if (command == 2)
+        {
+            target_speed = -default_waist_para_(0);
+        }
+        else
+        {
+            RCLCPP_WARN(node_->get_logger(),
+                        "Invalid target_command value: %d (expected 0 or 1 or 2)", command);
+            waist_lifting_planer_->setCurrentVelToZero();
+            return false;
+        }
+        if (!waist_lifting_planer_->initTargetLiftingSpeed(angles3d, target_speed, default_waist_para_(1),
+                                                           default_waist_para_(2), speedj_time,
+                                                           1.0 / ctrl_interfaces_.frequency_))
+        {
+            RCLCPP_WARN(node_->get_logger(),
+                        "Failed to initialize SINGLE_JOINT waist lifting speed plan for velocity %.3f",
+                        target_speed);
+            waist_lifting_planer_->setCurrentVelToZero();
+            return false;
+        }
+
+        waist_lifting_active_ = true;
+        motion_mode_ = MotionMode::WAISTLIFTING;
+        RCLCPP_INFO(node_->get_logger(),
+                    "Waist lifting started: type=%s, target_speed=%.3f, using %zu joints",
+                    (waist_lifting_planer_->isBodyThreeJoint()? "THREE_JOINT" : "SINGLE_JOINT"),
+                    target_speed, waist_joint_count_);
+
+
         return true;
     };
 
@@ -1268,6 +1195,9 @@ namespace arms_controller_common
         {
             std::string waist_lifting_type_ = node_->get_parameter("waist_lifting_type").as_string();
             waist_lifting_duration_ = node_->get_parameter("waist_lifting_duration").as_double();
+            std::vector<double> waist_para =
+                node_->get_parameter("waist_default_parameter").as_double_array();
+            default_waist_para_ << waist_para[0], waist_para[1], waist_para[2];
             RCLCPP_INFO(node_->get_logger(), "Waist lifting type: %s", waist_lifting_type_.c_str());
             if (waist_lifting_type_ == "three_joint")
             {

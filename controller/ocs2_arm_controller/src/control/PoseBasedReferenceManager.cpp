@@ -1494,9 +1494,9 @@ namespace ocs2::mobile_manipulator
         // 预计算所有轨迹点
         planning::TrajectPoint point;
         //保存计算的点
-        std::ofstream file("/home/lina/lina/data/cal_movec_data.csv");
-        file << "t" << "," << "x" << "," << "y" << "," << "z" << ","
-            << "qx" << "," << "qy" << "," << "qz" << "," << "qw" << std::endl;
+        // std::ofstream file("/home/lina/lina/data/cal_movec_data.csv");
+        // file << "t" << "," << "x" << "," << "y" << "," << "z" << ","
+        //     << "qx" << "," << "qy" << "," << "qz" << "," << "qw" << std::endl;
         for (size_t i = 0; i < kNumSamples; ++i)
         {
             const double t = static_cast<double>(i) * dt;
@@ -1510,14 +1510,14 @@ namespace ocs2::mobile_manipulator
             state_vec(4) = point.quaternion_point.q.y;
             state_vec(5) = point.quaternion_point.q.z;
             state_vec(6) = point.quaternion_point.q.w;
-            file << std::fixed << std::setprecision(12) << t << "," << state_vec(0) << "," << state_vec(1) << "," <<
-                state_vec(2) << "," << state_vec(3) << "," << state_vec(4) << "," << state_vec(5) << "," << state_vec(6)
-                << std::endl;
+            // file << std::fixed << std::setprecision(12) << t << "," << state_vec(0) << "," << state_vec(1) << "," <<
+            //     state_vec(2) << "," << state_vec(3) << "," << state_vec(4) << "," << state_vec(5) << "," << state_vec(6)
+            //     << std::endl;
             state.time_trajectory.push_back(t);
             state.state_trajectory.push_back(state_vec);
         }
-        file.close();
-        std::cout << "数据已保存" << std::endl;
+        // file.close();
+        // std::cout << "数据已保存" << std::endl;
 
         // 设置执行状态
         state.start_state = start_pose;

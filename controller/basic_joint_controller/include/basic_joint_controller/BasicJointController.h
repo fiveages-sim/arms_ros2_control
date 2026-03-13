@@ -14,6 +14,7 @@
 #include <controller_interface/controller_interface.hpp>
 #include <std_msgs/msg/string.hpp>
 #include <std_msgs/msg/int32.hpp>
+#include <std_msgs/msg/int8.hpp>
 #include <std_msgs/msg/float64.hpp>
 #include <geometry_msgs/msg/pose_stamped.hpp>
 #include <geometry_msgs/msg/pose.hpp>
@@ -116,15 +117,10 @@ namespace basic_joint_controller
         rclcpp::Subscription<std_msgs::msg::String>::SharedPtr robot_description_subscription_;
         rclcpp::Subscription<std_msgs::msg::Int32>::SharedPtr target_command_subscription_;
 
-        // moveL/cartesian body motion
-        bool body_movel_enabled_{false};
-        rclcpp::Subscription<geometry_msgs::msg::Pose>::SharedPtr movel_body_target_sub_;
-
-        // planning helpers - created in configure
-        std::shared_ptr<planning::moveL> movel_planner_;
-        std::shared_ptr<planning::FiveAgesW2IK> body_ik_solver_;
-
+        // body motion
         bool waist_lifting_enabled_{false};
         rclcpp::Subscription<std_msgs::msg::Float64>::SharedPtr waist_lifting_subscription_;
+
+        rclcpp::Subscription<std_msgs::msg::Int8>::SharedPtr waist_lifting_command_subscription_;
     };
 }

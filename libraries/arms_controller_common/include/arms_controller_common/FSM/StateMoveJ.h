@@ -20,14 +20,6 @@
 #include <eigen3/Eigen/Dense>
 #include "arms_controller_common/utils/WaistLiftingPlaner.h"
 
-// forward declarations for motion‑space planners and kinematics
-namespace planning
-{
-    class moveL;
-    class FiveAgesW2IK;
-    class TrajectoryParameter;
-    class Quaternion;
-}
 
 namespace arms_controller_common
 {
@@ -137,7 +129,6 @@ namespace arms_controller_common
         enum class MotionMode
         {
             MOVEJ,
-            MOVEL,
             WAISTLIFTING
         };
 
@@ -146,23 +137,16 @@ namespace arms_controller_common
          */
         void setMotionMode(MotionMode mode) { motion_mode_ = mode; }
 
-        /**
-         * @brief Provide planner and IK solver instances (typically set by controller)
+        /** 
+         * @brief 控制腰部升降指令，让腰部相对当前位置移动lifting_distance的距离
          */
-        void setMoveLPlanner(const std::shared_ptr<planning::moveL>& planner) { movel_planner_ = planner; }
-        void setBodyIKSolver(const std::shared_ptr<planning::FiveAgesW2IK>& solver) { body_ik_solver_ = solver; }
+        bool moveWaistLifting(double lifting_distance);
 
         /**
-         * @brief Request a cartesian (moveL) command for waist joints
-         * @param target_pos desired end‑effector position (cartesian) in body frame
-         * @param target_ori desired orientation quaternion
-         * @param param optional Cartesian trajectory parameters (velocity/acc/etc)
+         * @brief 控制腰部升降指令，command=0 停止，command=1 上升 ，command=2 下降
          */
-        void setMoveLTarget(const Eigen::Vector3d& target_pos,
-                            const planning::Quaternion& target_ori);
+        bool setWaistLiftingCommond(int command);
 
-        bool startWaistLifting(double lifting_distance);
-        
     private:
         void updateParam();
 
@@ -249,24 +233,20 @@ namespace arms_controller_common
 
         static constexpr double TARGET_EPSILON = 1e-6; // Tolerance for comparing target positions
 
-        // ----- moveL related members -----
         MotionMode motion_mode_{MotionMode::MOVEJ};
-        bool is_movel_mode_{false};
         // indices of joints that belong to body/waist (determined from joint_names_)
         std::vector<size_t> body_joint_indices_;
 
-        // planning/IK helpers (owned externally)
-        std::shared_ptr<planning::moveL> movel_planner_;
-        std::shared_ptr<planning::FiveAgesW2IK> body_ik_solver_;
 
         // Waist lifting support
         std::shared_ptr<arms_controller_common::WaistLiftingPlaner> waist_lifting_planer_;
         bool waist_lifting_active_{false};
         double waist_lifting_duration_{3.0};
+        Eigen::Vector3d default_waist_para_;
 
         std::vector<std::string> waist_joint_names_; // 腰部关节名称（前三个关节）
         void setWaistLiftingPlaner();
-        
+
         /**
          * @brief Update waist lifting limits from joint limits manager
         */
@@ -276,14 +256,11 @@ namespace arms_controller_common
          * @brief Get current waist joint angles
          * @return Current waist joint angles as Eigen::Vector3d
          */
-       
-    /**
-     * @brief Get current waist joint angles
-     */
-    Eigen::VectorXd getCurrentWaistAngles();
-    std::vector<double> applyWaistJointLimits(const std::vector<double>& waist_positions);
 
-        // time tracking for cartesian motion
-        double movel_elapsed_time_{0.0};
+        /**
+         * @brief Get current waist joint angles
+         */
+        Eigen::VectorXd getCurrentWaistAngles();
+        std::vector<double> applyWaistJointLimits(const std::vector<double>& waist_positions);
     };
 } // namespace arms_controller_common

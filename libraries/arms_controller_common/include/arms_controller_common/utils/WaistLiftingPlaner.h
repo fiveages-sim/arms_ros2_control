@@ -1,6 +1,6 @@
 #pragma once
-#include "arms_controller_common/utils/Interpolation.h"
 #include "lina_planning/planning/path_planner/movej.h"
+#include "lina_planning/planning/path_planner/speedj.h"
 #include <array>
 #include <eigen3/Eigen/Dense>
 #include <memory>
@@ -13,11 +13,20 @@ namespace arms_controller_common
     public:
         WaistLiftingPlaner() = default;
         ~WaistLiftingPlaner() = default;
-
+        // 腰部移动一定距离，
         bool initTargetLiftingLength(const Eigen::Vector3d& init_joint_angle,
                                      const double lifting_length,
                                      const double duration,
                                      const double period = 0.01);
+
+        // 腰部speedj到达目标速度：
+        bool initTargetLiftingSpeed(const Eigen::Vector3d& init_joint_angle,
+                                    const double target_lifting_speed,
+                                    const double max_lifting_acc,
+                                    const double max_lifting_jerk,
+                                    const double total_time,
+                                    const double period = 0.01);
+
         bool calNextPoint(std::vector<double>& next_point);
 
         void setBodyJointThreeJointType(bool is_three_rotation_joint)
@@ -33,13 +42,24 @@ namespace arms_controller_common
                                 const Eigen::Vector3d& angle_upper);
         void setSingleJointLimit(const double angle_lower, const double angle_upper);
 
-        bool isMotionOver(){
-            return movej_planner_->isMotionOver();
+        bool isMotionOver()
+        {
+            if (type_speed_)
+            {
+                return speedj_planner_->isMotionOver();
+            }
+            else
+            {
+                return movej_planner_->isMotionOver();
+            }
         }
 
+        void setCurrentVelToZero();
+
     private:
-        bool type_three_joint_; // true
-        // 为三个平行腰部关节，false为单个腰部移动关节
+        bool type_three_joint_; // true为三个平行腰部关节，false为单个腰部移动关节
+
+        bool type_speed_; // true 为speedj，false为movej
 
         /*三关节腰部参数*/
         double l1_;
@@ -70,6 +90,10 @@ namespace arms_controller_common
 
         /*由于只升降腰部，就使用简单的movej单关节*/
         std::unique_ptr<planning::moveJ> movej_planner_;
+
+        /*假如需要手柄操作或者是按下按钮上升或者下降，松手停止，使用speedj*/
+
+        std::unique_ptr<planning::SpeedJ> speedj_planner_;
 
         double min_val = 1.0e-9;
     };
