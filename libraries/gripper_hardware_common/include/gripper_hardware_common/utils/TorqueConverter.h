@@ -67,7 +67,7 @@ namespace gripper_hardware_common
         class Jodell
         {
         public:
-            static constexpr int MAX_TORQUE = 100;  // Maximum torque value (typical max is 100, not 255)
+            static constexpr int MAX_TORQUE = 255;  // Maximum torque value (typical max is 255, 0xFF)
 
             /**
              * @brief Convert normalized torque (0.0-1.0) to Jodell torque value
@@ -87,9 +87,9 @@ namespace gripper_hardware_common
                     return 0;
                 }
                 
-                // Map 0.0+ to 20-100 range (minimum 20 for operation)
-                // Linear mapping: 0.0 -> 20, 1.0 -> 100
-                int torque = static_cast<int>(20 + normalized * (MAX_TORQUE - 20));
+                // Map 0.0+ to 0-255 range (minimum 20 for operation)
+                // Linear mapping: 0.0 -> 0, 1.0 -> 255
+                int torque = static_cast<int>(0 + normalized * (MAX_TORQUE - 0));
                 return std::min(MAX_TORQUE, torque);
             }
 
