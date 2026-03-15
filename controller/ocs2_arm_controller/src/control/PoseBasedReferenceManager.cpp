@@ -27,8 +27,16 @@ namespace ocs2::mobile_manipulator
     {
         dual_arm_mode_ = interface_->dual_arm_;
 
-        // 获取base frame
-        base_frame_ = interface_->getManipulatorModelInfo().baseFrame;
+        // 获取base frame：轮式模式下OCS2目标和EE位置均在world坐标系下
+        if (interface_->getManipulatorModelInfo().manipulatorModelType ==
+            ManipulatorModelType::WheelBasedMobileManipulator)
+        {
+            base_frame_ = "world";
+        }
+        else
+        {
+            base_frame_ = interface_->getManipulatorModelInfo().baseFrame;
+        }
 
         // 初始化target state缓存
         left_target_state_ = vector_t::Zero(7);

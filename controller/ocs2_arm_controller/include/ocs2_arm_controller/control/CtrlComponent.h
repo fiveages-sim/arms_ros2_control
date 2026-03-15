@@ -19,6 +19,9 @@
 #include <ocs2_msgs/msg/mpc_observation.hpp>
 #include <std_msgs/msg/int32.hpp>
 #include "ocs2_arm_controller/control/Visualizer.h"
+#include <tf2_ros/transform_broadcaster.h>
+#include <geometry_msgs/msg/transform_stamped.hpp>
+#include <tf2/LinearMath/Quaternion.h>
 
 #include <arms_controller_common/CtrlInterfaces.h>
 
@@ -159,5 +162,12 @@ namespace ocs2::mobile_manipulator
         rclcpp::node_interfaces::OnSetParametersCallbackHandle::SharedPtr parameter_callback_handle_;
         rcl_interfaces::msg::SetParametersResult on_parameter_change(
         const std::vector<rclcpp::Parameter> &parameters);
+
+        // Wheel-based chassis state
+        bool is_wheel_based_ = false;
+        double base_x_ = 0.0;
+        double base_y_ = 0.0;
+        double base_yaw_ = 0.0;
+        std::unique_ptr<tf2_ros::TransformBroadcaster> tf_broadcaster_;
     };
 }

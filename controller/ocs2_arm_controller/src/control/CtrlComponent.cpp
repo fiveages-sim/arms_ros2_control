@@ -45,6 +45,19 @@ namespace ocs2::mobile_manipulator
         // Create Mobile Manipulator interface
         interface_ = std::make_shared<MobileManipulatorInterface>(task_file, lib_folder, urdf_file);
 
+        // Detect wheel-based mode
+        is_wheel_based_ = (interface_->getManipulatorModelInfo().manipulatorModelType ==
+                           ManipulatorModelType::WheelBasedMobileManipulator);
+        if (is_wheel_based_)
+        {
+            const auto& init_state = interface_->getInitialState();
+            base_x_   = init_state(0);
+            base_y_   = init_state(1);
+            base_yaw_ = init_state(2);
+            tf_broadcaster_ = std::make_unique<tf2_ros::TransformBroadcaster>(node_);
+            RCLCPP_INFO(node_->get_logger(), "Wheel-based mode: TF broadcaster initialized (odom->base_footprint)");
+        }
+
         // Setup publishers
         setupPublisher();
     }
@@ -67,11 +80,26 @@ namespace ocs2::mobile_manipulator
         }
         // Update observation state
         observation_.time = time.seconds();
+        if (is_wheel_based_)
+        {
+            // Base pose from internal integration (no real odometry in simulation)
+            observation_.state[0] = base_x_;
+            observation_.state[1] = base_y_;
+            observation_.state[2] = base_yaw_;
+            for (size_t i = 0; i < joint_names_.size(); ++i)
+            {
+                auto value = ctrl_interfaces_.joint_position_state_interface_[i].get().get_optional();
+                observation_.state[3 + i] = value.value_or(0.0);
+            }
+        }
+        else
+        {
             for (size_t i = 0; i < joint_names_.size(); ++i)
             {
                 auto value = ctrl_interfaces_.joint_position_state_interface_[i].get().get_optional();
                 observation_.state[i] = value.value_or(0.0);
             }
+        }
         observation_.input = vector_t::Zero(interface_->getManipulatorModelInfo().inputDim);
 
         // 更新PoseBasedReferenceManager的当前观测
@@ -129,12 +157,39 @@ namespace ocs2::mobile_manipulator
                 policy.inputTrajectory_
             );
             
+            // Integrate chassis pose and broadcast TF (wheel-based mode only)
+            if (is_wheel_based_)
+            {
+                double dt    = 1.0 / ctrl_interfaces_.frequency_;
+                double v     = future_input(0);
+                double omega = future_input(1);
+                base_x_   += v * std::cos(base_yaw_) * dt;
+                base_y_   += v * std::sin(base_yaw_) * dt;
+                base_yaw_ += omega * dt;
+
+                geometry_msgs::msg::TransformStamped tf_msg;
+                tf_msg.header.stamp    = time;
+                tf_msg.header.frame_id = "world";
+                tf_msg.child_frame_id  = "base_footprint";
+                tf_msg.transform.translation.x = base_x_;
+                tf_msg.transform.translation.y = base_y_;
+                tf_msg.transform.translation.z = 0.0;
+                tf2::Quaternion q;
+                q.setRPY(0.0, 0.0, base_yaw_);
+                tf_msg.transform.rotation.x = q.x();
+                tf_msg.transform.rotation.y = q.y();
+                tf_msg.transform.rotation.z = q.z();
+                tf_msg.transform.rotation.w = q.w();
+                tf_broadcaster_->sendTransform(tf_msg);
+            }
+
             // Extract joint positions from state and set as commands
+            const size_t joint_offset = is_wheel_based_ ? 3 : 0;
             if (ctrl_interfaces_.control_mode_ == ControlMode::POSITION)
             {
-                for (size_t i = 0; i < joint_names_.size() && i < static_cast<size_t>(future_state.size()); ++i)
+                for (size_t i = 0; i < joint_names_.size() && (joint_offset + i) < static_cast<size_t>(future_state.size()); ++i)
                 {
-                    ctrl_interfaces_.setJointPositionCommand(i, future_state(i));
+                    ctrl_interfaces_.setJointPositionCommand(i, future_state(joint_offset + i));
                 }
                 cached_last_action_ = future_state;
                 last_execute_time_ = time;
@@ -149,14 +204,14 @@ namespace ocs2::mobile_manipulator
                     std::ignore = ctrl_interfaces_.joint_force_command_interface_[i].get().set_value(static_torques(i));
                 }
 
-                for (size_t i = 0; i < joint_names_.size() && i < static_cast<size_t>(future_state.size()); ++i)
+                for (size_t i = 0; i < joint_names_.size() && (joint_offset + i) < static_cast<size_t>(future_state.size()); ++i)
                 {
-                    ctrl_interfaces_.setJointPositionCommand(i, future_state(i));
+                    ctrl_interfaces_.setJointPositionCommand(i, future_state(joint_offset + i));
                 }
 
-                for (size_t i = 0; i < joint_names_.size() && i < static_cast<size_t>(future_input.size()); ++i)
+                for (size_t i = 0; i < joint_names_.size() && (joint_offset + i) < static_cast<size_t>(future_input.size()); ++i)
                 {
-                    std::ignore = ctrl_interfaces_.joint_velocity_command_interface_[i].get().set_value(future_input(i));
+                    std::ignore = ctrl_interfaces_.joint_velocity_command_interface_[i].get().set_value(future_input(joint_offset + i));
                 }
             }
             else
@@ -192,9 +247,22 @@ namespace ocs2::mobile_manipulator
         observation_.time = node_->now().seconds();
 
         // Use last sent joint positions for initial state (avoids jumps when entering OCS2 state)
-        for (size_t i = 0; i < joint_names_.size() && i < ctrl_interfaces_.last_sent_joint_positions_.size(); ++i)
+        if (is_wheel_based_)
         {
-            observation_.state[i] = ctrl_interfaces_.last_sent_joint_positions_[i];
+            observation_.state[0] = base_x_;
+            observation_.state[1] = base_y_;
+            observation_.state[2] = base_yaw_;
+            for (size_t i = 0; i < joint_names_.size() && i < ctrl_interfaces_.last_sent_joint_positions_.size(); ++i)
+            {
+                observation_.state[3 + i] = ctrl_interfaces_.last_sent_joint_positions_[i];
+            }
+        }
+        else
+        {
+            for (size_t i = 0; i < joint_names_.size() && i < ctrl_interfaces_.last_sent_joint_positions_.size(); ++i)
+            {
+                observation_.state[i] = ctrl_interfaces_.last_sent_joint_positions_[i];
+            }
         }
 
         TargetTrajectories target_trajectories;

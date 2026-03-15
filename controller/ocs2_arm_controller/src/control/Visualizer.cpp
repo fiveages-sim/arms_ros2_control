@@ -34,7 +34,16 @@ namespace ocs2::mobile_manipulator
         dual_arm_mode_ = interface_->dual_arm_;
         
         // Get base frame information
-        base_frame_ = interface_->getManipulatorModelInfo().baseFrame;
+        // For wheel-based mode, Pinocchio FK returns EE in world frame, so markers must use "world"
+        if (interface_->getManipulatorModelInfo().manipulatorModelType ==
+            ManipulatorModelType::WheelBasedMobileManipulator)
+        {
+            base_frame_ = "world";
+        }
+        else
+        {
+            base_frame_ = interface_->getManipulatorModelInfo().baseFrame;
+        }
     }
 
     void Visualizer::initialize()
