@@ -270,14 +270,14 @@ namespace basic_joint_controller
                         }
 
 
-                        bool success = state_list_.movej->setWaistLiftingCommond(
+                        bool success = state_list_.movej->setWaistLiftingCommand(
                             msg->data); //腰部升降距离
 
                         if (success)
                         {
-                            RCLCPP_INFO(get_node()->get_logger(),
-                                        "Waist lifting command received: waist  %s",
-                                        cmd_msg.c_str());
+                            // RCLCPP_INFO(get_node()->get_logger(),
+                            //             "Waist lifting command received: waist  %s",
+                            //             cmd_msg.c_str());
                         }
                         else
                         {

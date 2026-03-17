@@ -145,7 +145,7 @@ namespace arms_controller_common
         /**
          * @brief 控制腰部升降指令，command=0 停止，command=1 上升 ，command=2 下降
          */
-        bool setWaistLiftingCommond(int command);
+        bool setWaistLiftingCommand(int command);
 
     private:
         void updateParam();
@@ -249,6 +249,8 @@ namespace arms_controller_common
         bool waist_lifting_active_{false};
         double waist_lifting_duration_{3.0};
         Eigen::Vector3d default_waist_para_;
+
+        int last_waist_command_{0};
 
         std::vector<std::string> waist_joint_names_; // 腰部关节名称（前三个关节）
         void setWaistLiftingPlaner();

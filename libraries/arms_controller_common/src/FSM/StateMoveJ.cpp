@@ -35,6 +35,7 @@ namespace arms_controller_common
     {
         joint_limits_manager_ = std::make_shared<JointLimitsManager>(node_->get_logger());
         joint_limits_manager_->setJointNames(joint_names_);
+        last_waist_command_ = 0;
     }
 
     void StateMoveJ::updateParam()
@@ -137,6 +138,7 @@ namespace arms_controller_common
 
                     if (waist_lifting_planer_->isMotionOver())
                     {
+                        refreshHoldPositions();
                         waist_lifting_active_ = false;
                         motion_mode_ = MotionMode::MOVEJ; // revert mode
                         //设置target为movel完成后的位置（不是恢复到之前的位置）
@@ -154,10 +156,12 @@ namespace arms_controller_common
             }
             else
             {
-                RCLCPP_WARN(node_->get_logger(), "Failed to calculate next waist lifting point");
+                refreshHoldPositions();
+                last_waist_command_=0;
                 waist_lifting_active_ = false;
-                waist_lifting_planer_->setCurrentVelToZero();//奇异了，报错停止，然后把当前实际的速度设为0
+                waist_lifting_planer_->setCurrentVelToZero(); //奇异了，报错停止，然后把当前实际的速度设为0
                 motion_mode_ = MotionMode::MOVEJ;
+                RCLCPP_WARN(node_->get_logger(), "Failed to calculate next waist lifting point");
             }
 
             return;
@@ -352,6 +356,7 @@ namespace arms_controller_common
 
         motion_mode_ = MotionMode::MOVEJ;
 
+        last_waist_command_ = 0;
         waist_lifting_active_ = false;
         waist_lifting_planer_.reset();
         RCLCPP_DEBUG(node_->get_logger(), "StateMoveJ exited, all state variables reset");
@@ -1118,8 +1123,14 @@ namespace arms_controller_common
         return true;
     };
 
-    bool StateMoveJ::setWaistLiftingCommond(int command)
+    bool StateMoveJ::setWaistLiftingCommand(int command)
     {
+        //避免重复执行计算
+        if (command == last_waist_command_)
+        {
+            return true;
+        }
+
         if (!waist_lifting_planer_) // 只在没有规划器时创建
         {
             setWaistLiftingPlaner();
@@ -1189,7 +1200,7 @@ namespace arms_controller_common
                     (waist_lifting_planer_->isBodyThreeJoint()? "THREE_JOINT" : "SINGLE_JOINT"),
                     target_speed, waist_joint_count_);
 
-
+        last_waist_command_ = command;
         return true;
     };
 

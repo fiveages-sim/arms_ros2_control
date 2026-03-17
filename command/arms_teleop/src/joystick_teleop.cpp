@@ -12,6 +12,7 @@ JoystickTeleop::JoystickTeleop() : Node("joystick_teleop_node") {
     chassis_publisher_ = create_publisher<geometry_msgs::msg::Twist>("/cmd_vel", 10);
     subscription_ = create_subscription<
         sensor_msgs::msg::Joy>("joy", 10, std::bind(&JoystickTeleop::joy_callback, this, _1));
+    waist_lifting_publisher_ = create_publisher<std_msgs::msg::Int8>("/body_joint_controller/waist_lifting_command", 10);
     
     // Load button and axes mapping from parameters
     loadButtonMapping();
@@ -462,7 +463,8 @@ void JoystickTeleop::processChassisAxes(const sensor_msgs::msg::Joy::SharedPtr m
     // Check if we have enough axes
     size_t max_axis_index = std::max({
         axes_map_.left_stick_x, axes_map_.left_stick_y,
-        axes_map_.right_stick_x, axes_map_.right_stick_y
+        axes_map_.right_stick_x, axes_map_.right_stick_y,
+        axes_map_.dpad_y
     });
     
     if (msg->axes.size() <= max_axis_index) {
@@ -479,6 +481,23 @@ void JoystickTeleop::processChassisAxes(const sensor_msgs::msg::Joy::SharedPtr m
     // Right stick controls angular velocity
     // Right stick X: rotation (angular.z)
     double right_stick_x = applyDeadzone(msg->axes[axes_map_.right_stick_x], axes_map_.deadzone);
+
+    // D-pad Y controls waist lifting
+    double dpad_y = applyDeadzone(msg->axes[axes_map_.dpad_y], axes_map_.dpad_deadzone);
+
+    // Process waist lifting command
+    auto waist_cmd = std_msgs::msg::Int8();
+    if (dpad_y > 0.5) {
+        // D-pad up: waist up (1)
+        waist_cmd.data = 1;
+    } else if (dpad_y < -0.5) {
+        // D-pad down: waist down (2)
+        waist_cmd.data = 2;
+    } else {
+        // D-pad neutral: stop (0)
+        waist_cmd.data = 0;
+    }
+    waist_lifting_publisher_->publish(waist_cmd);
 
     // Apply speed scaling based on current mode
     double speed_scale = high_speed_mode_ ? high_speed_scale_ : low_speed_scale_;
