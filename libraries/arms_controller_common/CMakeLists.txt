@@ -38,6 +38,7 @@ add_library(${PROJECT_NAME} SHARED
         src/utils/GravityCompensation.cpp
         src/utils/JointLimitsManager.cpp
         src/utils/JointTrajectoryManager.cpp
+        src/utils/WaistLiftingPlaner.cpp
 )
 
 target_include_directories(${PROJECT_NAME}

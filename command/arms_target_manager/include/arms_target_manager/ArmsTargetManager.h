@@ -179,6 +179,11 @@ namespace arms_ros2_control::command
             const std::string& armType,
             std::function<void(const geometry_msgs::msg::PoseStamped::ConstSharedPtr&)> callback);
 
+        /**
+         * @brief 当前目标关节回调（在腰部控制激活时触发 marker 刷新）
+         */
+        void currentTargetJointCallback(const std_msgs::msg::Float64MultiArray::ConstSharedPtr& msg);
+
     private:
         /**
          * 从当前状态构建 interactive marker（适配器函数）
@@ -282,6 +287,7 @@ namespace arms_ros2_control::command
         // 订阅器（注意：左臂和右臂的订阅器现在在 ArmMarker 内部管理）
         rclcpp::Subscription<arms_ros2_control_msgs::msg::Inputs>::SharedPtr control_input_subscription_;
         rclcpp::Subscription<sensor_msgs::msg::JointState>::SharedPtr head_joint_state_subscription_;
+        rclcpp::Subscription<std_msgs::msg::Float64MultiArray>::SharedPtr current_target_joint_subscription_;
         
         // 发布器：双臂目标（仅双臂模式）
         rclcpp::Publisher<nav_msgs::msg::Path>::SharedPtr dual_target_stamped_publisher_;

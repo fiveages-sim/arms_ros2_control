@@ -70,6 +70,8 @@ namespace arms_ros2_control::command
             {
                 // 更新 frame_id
                 current_target_frame_id_ = msg->header.frame_id;
+                latest_current_target_pose_ = *msg;
+                has_latest_current_target_pose_ = true;
 
                 // 获取消息的 frame_id
                 std::string source_frame_id = msg->header.frame_id;
@@ -104,6 +106,30 @@ namespace arms_ros2_control::command
                     update_callback_(getMarkerName(), pose_);
                 }
             });
+    }
+
+    bool ArmMarker::refreshFromLatestCurrentTarget()
+    {
+        if (!has_latest_current_target_pose_)
+        {
+            return false;
+        }
+
+        const std::string& source_frame_id = latest_current_target_pose_.header.frame_id;
+        if (source_frame_id.empty())
+        {
+            return false;
+        }
+
+        geometry_msgs::msg::Pose transformed_pose = transformPose(
+            latest_current_target_pose_.pose, source_frame_id, frame_id_);
+        pose_ = transformed_pose;
+
+        if (update_callback_)
+        {
+            update_callback_(getMarkerName(), pose_);
+        }
+        return true;
     }
 
     visualization_msgs::msg::InteractiveMarker ArmMarker::createMarker(

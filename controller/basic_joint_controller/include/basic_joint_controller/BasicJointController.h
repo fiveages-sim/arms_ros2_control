@@ -14,6 +14,9 @@
 #include <controller_interface/controller_interface.hpp>
 #include <std_msgs/msg/string.hpp>
 #include <std_msgs/msg/int32.hpp>
+#include <std_msgs/msg/float64.hpp>
+#include <geometry_msgs/msg/pose_stamped.hpp>
+#include <geometry_msgs/msg/pose.hpp>
 #include <hardware_interface/loaned_command_interface.hpp>
 #include <hardware_interface/loaned_state_interface.hpp>
 
@@ -22,6 +25,13 @@
 #include <arms_controller_common/FSM/StateHome.h>
 #include <arms_controller_common/FSM/StateHold.h>
 #include <arms_controller_common/CtrlInterfaces.h>
+
+// 直接包含完整的头文件，而不是前向声明
+#include <lina_planning/planning/path_planner/movel.h>
+#include <lina_planning/planning/kinematics/fiveages_w2_fk.h>
+#include <lina_planning/planning/kinematics/fiveages_w2_ik.h>
+#include <lina_planning/planning/common/quaternion.h>
+#include <lina_planning/planning/common/trajectory_init_parameters.h>
 
 namespace basic_joint_controller
 {
@@ -32,15 +42,15 @@ namespace basic_joint_controller
     using CtrlInterfaces = arms_controller_common::CtrlInterfaces;
 
     // Forward declarations
-    class StateHold;  // Extended StateHold with MOVEJ transition
-    class StateMoveJ;  // Extended StateMoveJ for basic_joint_controller
+    class StateHold; // Extended StateHold with MOVEJ transition
+    class StateMoveJ; // Extended StateMoveJ for basic_joint_controller
 
     struct FSMStateList
     {
         std::shared_ptr<FSMState> invalid;
-        std::shared_ptr<arms_controller_common::StateHome> home;  // Use common StateHome
-        std::shared_ptr<StateHold> hold;  // Extended StateHold for basic_joint_controller
-        std::shared_ptr<StateMoveJ> movej;  // Extended StateMoveJ for basic_joint_controller
+        std::shared_ptr<arms_controller_common::StateHome> home; // Use common StateHome
+        std::shared_ptr<StateHold> hold; // Extended StateHold for basic_joint_controller
+        std::shared_ptr<StateMoveJ> movej; // Extended StateMoveJ for basic_joint_controller
     };
 
     class BasicJointController final : public controller_interface::ControllerInterface
@@ -56,7 +66,7 @@ namespace basic_joint_controller
         controller_interface::CallbackReturn on_cleanup(const rclcpp_lifecycle::State& previous_state) override;
         controller_interface::CallbackReturn on_error(const rclcpp_lifecycle::State& previous_state) override;
         controller_interface::CallbackReturn on_shutdown(const rclcpp_lifecycle::State& previous_state) override;
-        
+
         controller_interface::InterfaceConfiguration command_interface_configuration() const override;
         controller_interface::InterfaceConfiguration state_interface_configuration() const override;
         controller_interface::return_type update(const rclcpp::Time& time, const rclcpp::Duration& period) override;
@@ -81,7 +91,8 @@ namespace basic_joint_controller
         FSMMode mode_{FSMMode::NORMAL};
 
         // Interface mapping
-        std::unordered_map<std::string, std::vector<std::reference_wrapper<hardware_interface::LoanedCommandInterface>>*>
+        std::unordered_map<std::string, std::vector<std::reference_wrapper<hardware_interface::LoanedCommandInterface>>
+                           *>
         command_interface_map_ = {
             {"position", &ctrl_interfaces_.joint_position_command_interface_}
         };
@@ -104,6 +115,12 @@ namespace basic_joint_controller
         rclcpp::Subscription<std_msgs::msg::Int32>::SharedPtr fsm_command_subscription_;
         rclcpp::Subscription<std_msgs::msg::String>::SharedPtr robot_description_subscription_;
         rclcpp::Subscription<std_msgs::msg::Int32>::SharedPtr target_command_subscription_;
+
+        // body motion
+        bool waist_lifting_enabled_{false};
+        rclcpp::Subscription<std_msgs::msg::Float64>::SharedPtr waist_lifting_subscription_;
+
+        rclcpp::Subscription<std_msgs::msg::Float64>::SharedPtr waist_lifting_command_subscription_;
+        rclcpp::Subscription<std_msgs::msg::Float64>::SharedPtr waist_turning_command_subscription_;
     };
 }
-

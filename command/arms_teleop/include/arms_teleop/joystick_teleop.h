@@ -9,6 +9,7 @@
 #include <sensor_msgs/msg/joy.hpp>
 #include <arms_ros2_control_msgs/msg/inputs.hpp>
 #include <std_msgs/msg/int32.hpp>
+#include <std_msgs/msg/float64.hpp>
 #include <geometry_msgs/msg/twist.hpp>
 
 class JoystickTeleop final : public rclcpp::Node {
@@ -31,7 +32,10 @@ private:
     rclcpp::Publisher<std_msgs::msg::Int32>::SharedPtr fsm_command_publisher_;
     rclcpp::Publisher<geometry_msgs::msg::Twist>::SharedPtr chassis_publisher_;
     rclcpp::Subscription<sensor_msgs::msg::Joy>::SharedPtr subscription_;
-    
+
+    rclcpp::Publisher<std_msgs::msg::Float64>::SharedPtr waist_lifting_publisher_;
+    rclcpp::Publisher<std_msgs::msg::Float64>::SharedPtr waist_turning_publisher_;
+
     // Control parameters
     double updateRate_;
     
