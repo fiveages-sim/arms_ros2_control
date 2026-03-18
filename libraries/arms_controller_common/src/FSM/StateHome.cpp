@@ -2,10 +2,23 @@
 // Common StateHome Implementation
 //
 #include "arms_controller_common/FSM/StateHome.h"
+#include "arms_controller_common/utils/SharedPublishers.h"
 #include <cmath>
 
 namespace arms_controller_common
 {
+    void StateHome::publishCurrentTargetJoint(const std::vector<double>& target_positions)
+    {
+        if (!current_target_joint_publisher_)
+        {
+            return;
+        }
+
+        std_msgs::msg::Float64MultiArray msg;
+        msg.data = target_positions;
+        current_target_joint_publisher_->publish(msg);
+    }
+
     StateHome::StateHome(CtrlInterfaces& ctrl_interfaces,
                          const std::shared_ptr<GravityCompensation>& gravity_compensation,
                          const std::shared_ptr<rclcpp_lifecycle::LifecycleNode>& node)
@@ -16,6 +29,11 @@ namespace arms_controller_common
     {
         // Get switch_command_base from parameter server
         switch_command_base_ = node->get_parameter("switch_command_base").as_int();
+        if (node_)
+        {
+            current_target_joint_publisher_ =
+                arms_controller_common::utils::getOrCreateCurrentTargetJointPublisher(node_);
+        }
     }
 
     void StateHome::setHomePosition(const std::vector<double>& home_pos)
@@ -94,6 +112,10 @@ namespace arms_controller_common
             {
                 RCLCPP_ERROR(node_->get_logger(),
                              "Failed to initialize trajectory manager in StateHome::enter()");
+            }
+            else
+            {
+                publishCurrentTargetJoint(current_target_);
             }
         }
         else
@@ -329,6 +351,7 @@ namespace arms_controller_common
                 ctrl_interfaces_.frequency_,
                 tanh_scale_
             );
+            publishCurrentTargetJoint(current_target_);
 
             RCLCPP_INFO(node_->get_logger(),
                         "Starting interpolation to configuration %zu over %.1f seconds (type=%s)",

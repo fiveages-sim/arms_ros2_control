@@ -588,6 +588,44 @@ namespace arms_ros2_control::command
             dual_target_stamped_publisher_ = node_->create_publisher<nav_msgs::msg::Path>(
                 "dual_target/stamped", 1);
         }
+
+        // 订阅当前目标关节（用于在 OCS2 状态触发 marker 刷新）
+        current_target_joint_subscription_ = node_->create_subscription<std_msgs::msg::Float64MultiArray>(
+            "/body_joint_controller/current_target_joint", 10,
+            [this](const std_msgs::msg::Float64MultiArray::ConstSharedPtr msg)
+            {
+                currentTargetJointCallback(msg);
+            });
+    }
+
+    void ArmsTargetManager::currentTargetJointCallback(
+        const std_msgs::msg::Float64MultiArray::ConstSharedPtr& msg)
+    {
+        if (!msg)
+        {
+            return;
+        }
+        if (current_controller_state_ != 3)
+        {
+            return; // 仅在 OCS2 状态下处理
+        }
+        if (current_mode_ == MarkerState::SINGLE_SHOT)
+        {
+            // 收到 current_target_joint 后自动切到连续模式，
+            // 以便 marker 能持续跟随腰部引起的目标位姿更新。
+            togglePublishMode();
+            RCLCPP_INFO(node_->get_logger(),
+                        "Switched ArmsTargetManager to CONTINUOUS mode on current_target_joint update");
+        }
+
+        if (left_arm_marker_)
+        {
+            left_arm_marker_->refreshFromLatestCurrentTarget();
+        }
+        if (dual_arm_mode_ && right_arm_marker_)
+        {
+            right_arm_marker_->refreshFromLatestCurrentTarget();
+        }
     }
 
 

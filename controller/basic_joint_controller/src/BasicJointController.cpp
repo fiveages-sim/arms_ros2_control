@@ -58,6 +58,7 @@ namespace basic_joint_controller
     controller_interface::return_type BasicJointController::update(const rclcpp::Time& time,
                                                                    const rclcpp::Duration& period)
     {
+        (void)time;
         if (mode_ == FSMMode::NORMAL)
         {
             current_state_->run(time, period);
@@ -183,7 +184,6 @@ namespace basic_joint_controller
 
         state_list_.movej->setupSubscriptions("target_joint_position", false);
         state_list_.movej->setupTrajectorySubscription();
-
         robot_description_subscription_ = get_node()->create_subscription<std_msgs::msg::String>(
             "/robot_description", rclcpp::QoS(rclcpp::KeepLast(1)).transient_local(),
             [this](const std_msgs::msg::String::SharedPtr msg)
@@ -233,9 +233,9 @@ namespace basic_joint_controller
             // 订阅腰部升降speedj 指令
             std::string waist_lifting_command_topic = "/" + controller_name_ + "/waist_lifting_command";
 
-            waist_lifting_command_subscription_ = get_node()->create_subscription<std_msgs::msg::Int8>(
+            waist_lifting_command_subscription_ = get_node()->create_subscription<std_msgs::msg::Float64>(
                 waist_lifting_command_topic, 10,
-                [this](const std_msgs::msg::Int8::SharedPtr msg)
+                [this](const std_msgs::msg::Float64::SharedPtr msg)
                 {
                     // 只有在 MOVEJ 状态时才处理
                     if (!current_state_ || current_state_->state_name != FSMStateName::MOVEJ)
@@ -249,29 +249,7 @@ namespace basic_joint_controller
                     // 通过 StateMoveJ 启动腰部升降
                     if (state_list_.movej)
                     {
-                        std::string cmd_msg;
-                        if (msg->data == 0)
-                        {
-                            cmd_msg = "stop";
-                        }
-                        else if (msg->data == 1)
-                        {
-                            cmd_msg = "up";
-                        }
-                        else if (msg->data == 2)
-                        {
-                            cmd_msg = "down";
-                        }
-                        else
-                        {
-                            RCLCPP_WARN(get_node()->get_logger(),
-                                        "Invalid target_command value: %d (expected 0 or 1 or 2)", msg->data);
-                            return;
-                        }
-
-
-                        bool success = state_list_.movej->setWaistLiftingCommand(
-                            msg->data); //腰部升降距离
+                        bool success = state_list_.movej->setWaistLiftingFactor(msg->data);
 
                         if (success)
                         {
@@ -283,6 +261,30 @@ namespace basic_joint_controller
                         {
                             RCLCPP_WARN(get_node()->get_logger(),
                                         "waist lifting command failed");
+                        }
+                    }
+                });
+
+            std::string waist_turning_command_topic = "/" + controller_name_ + "/waist_turning_command";
+            waist_turning_command_subscription_ = get_node()->create_subscription<std_msgs::msg::Float64>(
+                waist_turning_command_topic, 10,
+                [this](const std_msgs::msg::Float64::SharedPtr msg)
+                {
+                    if (!current_state_ || current_state_->state_name != FSMStateName::MOVEJ)
+                    {
+                        RCLCPP_WARN_THROTTLE(get_node()->get_logger(),
+                                             *get_node()->get_clock(), 5000,
+                                             "Waist turning ignored: controller not in MOVEJ state");
+                        return;
+                    }
+
+                    if (state_list_.movej)
+                    {
+                        bool success = state_list_.movej->setWaistTurningFactor(msg->data);
+                        if (!success)
+                        {
+                            RCLCPP_WARN(get_node()->get_logger(),
+                                        "waist turning command failed");
                         }
                     }
                 });

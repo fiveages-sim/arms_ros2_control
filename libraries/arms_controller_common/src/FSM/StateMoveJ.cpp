@@ -2,6 +2,8 @@
 // Common StateMoveJ Implementation
 //
 #include "arms_controller_common/FSM/StateMoveJ.h"
+#include "arms_controller_common/utils/SharedPublishers.h"
+#include <algorithm>
 #include <cmath>
 
 // planners/kinematics required for cartesian moveL support
@@ -12,6 +14,18 @@
 
 namespace arms_controller_common
 {
+    void StateMoveJ::publishCurrentTargetJoint(const std::vector<double>& target_positions)
+    {
+        if (!current_target_joint_publisher_)
+        {
+            return;
+        }
+
+        std_msgs::msg::Float64MultiArray msg;
+        msg.data = target_positions;
+        current_target_joint_publisher_->publish(msg);
+    }
+
     void StateMoveJ::refreshHoldPositions()
     {
         size_t num_joints = ctrl_interfaces_.joint_position_state_interface_.size();
@@ -35,7 +49,13 @@ namespace arms_controller_common
     {
         joint_limits_manager_ = std::make_shared<JointLimitsManager>(node_->get_logger());
         joint_limits_manager_->setJointNames(joint_names_);
-        last_waist_command_ = 0;
+        last_waist_factor_ = 0.0;
+        last_waist_turning_factor_ = 0.0;
+        if (node_)
+        {
+            current_target_joint_publisher_ =
+                arms_controller_common::utils::getOrCreateCurrentTargetJointPublisher(node_);
+        }
     }
 
     void StateMoveJ::updateParam()
@@ -104,7 +124,7 @@ namespace arms_controller_common
     void StateMoveJ::run(const rclcpp::Time& /*time*/, const rclcpp::Duration& /*period*/)
     {
         std::lock_guard lock(target_mutex_);
-        // 优先处理腰部升降
+        // 优先处理腰部升降（与转向互斥）
         if (waist_lifting_active_ && waist_lifting_planer_)
         {
             std::vector<double> next_waist_pos;
@@ -127,14 +147,16 @@ namespace arms_controller_common
                     for (size_t i = waist_joint_count_;
                          i < ctrl_interfaces_.joint_position_command_interface_.size(); i++)
                     {
-                        ctrl_interfaces_.setJointPositionCommand(i,
-                                                                 ctrl_interfaces_.last_sent_joint_positions_[i]);
+                        ctrl_interfaces_.setJointPositionCommand(i, ctrl_interfaces_.last_sent_joint_positions_[i]);
                     }
 
                     //实时更新当前位置，避免因为奇异而停止
                     target_pos_ = ctrl_interfaces_.last_sent_joint_positions_;
                     has_target_ = false;
                     start_pos_ = target_pos_;
+                    // Waist lifting is continuous speed planning; publish the updated
+                    // commanded joint target each cycle so observers can track it.
+                    publishCurrentTargetJoint(target_pos_);
 
                     if (waist_lifting_planer_->isMotionOver())
                     {
@@ -157,13 +179,57 @@ namespace arms_controller_common
             else
             {
                 refreshHoldPositions();
-                last_waist_command_=0;
+                last_waist_factor_ = 0.0;
                 waist_lifting_active_ = false;
                 waist_lifting_planer_->setCurrentVelToZero(); //奇异了，报错停止，然后把当前实际的速度设为0
                 motion_mode_ = MotionMode::MOVEJ;
                 RCLCPP_WARN(node_->get_logger(), "Failed to calculate next waist lifting point");
             }
 
+            return;
+        }
+
+        // 其次处理腰部转向（单关节 speedj）
+        if (waist_turning_active_ && waist_turning_planer_)
+        {
+            std::vector<double> next_turn_pos;
+            if (waist_turning_planer_->calNextPoint(next_turn_pos) && !next_turn_pos.empty())
+            {
+                size_t cmd_size = ctrl_interfaces_.joint_position_command_interface_.size();
+                size_t target_idx = std::min(waist_turning_joint_index_, (cmd_size > 0 ? cmd_size - 1 : 0));
+                for (size_t i = 0; i < cmd_size; ++i)
+                {
+                    if (i == target_idx)
+                    {
+                        ctrl_interfaces_.setJointPositionCommand(i, next_turn_pos[0]);
+                    }
+                    else
+                    {
+                        ctrl_interfaces_.setJointPositionCommand(i, ctrl_interfaces_.last_sent_joint_positions_[i]);
+                    }
+                }
+
+                target_pos_ = ctrl_interfaces_.last_sent_joint_positions_;
+                has_target_ = false;
+                start_pos_ = target_pos_;
+                publishCurrentTargetJoint(target_pos_);
+
+                if (waist_turning_planer_->isMotionOver())
+                {
+                    refreshHoldPositions();
+                    waist_turning_active_ = false;
+                    motion_mode_ = MotionMode::MOVEJ;
+                }
+            }
+            else
+            {
+                refreshHoldPositions();
+                last_waist_turning_factor_ = 0.0;
+                waist_turning_active_ = false;
+                waist_turning_planer_->setCurrentVelToZero();
+                motion_mode_ = MotionMode::MOVEJ;
+                RCLCPP_WARN(node_->get_logger(), "Failed to calculate next waist turning point");
+            }
             return;
         }
 
@@ -356,9 +422,12 @@ namespace arms_controller_common
 
         motion_mode_ = MotionMode::MOVEJ;
 
-        last_waist_command_ = 0;
+        last_waist_factor_ = 0.0;
+        last_waist_turning_factor_ = 0.0;
         waist_lifting_active_ = false;
+        waist_turning_active_ = false;
         waist_lifting_planer_.reset();
+        waist_turning_planer_.reset();
         RCLCPP_DEBUG(node_->get_logger(), "StateMoveJ exited, all state variables reset");
     }
 
@@ -424,6 +493,7 @@ namespace arms_controller_common
         // Apply joint limit checking if callback is set
         target_pos_ = applyJointLimits(target_pos, "target position");
         has_target_ = true;
+        publishCurrentTargetJoint(target_pos_);
 
         // Reset interpolation if we're already in the state
         if (interpolation_active_)
@@ -515,6 +585,7 @@ namespace arms_controller_common
         target_pos_ = applyJointLimits(target_pos_, "target position for prefix '" + prefix + "'");
 
         has_target_ = true;
+        publishCurrentTargetJoint(target_pos_);
         use_prefix_filter_ = true;
         active_prefix_ = prefix;
         refreshHoldPositions();
@@ -897,6 +968,10 @@ namespace arms_controller_common
 
             has_target_ = true;
             interpolation_active_ = false; // Will be activated in run()
+            if (!waypoints.empty())
+            {
+                publishCurrentTargetJoint(waypoints.back());
+            }
 
             RCLCPP_INFO(node_->get_logger(),
                         "Trajectory loaded: %zu waypoints (1 current + %zu input), %zu segments. "
@@ -1112,8 +1187,21 @@ namespace arms_controller_common
                         "Invalid waist lifting type or insufficient joint angles");
             return false;
         }
+        // Entering waist lifting should cancel any stale MOVEJ trajectory state,
+        // otherwise previous targets may be replayed after waist motion ends.
+        trajectory_manager_.reset();
+        interpolation_active_ = false;
+        has_target_ = false;
+        target_pos_.clear();
+        // Controller-side mutual exclusion: lifting preempts turning.
+        waist_turning_active_ = false;
+        last_waist_turning_factor_ = 0.0;
+        if (waist_turning_planer_)
+        {
+            waist_turning_planer_->setCurrentVelToZero();
+        }
         waist_lifting_active_ = true;
-        motion_mode_ = MotionMode::WAISTLIFTING;
+        motion_mode_ = MotionMode::WAIST_CONTROL;
         RCLCPP_INFO(node_->get_logger(),
                     "Waist lifting started: type=%s, distance=%.3f, duration=%.3f, using %zu joints",
                     (waist_lifting_planer_->isBodyThreeJoint()? "THREE_JOINT" : "SINGLE_JOINT"),
@@ -1125,8 +1213,32 @@ namespace arms_controller_common
 
     bool StateMoveJ::setWaistLiftingCommand(int command)
     {
-        //避免重复执行计算
-        if (command == last_waist_command_)
+        if (command == 0)
+        {
+            return setWaistLiftingFactor(0.0);
+        }
+        if (command == 1)
+        {
+            return setWaistLiftingFactor(1.0);
+        }
+        if (command == 2)
+        {
+            return setWaistLiftingFactor(-1.0);
+        }
+
+        RCLCPP_WARN(node_->get_logger(),
+                    "Invalid target_command value: %d (expected 0 or 1 or 2)", command);
+        if (waist_lifting_planer_)
+        {
+            waist_lifting_planer_->setCurrentVelToZero();
+        }
+        return false;
+    };
+
+    bool StateMoveJ::setWaistLiftingFactor(double factor)
+    {
+        // 避免重复执行计算
+        if (std::fabs(factor - last_waist_factor_) < waist_factor_epsilon_)
         {
             return true;
         }
@@ -1160,27 +1272,13 @@ namespace arms_controller_common
                         "Invalid waist lifting type or insufficient joint angles");
             return false;
         }
+        double clamped_factor = std::clamp(factor, -1.0, 1.0);
         double speedj_time = 100000000.0;
-        double target_speed = 0.0;
-        if (command == 0)
+        double target_speed = clamped_factor * default_waist_para_(0);
+        if (std::fabs(clamped_factor) < waist_factor_epsilon_)
         {
             speedj_time = 0.0;
             target_speed = 0.0;
-        }
-        else if (command == 1)
-        {
-            target_speed = default_waist_para_(0);
-        }
-        else if (command == 2)
-        {
-            target_speed = -default_waist_para_(0);
-        }
-        else
-        {
-            RCLCPP_WARN(node_->get_logger(),
-                        "Invalid target_command value: %d (expected 0 or 1 or 2)", command);
-            waist_lifting_planer_->setCurrentVelToZero();
-            return false;
         }
         if (!waist_lifting_planer_->initTargetLiftingSpeed(angles3d, target_speed, default_waist_para_(1),
                                                            default_waist_para_(2), speedj_time,
@@ -1193,16 +1291,104 @@ namespace arms_controller_common
             return false;
         }
 
+        // Entering waist lifting should cancel any stale MOVEJ trajectory state,
+        // otherwise previous targets may be replayed after waist motion ends.
+        trajectory_manager_.reset();
+        interpolation_active_ = false;
+        has_target_ = false;
+        target_pos_.clear();
+        // Controller-side mutual exclusion: lifting preempts turning.
+        waist_turning_active_ = false;
+        last_waist_turning_factor_ = 0.0;
+        if (waist_turning_planer_)
+        {
+            waist_turning_planer_->setCurrentVelToZero();
+        }
         waist_lifting_active_ = true;
-        motion_mode_ = MotionMode::WAISTLIFTING;
+        motion_mode_ = MotionMode::WAIST_CONTROL;
         RCLCPP_INFO(node_->get_logger(),
-                    "Waist lifting started: type=%s, target_speed=%.3f, using %zu joints",
+                    "Waist lifting started: type=%s, factor=%.3f, target_speed=%.3f, using %zu joints",
                     (waist_lifting_planer_->isBodyThreeJoint()? "THREE_JOINT" : "SINGLE_JOINT"),
-                    target_speed, waist_joint_count_);
+                    clamped_factor, target_speed, waist_joint_count_);
 
-        last_waist_command_ = command;
+        last_waist_factor_ = clamped_factor;
         return true;
     };
+
+    bool StateMoveJ::setWaistTurningFactor(double factor)
+    {
+        if (std::fabs(factor - last_waist_turning_factor_) < waist_factor_epsilon_)
+        {
+            return true;
+        }
+
+        std::lock_guard lock(target_mutex_);
+        if (waist_joint_names_.empty())
+        {
+            setWaistLiftingPlaner();
+        }
+        if (waist_joint_names_.empty())
+        {
+            RCLCPP_WARN(node_->get_logger(), "Waist turning planner not initialized");
+            return false;
+        }
+
+        if (!waist_turning_planer_)
+        {
+            waist_turning_planer_ = std::make_shared<arms_controller_common::WaistLiftingPlaner>();
+            waist_turning_planer_->setBodyJointThreeJointType(false);
+        }
+
+        if (joint_limits_manager_ && waist_turning_joint_index_ < joint_names_.size())
+        {
+            const std::string& turning_joint_name = joint_names_[waist_turning_joint_index_];
+            if (joint_limits_manager_->hasLimits(turning_joint_name))
+            {
+                JointLimits limits = joint_limits_manager_->getJointLimits(turning_joint_name);
+                waist_turning_planer_->setSingleJointLimit(limits.lower, limits.upper);
+            }
+        }
+
+        Eigen::Vector3d angles3d = Eigen::Vector3d::Zero();
+        if (waist_turning_joint_index_ < ctrl_interfaces_.joint_position_state_interface_.size())
+        {
+            auto value = ctrl_interfaces_.joint_position_state_interface_[waist_turning_joint_index_].get().get_optional();
+            angles3d(0) = value.value_or(0.0);
+        }
+
+        double clamped_factor = std::clamp(factor, -1.0, 1.0);
+        double speedj_time = 100000000.0;
+        double target_speed = clamped_factor * default_waist_para_(0);
+        if (std::fabs(clamped_factor) < waist_factor_epsilon_)
+        {
+            speedj_time = 0.0;
+            target_speed = 0.0;
+        }
+
+        if (!waist_turning_planer_->initTargetLiftingSpeed(angles3d, target_speed, default_waist_para_(1),
+                                                            default_waist_para_(2), speedj_time,
+                                                            1.0 / ctrl_interfaces_.frequency_))
+        {
+            waist_turning_planer_->setCurrentVelToZero();
+            return false;
+        }
+
+        trajectory_manager_.reset();
+        interpolation_active_ = false;
+        has_target_ = false;
+        target_pos_.clear();
+        // Controller-side mutual exclusion: turning preempts lifting.
+        waist_lifting_active_ = false;
+        last_waist_factor_ = 0.0;
+        if (waist_lifting_planer_)
+        {
+            waist_lifting_planer_->setCurrentVelToZero();
+        }
+        waist_turning_active_ = true;
+        motion_mode_ = MotionMode::WAIST_CONTROL;
+        last_waist_turning_factor_ = clamped_factor;
+        return true;
+    }
 
     void StateMoveJ::setWaistLiftingPlaner()
     {
@@ -1262,6 +1448,14 @@ namespace arms_controller_common
         for (size_t i = 0; i < waist_joint_count_ && i < joint_names_.size(); i++)
         {
             waist_joint_names_.push_back(joint_names_[i]);
+        }
+        if (joint_names_.size() > waist_joint_count_)
+        {
+            waist_turning_joint_index_ = waist_joint_count_;
+        }
+        else
+        {
+            waist_turning_joint_index_ = 0;
         }
         // 如果有joint_limits_manager，立即更新限制
         updateWaistLiftingLimits();

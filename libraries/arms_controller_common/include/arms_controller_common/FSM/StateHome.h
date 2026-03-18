@@ -9,8 +9,11 @@
 #include "arms_controller_common/utils/JointTrajectoryManager.h"
 #include <vector>
 #include <memory>
+#include <functional>
+#include <utility>
 #include <rclcpp/rclcpp.hpp>
 #include <rclcpp_lifecycle/lifecycle_node.hpp>
+#include <std_msgs/msg/float64_multi_array.hpp>
 
 namespace arms_controller_common
 {
@@ -173,6 +176,9 @@ namespace arms_controller_common
 
         // Unified trajectory manager
         JointTrajectoryManager trajectory_manager_;
+        // Current target joint publisher (shared convention across controllers)
+        rclcpp::Publisher<std_msgs::msg::Float64MultiArray>::SharedPtr current_target_joint_publisher_;
+        void publishCurrentTargetJoint(const std::vector<double>& target_positions);
 
         // Configuration switching
         long switch_command_base_{100};                     // Base command for multi-config switching

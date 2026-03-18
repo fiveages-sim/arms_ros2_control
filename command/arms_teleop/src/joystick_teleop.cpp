@@ -12,7 +12,8 @@ JoystickTeleop::JoystickTeleop() : Node("joystick_teleop_node") {
     chassis_publisher_ = create_publisher<geometry_msgs::msg::Twist>("/cmd_vel", 10);
     subscription_ = create_subscription<
         sensor_msgs::msg::Joy>("joy", 10, std::bind(&JoystickTeleop::joy_callback, this, _1));
-    waist_lifting_publisher_ = create_publisher<std_msgs::msg::Int8>("/body_joint_controller/waist_lifting_command", 10);
+    waist_lifting_publisher_ = create_publisher<std_msgs::msg::Float64>("/body_joint_controller/waist_lifting_command", 10);
+    waist_turning_publisher_ = create_publisher<std_msgs::msg::Float64>("/body_joint_controller/waist_turning_command", 10);
     
     // Load button and axes mapping from parameters
     loadButtonMapping();
@@ -464,7 +465,7 @@ void JoystickTeleop::processChassisAxes(const sensor_msgs::msg::Joy::SharedPtr m
     size_t max_axis_index = std::max({
         axes_map_.left_stick_x, axes_map_.left_stick_y,
         axes_map_.right_stick_x, axes_map_.right_stick_y,
-        axes_map_.dpad_y
+        axes_map_.dpad_x
     });
     
     if (msg->axes.size() <= max_axis_index) {
@@ -481,26 +482,40 @@ void JoystickTeleop::processChassisAxes(const sensor_msgs::msg::Joy::SharedPtr m
     // Right stick controls angular velocity
     // Right stick X: rotation (angular.z)
     double right_stick_x = applyDeadzone(msg->axes[axes_map_.right_stick_x], axes_map_.deadzone);
+    // Right stick Y: waist lifting
+    double right_stick_y = applyDeadzone(msg->axes[axes_map_.right_stick_y], axes_map_.deadzone);
+    // D-pad X: waist turning
+    double dpad_x = applyDeadzone(msg->axes[axes_map_.dpad_x], axes_map_.dpad_deadzone);
 
-    // D-pad Y controls waist lifting
-    double dpad_y = applyDeadzone(msg->axes[axes_map_.dpad_y], axes_map_.dpad_deadzone);
+    // Process waist commands as mutually-exclusive factors.
+    // Disable simultaneous non-zero lifting and turning command publishing.
+    auto waist_cmd = std_msgs::msg::Float64();
+    auto waist_turn_cmd = std_msgs::msg::Float64();
+    double speed_scale = high_speed_mode_ ? high_speed_scale_ : low_speed_scale_;
 
-    // Process waist lifting command
-    auto waist_cmd = std_msgs::msg::Int8();
-    if (dpad_y > 0.5) {
-        // D-pad up: waist up (1)
-        waist_cmd.data = 1;
-    } else if (dpad_y < -0.5) {
-        // D-pad down: waist down (2)
-        waist_cmd.data = 2;
+    const bool lifting_active = (right_stick_y > 0.5) || (right_stick_y < -0.5);
+    const bool turning_active = (dpad_x > 0.5) || (dpad_x < -0.5);
+
+    // Priority: lifting > turning when both inputs are active.
+    // Waist turning follows mirror mode:
+    // - mirror enabled: keep current turning mapping
+    // - mirror disabled: invert turning direction
+    const double turning_direction_scale = mirror_movement_ ? -1.0 : 1.0;
+    if (lifting_active) {
+        waist_cmd.data = (right_stick_y > 0.0) ? speed_scale : -speed_scale;
+        waist_turn_cmd.data = 0.0;
+    } else if (turning_active) {
+        waist_cmd.data = 0.0;
+        waist_turn_cmd.data = ((dpad_x > 0.0) ? -speed_scale : speed_scale) * turning_direction_scale;
     } else {
-        // D-pad neutral: stop (0)
-        waist_cmd.data = 0;
+        waist_cmd.data = 0.0;
+        waist_turn_cmd.data = 0.0;
     }
+
     waist_lifting_publisher_->publish(waist_cmd);
+    waist_turning_publisher_->publish(waist_turn_cmd);
 
     // Apply speed scaling based on current mode
-    double speed_scale = high_speed_mode_ ? high_speed_scale_ : low_speed_scale_;
 
     // Update chassis velocity command
     chassis_cmd_.linear.x = left_stick_y * chassis_linear_scale_ * speed_scale;   // Forward/backward
