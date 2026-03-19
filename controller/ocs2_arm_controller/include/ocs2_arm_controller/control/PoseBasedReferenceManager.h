@@ -9,7 +9,9 @@
 #include <functional>
 #include <geometry_msgs/msg/pose.hpp>
 #include <geometry_msgs/msg/pose_stamped.hpp>
+#ifdef HAS_LINA_PLANNING
 #include <lina_planning/planning/path_planner/circular_curve.h>
+#endif
 #include <memory>
 #include <nav_msgs/msg/path.hpp>
 #include <ocs2_mobile_manipulator/MobileManipulatorInterface.h>
@@ -158,6 +160,7 @@ namespace ocs2::mobile_manipulator
         // moveL 插值轨迹持续时间（秒）
         double moveL_duration_;
 
+#ifdef HAS_LINA_PLANNING
         // 圆弧指针
         std::shared_ptr<planning::CircularCurver> left_circle_curve_;
         std::shared_ptr<planning::CircularCurver> right_circle_curve_;
@@ -225,5 +228,6 @@ namespace ocs2::mobile_manipulator
         bool initCircleCurve(vector_t start_pose, arms_ros2_control_msgs::msg::CircleMessage::SharedPtr msg,
                              std::shared_ptr<planning::CircularCurver> circle_ptr);
         double min_val = 1.0e-6;
+#endif
     };
 } // namespace ocs2::mobile_manipulator

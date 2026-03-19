@@ -26,6 +26,19 @@ set(CONTROLLER_INCLUDE_DEPENDS
 
 # find dependencies
 find_package(ament_cmake REQUIRED)
+# Optional: enable circular trajectory support when lina_planning is available
+find_package(lina_planning QUIET)
+if(NOT lina_planning_FOUND)
+    # Auto-hint for typical colcon workspace layout:
+    # <ws>/src/arms_ros2_control/controller/ocs2_arm_controller (this package)
+    # <ws>/install/lina_planning/share/lina_planning/cmake (installed config)
+    get_filename_component(_ws_root "${CMAKE_CURRENT_SOURCE_DIR}/../../../../" ABSOLUTE)
+    set(_lina_planning_hint "${_ws_root}/install/lina_planning/share/lina_planning/cmake")
+    if(EXISTS "${_lina_planning_hint}/lina_planningConfig.cmake")
+        set(lina_planning_DIR "${_lina_planning_hint}")
+        find_package(lina_planning QUIET)
+    endif()
+endif()
 foreach (Dependency IN ITEMS ${CONTROLLER_INCLUDE_DEPENDS})
     find_package(${Dependency} REQUIRED)
 endforeach ()
@@ -53,6 +66,14 @@ ament_target_dependencies(${PROJECT_NAME}
         ${CONTROLLER_INCLUDE_DEPENDS}
 )
 
+if(lina_planning_FOUND)
+    target_compile_definitions(${PROJECT_NAME} PUBLIC HAS_LINA_PLANNING)
+    target_link_libraries(${PROJECT_NAME} lina_planning::lina_planning)
+    message(STATUS "lina_planning found - circle motion support enabled")
+else()
+    message(STATUS "lina_planning not found - circle motion support disabled")
+endif()
+
 pluginlib_export_plugin_description_file(controller_interface ocs2_arm_controller.xml)
 
 install(
@@ -74,6 +95,9 @@ install(
 )
 
 ament_export_dependencies(${CONTROLLER_INCLUDE_DEPENDS})
+if(lina_planning_FOUND)
+    ament_export_dependencies(lina_planning)
+endif()
 ament_export_targets(export_${PROJECT_NAME} HAS_LIBRARY_TARGET)
 
 ament_package() 
