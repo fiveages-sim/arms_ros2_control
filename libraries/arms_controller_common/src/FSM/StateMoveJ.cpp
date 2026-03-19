@@ -6,12 +6,6 @@
 #include <algorithm>
 #include <cmath>
 
-// planners/kinematics required for cartesian moveL support
-#include "lina_planning/planning/path_planner/movel.h"
-#include "lina_planning/planning/kinematics/fiveages_w2_fk.h"
-#include "lina_planning/planning/kinematics/fiveages_w2_ik.h"
-
-
 namespace arms_controller_common
 {
     void StateMoveJ::publishCurrentTargetJoint(const std::vector<double>& target_positions)

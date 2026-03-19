@@ -37,6 +37,7 @@ namespace ocs2::mobile_manipulator
         right_target_state_ = vector_t::Zero(7);
 
         // 初始化圆弧指针
+#ifdef HAS_LINA_PLANNING
         left_circle_curve_ = std::make_shared<planning::CircularCurver>();
         right_circle_curve_ = std::make_shared<planning::CircularCurver>();
         // 初始化Service状态
@@ -48,6 +49,7 @@ namespace ocs2::mobile_manipulator
             right_service_state_.arm_name = "right";
             right_service_state_.curve = right_circle_curve_;
         }
+#endif
     }
 
     void PoseBasedReferenceManager::subscribe(
@@ -112,6 +114,7 @@ namespace ocs2::mobile_manipulator
                     "right_target/stamped", 1, rightStampedCallback);
         }
         // 删除圆弧订阅者，添加Service
+#ifdef HAS_LINA_PLANNING
         // 左臂圆弧Service
         auto leftServiceCallback =
             [this](const std::shared_ptr<rmw_request_id_t> request_header,
@@ -140,6 +143,10 @@ namespace ocs2::mobile_manipulator
                 "execute_right_circle",
                 rightServiceCallback);
         }
+#else
+        RCLCPP_WARN(logger_,
+                    "lina_planning not available, circle execution services are disabled");
+#endif
 
         // 创建执行定时器
         // execution_timer_ = node->create_wall_timer(
@@ -953,6 +960,7 @@ namespace ocs2::mobile_manipulator
     }
 
     // 新增圆形轨迹相关函数
+#ifdef HAS_LINA_PLANNING
     bool PoseBasedReferenceManager::initCircleCurve(
         vector_t start_pose,
         arms_ros2_control_msgs::msg::CircleMessage::SharedPtr msg,
@@ -1602,4 +1610,5 @@ namespace ocs2::mobile_manipulator
             publishCurrentTargets("right");
         }
     }
+#endif
 } // namespace ocs2::mobile_manipulator

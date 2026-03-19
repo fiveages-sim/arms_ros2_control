@@ -3,12 +3,6 @@
 #include <cmath>
 #include <iostream>
 
-namespace
-{
-    double position_of_waist = 0.0;
-    double velocity_of_waist = 0.0;
-} // namespace
-
 namespace arms_controller_common
 {
     bool WaistLiftingPlaner::initTargetLiftingLength(
@@ -17,13 +11,8 @@ namespace arms_controller_common
     {
         type_speed_ = false;
         current_joint_angle_ = init_joint_angle;
-
-        movej_planner_ = std::make_unique<planning::moveJ>();
-
-        size_t nr_of_joints = 1;
-        planning::TrajectPoint start_joint_point(nr_of_joints);
-        planning::TrajectPoint end_joint_point(nr_of_joints);
-        planning::TrajectoryParameter traj_param(duration, nr_of_joints);
+        double start_pos = 0.0;
+        double end_pos = 0.0;
 
         if (type_three_joint_)
         {
@@ -32,15 +21,24 @@ namespace arms_controller_common
             threeLinkPlanerFK(init_joint_angle, &init_x, &init_z, &init_phi);
             x_ = init_x;
             phi_ = init_phi;
-            start_joint_point.joint_pos(0) = init_z;
-            end_joint_point.joint_pos(0) = init_z + lifting_length;
+            start_pos = init_z;
+            end_pos = init_z + lifting_length;
         }
         else
         {
             // 对于单关节，直接规划关节角度
-            start_joint_point.joint_pos(0) = init_joint_angle(0);
-            end_joint_point.joint_pos(0) = init_joint_angle(0) + lifting_length;
+            start_pos = init_joint_angle(0);
+            end_pos = init_joint_angle(0) + lifting_length;
         }
+
+#ifdef HAS_LINA_PLANNING
+        movej_planner_ = std::make_unique<planning::moveJ>();
+        size_t nr_of_joints = 1;
+        planning::TrajectPoint start_joint_point(nr_of_joints);
+        planning::TrajectPoint end_joint_point(nr_of_joints);
+        planning::TrajectoryParameter traj_param(duration, nr_of_joints);
+        start_joint_point.joint_pos(0) = start_pos;
+        end_joint_point.joint_pos(0) = end_pos;
 
         planning::TrajectoryInitParameters movej_init_para(
             start_joint_point, end_joint_point, traj_param, period);
@@ -51,6 +49,22 @@ namespace arms_controller_common
         }
 
         movej_planner_->setRealStartTime(0.0);
+#else
+        speed_plan_state_.period = std::max(period, 1.0e-4);
+        speed_plan_state_.elapsed_time = 0.0;
+        speed_plan_state_.total_time = std::max(duration, 0.0);
+        speed_plan_state_.start_pos = start_pos;
+        speed_plan_state_.target_pos = end_pos;
+        speed_plan_state_.target_speed = 0.0;
+        speed_plan_state_.max_acc = 0.0;
+        speed_plan_state_.motion_over = (speed_plan_state_.total_time <= min_val);
+        waist_position_cache_ = (speed_plan_state_.total_time <= min_val) ? end_pos : start_pos;
+        waist_velocity_cache_ = 0.0;
+#endif
+#ifdef HAS_LINA_PLANNING
+        waist_position_cache_ = start_pos;
+        waist_velocity_cache_ = 0.0;
+#endif
         return true;
     }
 
@@ -61,13 +75,7 @@ namespace arms_controller_common
     {
         type_speed_ = true;
         current_joint_angle_ = init_joint_angle;
-
-        speedj_planner_ = std::make_unique<planning::SpeedJ>();
-
-        size_t nr_of_joints = 1;
-        planning::TrajectPoint start_joint_point(nr_of_joints);
-        planning::TrajectPoint end_joint_point(nr_of_joints);
-        planning::TrajectoryParameter traj_param(nr_of_joints);
+        double start_pos = 0.0;
 
         if (type_three_joint_)
         {
@@ -76,14 +84,23 @@ namespace arms_controller_common
             threeLinkPlanerFK(init_joint_angle, &init_x, &init_z, &init_phi);
             x_ = init_x;
             phi_ = init_phi;
-            start_joint_point.joint_pos(0) = init_z;
+            start_pos = init_z;
         }
         else
         {
             // 对于单关节，直接规划关节角度
-            start_joint_point.joint_pos(0) = init_joint_angle(0);
+            start_pos = init_joint_angle(0);
         }
-        start_joint_point.joint_vel(0) = velocity_of_waist;
+
+#ifdef HAS_LINA_PLANNING
+        speedj_planner_ = std::make_unique<planning::SpeedJ>();
+
+        size_t nr_of_joints = 1;
+        planning::TrajectPoint start_joint_point(nr_of_joints);
+        planning::TrajectPoint end_joint_point(nr_of_joints);
+        planning::TrajectoryParameter traj_param(nr_of_joints);
+        start_joint_point.joint_pos(0) = start_pos;
+        start_joint_point.joint_vel(0) = waist_velocity_cache_;
         end_joint_point.joint_vel(0) = target_lifting_speed;
         traj_param.joint_max_acc(0) = max_lifting_acc;
         traj_param.joint_max_jerk(0) = max_lifting_jerk;
@@ -108,16 +125,41 @@ namespace arms_controller_common
         }
 
         speedj_planner_->setRealStartTime(0.0);
+#else
+        (void)max_lifting_jerk;
+        speed_plan_state_.period = std::max(period, 1.0e-4);
+        speed_plan_state_.elapsed_time = 0.0;
+        speed_plan_state_.total_time = std::max(total_time, 0.0);
+        speed_plan_state_.start_pos = start_pos;
+        speed_plan_state_.target_pos = start_pos;
+        waist_position_cache_ = start_pos;
+        speed_plan_state_.target_speed = target_lifting_speed;
+        speed_plan_state_.max_acc = std::max(max_lifting_acc, 0.0);
+        speed_plan_state_.motion_over = (std::abs(target_lifting_speed) <= min_val);
+        if (speed_plan_state_.total_time <= min_val || std::abs(target_lifting_speed) <= min_val)
+        {
+            speed_plan_state_.target_speed = 0.0;
+            waist_velocity_cache_ = 0.0;
+            speed_plan_state_.motion_over = true;
+        }
+#endif
+#ifdef HAS_LINA_PLANNING
+        waist_position_cache_ = start_pos;
+#endif
         return true;
     }
 
     void WaistLiftingPlaner::setCurrentVelToZero()
     {
-        velocity_of_waist = 0.0;
+        waist_velocity_cache_ = 0.0;
+        speed_plan_state_.target_speed = 0.0;
+        speed_plan_state_.motion_over = true;
     }
 
     bool WaistLiftingPlaner::calNextPoint(std::vector<double>& next_point)
     {
+        double curr_z = 0.0;
+#ifdef HAS_LINA_PLANNING
         planning::TrajectPoint point(1);
         if (type_speed_)
         {
@@ -127,9 +169,57 @@ namespace arms_controller_common
         {
             point = movej_planner_->run();
         }
-        double curr_z = point.joint_pos(0);
-        position_of_waist = curr_z;
-        velocity_of_waist = point.joint_vel(0);
+        curr_z = point.joint_pos(0);
+        waist_position_cache_ = curr_z;
+        waist_velocity_cache_ = point.joint_vel(0);
+#else
+        if (type_speed_)
+        {
+            if (!speed_plan_state_.motion_over)
+            {
+                const double dt = speed_plan_state_.period;
+                if (speed_plan_state_.max_acc > min_val)
+                {
+                    const double max_delta_v = speed_plan_state_.max_acc * dt;
+                    const double delta_v = std::clamp(speed_plan_state_.target_speed - waist_velocity_cache_,
+                                                      -max_delta_v, max_delta_v);
+                    waist_velocity_cache_ += delta_v;
+                }
+                else
+                {
+                    waist_velocity_cache_ = speed_plan_state_.target_speed;
+                }
+
+                waist_position_cache_ += waist_velocity_cache_ * dt;
+                speed_plan_state_.elapsed_time += dt;
+                if (speed_plan_state_.total_time > min_val &&
+                    speed_plan_state_.elapsed_time >= speed_plan_state_.total_time)
+                {
+                    speed_plan_state_.motion_over = true;
+                }
+            }
+            curr_z = waist_position_cache_;
+        }
+        else
+        {
+            if (!speed_plan_state_.motion_over)
+            {
+                const double duration = std::max(speed_plan_state_.total_time, min_val);
+                speed_plan_state_.elapsed_time = std::min(
+                    speed_plan_state_.elapsed_time + speed_plan_state_.period, duration);
+                const double p = std::clamp(speed_plan_state_.elapsed_time / duration, 0.0, 1.0);
+                const double smooth_p = p * p * (3.0 - 2.0 * p);
+                waist_position_cache_ = speed_plan_state_.start_pos +
+                    (speed_plan_state_.target_pos - speed_plan_state_.start_pos) * smooth_p;
+                if (p >= 1.0 - min_val)
+                {
+                    speed_plan_state_.motion_over = true;
+                }
+            }
+            curr_z = waist_position_cache_;
+            waist_velocity_cache_ = 0.0;
+        }
+#endif
         if (type_three_joint_)
         {
             // 三关节腰部

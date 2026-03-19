@@ -106,6 +106,8 @@ private:
     // Speed scaling factors
     double low_speed_scale_;
     double high_speed_scale_;
+    // Activation threshold for arm axes in ARM mode
+    double arm_axes_activation_threshold_{0.5};
     
     // Chassis speed scaling factors
     double chassis_linear_scale_;

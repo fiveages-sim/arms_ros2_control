@@ -14,7 +14,6 @@ set(CONTROLLER_INCLUDE_DEPENDS
         controller_interface
         std_msgs
         arms_controller_common
-        lina_planning
 )
 
 # find dependencies
@@ -41,11 +40,6 @@ target_include_directories(${PROJECT_NAME}
 ament_target_dependencies(${PROJECT_NAME}
         ${CONTROLLER_INCLUDE_DEPENDS}
 )
-
-# lina_planning linking using keyword signature (after ament_target_dependencies which uses plain signature)
-#if(lina_planning_FOUND)
-#    target_link_libraries(${PROJECT_NAME} PUBLIC lina_planning::lina_planning)
-#endif()
 
 # 然后再链接 Eigen3（也使用 plain signature 保持一致）
 target_link_libraries(${PROJECT_NAME}

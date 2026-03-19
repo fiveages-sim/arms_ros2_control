@@ -26,13 +26,6 @@
 #include <arms_controller_common/FSM/StateHold.h>
 #include <arms_controller_common/CtrlInterfaces.h>
 
-// 直接包含完整的头文件，而不是前向声明
-#include <lina_planning/planning/path_planner/movel.h>
-#include <lina_planning/planning/kinematics/fiveages_w2_fk.h>
-#include <lina_planning/planning/kinematics/fiveages_w2_ik.h>
-#include <lina_planning/planning/common/quaternion.h>
-#include <lina_planning/planning/common/trajectory_init_parameters.h>
-
 namespace basic_joint_controller
 {
     // Use FSM types from arms_controller_common

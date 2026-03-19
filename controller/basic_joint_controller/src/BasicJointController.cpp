@@ -205,9 +205,6 @@ namespace basic_joint_controller
                     // 只有在 MOVEJ 状态时才处理
                     if (!current_state_ || current_state_->state_name != FSMStateName::MOVEJ)
                     {
-                        RCLCPP_WARN_THROTTLE(get_node()->get_logger(),
-                                             *get_node()->get_clock(), 5000,
-                                             "Waist lifting ignored: controller not in MOVEJ state");
                         return;
                     }
 
@@ -240,9 +237,6 @@ namespace basic_joint_controller
                     // 只有在 MOVEJ 状态时才处理
                     if (!current_state_ || current_state_->state_name != FSMStateName::MOVEJ)
                     {
-                        RCLCPP_WARN_THROTTLE(get_node()->get_logger(),
-                                             *get_node()->get_clock(), 5000,
-                                             "Waist lifting ignored: controller not in MOVEJ state");
                         return;
                     }
 
@@ -272,9 +266,6 @@ namespace basic_joint_controller
                 {
                     if (!current_state_ || current_state_->state_name != FSMStateName::MOVEJ)
                     {
-                        RCLCPP_WARN_THROTTLE(get_node()->get_logger(),
-                                             *get_node()->get_clock(), 5000,
-                                             "Waist turning ignored: controller not in MOVEJ state");
                         return;
                     }
 
