@@ -183,8 +183,9 @@ namespace arms_rviz_control_plugin
 
         std::unique_ptr<QTimer> waist_repeat_timer_;
 
-        std::unique_ptr<QFrame> waist_separator_line_;
-        std::unique_ptr<QLabel> waist_joint_section_label_;
+        std::unique_ptr<QWidget> scroll_content_widget_;
+        std::unique_ptr<QVBoxLayout> scroll_content_layout_;
+        std::unique_ptr<QGroupBox> waist_group_box_;
 
         bool waist_up_pressed_ = false;
         bool waist_down_pressed_ = false;

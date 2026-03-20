@@ -29,40 +29,46 @@ namespace arms_rviz_control_plugin
         category_layout_->addStretch();
         main_layout->addLayout(category_layout_.get());
 
-        // Create scroll area for joint controls
+        // Create scroll area for controls
         scroll_area_ = std::make_unique<QScrollArea>(this);
         scroll_area_->setWidgetResizable(true);
         scroll_area_->setVisible(false);
 
-        // Create group box for joint controls (no title)
-        joint_control_group_ = std::make_unique<QGroupBox>(this);
-        joint_control_group_->setTitle(""); // Hide title
+        // Create scroll content widget
+        scroll_content_widget_ = std::make_unique<QWidget>(this);
+        scroll_content_layout_ = std::make_unique<QVBoxLayout>(scroll_content_widget_.get());
+        scroll_content_layout_->setSpacing(8);
+        scroll_content_layout_->setContentsMargins(0, 0, 0, 0);
+
+        // Create waist control group box
+        waist_group_box_ = std::make_unique<QGroupBox>("腰部控制", scroll_content_widget_.get());
+        waist_group_box_->setStyleSheet("QGroupBox { font-weight: bold; }");
+        waist_control_layout_ = std::make_unique<QVBoxLayout>(waist_group_box_.get());
+        waist_control_layout_->setSpacing(8);
+
+        // Create original joint control group box (keep original style)
+        joint_control_group_ = std::make_unique<QGroupBox>(scroll_content_widget_.get());
+        joint_control_group_->setTitle(""); // keep original appearance
         joint_layout_ = std::make_unique<QVBoxLayout>(joint_control_group_.get());
         joint_layout_->setSpacing(5);
-
-        // =========================
-        // Waist control widgets (shown only in body category)
-        // =========================
-        waist_control_layout_ = std::make_unique<QVBoxLayout>();
-        waist_control_layout_->setSpacing(8);
 
         // Lifting scale
         waist_lifting_layout_ = std::make_unique<QVBoxLayout>();
         waist_lifting_layout_->setSpacing(4);
 
-        waist_lifting_label_ = std::make_unique<QLabel>("腰部升降速度比例:", joint_control_group_.get());
+        waist_lifting_label_ = std::make_unique<QLabel>("腰部升降速度比例:", waist_group_box_.get());
         waist_lifting_label_->setStyleSheet("QLabel { font-weight: bold; }");
         waist_lifting_layout_->addWidget(waist_lifting_label_.get());
 
         waist_lifting_slider_layout_ = std::make_unique<QHBoxLayout>();
 
-        waist_lifting_slider_ = std::make_unique<QSlider>(Qt::Horizontal, joint_control_group_.get());
+        waist_lifting_slider_ = std::make_unique<QSlider>(Qt::Horizontal, waist_group_box_.get());
         waist_lifting_slider_->setRange(0, 100);
         waist_lifting_slider_->setValue(50);
         waist_lifting_slider_->setSingleStep(1);
         waist_lifting_slider_->setPageStep(5);
 
-        waist_lifting_value_label_ = std::make_unique<QLabel>("0.50", joint_control_group_.get());
+        waist_lifting_value_label_ = std::make_unique<QLabel>("0.50", waist_group_box_.get());
         waist_lifting_value_label_->setMinimumWidth(50);
         waist_lifting_value_label_->setAlignment(Qt::AlignRight | Qt::AlignVCenter);
 
@@ -79,19 +85,19 @@ namespace arms_rviz_control_plugin
         waist_turning_layout_ = std::make_unique<QVBoxLayout>();
         waist_turning_layout_->setSpacing(4);
 
-        waist_turning_label_ = std::make_unique<QLabel>("腰部旋转速度比例:", joint_control_group_.get());
+        waist_turning_label_ = std::make_unique<QLabel>("腰部旋转速度比例:", waist_group_box_.get());
         waist_turning_label_->setStyleSheet("QLabel { font-weight: bold; }");
         waist_turning_layout_->addWidget(waist_turning_label_.get());
 
         waist_turning_slider_layout_ = std::make_unique<QHBoxLayout>();
 
-        waist_turning_slider_ = std::make_unique<QSlider>(Qt::Horizontal, joint_control_group_.get());
+        waist_turning_slider_ = std::make_unique<QSlider>(Qt::Horizontal, waist_group_box_.get());
         waist_turning_slider_->setRange(0, 100);
         waist_turning_slider_->setValue(50);
         waist_turning_slider_->setSingleStep(1);
         waist_turning_slider_->setPageStep(5);
 
-        waist_turning_value_label_ = std::make_unique<QLabel>("0.50", joint_control_group_.get());
+        waist_turning_value_label_ = std::make_unique<QLabel>("0.50", waist_group_box_.get());
         waist_turning_value_label_->setMinimumWidth(50);
         waist_turning_value_label_->setAlignment(Qt::AlignRight | Qt::AlignVCenter);
 
@@ -108,10 +114,10 @@ namespace arms_rviz_control_plugin
         waist_button_layout_top_ = std::make_unique<QHBoxLayout>();
         waist_button_layout_bottom_ = std::make_unique<QHBoxLayout>();
 
-        waist_up_button_ = std::make_unique<QPushButton>("上升", joint_control_group_.get());
-        waist_down_button_ = std::make_unique<QPushButton>("下降", joint_control_group_.get());
-        waist_left_button_ = std::make_unique<QPushButton>("左转", joint_control_group_.get());
-        waist_right_button_ = std::make_unique<QPushButton>("右转", joint_control_group_.get());
+        waist_up_button_ = std::make_unique<QPushButton>("上升", waist_group_box_.get());
+        waist_down_button_ = std::make_unique<QPushButton>("下降", waist_group_box_.get());
+        waist_left_button_ = std::make_unique<QPushButton>("左转", waist_group_box_.get());
+        waist_right_button_ = std::make_unique<QPushButton>("右转", waist_group_box_.get());
 
         waist_up_button_->setStyleSheet(
             "QPushButton { background-color: #5cb85c; color: white; font-weight: bold; padding: 8px; }");
@@ -143,26 +149,6 @@ namespace arms_rviz_control_plugin
         waist_control_layout_->addLayout(waist_button_layout_top_.get());
         waist_control_layout_->addLayout(waist_button_layout_bottom_.get());
 
-        // Add waist control layout before joint rows
-        joint_layout_->addLayout(waist_control_layout_.get());
-
-        // Separator between waist controls and joint controls
-        // Separator
-        waist_separator_line_ = std::make_unique<QFrame>(joint_control_group_.get());
-        waist_separator_line_->setFrameShape(QFrame::HLine);
-        waist_separator_line_->setFrameShadow(QFrame::Sunken);
-        waist_separator_line_->setStyleSheet(
-            "QFrame { color: #999999; margin-top: 6px; margin-bottom: 6px; }");
-
-        joint_layout_->addWidget(waist_separator_line_.get());
-
-        // Label
-        waist_joint_section_label_ = std::make_unique<QLabel>("关节控制", joint_control_group_.get());
-        waist_joint_section_label_->setStyleSheet(
-            "QLabel { font-weight: bold; color: #666666; padding-bottom: 4px; }");
-
-        joint_layout_->addWidget(waist_joint_section_label_.get());
-
         waist_repeat_timer_ = std::make_unique<QTimer>(this);
         waist_repeat_timer_->setInterval(100);
         connect(waist_repeat_timer_.get(), &QTimer::timeout,
@@ -170,8 +156,12 @@ namespace arms_rviz_control_plugin
 
         updateWaistScaleLabels();
 
-        // Add group box to scroll area
-        scroll_area_->setWidget(joint_control_group_.get());
+        // Add both boxes into scroll content
+        scroll_content_layout_->addWidget(waist_group_box_.get());
+        scroll_content_layout_->addWidget(joint_control_group_.get());
+
+        // Set scroll content
+        scroll_area_->setWidget(scroll_content_widget_.get());
         main_layout->addWidget(scroll_area_.get());
 
         // Create send button
@@ -689,40 +679,9 @@ namespace arms_rviz_control_plugin
 
     void JointControlPanel::updateWaistControlsVisibility(bool visible)
     {
-        if (waist_control_layout_)
+        if (waist_group_box_)
         {
-            for (int i = 0; i < waist_control_layout_->count(); ++i)
-            {
-                QLayoutItem* item = waist_control_layout_->itemAt(i);
-                if (item && item->widget())
-                {
-                    item->widget()->setVisible(visible);
-                }
-                else if (item && item->layout())
-                {
-                    QLayout* sub_layout = item->layout();
-                    for (int j = 0; j < sub_layout->count(); ++j)
-                    {
-                        QLayoutItem* sub_item = sub_layout->itemAt(j);
-                        if (sub_item && sub_item->widget())
-                        {
-                            sub_item->widget()->setVisible(visible);
-                        }
-                        else if (sub_item && sub_item->layout())
-                        {
-                            QLayout* sub_sub_layout = sub_item->layout();
-                            for (int k = 0; k < sub_sub_layout->count(); ++k)
-                            {
-                                QLayoutItem* sub_sub_item = sub_sub_layout->itemAt(k);
-                                if (sub_sub_item && sub_sub_item->widget())
-                                {
-                                    sub_sub_item->widget()->setVisible(visible);
-                                }
-                            }
-                        }
-                    }
-                }
-            }
+            waist_group_box_->setVisible(visible);
         }
 
         if (!visible)
@@ -739,15 +698,6 @@ namespace arms_rviz_control_plugin
 
             stopWaistLifting();
             stopWaistTurning();
-        }
-        if (waist_separator_line_)
-        {
-            waist_separator_line_->setVisible(visible);
-        }
-
-        if (waist_joint_section_label_)
-        {
-            waist_joint_section_label_->setVisible(visible);
         }
     }
 
