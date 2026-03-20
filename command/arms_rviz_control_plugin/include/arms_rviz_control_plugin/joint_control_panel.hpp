@@ -25,6 +25,7 @@
 #include <std_msgs/msg/string.hpp>
 #include <geometry_msgs/msg/pose_stamped.hpp>
 #include <arms_controller_common/utils/JointLimitsManager.h>
+#include <rclcpp/parameter_client.hpp>
 
 namespace arms_rviz_control_plugin
 {
@@ -94,6 +95,8 @@ namespace arms_rviz_control_plugin
         void updateWaistControlsVisibility(bool visible);
 
         void onBodyCurrentTargetReceived(const std_msgs::msg::Float64MultiArray::SharedPtr msg);
+
+        void refreshWaistEnabledState();
 
         // ROS2
         rclcpp::Node::SharedPtr node_;
@@ -191,5 +194,7 @@ namespace arms_rviz_control_plugin
         bool waist_down_pressed_ = false;
         bool waist_left_pressed_ = false;
         bool waist_right_pressed_ = false;
+        bool is_waist_enabled_ = false;
+        bool waist_enabled_checked_ = false;
     };
 } // namespace arms_rviz_control_plugin
