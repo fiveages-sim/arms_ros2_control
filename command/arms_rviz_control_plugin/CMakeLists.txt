@@ -21,7 +21,6 @@ qt5_wrap_cpp(MOC_FILES
         include/arms_rviz_control_plugin/ocs2_fsm_panel.hpp
         include/arms_rviz_control_plugin/gripper_control_panel.hpp
         include/arms_rviz_control_plugin/joint_control_panel.hpp
-        include/arms_rviz_control_plugin/waist_control_panel.hpp
 )
 
 # 设置源代码文件列表
@@ -29,7 +28,6 @@ set(SRC_FILES
         src/ocs2_fsm_panel.cpp
         src/gripper_control_panel.cpp
         src/joint_control_panel.cpp
-        src/waist_control_panel.cpp
 )
 
 # Include directories
