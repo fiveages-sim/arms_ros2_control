@@ -17,4 +17,10 @@
     base_class_type="rviz_common::Panel">
     <description>Joint Control Panel for adjusting joint positions when command is 3 or 4</description>
   </class>
+  <class
+    name="arms_rviz_control_plugin/WaistControlPanel"
+    type="arms_rviz_control_plugin::WaistControlPanel"
+    base_class_type="rviz_common::Panel">
+    <description>Panel for controlling waist lifting and waist turning commands.</description>
+  </class>
 </library>
