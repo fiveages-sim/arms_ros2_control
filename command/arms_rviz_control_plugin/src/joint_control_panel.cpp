@@ -40,6 +40,119 @@ namespace arms_rviz_control_plugin
         joint_layout_ = std::make_unique<QVBoxLayout>(joint_control_group_.get());
         joint_layout_->setSpacing(5);
 
+        // =========================
+        // Waist control widgets (shown only in body category)
+        // =========================
+        waist_control_layout_ = std::make_unique<QVBoxLayout>();
+        waist_control_layout_->setSpacing(8);
+
+        // Lifting scale
+        waist_lifting_layout_ = std::make_unique<QVBoxLayout>();
+        waist_lifting_layout_->setSpacing(4);
+
+        waist_lifting_label_ = std::make_unique<QLabel>("腰部升降速度比例:", joint_control_group_.get());
+        waist_lifting_label_->setStyleSheet("QLabel { font-weight: bold; }");
+        waist_lifting_layout_->addWidget(waist_lifting_label_.get());
+
+        waist_lifting_slider_layout_ = std::make_unique<QHBoxLayout>();
+
+        waist_lifting_slider_ = std::make_unique<QSlider>(Qt::Horizontal, joint_control_group_.get());
+        waist_lifting_slider_->setRange(0, 100);
+        waist_lifting_slider_->setValue(50);
+        waist_lifting_slider_->setSingleStep(1);
+        waist_lifting_slider_->setPageStep(5);
+
+        waist_lifting_value_label_ = std::make_unique<QLabel>("0.50", joint_control_group_.get());
+        waist_lifting_value_label_->setMinimumWidth(50);
+        waist_lifting_value_label_->setAlignment(Qt::AlignRight | Qt::AlignVCenter);
+
+        connect(waist_lifting_slider_.get(), &QSlider::valueChanged,
+                this, &JointControlPanel::onWaistLiftingSliderChanged);
+
+        waist_lifting_slider_layout_->addWidget(waist_lifting_slider_.get());
+        waist_lifting_slider_layout_->addWidget(waist_lifting_value_label_.get());
+
+        waist_lifting_layout_->addLayout(waist_lifting_slider_layout_.get());
+        waist_control_layout_->addLayout(waist_lifting_layout_.get());
+
+        // Turning scale
+        waist_turning_layout_ = std::make_unique<QVBoxLayout>();
+        waist_turning_layout_->setSpacing(4);
+
+        waist_turning_label_ = std::make_unique<QLabel>("腰部旋转速度比例:", joint_control_group_.get());
+        waist_turning_label_->setStyleSheet("QLabel { font-weight: bold; }");
+        waist_turning_layout_->addWidget(waist_turning_label_.get());
+
+        waist_turning_slider_layout_ = std::make_unique<QHBoxLayout>();
+
+        waist_turning_slider_ = std::make_unique<QSlider>(Qt::Horizontal, joint_control_group_.get());
+        waist_turning_slider_->setRange(0, 100);
+        waist_turning_slider_->setValue(50);
+        waist_turning_slider_->setSingleStep(1);
+        waist_turning_slider_->setPageStep(5);
+
+        waist_turning_value_label_ = std::make_unique<QLabel>("0.50", joint_control_group_.get());
+        waist_turning_value_label_->setMinimumWidth(50);
+        waist_turning_value_label_->setAlignment(Qt::AlignRight | Qt::AlignVCenter);
+
+        connect(waist_turning_slider_.get(), &QSlider::valueChanged,
+                this, &JointControlPanel::onWaistTurningSliderChanged);
+
+        waist_turning_slider_layout_->addWidget(waist_turning_slider_.get());
+        waist_turning_slider_layout_->addWidget(waist_turning_value_label_.get());
+
+        waist_turning_layout_->addLayout(waist_turning_slider_layout_.get());
+        waist_control_layout_->addLayout(waist_turning_layout_.get());
+
+        // Buttons
+        waist_button_layout_top_ = std::make_unique<QHBoxLayout>();
+        waist_button_layout_bottom_ = std::make_unique<QHBoxLayout>();
+
+        waist_up_button_ = std::make_unique<QPushButton>("上升", joint_control_group_.get());
+        waist_down_button_ = std::make_unique<QPushButton>("下降", joint_control_group_.get());
+        waist_left_button_ = std::make_unique<QPushButton>("左转", joint_control_group_.get());
+        waist_right_button_ = std::make_unique<QPushButton>("右转", joint_control_group_.get());
+
+        waist_up_button_->setStyleSheet(
+            "QPushButton { background-color: #5cb85c; color: white; font-weight: bold; padding: 8px; }");
+        waist_down_button_->setStyleSheet(
+            "QPushButton { background-color: #f0ad4e; color: white; font-weight: bold; padding: 8px; }");
+        waist_left_button_->setStyleSheet(
+            "QPushButton { background-color: #5bc0de; color: white; font-weight: bold; padding: 8px; }");
+        waist_right_button_->setStyleSheet(
+            "QPushButton { background-color: #337ab7; color: white; font-weight: bold; padding: 8px; }");
+
+        connect(waist_up_button_.get(), &QPushButton::pressed, this, &JointControlPanel::onWaistUpPressed);
+        connect(waist_up_button_.get(), &QPushButton::released, this, &JointControlPanel::onWaistUpReleased);
+
+        connect(waist_down_button_.get(), &QPushButton::pressed, this, &JointControlPanel::onWaistDownPressed);
+        connect(waist_down_button_.get(), &QPushButton::released, this, &JointControlPanel::onWaistDownReleased);
+
+        connect(waist_left_button_.get(), &QPushButton::pressed, this, &JointControlPanel::onWaistLeftPressed);
+        connect(waist_left_button_.get(), &QPushButton::released, this, &JointControlPanel::onWaistLeftReleased);
+
+        connect(waist_right_button_.get(), &QPushButton::pressed, this, &JointControlPanel::onWaistRightPressed);
+        connect(waist_right_button_.get(), &QPushButton::released, this, &JointControlPanel::onWaistRightReleased);
+
+        waist_button_layout_top_->addWidget(waist_up_button_.get());
+        waist_button_layout_top_->addWidget(waist_down_button_.get());
+
+        waist_button_layout_bottom_->addWidget(waist_left_button_.get());
+        waist_button_layout_bottom_->addWidget(waist_right_button_.get());
+
+        waist_control_layout_->addLayout(waist_button_layout_top_.get());
+        waist_control_layout_->addLayout(waist_button_layout_bottom_.get());
+
+        // Add waist control layout before joint rows
+        joint_layout_->addLayout(waist_control_layout_.get());
+
+        waist_repeat_timer_ = std::make_unique<QTimer>(this);
+        waist_repeat_timer_->setInterval(100);
+        connect(waist_repeat_timer_.get(), &QTimer::timeout,
+                this, &JointControlPanel::onWaistRepeatTimeout);
+
+        updateWaistScaleLabels();
+
         // Add group box to scroll area
         scroll_area_->setWidget(joint_control_group_.get());
         main_layout->addWidget(scroll_area_.get());
@@ -197,6 +310,12 @@ namespace arms_rviz_control_plugin
         right_current_target_subscriber_ = node_->create_subscription<geometry_msgs::msg::PoseStamped>(
             "right_current_target", 10,
             std::bind(&JointControlPanel::onRightCurrentTargetReceived, this, std::placeholders::_1));
+        
+        waist_lifting_publisher_ = node_->create_publisher<std_msgs::msg::Float64>(
+            "/body_joint_controller/waist_lifting_command", 10);
+
+        waist_turning_publisher_ = node_->create_publisher<std_msgs::msg::Float64>(
+            "/body_joint_controller/waist_turning_command", 10);
 
         // Initialize publisher (will be updated when category changes)
         updatePublisher();
@@ -498,7 +617,6 @@ namespace arms_rviz_control_plugin
                 }
             }
         }
-
         // When command is 4 (MOVEJ), hide button for left/right categories
         // NOTE: Now enabled - button will show in MOVEJ mode for left/right categories
         // if (current_command_ == 4)
@@ -510,6 +628,61 @@ namespace arms_rviz_control_plugin
         // }
 
         return true;
+    }
+
+    void JointControlPanel::updateWaistControlsVisibility(bool visible)
+    {
+        if (waist_control_layout_)
+        {
+            for (int i = 0; i < waist_control_layout_->count(); ++i)
+            {
+                QLayoutItem* item = waist_control_layout_->itemAt(i);
+                if (item && item->widget())
+                {
+                    item->widget()->setVisible(visible);
+                }
+                else if (item && item->layout())
+                {
+                    QLayout* sub_layout = item->layout();
+                    for (int j = 0; j < sub_layout->count(); ++j)
+                    {
+                        QLayoutItem* sub_item = sub_layout->itemAt(j);
+                        if (sub_item && sub_item->widget())
+                        {
+                            sub_item->widget()->setVisible(visible);
+                        }
+                        else if (sub_item && sub_item->layout())
+                        {
+                            QLayout* sub_sub_layout = sub_item->layout();
+                            for (int k = 0; k < sub_sub_layout->count(); ++k)
+                            {
+                                QLayoutItem* sub_sub_item = sub_sub_layout->itemAt(k);
+                                if (sub_sub_item && sub_sub_item->widget())
+                                {
+                                    sub_sub_item->widget()->setVisible(visible);
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        if (!visible)
+        {
+            waist_up_pressed_ = false;
+            waist_down_pressed_ = false;
+            waist_left_pressed_ = false;
+            waist_right_pressed_ = false;
+
+            if (waist_repeat_timer_ && waist_repeat_timer_->isActive())
+            {
+                waist_repeat_timer_->stop();
+            }
+
+            stopWaistLifting();
+            stopWaistTurning();
+        }
     }
 
     void JointControlPanel::updatePanelVisibility()
@@ -886,6 +1059,9 @@ namespace arms_rviz_control_plugin
                 }
             }
         }
+
+        // Waist controls only visible in body category
+        updateWaistControlsVisibility(current_category_ == "body");
     }
 
     void JointControlPanel::onSendButtonClicked()
@@ -1041,6 +1217,207 @@ namespace arms_rviz_control_plugin
         auto msg = std_msgs::msg::Float64MultiArray();
         msg.data = target_positions;
         joint_position_publisher_->publish(msg);
+    }
+
+    void JointControlPanel::onWaistLiftingSliderChanged(int)
+    {
+        updateWaistScaleLabels();
+    }
+
+    void JointControlPanel::onWaistTurningSliderChanged(int)
+    {
+        updateWaistScaleLabels();
+    }
+
+    double JointControlPanel::getWaistLiftingScale() const
+    {
+        if (!waist_lifting_slider_)
+        {
+            return 0.0;
+        }
+        return static_cast<double>(waist_lifting_slider_->value()) / 100.0;
+    }
+
+    double JointControlPanel::getWaistTurningScale() const
+    {
+        if (!waist_turning_slider_)
+        {
+            return 0.0;
+        }
+        return static_cast<double>(waist_turning_slider_->value()) / 100.0;
+    }
+
+    void JointControlPanel::updateWaistScaleLabels()
+    {
+        if (waist_lifting_value_label_)
+        {
+            waist_lifting_value_label_->setText(QString::number(getWaistLiftingScale(), 'f', 2));
+        }
+        if (waist_turning_value_label_)
+        {
+            waist_turning_value_label_->setText(QString::number(getWaistTurningScale(), 'f', 2));
+        }
+    }
+
+    void JointControlPanel::publishWaistLifting(double value)
+    {
+        if (!waist_lifting_publisher_)
+        {
+            return;
+        }
+
+        std_msgs::msg::Float64 msg;
+        msg.data = value;
+        waist_lifting_publisher_->publish(msg);
+    }
+
+    void JointControlPanel::publishWaistTurning(double value)
+    {
+        if (!waist_turning_publisher_)
+        {
+            return;
+        }
+
+        std_msgs::msg::Float64 msg;
+        msg.data = value;
+        waist_turning_publisher_->publish(msg);
+    }
+
+    void JointControlPanel::stopWaistLifting()
+    {
+        publishWaistLifting(0.0);
+    }
+
+    void JointControlPanel::stopWaistTurning()
+    {
+        publishWaistTurning(0.0);
+    }
+
+    void JointControlPanel::updateWaistRepeatTimerState()
+    {
+        const bool any_pressed =
+            waist_up_pressed_ || waist_down_pressed_ || waist_left_pressed_ || waist_right_pressed_;
+
+        if (any_pressed)
+        {
+            if (waist_repeat_timer_ && !waist_repeat_timer_->isActive())
+            {
+                waist_repeat_timer_->start();
+            }
+        }
+        else
+        {
+            if (waist_repeat_timer_ && waist_repeat_timer_->isActive())
+            {
+                waist_repeat_timer_->stop();
+            }
+        }
+    }
+
+    void JointControlPanel::onWaistUpPressed()
+    {
+        waist_up_pressed_ = true;
+        waist_down_pressed_ = false;
+
+        publishWaistLifting(getWaistLiftingScale());
+        updateWaistRepeatTimerState();
+    }
+
+    void JointControlPanel::onWaistUpReleased()
+    {
+        waist_up_pressed_ = false;
+
+        if (!waist_down_pressed_)
+        {
+            stopWaistLifting();
+        }
+
+        updateWaistRepeatTimerState();
+    }
+
+    void JointControlPanel::onWaistDownPressed()
+    {
+        waist_down_pressed_ = true;
+        waist_up_pressed_ = false;
+
+        publishWaistLifting(-getWaistLiftingScale());
+        updateWaistRepeatTimerState();
+    }
+
+    void JointControlPanel::onWaistDownReleased()
+    {
+        waist_down_pressed_ = false;
+
+        if (!waist_up_pressed_)
+        {
+            stopWaistLifting();
+        }
+
+        updateWaistRepeatTimerState();
+    }
+
+    void JointControlPanel::onWaistLeftPressed()
+    {
+        waist_left_pressed_ = true;
+        waist_right_pressed_ = false;
+
+        publishWaistTurning(-getWaistTurningScale());
+        updateWaistRepeatTimerState();
+    }
+
+    void JointControlPanel::onWaistLeftReleased()
+    {
+        waist_left_pressed_ = false;
+
+        if (!waist_right_pressed_)
+        {
+            stopWaistTurning();
+        }
+
+        updateWaistRepeatTimerState();
+    }
+
+    void JointControlPanel::onWaistRightPressed()
+    {
+        waist_right_pressed_ = true;
+        waist_left_pressed_ = false;
+
+        // 这里用你当前测试正确的符号
+        publishWaistTurning(getWaistTurningScale());
+        updateWaistRepeatTimerState();
+    }
+
+    void JointControlPanel::onWaistRightReleased()
+    {
+        waist_right_pressed_ = false;
+
+        if (!waist_left_pressed_)
+        {
+            stopWaistTurning();
+        }
+
+        updateWaistRepeatTimerState();
+    }
+
+    void JointControlPanel::onWaistRepeatTimeout()
+    {
+        if (waist_up_pressed_ && !waist_down_pressed_)
+        {
+            publishWaistLifting(getWaistLiftingScale());
+        }
+        else if (waist_down_pressed_ && !waist_up_pressed_)
+        {
+            publishWaistLifting(-getWaistLiftingScale());
+        }
+
+        if (waist_left_pressed_ && !waist_right_pressed_)
+        {
+            publishWaistTurning(-getWaistTurningScale());
+        }
+        else if (waist_right_pressed_ && !waist_left_pressed_)
+        {
+            publishWaistTurning(getWaistTurningScale());
+        }
     }
 
     void JointControlPanel::updateSpinboxRanges()
