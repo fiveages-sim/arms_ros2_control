@@ -26,19 +26,8 @@ set(CONTROLLER_INCLUDE_DEPENDS
 
 # find dependencies
 find_package(ament_cmake REQUIRED)
-# Optional: enable circular trajectory support when lina_planning is available
+# lina_planning is optional - circle trajectory support requires it
 find_package(lina_planning QUIET)
-if(NOT lina_planning_FOUND)
-    # Auto-hint for typical colcon workspace layout:
-    # <ws>/src/arms_ros2_control/controller/ocs2_arm_controller (this package)
-    # <ws>/install/lina_planning/share/lina_planning/cmake (installed config)
-    get_filename_component(_ws_root "${CMAKE_CURRENT_SOURCE_DIR}/../../../../" ABSOLUTE)
-    set(_lina_planning_hint "${_ws_root}/install/lina_planning/share/lina_planning/cmake")
-    if(EXISTS "${_lina_planning_hint}/lina_planningConfig.cmake")
-        set(lina_planning_DIR "${_lina_planning_hint}")
-        find_package(lina_planning QUIET)
-    endif()
-endif()
 foreach (Dependency IN ITEMS ${CONTROLLER_INCLUDE_DEPENDS})
     find_package(${Dependency} REQUIRED)
 endforeach ()
