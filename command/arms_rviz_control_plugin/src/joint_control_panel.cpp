@@ -333,6 +333,10 @@ namespace arms_rviz_control_plugin
 
         waist_turning_publisher_ = node_->create_publisher<std_msgs::msg::Float64>(
             "/body_joint_controller/waist_turning_command", 10);
+        
+        body_current_target_subscriber_ = node_->create_subscription<std_msgs::msg::Float64MultiArray>(
+            "/body_joint_controller/current_target_joint", 10,
+            std::bind(&JointControlPanel::onBodyCurrentTargetReceived, this, std::placeholders::_1));
 
         // Initialize publisher (will be updated when category changes)
         updatePublisher();
@@ -351,6 +355,42 @@ namespace arms_rviz_control_plugin
                 categories_str += cat;
             }
             RCLCPP_INFO(node_->get_logger(), "Available categories: %s", categories_str.c_str());
+        }
+    }
+
+    void JointControlPanel::onBodyCurrentTargetReceived(
+        const std_msgs::msg::Float64MultiArray::SharedPtr msg)
+    {
+        if (!joints_initialized_ || !msg)
+        {
+            return;
+        }
+
+        auto it = category_to_joints_.find("body");
+        if (it == category_to_joints_.end() || it->second.empty())
+        {
+            return;
+        }
+
+        const auto& body_joint_indices = it->second;
+        size_t update_count = std::min(body_joint_indices.size(), msg->data.size());
+
+        for (size_t i = 0; i < update_count; ++i)
+        {
+            size_t joint_idx = body_joint_indices[i];
+            double target_value = msg->data[i];
+
+            if (joint_idx < joint_positions_.size())
+            {
+                joint_positions_[joint_idx] = target_value;
+            }
+
+            if (joint_idx < joint_spinboxes_.size() && joint_spinboxes_[joint_idx])
+            {
+                bool was_blocked = joint_spinboxes_[joint_idx]->blockSignals(true);
+                joint_spinboxes_[joint_idx]->setValue(target_value);
+                joint_spinboxes_[joint_idx]->blockSignals(was_blocked);
+            }
         }
     }
 

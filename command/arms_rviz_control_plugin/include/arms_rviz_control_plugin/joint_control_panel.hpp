@@ -93,6 +93,8 @@ namespace arms_rviz_control_plugin
 
         void updateWaistControlsVisibility(bool visible);
 
+        void onBodyCurrentTargetReceived(const std_msgs::msg::Float64MultiArray::SharedPtr msg);
+
         // ROS2
         rclcpp::Node::SharedPtr node_;
         rclcpp::Subscription<std_msgs::msg::Int32>::SharedPtr fsm_command_subscriber_;
@@ -105,6 +107,7 @@ namespace arms_rviz_control_plugin
         rclcpp::Subscription<geometry_msgs::msg::PoseStamped>::SharedPtr right_current_target_subscriber_;
         rclcpp::Publisher<std_msgs::msg::Float64>::SharedPtr waist_lifting_publisher_;
         rclcpp::Publisher<std_msgs::msg::Float64>::SharedPtr waist_turning_publisher_;
+        rclcpp::Subscription<std_msgs::msg::Float64MultiArray>::SharedPtr body_current_target_subscriber_;
 
         // Frame IDs from current_target topics
         std::string left_target_frame_id_;
