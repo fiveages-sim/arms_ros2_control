@@ -116,11 +116,11 @@ namespace arms_rviz_control_plugin
         waist_up_button_->setStyleSheet(
             "QPushButton { background-color: #5cb85c; color: white; font-weight: bold; padding: 8px; }");
         waist_down_button_->setStyleSheet(
-            "QPushButton { background-color: #f0ad4e; color: white; font-weight: bold; padding: 8px; }");
+            "QPushButton { background-color: #5cb85c; color: white; font-weight: bold; padding: 8px; }");
         waist_left_button_->setStyleSheet(
             "QPushButton { background-color: #5bc0de; color: white; font-weight: bold; padding: 8px; }");
         waist_right_button_->setStyleSheet(
-            "QPushButton { background-color: #337ab7; color: white; font-weight: bold; padding: 8px; }");
+            "QPushButton { background-color: #5bc0de; color: white; font-weight: bold; padding: 8px; }");
 
         connect(waist_up_button_.get(), &QPushButton::pressed, this, &JointControlPanel::onWaistUpPressed);
         connect(waist_up_button_.get(), &QPushButton::released, this, &JointControlPanel::onWaistUpReleased);
@@ -145,6 +145,23 @@ namespace arms_rviz_control_plugin
 
         // Add waist control layout before joint rows
         joint_layout_->addLayout(waist_control_layout_.get());
+
+        // Separator between waist controls and joint controls
+        // Separator
+        waist_separator_line_ = std::make_unique<QFrame>(joint_control_group_.get());
+        waist_separator_line_->setFrameShape(QFrame::HLine);
+        waist_separator_line_->setFrameShadow(QFrame::Sunken);
+        waist_separator_line_->setStyleSheet(
+            "QFrame { color: #999999; margin-top: 6px; margin-bottom: 6px; }");
+
+        joint_layout_->addWidget(waist_separator_line_.get());
+
+        // Label
+        waist_joint_section_label_ = std::make_unique<QLabel>("关节控制", joint_control_group_.get());
+        waist_joint_section_label_->setStyleSheet(
+            "QLabel { font-weight: bold; color: #666666; padding-bottom: 4px; }");
+
+        joint_layout_->addWidget(waist_joint_section_label_.get());
 
         waist_repeat_timer_ = std::make_unique<QTimer>(this);
         waist_repeat_timer_->setInterval(100);
@@ -682,6 +699,15 @@ namespace arms_rviz_control_plugin
 
             stopWaistLifting();
             stopWaistTurning();
+        }
+        if (waist_separator_line_)
+        {
+            waist_separator_line_->setVisible(visible);
+        }
+
+        if (waist_joint_section_label_)
+        {
+            waist_joint_section_label_->setVisible(visible);
         }
     }
 

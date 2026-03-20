@@ -180,6 +180,9 @@ namespace arms_rviz_control_plugin
 
         std::unique_ptr<QTimer> waist_repeat_timer_;
 
+        std::unique_ptr<QFrame> waist_separator_line_;
+        std::unique_ptr<QLabel> waist_joint_section_label_;
+
         bool waist_up_pressed_ = false;
         bool waist_down_pressed_ = false;
         bool waist_left_pressed_ = false;
