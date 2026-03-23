@@ -175,6 +175,19 @@ namespace ocs2::mobile_manipulator
         path_subscriber_ = node->create_subscription<nav_msgs::msg::Path>(
             "target_path", 1, pathCallback);
 
+        auto executePathCallback =
+            [this](const std::shared_ptr<rmw_request_id_t> request_header,
+                   const std::shared_ptr<arms_ros2_control_msgs::srv::ExecutePath::Request>
+                       request,
+                   std::shared_ptr<arms_ros2_control_msgs::srv::ExecutePath::Response> response)
+        {
+            (void)request_header;
+            this->handleExecutePathService(request, response);
+        };
+        execute_path_service_ =
+            node->create_service<arms_ros2_control_msgs::srv::ExecutePath>(
+                "execute_path", executePathCallback);
+
         // 初始化发布器：发布当前目标
         left_target_publisher_ =
             node->create_publisher<geometry_msgs::msg::PoseStamped>(
@@ -722,31 +735,34 @@ namespace ocs2::mobile_manipulator
             }
         }
 
-        // 为每个臂生成插值轨迹
+        runInterpolatedPathTrajectory(left_arm_waypoints, right_arm_waypoints,
+                                      trajectory_duration_);
+    }
+
+    void PoseBasedReferenceManager::runInterpolatedPathTrajectory(
+        const std::vector<vector_t>& left_arm_waypoints,
+        const std::vector<vector_t>& right_arm_waypoints,
+        double trajectory_duration_sec)
+    {
         // 采样间隔（秒）
         constexpr double kSampleInterval = 0.04; // 0.04秒一个采样点（25Hz）
 
-        // 根据时间长度动态计算采样点数量
         const size_t kNumSamples = std::max(
-            static_cast<size_t>(std::ceil(trajectory_duration_ / kSampleInterval)) +
-            1,
-            static_cast<size_t>(2) // 至少2个采样点
-        );
+            static_cast<size_t>(std::ceil(trajectory_duration_sec / kSampleInterval)) +
+                1,
+            static_cast<size_t>(2));
 
         const double t0 = current_observation_.time;
-        const double t1 = t0 + trajectory_duration_;
+        const double t1 = t0 + trajectory_duration_sec;
         const double dt = (t1 - t0) / static_cast<double>(kNumSamples - 1);
 
-        // 插值函数（复用现有的interpolatePose7逻辑）
         auto interpolatePose7 = [](const vector_t& s0, const vector_t& s1,
                                    double alpha) -> vector_t
         {
             vector_t out = vector_t::Zero(7);
-            // position
             out.segment<3>(0) =
                 (1.0 - alpha) * s0.segment<3>(0) + alpha * s1.segment<3>(0);
 
-            // quaternion stored as [qx, qy, qz, qw]
             Eigen::Quaterniond q0(s0(6), s0(3), s0(4), s0(5));
             Eigen::Quaterniond q1(s1(6), s1(3), s1(4), s1(5));
             if (q0.norm() < 1e-9)
@@ -766,7 +782,6 @@ namespace ocs2::mobile_manipulator
                 q1.normalize();
             }
 
-            // 保证走最短弧（避免四元数符号翻转导致绕远）
             if (q0.dot(q1) < 0.0)
             {
                 q1.coeffs() *= -1.0;
@@ -781,27 +796,24 @@ namespace ocs2::mobile_manipulator
             return out;
         };
 
-        // 构建完整的路径点序列（包含起始状态）
         std::vector<vector_t> left_full_path;
-        left_full_path.push_back(left_target_state_); // 起始点
+        left_full_path.push_back(left_target_state_);
         left_full_path.insert(left_full_path.end(), left_arm_waypoints.begin(),
                               left_arm_waypoints.end());
 
         std::vector<vector_t> right_full_path;
         if (dual_arm_mode_)
         {
-            right_full_path.push_back(right_target_state_); // 起始点
+            right_full_path.push_back(right_target_state_);
             right_full_path.insert(right_full_path.end(), right_arm_waypoints.begin(),
-                                   right_arm_waypoints.end());
+                                  right_arm_waypoints.end());
         }
 
-        // 生成轨迹
         scalar_array_t time_trajectory;
         time_trajectory.reserve(kNumSamples);
         vector_array_t state_trajectory;
         state_trajectory.reserve(kNumSamples);
 
-        // 辅助函数：根据全局alpha值在路径点序列中插值
         auto interpolateAlongPath =
             [&interpolatePose7](const std::vector<vector_t>& path,
                                 double global_alpha) -> vector_t
@@ -811,7 +823,6 @@ namespace ocs2::mobile_manipulator
                 return path[0];
             }
 
-            // 计算当前应该在哪两个路径点之间
             const size_t num_segments = path.size() - 1;
             const double segment_size = 1.0 / static_cast<double>(num_segments);
             size_t segment_idx = static_cast<size_t>(global_alpha / segment_size);
@@ -835,7 +846,6 @@ namespace ocs2::mobile_manipulator
             vector_t combined_state;
             if (dual_arm_mode_)
             {
-                // 双臂模式：分别插值左右臂，然后合并
                 vector_t left_state = interpolateAlongPath(left_full_path, global_alpha);
                 vector_t right_state =
                     interpolateAlongPath(right_full_path, global_alpha);
@@ -846,7 +856,6 @@ namespace ocs2::mobile_manipulator
             }
             else
             {
-                // 单臂模式：只插值左臂
                 combined_state = interpolateAlongPath(left_full_path, global_alpha);
             }
 
@@ -854,7 +863,6 @@ namespace ocs2::mobile_manipulator
             state_trajectory.push_back(combined_state);
         }
 
-        // 更新缓存
         if (!left_arm_waypoints.empty())
         {
             left_target_state_ = left_arm_waypoints.back();
@@ -864,7 +872,6 @@ namespace ocs2::mobile_manipulator
             right_target_state_ = right_arm_waypoints.back();
         }
 
-        // 创建并设置轨迹
         vector_array_t input_trajectory(
             kNumSamples,
             vector_t::Zero(interface_->getManipulatorModelInfo().inputDim));
@@ -872,7 +879,6 @@ namespace ocs2::mobile_manipulator
                                                input_trajectory);
         referenceManagerPtr_->setTargetTrajectories(std::move(target_trajectories));
 
-        // 发布当前目标
         publishCurrentTargets();
 
         if (dual_arm_mode_)
@@ -889,6 +895,82 @@ namespace ocs2::mobile_manipulator
                         "处理路径（单臂模式）：%zu 个路径点，生成 %zu 个轨迹点",
                         left_arm_waypoints.size(), kNumSamples);
         }
+    }
+
+    void PoseBasedReferenceManager::handleExecutePathService(
+        const std::shared_ptr<arms_ros2_control_msgs::srv::ExecutePath::Request> request,
+        std::shared_ptr<arms_ros2_control_msgs::srv::ExecutePath::Response> response)
+    {
+        updateParam();
+
+        double duration = request->trajectory_duration;
+        if (duration <= 0.0)
+        {
+            duration = trajectory_duration_;
+        }
+
+        auto poseToState =
+            [](const geometry_msgs::msg::PoseStamped& pose_stamped) -> vector_t
+        {
+            vector_t state = vector_t::Zero(7);
+            state(0) = pose_stamped.pose.position.x;
+            state(1) = pose_stamped.pose.position.y;
+            state(2) = pose_stamped.pose.position.z;
+            state(3) = pose_stamped.pose.orientation.x;
+            state(4) = pose_stamped.pose.orientation.y;
+            state(5) = pose_stamped.pose.orientation.z;
+            state(6) = pose_stamped.pose.orientation.w;
+            return state;
+        };
+
+        std::vector<vector_t> left_arm_waypoints;
+        std::vector<vector_t> right_arm_waypoints;
+
+        for (const auto& pose_stamped : request->left_arm_path.poses)
+        {
+            left_arm_waypoints.push_back(poseToState(pose_stamped));
+        }
+        if (dual_arm_mode_)
+        {
+            for (const auto& pose_stamped : request->right_arm_path.poses)
+            {
+                right_arm_waypoints.push_back(poseToState(pose_stamped));
+            }
+        }
+
+        if (dual_arm_mode_ && request->left_arm_path.poses.empty() &&
+            request->right_arm_path.poses.empty())
+        {
+            response->success = false;
+            response->message = "both left_arm_path and right_arm_path are empty";
+            response->estimated_duration = 0.0;
+            return;
+        }
+
+        if (dual_arm_mode_)
+        {
+            if (left_arm_waypoints.empty())
+            {
+                left_arm_waypoints.push_back(left_target_state_);
+            }
+            if (right_arm_waypoints.empty())
+            {
+                right_arm_waypoints.push_back(right_target_state_);
+            }
+        }
+        else
+        {
+            if (left_arm_waypoints.empty())
+            {
+                left_arm_waypoints.push_back(left_target_state_);
+            }
+        }
+
+        runInterpolatedPathTrajectory(left_arm_waypoints, right_arm_waypoints, duration);
+
+        response->success = true;
+        response->message = "trajectory applied";
+        response->estimated_duration = duration;
     }
 
     void PoseBasedReferenceManager::resetTargetStateCache()

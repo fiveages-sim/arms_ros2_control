@@ -5,6 +5,7 @@
 
 #include <arms_ros2_control_msgs/msg/circle_message.hpp>
 #include <arms_ros2_control_msgs/srv/execute_circle.hpp>
+#include <arms_ros2_control_msgs/srv/execute_path.hpp>
 // #include <arms_ros2_control_msgs/srv/circle_result.hpp>
 #include <functional>
 #include <geometry_msgs/msg/pose.hpp>
@@ -82,6 +83,19 @@ namespace ocs2::mobile_manipulator
         void rightPoseStampedCallback(geometry_msgs::msg::PoseStamped::SharedPtr msg);
         void dualTargetStampedCallback(nav_msgs::msg::Path::SharedPtr msg);
         void pathCallback(nav_msgs::msg::Path::SharedPtr msg);
+        /**
+         * 由 pathCallback 与 ExecutePath 服务共用：在假定路径点已在 base frame 的前提下，
+         * 从当前缓存起点插值并 setTargetTrajectories。
+         */
+        void runInterpolatedPathTrajectory(
+            const std::vector<vector_t>& left_arm_waypoints,
+            const std::vector<vector_t>& right_arm_waypoints,
+            double trajectory_duration_sec);
+
+        void handleExecutePathService(
+            const std::shared_ptr<arms_ros2_control_msgs::srv::ExecutePath::Request> request,
+            std::shared_ptr<arms_ros2_control_msgs::srv::ExecutePath::Response> response);
+
         void updateTargetTrajectory();
         /**
          * 使用"上一帧缓存目标 -> 当前新目标缓存"生成插值轨迹并写入 ReferenceManager。
@@ -128,6 +142,9 @@ namespace ocs2::mobile_manipulator
         rclcpp::Subscription<nav_msgs::msg::Path>::SharedPtr
         dual_target_stamped_subscriber_;
         rclcpp::Subscription<nav_msgs::msg::Path>::SharedPtr path_subscriber_;
+
+        rclcpp::Service<arms_ros2_control_msgs::srv::ExecutePath>::SharedPtr
+            execute_path_service_;
 
         // 发布器：发布当前目标
         rclcpp::Publisher<geometry_msgs::msg::PoseStamped>::SharedPtr
