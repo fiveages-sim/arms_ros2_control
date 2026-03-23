@@ -5,10 +5,12 @@
 #include "basic_joint_controller/BasicJointController.h"
 #include "basic_joint_controller/FSM/StateHold.h"
 #include "basic_joint_controller/FSM/StateMoveJ.h"
+#include <eigen3/Eigen/Dense>
 #include <arms_controller_common/FSM/StateHome.h>
 
 #include <std_msgs/msg/float64_multi_array.hpp>
 #include <string>
+#include <boost/log/attributes/constant.hpp>
 
 namespace basic_joint_controller
 {
@@ -56,6 +58,7 @@ namespace basic_joint_controller
     controller_interface::return_type BasicJointController::update(const rclcpp::Time& time,
                                                                    const rclcpp::Duration& period)
     {
+        (void)time;
         if (mode_ == FSMMode::NORMAL)
         {
             current_state_->run(time, period);
@@ -137,6 +140,28 @@ namespace basic_joint_controller
                             target_command_close_config_, target_command_open_config_);
             }
 
+            // 读取腰部升降配置
+            waist_lifting_enabled_ = auto_declare<bool>("waist_lifting_enabled", false);
+
+            // 声明腰部参数
+            if (waist_lifting_enabled_)
+            {
+                auto_declare<double>("waist_lifting_duration", 3.0);
+                auto_declare<std::vector<double>>("waist_default_parameter", {0.25, 1.0, 5.0});
+                std::string waist_lifting_type_ = auto_declare<std::string>("waist_lifting_type", "three_joint");
+                if (waist_lifting_type_ == "three_joint")
+                {
+                    auto_declare<double>("waist_l1", 0.322);
+                    auto_declare<double>("waist_l2", 0.355);
+                    auto_declare<std::vector<double>>("waist_rotation_direction", {1.0, 1.0, 1.0});
+                    auto_declare<std::vector<double>>("waist_angle_offset", {0.0, 0.0, 0.0});
+                }
+
+                RCLCPP_INFO(get_node()->get_logger(),
+                            "Waist lifting enabled for controller %s",
+                            controller_name_.c_str());
+            }
+
             return CallbackReturn::SUCCESS;
         }
         catch (const std::exception& e)
@@ -159,13 +184,102 @@ namespace basic_joint_controller
 
         state_list_.movej->setupSubscriptions("target_joint_position", false);
         state_list_.movej->setupTrajectorySubscription();
-
         robot_description_subscription_ = get_node()->create_subscription<std_msgs::msg::String>(
             "/robot_description", rclcpp::QoS(rclcpp::KeepLast(1)).transient_local(),
             [this](const std_msgs::msg::String::SharedPtr msg)
             {
                 state_list_.movej->updateJointLimitsFromURDF(msg->data);
             });
+
+
+        // 创建腰部升降规划器并传递给 StateMoveJ
+        if (waist_lifting_enabled_)
+        {
+            // 订阅腰部升降话题
+            std::string waist_lifting_topic = "/" + controller_name_ + "/waist_lifting";
+
+            waist_lifting_subscription_ = get_node()->create_subscription<std_msgs::msg::Float64>(
+                waist_lifting_topic, 10,
+                [this](const std_msgs::msg::Float64::SharedPtr msg)
+                {
+                    // 只有在 MOVEJ 状态时才处理
+                    if (!current_state_ || current_state_->state_name != FSMStateName::MOVEJ)
+                    {
+                        return;
+                    }
+
+                    // 通过 StateMoveJ 启动腰部升降
+                    if (state_list_.movej)
+                    {
+                        bool success = state_list_.movej->moveWaistLifting(
+                            msg->data); //腰部升降距离
+
+                        if (success)
+                        {
+                            RCLCPP_INFO(get_node()->get_logger(),
+                                        "Waist lifting command received: distance=%.3f",
+                                        msg->data);
+                        }
+                        else
+                        {
+                            RCLCPP_WARN(get_node()->get_logger(),
+                                        "waist lifting command failed");
+                        }
+                    }
+                });
+            // 订阅腰部升降speedj 指令
+            std::string waist_lifting_command_topic = "/" + controller_name_ + "/waist_lifting_command";
+
+            waist_lifting_command_subscription_ = get_node()->create_subscription<std_msgs::msg::Float64>(
+                waist_lifting_command_topic, 10,
+                [this](const std_msgs::msg::Float64::SharedPtr msg)
+                {
+                    // 只有在 MOVEJ 状态时才处理
+                    if (!current_state_ || current_state_->state_name != FSMStateName::MOVEJ)
+                    {
+                        return;
+                    }
+
+                    // 通过 StateMoveJ 启动腰部升降
+                    if (state_list_.movej)
+                    {
+                        bool success = state_list_.movej->setWaistLiftingFactor(msg->data);
+
+                        if (success)
+                        {
+                            // RCLCPP_INFO(get_node()->get_logger(),
+                            //             "Waist lifting command received: waist  %s",
+                            //             cmd_msg.c_str());
+                        }
+                        else
+                        {
+                            RCLCPP_WARN(get_node()->get_logger(),
+                                        "waist lifting command failed");
+                        }
+                    }
+                });
+
+            std::string waist_turning_command_topic = "/" + controller_name_ + "/waist_turning_command";
+            waist_turning_command_subscription_ = get_node()->create_subscription<std_msgs::msg::Float64>(
+                waist_turning_command_topic, 10,
+                [this](const std_msgs::msg::Float64::SharedPtr msg)
+                {
+                    if (!current_state_ || current_state_->state_name != FSMStateName::MOVEJ)
+                    {
+                        return;
+                    }
+
+                    if (state_list_.movej)
+                    {
+                        bool success = state_list_.movej->setWaistTurningFactor(msg->data);
+                        if (!success)
+                        {
+                            RCLCPP_WARN(get_node()->get_logger(),
+                                        "waist turning command failed");
+                        }
+                    }
+                });
+        }
 
         // Subscribe to target_command topic for dexterous hand control (if enabled)
         // Only effective when in MOVEJ state - directly sets target position without switching states

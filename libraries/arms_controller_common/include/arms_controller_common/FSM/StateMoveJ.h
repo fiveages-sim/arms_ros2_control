@@ -13,10 +13,14 @@
 #include <mutex>
 #include <string>
 #include <functional>
+#include <utility>
 #include <rclcpp/rclcpp.hpp>
 #include <rclcpp_lifecycle/lifecycle_node.hpp>
 #include <std_msgs/msg/float64_multi_array.hpp>
 #include <trajectory_msgs/msg/joint_trajectory.hpp>
+#include <eigen3/Eigen/Dense>
+#include "arms_controller_common/utils/WaistLiftingPlaner.h"
+
 
 namespace arms_controller_common
 {
@@ -119,6 +123,43 @@ namespace arms_controller_common
          */
         void setupTrajectorySubscription(const std::string& topic_name = "target_joint_trajectory");
 
+        // ---------- added for moveL / waist motion ----------
+        /**
+         * @brief Switch to MOVEJ vs MOVEL mode (default MOVEJ)
+         */
+        enum class MotionMode
+        {
+            MOVEJ,
+            WAIST_CONTROL
+        };
+
+        /**
+         * @brief Set motion type for next command
+         */
+        void setMotionMode(MotionMode mode) { motion_mode_ = mode; }
+
+        /** 
+         * @brief 控制腰部升降指令，让腰部相对当前位置移动lifting_distance的距离
+         */
+        bool moveWaistLifting(double lifting_distance);
+
+        /**
+         * @brief 控制腰部升降指令，command=0 停止，command=1 上升 ，command=2 下降
+         */
+        bool setWaistLiftingCommand(int command);
+
+        /**
+         * @brief 控制腰部升降速度系数，factor取值建议[-1, 1]
+         * 实际目标速度 = factor * default_waist_para_[0]
+         */
+        bool setWaistLiftingFactor(double factor);
+
+        /**
+         * @brief 控制腰部转向速度系数，factor取值建议[-1, 1]
+         * 实际目标速度 = factor * default_waist_para_[0]
+         */
+        bool setWaistTurningFactor(double factor);
+
     private:
         void updateParam();
 
@@ -151,6 +192,10 @@ namespace arms_controller_common
 
         // Trajectory message subscription
         rclcpp::Subscription<trajectory_msgs::msg::JointTrajectory>::SharedPtr trajectory_subscription_;
+
+        // Current target joint publisher (shared convention across controllers)
+        rclcpp::Publisher<std_msgs::msg::Float64MultiArray>::SharedPtr current_target_joint_publisher_;
+        void publishCurrentTargetJoint(const std::vector<double>& target_positions);
 
         // Joint limit checking
         std::shared_ptr<JointLimitsManager> joint_limits_manager_;
@@ -210,5 +255,42 @@ namespace arms_controller_common
         void refreshHoldPositions();
 
         static constexpr double TARGET_EPSILON = 1e-6; // Tolerance for comparing target positions
+
+        MotionMode motion_mode_{MotionMode::MOVEJ};
+        // indices of joints that belong to body/waist (determined from joint_names_)
+        std::vector<size_t> body_joint_indices_;
+
+
+        // Waist lifting support
+        std::shared_ptr<arms_controller_common::WaistLiftingPlaner> waist_lifting_planer_;
+        bool waist_lifting_active_{false};
+        std::shared_ptr<arms_controller_common::WaistLiftingPlaner> waist_turning_planer_;
+        bool waist_turning_active_{false};
+        double waist_lifting_duration_{3.0};
+        Eigen::Vector3d default_waist_para_;
+
+        double last_waist_factor_{0.0};
+        double last_waist_turning_factor_{0.0};
+        static constexpr double waist_factor_epsilon_{1e-6};
+        size_t waist_turning_joint_index_{0};
+
+        std::vector<std::string> waist_joint_names_; // 腰部关节名称（前三个关节）
+        void setWaistLiftingPlaner();
+
+        /**
+         * @brief Update waist lifting limits from joint limits manager
+        */
+        void updateWaistLiftingLimits();
+        size_t waist_joint_count_ = 3;
+        /**
+         * @brief Get current waist joint angles
+         * @return Current waist joint angles as Eigen::Vector3d
+         */
+
+        /**
+         * @brief Get current waist joint angles
+         */
+        Eigen::VectorXd getCurrentWaistAngles();
+        std::vector<double> applyWaistJointLimits(const std::vector<double>& waist_positions);
     };
 } // namespace arms_controller_common

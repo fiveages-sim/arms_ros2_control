@@ -38,6 +38,7 @@ add_library(${PROJECT_NAME} SHARED
         src/utils/GravityCompensation.cpp
         src/utils/JointLimitsManager.cpp
         src/utils/JointTrajectoryManager.cpp
+        src/utils/WaistLiftingPlaner.cpp
 )
 
 target_include_directories(${PROJECT_NAME}
@@ -85,4 +86,3 @@ endif()
 ament_export_targets(export_${PROJECT_NAME} HAS_LIBRARY_TARGET)
 
 ament_package()
-

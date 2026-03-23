@@ -145,6 +145,12 @@ namespace arms_ros2_control::command
         bool publishTargetPose(bool force = false, bool use_stamped = false);
 
         /**
+         * @brief 使用最近一次 current_target 重新刷新 marker pose
+         * @return true 刷新成功，false 表示没有可用的 current_target
+         */
+        bool refreshFromLatestCurrentTarget();
+
+        /**
          * @brief 获取当前 pose
          * @return 当前 pose（在 marker_fixed_frame_ 坐标系下）
          */
@@ -225,6 +231,8 @@ namespace arms_ros2_control::command
         
         // 当前目标的 frame_id（从 left_current_target 或 right_current_target 获取）
         std::string current_target_frame_id_;
+        geometry_msgs::msg::PoseStamped latest_current_target_pose_;
+        bool has_latest_current_target_pose_{false};
         
         // 更新回调（用于通知外部更新可视化）
         UpdateCallback update_callback_;

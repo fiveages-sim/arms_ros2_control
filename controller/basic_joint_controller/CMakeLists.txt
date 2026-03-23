@@ -22,6 +22,9 @@ foreach (Dependency IN ITEMS ${CONTROLLER_INCLUDE_DEPENDS})
     find_package(${Dependency} REQUIRED)
 endforeach ()
 
+# 添加 Eigen3 查找
+find_package(Eigen3 REQUIRED)
+
 add_library(${PROJECT_NAME} SHARED
         src/BasicJointController.cpp
         src/FSM/StateHold.cpp
@@ -36,6 +39,11 @@ target_include_directories(${PROJECT_NAME}
         src)
 ament_target_dependencies(${PROJECT_NAME}
         ${CONTROLLER_INCLUDE_DEPENDS}
+)
+
+# 然后再链接 Eigen3（也使用 plain signature 保持一致）
+target_link_libraries(${PROJECT_NAME}
+        Eigen3::Eigen
 )
 
 pluginlib_export_plugin_description_file(controller_interface basic_joint_controller.xml)
