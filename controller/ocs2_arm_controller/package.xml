@@ -19,6 +19,7 @@
 	<depend>arms_target_manager</depend>
 	<depend>adaptive_gripper_controller</depend>
 	<depend>arms_controller_common</depend>
+	<depend>ocs2_controller_common</depend>
 	<depend>tf2_ros</depend>
 	<depend>tf2_geometry_msgs</depend>
 	<depend>arms_ros2_control_msgs</depend>

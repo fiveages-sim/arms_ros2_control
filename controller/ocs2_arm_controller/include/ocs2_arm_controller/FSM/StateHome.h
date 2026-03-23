@@ -3,9 +3,10 @@
 //
 #pragma once
 
+#include <memory>
+
 #include <arms_controller_common/FSM/StateHome.h>
-#include <arms_controller_common/CtrlInterfaces.h>
-#include <rclcpp/rclcpp.hpp>
+#include <rclcpp_lifecycle/lifecycle_node.hpp>
 
 namespace ocs2::mobile_manipulator
 {

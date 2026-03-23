@@ -4,6 +4,7 @@
 
 #include "ocs2_arm_controller/FSM/StateOCS2.h"
 
+#include <ocs2_controller_common/mpc/MpcExecutionParams.hpp>
 #include <ocs2_core/misc/LoadData.h>
 #include <ocs2_ddp/GaussNewtonDDP_MPC.h>
 #include <pinocchio/algorithm/kinematics.hpp>
@@ -15,65 +16,13 @@ namespace ocs2::mobile_manipulator
                          const std::shared_ptr<CtrlComponent>& ctrl_comp)
         : FSMState(FSMStateName::OCS2, "ocs2", ctrl_interfaces), ctrl_comp_(ctrl_comp), ctrl_interfaces_(ctrl_interfaces), node_(node)
     {
-        // Get joint names
         joint_names_ = node_->get_parameter("joints").as_string_array();
 
-        // Get MPC update frequency
         const double controller_frequency = ctrl_interfaces_.frequency_;
-
-        // Get MPC frequency from parameters (already declared in controller's on_init with default 0)
-        // Parameter is int type, convert to double for calculations
-        double mpc_frequency = static_cast<double>(node_->get_parameter("mpc_frequency").as_int());
-        
-        if (mpc_frequency > 0.0)
-        {
-            RCLCPP_INFO(node_->get_logger(), "MPC frequency from parameter: %.1f Hz", mpc_frequency);
-        }
-
-        // Validate MPC frequency
-        if (const bool mpc_frequency_valid = mpc_frequency > 0.0 && mpc_frequency <= controller_frequency; !
-            mpc_frequency_valid)
-        {
-            // Use 1/4 of controller frequency as default to ensure MPC updates are frequent enough
-            const double original_frequency = mpc_frequency;
-            mpc_frequency = controller_frequency / 4.0;
-
-            if (original_frequency <= 0.0)
-            {
-                RCLCPP_WARN(node_->get_logger(),
-                            "Invalid MPC frequency (%.1f Hz), using 1/4 of controller frequency: %.1f Hz (controller: %.1f Hz)",
-                            original_frequency, mpc_frequency, controller_frequency);
-            }
-            else if (original_frequency > controller_frequency)
-            {
-                RCLCPP_WARN(node_->get_logger(),
-                            "MPC frequency (%.1f Hz) exceeds controller frequency (%.1f Hz), using 1/4 of controller frequency: %.1f Hz",
-                            original_frequency, mpc_frequency, controller_frequency);
-            }
-            else
-            {
-                RCLCPP_INFO(node_->get_logger(),
-                            "MPC frequency not set, using 1/4 of controller frequency: %.1f Hz (controller: %.1f Hz)",
-                            mpc_frequency, controller_frequency);
-            }
-        }
-
-        // Ensure MPC frequency is not too low, minimum frequency is 10Hz
-        if (mpc_frequency < 10.0)
-        {
-            RCLCPP_WARN(node_->get_logger(),
-                        "MPC frequency (%.1f Hz) is too low, setting minimum frequency to 10.0 Hz", mpc_frequency);
-            mpc_frequency = 10.0;
-        }
-
-        mpc_period_ = 1.0 / mpc_frequency;
-
-        // Calculate thread sleep duration based on controller frequency
-        // Sleep time is set to 2x controller period to ensure MPC update requests are not missed
-        thread_sleep_duration_ms_ = static_cast<int>(2.0 / controller_frequency * 1000.0);
-
-        RCLCPP_INFO(node_->get_logger(), "Thread sleep duration: %d ms (based on controller frequency: %.1f Hz)",
-                    thread_sleep_duration_ms_, controller_frequency);
+        const auto mpc_params = ocs2::controller_common::computeMpcExecutionParams(
+            controller_frequency, node_->get_parameter("mpc_frequency").as_int(), node_->get_logger());
+        mpc_period_ = mpc_params.mpc_period_sec;
+        thread_sleep_duration_ms_ = mpc_params.thread_sleep_ms;
 
         // Check if self-collision is enabled in config file
         const bool selfCollisionEnabled = ctrl_comp_->interface_->isSelfCollisionEnabled();

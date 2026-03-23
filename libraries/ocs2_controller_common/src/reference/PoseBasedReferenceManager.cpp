@@ -2,7 +2,7 @@
 // Created for OCS2 Arm Controller - PoseBasedReferenceManager
 //
 
-#include "ocs2_arm_controller/control/PoseBasedReferenceManager.h"
+#include "ocs2_controller_common/reference/PoseBasedReferenceManager.h"
 #include <Eigen/Geometry>
 #include <algorithm>
 #include <cmath>
@@ -15,22 +15,22 @@
 #include <fstream>
 #include <iomanip>
 
-namespace ocs2::mobile_manipulator
+namespace ocs2::controller_common
 {
     PoseBasedReferenceManager::PoseBasedReferenceManager(
         std::string topicPrefix,
         std::shared_ptr<ReferenceManagerInterface> referenceManagerPtr,
-        std::shared_ptr<MobileManipulatorInterface> interfacePtr)
+        Ocs2ReferenceTargetContext target_context)
         : ReferenceManagerDecorator(std::move(referenceManagerPtr)),
           topic_prefix_(std::move(topicPrefix)),
-          interface_(std::move(interfacePtr)),
+          target_context_(std::move(target_context)),
           logger_(rclcpp::get_logger("PoseBasedReferenceManager")),
           trajectory_duration_(2.0), moveL_duration_(2.0)
     {
-        dual_arm_mode_ = interface_->dual_arm_;
+        dual_arm_mode_ = target_context_.dual_arm;
 
         // 获取base frame
-        base_frame_ = interface_->getManipulatorModelInfo().baseFrame;
+        base_frame_ = target_context_.base_frame;
 
         // 初始化target state缓存
         left_target_state_ = vector_t::Zero(7);
@@ -217,7 +217,7 @@ namespace ocs2::mobile_manipulator
         scalar_array_t time_trajectory = {target_time};
         vector_array_t state_trajectory = {combined_target_state};
         vector_array_t input_trajectory(
-            1, vector_t::Zero(interface_->getManipulatorModelInfo().inputDim));
+            1, vector_t::Zero(target_context_.input_dim));
 
         TargetTrajectories target_trajectories(time_trajectory, state_trajectory,
                                                input_trajectory);
@@ -345,7 +345,7 @@ namespace ocs2::mobile_manipulator
 
         vector_array_t input_trajectory(
             kNumSamples,
-            vector_t::Zero(interface_->getManipulatorModelInfo().inputDim));
+            vector_t::Zero(target_context_.input_dim));
         TargetTrajectories target_trajectories(time_trajectory, state_trajectory,
                                                input_trajectory);
         referenceManagerPtr_->setTargetTrajectories(std::move(target_trajectories));
@@ -867,7 +867,7 @@ namespace ocs2::mobile_manipulator
         // 创建并设置轨迹
         vector_array_t input_trajectory(
             kNumSamples,
-            vector_t::Zero(interface_->getManipulatorModelInfo().inputDim));
+            vector_t::Zero(target_context_.input_dim));
         TargetTrajectories target_trajectories(time_trajectory, state_trajectory,
                                                input_trajectory);
         referenceManagerPtr_->setTargetTrajectories(std::move(target_trajectories));
@@ -1591,7 +1591,7 @@ namespace ocs2::mobile_manipulator
 
         vector_array_t input_trajectory(
             time_size,
-            vector_t::Zero(interface_->getManipulatorModelInfo().inputDim));
+            vector_t::Zero(target_context_.input_dim));
         TargetTrajectories target_trajectories(time_trajectory, state_trajectory,
                                                input_trajectory);
         referenceManagerPtr_->setTargetTrajectories(std::move(target_trajectories));
@@ -1611,4 +1611,4 @@ namespace ocs2::mobile_manipulator
         }
     }
 #endif
-} // namespace ocs2::mobile_manipulator
+} // namespace ocs2::controller_common

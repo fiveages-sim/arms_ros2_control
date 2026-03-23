@@ -16,6 +16,7 @@ set(CONTROLLER_INCLUDE_DEPENDS
         ocs2_mobile_manipulator
         ocs2_ros_interfaces
         ocs2_self_collision_visualization
+        ocs2_controller_common
         arms_controller_common
         tf2_ros
         tf2_geometry_msgs
@@ -26,8 +27,6 @@ set(CONTROLLER_INCLUDE_DEPENDS
 
 # find dependencies
 find_package(ament_cmake REQUIRED)
-# lina_planning is optional - circle trajectory support requires it
-find_package(lina_planning QUIET)
 foreach (Dependency IN ITEMS ${CONTROLLER_INCLUDE_DEPENDS})
     find_package(${Dependency} REQUIRED)
 endforeach ()
@@ -36,8 +35,6 @@ add_library(${PROJECT_NAME} SHARED
         src/Ocs2ArmController.cpp
 
         src/control/CtrlComponent.cpp
-        src/control/PoseBasedReferenceManager.cpp
-        src/control/Visualizer.cpp
 
         src/FSM/StateHome.cpp
         src/FSM/StateOCS2.cpp
@@ -54,14 +51,6 @@ target_include_directories(${PROJECT_NAME}
 ament_target_dependencies(${PROJECT_NAME}
         ${CONTROLLER_INCLUDE_DEPENDS}
 )
-
-if(lina_planning_FOUND)
-    target_compile_definitions(${PROJECT_NAME} PUBLIC HAS_LINA_PLANNING)
-    target_link_libraries(${PROJECT_NAME} lina_planning::lina_planning)
-    message(STATUS "lina_planning found - circle motion support enabled")
-else()
-    message(STATUS "lina_planning not found - circle motion support disabled")
-endif()
 
 pluginlib_export_plugin_description_file(controller_interface ocs2_arm_controller.xml)
 
@@ -84,9 +73,6 @@ install(
 )
 
 ament_export_dependencies(${CONTROLLER_INCLUDE_DEPENDS})
-if(lina_planning_FOUND)
-    ament_export_dependencies(lina_planning)
-endif()
 ament_export_targets(export_${PROJECT_NAME} HAS_LIBRARY_TARGET)
 
 ament_package() 

@@ -2,42 +2,35 @@
 // Created by fiveages on 8/21/25.
 //
 
-#include "ocs2_arm_controller/control/Visualizer.h"
+#include "ocs2_controller_common/visualization/Ocs2PinocchioVisualizer.h"
 #include <limits>
 #include <fstream>
 #include <string>
 #include <ocs2_ros_interfaces/common/RosMsgHelpers.h>
 #include <pinocchio/algorithm/frames.hpp>
 #include <pinocchio/algorithm/kinematics.hpp>
-#include <ocs2_core/misc/LoadData.h>
-#include <boost/property_tree/ptree.hpp>
-#include <boost/property_tree/info_parser.hpp>
 #include <std_msgs/msg/string.hpp>
 
-namespace ocs2::mobile_manipulator
+namespace ocs2::controller_common
 {
-    Visualizer::Visualizer(const std::shared_ptr<rclcpp_lifecycle::LifecycleNode>& node,
-                           const std::shared_ptr<MobileManipulatorInterface>& interface,
-                           const std::string& robot_name,
-                           const std::string& urdf_file)
+    Ocs2PinocchioVisualizer::Ocs2PinocchioVisualizer(const std::shared_ptr<rclcpp_lifecycle::LifecycleNode>& node,
+                                                     PinocchioInterface pinocchio_interface, Ocs2VisualizerConfig config)
         : node_(node),
-          interface_(interface),
+          pinocchio_interface_(std::move(pinocchio_interface)),
+          config_(std::move(config)),
           enable_self_collision_(true),
           dual_arm_mode_(false),
-          robot_name_(robot_name),
-          urdf_file_(urdf_file),
+          robot_name_(config_.robot_name),
+          base_frame_(config_.base_frame),
+          urdf_file_(config_.urdf_file),
           trajectory_line_width_(0.005),
           left_arm_color_({0.0, 0.4470, 0.7410}),
           right_arm_color_({0.6350, 0.0780, 0.1840})
     {
-        // Detect if dual arm mode is enabled
-        dual_arm_mode_ = interface_->dual_arm_;
-        
-        // Get base frame information
-        base_frame_ = interface_->getManipulatorModelInfo().baseFrame;
+        dual_arm_mode_ = config_.dual_arm;
     }
 
-    void Visualizer::initialize()
+    void Ocs2PinocchioVisualizer::initialize()
     {
         // Create publisher
         trajectory_marker_publisher_ = node_->create_publisher<visualization_msgs::msg::MarkerArray>(
@@ -87,27 +80,24 @@ namespace ocs2::mobile_manipulator
             }
         }
 
-        // Get self-collision geometry interface from MobileManipulatorInterface and initialize visualization
         try
         {
-            if (const auto pinocchio_geometry_interface = interface_->getPinocchioGeometryInterface())
+            auto geometry_opt = std::move(config_.pinocchio_geometry);
+            if (geometry_opt)
             {
-                // Get activation distance for visualization filtering
-                const scalar_t activationDistance = interface_->getSelfCollisionActivationDistance();
-                
+                const scalar_t activationDistance = config_.self_collision_activation_distance;
                 geometry_visualization_ = std::make_unique<GeometryInterfaceVisualization>(
-                    interface_->getPinocchioInterface(),
-                    std::move(*pinocchio_geometry_interface), base_frame_, activationDistance);
+                    pinocchio_interface_, std::move(*geometry_opt), base_frame_, activationDistance);
 
                 enable_self_collision_ = true;
-                RCLCPP_INFO(node_->get_logger(), 
-                    "Self-collision visualization initialized (activation distance: %.3f m)", activationDistance);
+                RCLCPP_INFO(node_->get_logger(),
+                            "Self-collision visualization initialized (activation distance: %.3f m)", activationDistance);
             }
             else
             {
                 enable_self_collision_ = false;
                 RCLCPP_INFO(node_->get_logger(),
-                            "Interface has no geometry information, self-collision visualization disabled");
+                            "No Pinocchio geometry provided, self-collision visualization disabled");
             }
         }
         catch (const std::exception& e)
@@ -118,12 +108,12 @@ namespace ocs2::mobile_manipulator
             enable_self_collision_ = false;
         }
 
-        RCLCPP_INFO(node_->get_logger(), "Visualizer initialization completed");
+        RCLCPP_INFO(node_->get_logger(), "Ocs2PinocchioVisualizer initialization completed");
         RCLCPP_INFO(node_->get_logger(), "Self-collision visualization: %s",
                     enable_self_collision_ ? "enabled" : "disabled");
     }
 
-    void Visualizer::updateEndEffectorTrajectory(const PrimalSolution& policy)
+    void Ocs2PinocchioVisualizer::updateEndEffectorTrajectory(const PrimalSolution& policy)
     {
         // Update end effector trajectory history - get from MPC calculation results
         if (!policy.stateTrajectory_.empty())
@@ -165,7 +155,7 @@ namespace ocs2::mobile_manipulator
     }
 
 
-    void Visualizer::publishEndEffectorTrajectory(const rclcpp::Time& time)
+    void Ocs2PinocchioVisualizer::publishEndEffectorTrajectory(const rclcpp::Time& time)
     {
         visualization_msgs::msg::MarkerArray marker_array;
         geometry_msgs::msg::PoseArray pose_array;
@@ -248,7 +238,7 @@ namespace ocs2::mobile_manipulator
         trajectory_marker_publisher_->publish(marker_array);
     }
 
-    void Visualizer::publishSelfCollisionVisualization(const vector_t& state) const
+    void Ocs2PinocchioVisualizer::publishSelfCollisionVisualization(const vector_t& state) const
     {
         if (geometry_visualization_)
         {
@@ -257,7 +247,7 @@ namespace ocs2::mobile_manipulator
         }
     }
 
-    bool Visualizer::isCollisionDetected(scalar_t threshold) const
+    bool Ocs2PinocchioVisualizer::isCollisionDetected(scalar_t threshold) const
     {
         if (geometry_visualization_)
         {
@@ -266,7 +256,7 @@ namespace ocs2::mobile_manipulator
         return false;
     }
 
-    void Visualizer::publishEndEffectorPose(const rclcpp::Time& time, const vector_t& state) const
+    void Ocs2PinocchioVisualizer::publishEndEffectorPose(const rclcpp::Time& time, const vector_t& state) const
     {
         if (dual_arm_mode_) {
             // Dual arm mode: publish left and right arm end effector poses
@@ -278,20 +268,19 @@ namespace ocs2::mobile_manipulator
         }
     }
 
-    vector_t Visualizer::computeEndEffectorPose(const vector_t& state) const
+    vector_t Ocs2PinocchioVisualizer::computeEndEffectorPose(const vector_t& state) const
     {
         vector_t ee_state = vector_t::Zero(7);
 
         try
         {
-            const auto& pinocchio_interface = interface_->getPinocchioInterface();
-            const auto& model = pinocchio_interface.getModel();
-            auto data = pinocchio_interface.getData();
+            const auto& model = pinocchio_interface_.getModel();
+            auto data = pinocchio_interface_.getData();
 
             pinocchio::forwardKinematics(model, data, state);
             pinocchio::updateFramePlacements(model, data);
 
-            const auto& ee_frame_name = interface_->getManipulatorModelInfo().eeFrame;
+            const auto& ee_frame_name = config_.left_ee_frame;
             const auto ee_frame_id = model.getFrameId(ee_frame_name);
             const auto& frame_placement = data.oMf[ee_frame_id];
 
@@ -310,20 +299,19 @@ namespace ocs2::mobile_manipulator
         return ee_state;
     }
 
-    vector_t Visualizer::computeRightEndEffectorPose(const vector_t& state) const
+    vector_t Ocs2PinocchioVisualizer::computeRightEndEffectorPose(const vector_t& state) const
     {
         vector_t ee_state = vector_t::Zero(7);
 
         try
         {
-            const auto& pinocchio_interface = interface_->getPinocchioInterface();
-            const auto& model = pinocchio_interface.getModel();
-            auto data = pinocchio_interface.getData();
+            const auto& model = pinocchio_interface_.getModel();
+            auto data = pinocchio_interface_.getData();
 
             pinocchio::forwardKinematics(model, data, state);
             pinocchio::updateFramePlacements(model, data);
 
-            const auto& ee_frame_name = interface_->getManipulatorModelInfo().eeFrame1;
+            const auto& ee_frame_name = config_.right_ee_frame;
             const auto ee_frame_id = model.getFrameId(ee_frame_name);
             const auto& frame_placement = data.oMf[ee_frame_id];
 
@@ -342,7 +330,7 @@ namespace ocs2::mobile_manipulator
         return ee_state;
     }
 
-    void Visualizer::publishLeftEndEffectorPose(const rclcpp::Time& time, const vector_t& state) const
+    void Ocs2PinocchioVisualizer::publishLeftEndEffectorPose(const rclcpp::Time& time, const vector_t& state) const
     {
         // Calculate left arm end effector pose (left arm uses default eeFrame)
         const auto ee_pose = computeEndEffectorPose(state);
@@ -362,7 +350,7 @@ namespace ocs2::mobile_manipulator
         left_end_effector_pose_publisher_->publish(ee_pose_msg);
     }
 
-    void Visualizer::publishRightEndEffectorPose(const rclcpp::Time& time, const vector_t& state) const
+    void Ocs2PinocchioVisualizer::publishRightEndEffectorPose(const rclcpp::Time& time, const vector_t& state) const
     {
         // Calculate right arm end effector pose
         const auto ee_pose = computeRightEndEffectorPose(state);
@@ -382,7 +370,7 @@ namespace ocs2::mobile_manipulator
         right_end_effector_pose_publisher_->publish(ee_pose_msg);
     }
 
-    visualization_msgs::msg::Marker Visualizer::createTrajectoryLineMarker(
+    visualization_msgs::msg::Marker Ocs2PinocchioVisualizer::createTrajectoryLineMarker(
         const std::vector<geometry_msgs::msg::Point>& points,
         const std::array<double, 3>& color,
         const double line_width,
@@ -398,7 +386,7 @@ namespace ocs2::mobile_manipulator
         return marker;
     }
 
-    void Visualizer::clearTrajectoryHistory()
+    void Ocs2PinocchioVisualizer::clearTrajectoryHistory()
     {
         left_arm_trajectory_history_.clear();
         right_arm_trajectory_history_.clear();
