@@ -50,6 +50,9 @@ namespace ocs2::mobile_manipulator
                            ManipulatorModelType::WheelBasedMobileManipulator);
         if (is_wheel_based_)
         {
+            // TODO(odom): 当有真实 odom 时，初始值应从 odom 话题获取而非 task.info。
+            //   建议在此订阅 /odom (nav_msgs::msg::Odometry)，在回调中更新
+            //   odom_x_, odom_y_, odom_yaw_ 成员变量，并用这些值初始化 base_x_/y_/yaw_。
             const auto& init_state = interface_->getInitialState();
             base_x_   = init_state(0);
             base_y_   = init_state(1);
@@ -82,6 +85,10 @@ namespace ocs2::mobile_manipulator
         observation_.time = time.seconds();
         if (is_wheel_based_)
         {
+            // TODO(odom): 当有真实 odom 时，将下方三行替换为从 odom 回调更新的实测值：
+            //   observation_.state[0] = odom_x_;
+            //   observation_.state[1] = odom_y_;
+            //   observation_.state[2] = odom_yaw_;
             // Base pose from internal integration (no real odometry in simulation)
             observation_.state[0] = base_x_;
             observation_.state[1] = base_y_;
@@ -168,6 +175,12 @@ namespace ocs2::mobile_manipulator
             
             // Integrate chassis pose (wheel-based mode only)
             // TF broadcast is handled by publishWorldTF() called from the main update loop
+            //
+            // TODO(odom): 当有真实 odom 时，删除下方的积分逻辑，改为直接同步 odom 实测值：
+            //   base_x_   = odom_x_;
+            //   base_y_   = odom_y_;
+            //   base_yaw_ = odom_yaw_;
+            // 积分会随时间累积误差（尤其是打滑、急加速场景），真实 odom 精度更高。
             if (is_wheel_based_)
             {
                 double dt    = 1.0 / ctrl_interfaces_.frequency_;
@@ -242,6 +255,8 @@ namespace ocs2::mobile_manipulator
         observation_.time = node_->now().seconds();
 
         // Use last sent joint positions for initial state (avoids jumps when entering OCS2 state)
+        // TODO(odom): 当有真实 odom 时，此处同样替换为 odom_x_, odom_y_, odom_yaw_，
+        //   确保 MPC 重置时的初始底盘位置与实际一致。
         if (is_wheel_based_)
         {
             observation_.state[0] = base_x_;
