@@ -95,6 +95,9 @@ namespace ocs2::mobile_manipulator
         void updateObservation(const rclcpp::Time& time);
         void evaluatePolicy(const rclcpp::Time& time);
         void resetMpc();
+        // Publish world->base_footprint TF using last known chassis pose.
+        // Safe to call every update cycle regardless of FSM state.
+        void publishWorldTF(const rclcpp::Time& time);
         void advanceMpc();
 
         // Visualization management

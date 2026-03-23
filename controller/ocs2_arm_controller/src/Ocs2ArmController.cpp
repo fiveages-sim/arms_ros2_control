@@ -58,6 +58,9 @@ namespace ocs2::mobile_manipulator
     {
         // Publish end effector pose (regardless of current state)
         ctrl_comp_->updateObservation(time);
+        // Publish world->base_footprint TF every cycle so RViz always has the world frame,
+        // regardless of which FSM state is active (OCS2/Hold/Home/Rest).
+        ctrl_comp_->publishWorldTF(time);
 
         if (mode_ == FSMMode::NORMAL)
         {

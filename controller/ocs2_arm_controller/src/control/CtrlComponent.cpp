@@ -125,6 +125,15 @@ namespace ocs2::mobile_manipulator
         if (trigger_cached_state && cached_ob_state_)
         {
             observation_.state = cached_last_action_;
+            // For wheel-based mode, always use the actual dead-reckoning base pose.
+            // cached_last_action_ holds a MPC-predicted future state whose base position
+            // diverges from the real integration over time, causing EE pose drift.
+            if (is_wheel_based_)
+            {
+                observation_.state[0] = base_x_;
+                observation_.state[1] = base_y_;
+                observation_.state[2] = base_yaw_;
+            }
         }
         
         mpc_mrt_interface_->setCurrentObservation(observation_);
@@ -157,7 +166,8 @@ namespace ocs2::mobile_manipulator
                 policy.inputTrajectory_
             );
             
-            // Integrate chassis pose and broadcast TF (wheel-based mode only)
+            // Integrate chassis pose (wheel-based mode only)
+            // TF broadcast is handled by publishWorldTF() called from the main update loop
             if (is_wheel_based_)
             {
                 double dt    = 1.0 / ctrl_interfaces_.frequency_;
@@ -166,21 +176,6 @@ namespace ocs2::mobile_manipulator
                 base_x_   += v * std::cos(base_yaw_) * dt;
                 base_y_   += v * std::sin(base_yaw_) * dt;
                 base_yaw_ += omega * dt;
-
-                geometry_msgs::msg::TransformStamped tf_msg;
-                tf_msg.header.stamp    = time;
-                tf_msg.header.frame_id = "world";
-                tf_msg.child_frame_id  = "base_footprint";
-                tf_msg.transform.translation.x = base_x_;
-                tf_msg.transform.translation.y = base_y_;
-                tf_msg.transform.translation.z = 0.0;
-                tf2::Quaternion q;
-                q.setRPY(0.0, 0.0, base_yaw_);
-                tf_msg.transform.rotation.x = q.x();
-                tf_msg.transform.rotation.y = q.y();
-                tf_msg.transform.rotation.z = q.z();
-                tf_msg.transform.rotation.w = q.w();
-                tf_broadcaster_->sendTransform(tf_msg);
             }
 
             // Extract joint positions from state and set as commands
@@ -410,5 +405,25 @@ namespace ocs2::mobile_manipulator
             fsm_cmd.data = command;
             fsm_command_publisher_->publish(fsm_cmd);
         }
+    }
+    void CtrlComponent::publishWorldTF(const rclcpp::Time& time)
+    {
+        if (!is_wheel_based_ || !tf_broadcaster_)
+            return;
+
+        geometry_msgs::msg::TransformStamped tf_msg;
+        tf_msg.header.stamp    = time;
+        tf_msg.header.frame_id = "world";
+        tf_msg.child_frame_id  = "base_footprint";
+        tf_msg.transform.translation.x = base_x_;
+        tf_msg.transform.translation.y = base_y_;
+        tf_msg.transform.translation.z = 0.0;
+        tf2::Quaternion q;
+        q.setRPY(0.0, 0.0, base_yaw_);
+        tf_msg.transform.rotation.x = q.x();
+        tf_msg.transform.rotation.y = q.y();
+        tf_msg.transform.rotation.z = q.z();
+        tf_msg.transform.rotation.w = q.w();
+        tf_broadcaster_->sendTransform(tf_msg);
     }
 } // namespace ocs2::mobile_manipulator
