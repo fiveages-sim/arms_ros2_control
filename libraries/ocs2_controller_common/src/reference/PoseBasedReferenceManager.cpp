@@ -2,7 +2,7 @@
 // Created for OCS2 Arm Controller - PoseBasedReferenceManager
 //
 
-#include "ocs2_arm_controller/control/PoseBasedReferenceManager.h"
+#include "ocs2_controller_common/reference/PoseBasedReferenceManager.h"
 #include <Eigen/Geometry>
 #include <algorithm>
 #include <cmath>
@@ -15,26 +15,30 @@
 #include <fstream>
 #include <iomanip>
 
-namespace ocs2::mobile_manipulator
+#include <ocs2_wheel_humanoid/mode/SwitchedHumanoidReferenceManager.h>
+
+namespace ocs2::controller_common
 {
     PoseBasedReferenceManager::PoseBasedReferenceManager(
         std::string topicPrefix,
         std::shared_ptr<ReferenceManagerInterface> referenceManagerPtr,
-        std::shared_ptr<MobileManipulatorInterface> interfacePtr)
+        Ocs2ReferenceTargetContext target_context)
         : ReferenceManagerDecorator(std::move(referenceManagerPtr)),
           topic_prefix_(std::move(topicPrefix)),
-          interface_(std::move(interfacePtr)),
+          target_context_(std::move(target_context)),
           logger_(rclcpp::get_logger("PoseBasedReferenceManager")),
           trajectory_duration_(2.0), moveL_duration_(2.0)
     {
-        dual_arm_mode_ = interface_->dual_arm_;
+        dual_arm_mode_ = target_context_.dual_arm;
 
         // 获取base frame
-        base_frame_ = interface_->getManipulatorModelInfo().baseFrame;
+        base_frame_ = target_context_.base_frame;
 
         // 初始化target state缓存
         left_target_state_ = vector_t::Zero(7);
         right_target_state_ = vector_t::Zero(7);
+        body_pose_7_xyzw_ = vector_t::Zero(7);
+        body_pose_7_xyzw_(6) = 1.0; // identity quaternion (geometry_msgs order)
 
         // 初始化圆弧指针
 #ifdef HAS_LINA_PLANNING
@@ -175,6 +179,18 @@ namespace ocs2::mobile_manipulator
         path_subscriber_ = node->create_subscription<nav_msgs::msg::Path>(
             "target_path", 1, pathCallback);
 
+        // ExecutePath服务
+        auto executePathCallback =
+            [this](const std::shared_ptr<rmw_request_id_t> request_header,
+                   const std::shared_ptr<arms_ros2_control_msgs::srv::ExecutePath::Request> request,
+                   std::shared_ptr<arms_ros2_control_msgs::srv::ExecutePath::Response> response)
+        {
+            (void)request_header;
+            this->handleExecutePathService(request, response);
+        };
+        execute_path_service_ = node->create_service<arms_ros2_control_msgs::srv::ExecutePath>(
+            "execute_path", executePathCallback);
+
         // 初始化发布器：发布当前目标
         left_target_publisher_ =
             node->create_publisher<geometry_msgs::msg::PoseStamped>(
@@ -188,6 +204,63 @@ namespace ocs2::mobile_manipulator
         }
     }
 
+    int PoseBasedReferenceManager::effectiveTargetStateDim() const
+    {
+        if (target_context_.reference_target_state_dim > 0)
+        {
+            return target_context_.reference_target_state_dim;
+        }
+        return dual_arm_mode_ ? 14 : 7;
+    }
+
+    vector_t PoseBasedReferenceManager::identityBodyPose7() const
+    {
+        vector_t b = vector_t::Zero(7);
+        b(6) = 1.0;
+        return b;
+    }
+
+    vector_t PoseBasedReferenceManager::bodySegmentForAssembly() const
+    {
+        if (!target_context_.body_pose_from_current_state &&
+            effectiveTargetStateDim() == Ocs2ReferenceTargetContext::kWheelHumanoidTargetStateDim)
+        {
+            return identityBodyPose7();
+        }
+        return body_pose_7_xyzw_;
+    }
+
+    vector_t PoseBasedReferenceManager::assembleDualArmReferenceState(const vector_t& left7, const vector_t& right7) const
+    {
+        if (effectiveTargetStateDim() == Ocs2ReferenceTargetContext::kWheelHumanoidTargetStateDim)
+        {
+            return assembleWheelHumanoidTargetState(left7, right7, bodySegmentForAssembly());
+        }
+        vector_t s = vector_t::Zero(14);
+        s.segment(0, 7) = left7;
+        s.segment(7, 7) = right7;
+        return s;
+    }
+
+    vector_t PoseBasedReferenceManager::assembleWheelHumanoidTargetState(const vector_t& left_pose7_xyzw,
+                                                                         const vector_t& right_pose7_xyzw,
+                                                                         const vector_t& body_pose7_xyzw)
+    {
+        vector_t s = vector_t::Zero(Ocs2ReferenceTargetContext::kWheelHumanoidTargetStateDim);
+        s.segment(0, 7) = left_pose7_xyzw.head<7>();
+        s.segment(7, 7) = right_pose7_xyzw.head<7>();
+        s.segment(14, 7) = body_pose7_xyzw.head<7>();
+        return s;
+    }
+
+    void PoseBasedReferenceManager::setBodyPoseReference(const vector_t& body_pose_xyzw_7)
+    {
+        if (body_pose_xyzw_7.size() >= 7)
+        {
+            body_pose_7_xyzw_ = body_pose_xyzw_7.head<7>();
+        }
+    }
+
     void PoseBasedReferenceManager::setCurrentObservation(
         const SystemObservation& observation)
     {
@@ -196,14 +269,10 @@ namespace ocs2::mobile_manipulator
 
     void PoseBasedReferenceManager::updateTargetTrajectory()
     {
-        // 创建合并的target state
         vector_t combined_target_state;
-
         if (dual_arm_mode_)
         {
-            combined_target_state = vector_t::Zero(14);
-            combined_target_state.segment(0, 7) = left_target_state_;
-            combined_target_state.segment(7, 7) = right_target_state_;
+            combined_target_state = assembleDualArmReferenceState(left_target_state_, right_target_state_);
         }
         else
         {
@@ -217,7 +286,7 @@ namespace ocs2::mobile_manipulator
         scalar_array_t time_trajectory = {target_time};
         vector_array_t state_trajectory = {combined_target_state};
         vector_array_t input_trajectory(
-            1, vector_t::Zero(interface_->getManipulatorModelInfo().inputDim));
+            1, vector_t::Zero(target_context_.input_dim));
 
         TargetTrajectories target_trajectories(time_trajectory, state_trajectory,
                                                input_trajectory);
@@ -253,16 +322,8 @@ namespace ocs2::mobile_manipulator
         vector_t goal_state;
         if (dual_arm_mode_)
         {
-            start_state = vector_t::Zero(14);
-            goal_state = vector_t::Zero(14);
-
-            // 左臂：从previous到current
-            start_state.segment(0, 7) = previous_left_target_state;
-            goal_state.segment(0, 7) = left_target_state_;
-
-            // 右臂：从previous到current
-            start_state.segment(7, 7) = previous_right_target_state;
-            goal_state.segment(7, 7) = right_target_state_;
+            start_state = assembleDualArmReferenceState(previous_left_target_state, previous_right_target_state);
+            goal_state = assembleDualArmReferenceState(left_target_state_, right_target_state_);
         }
         else
         {
@@ -328,11 +389,11 @@ namespace ocs2::mobile_manipulator
             vector_t xt;
             if (dual_arm_mode_)
             {
-                xt = vector_t::Zero(14);
-                xt.segment(0, 7) = interpolatePose7(start_state.segment(0, 7),
-                                                    goal_state.segment(0, 7), alpha);
-                xt.segment(7, 7) = interpolatePose7(start_state.segment(7, 7),
+                const vector_t left_i = interpolatePose7(start_state.segment(0, 7),
+                                                         goal_state.segment(0, 7), alpha);
+                const vector_t right_i = interpolatePose7(start_state.segment(7, 7),
                                                     goal_state.segment(7, 7), alpha);
+                xt = assembleDualArmReferenceState(left_i, right_i);
             }
             else
             {
@@ -345,7 +406,7 @@ namespace ocs2::mobile_manipulator
 
         vector_array_t input_trajectory(
             kNumSamples,
-            vector_t::Zero(interface_->getManipulatorModelInfo().inputDim));
+            vector_t::Zero(target_context_.input_dim));
         TargetTrajectories target_trajectories(time_trajectory, state_trajectory,
                                                input_trajectory);
         referenceManagerPtr_->setTargetTrajectories(std::move(target_trajectories));
@@ -356,6 +417,59 @@ namespace ocs2::mobile_manipulator
         trajectory_duration_ =
             node_->get_parameter("movel_trajectory_duration").as_double();
         moveL_duration_ = node_->get_parameter("movel_duration").as_double();
+    }
+
+    void PoseBasedReferenceManager::syncWheelHumanoidCoupledOppositeArmIfNeeded(bool left_target_was_updated)
+    {
+        if (!dual_arm_mode_ ||
+            effectiveTargetStateDim() != Ocs2ReferenceTargetContext::kWheelHumanoidTargetStateDim) {
+            return;
+        }
+        auto* sw = dynamic_cast<::ocs2::wheel_humanoid::SwitchedHumanoidReferenceManager*>(referenceManagerPtr_.get());
+        if (sw == nullptr) {
+            return;
+        }
+        const scalar_t t = current_observation_.time;
+        if (!sw->isBimanualCoupled(t) || !sw->hasCapturedCoupling()) {
+            return;
+        }
+        const auto rel = sw->getCouplingParameters(t);
+        const Eigen::Matrix<scalar_t, 3, 1> relPos = rel.first;
+        Eigen::Quaternion<scalar_t> relQuat = rel.second;
+        if (relQuat.norm() < static_cast<scalar_t>(1e-9)) {
+            return;
+        }
+        relQuat.normalize();
+
+        if (left_target_was_updated) {
+            const vector_t& left = left_target_state_;
+            vector_t& right = right_target_state_;
+            const Eigen::Matrix<scalar_t, 3, 1> leftPos = left.head<3>();
+            Eigen::Quaternion<scalar_t> leftQuat(left(6), left(3), left(4), left(5));
+            leftQuat.normalize();
+            const Eigen::Matrix<scalar_t, 3, 1> rightPos = leftPos + leftQuat * relPos;
+            Eigen::Quaternion<scalar_t> rightQuat = (leftQuat * relQuat).normalized();
+            right.head<3>() = rightPos;
+            right(3) = rightQuat.x();
+            right(4) = rightQuat.y();
+            right(5) = rightQuat.z();
+            right(6) = rightQuat.w();
+        } else {
+            vector_t& left = left_target_state_;
+            const vector_t& right = right_target_state_;
+            const Eigen::Matrix<scalar_t, 3, 1> rightPos = right.head<3>();
+            Eigen::Quaternion<scalar_t> rightQuat(right(6), right(3), right(4), right(5));
+            rightQuat.normalize();
+            const Eigen::Quaternion<scalar_t> invRelQuat = relQuat.inverse();
+            const Eigen::Matrix<scalar_t, 3, 1> invRelPos = -(invRelQuat * relPos);
+            const Eigen::Quaternion<scalar_t> leftQuat = (rightQuat * invRelQuat).normalized();
+            const Eigen::Matrix<scalar_t, 3, 1> leftPos = rightPos + rightQuat * invRelPos;
+            left.head<3>() = leftPos;
+            left(3) = leftQuat.x();
+            left(4) = leftQuat.y();
+            left(5) = leftQuat.z();
+            left(6) = leftQuat.w();
+        }
     }
 
     void PoseBasedReferenceManager::leftPoseCallback(
@@ -373,6 +487,8 @@ namespace ocs2::mobile_manipulator
 
         // 更新左臂target state缓存
         left_target_state_ = target_state;
+
+        syncWheelHumanoidCoupledOppositeArmIfNeeded(true);
 
         // 更新target trajectory
         updateTargetTrajectory();
@@ -396,6 +512,8 @@ namespace ocs2::mobile_manipulator
 
         // 更新右臂target state缓存
         right_target_state_ = target_state;
+
+        syncWheelHumanoidCoupledOppositeArmIfNeeded(false);
 
         // 更新target trajectory
         updateTargetTrajectory();
@@ -422,6 +540,8 @@ namespace ocs2::mobile_manipulator
         target_state(5) = msg->orientation.z;
         target_state(6) = msg->orientation.w;
         left_target_state_ = target_state;
+
+        syncWheelHumanoidCoupledOppositeArmIfNeeded(true);
 
         // 生成轨迹
         if (dual_arm_mode_)
@@ -459,6 +579,8 @@ namespace ocs2::mobile_manipulator
         target_state(5) = msg->orientation.z;
         target_state(6) = msg->orientation.w;
         right_target_state_ = target_state;
+
+        syncWheelHumanoidCoupledOppositeArmIfNeeded(false);
 
         // 生成轨迹（在双臂模式下，同时更新两个臂）
         updateTrajectory(previous_left_target_state, previous_right_target_state);
@@ -722,131 +844,87 @@ namespace ocs2::mobile_manipulator
             }
         }
 
-        // 为每个臂生成插值轨迹
-        // 采样间隔（秒）
-        constexpr double kSampleInterval = 0.04; // 0.04秒一个采样点（25Hz）
+        runInterpolatedPathTrajectory(left_arm_waypoints, right_arm_waypoints, trajectory_duration_);
+    }
 
-        // 根据时间长度动态计算采样点数量
+    void PoseBasedReferenceManager::runInterpolatedPathTrajectory(
+        const std::vector<vector_t>& left_arm_waypoints,
+        const std::vector<vector_t>& right_arm_waypoints,
+        double trajectory_duration_sec)
+    {
+        constexpr double kSampleInterval = 0.04;
         const size_t kNumSamples = std::max(
-            static_cast<size_t>(std::ceil(trajectory_duration_ / kSampleInterval)) +
-            1,
-            static_cast<size_t>(2) // 至少2个采样点
-        );
+            static_cast<size_t>(std::ceil(trajectory_duration_sec / kSampleInterval)) + 1,
+            static_cast<size_t>(2));
 
         const double t0 = current_observation_.time;
-        const double t1 = t0 + trajectory_duration_;
+        const double t1 = t0 + trajectory_duration_sec;
         const double dt = (t1 - t0) / static_cast<double>(kNumSamples - 1);
 
-        // 插值函数（复用现有的interpolatePose7逻辑）
         auto interpolatePose7 = [](const vector_t& s0, const vector_t& s1,
                                    double alpha) -> vector_t
         {
             vector_t out = vector_t::Zero(7);
-            // position
             out.segment<3>(0) =
                 (1.0 - alpha) * s0.segment<3>(0) + alpha * s1.segment<3>(0);
 
-            // quaternion stored as [qx, qy, qz, qw]
             Eigen::Quaterniond q0(s0(6), s0(3), s0(4), s0(5));
             Eigen::Quaterniond q1(s1(6), s1(3), s1(4), s1(5));
-            if (q0.norm() < 1e-9)
-            {
-                q0 = Eigen::Quaterniond::Identity();
-            }
-            else
-            {
-                q0.normalize();
-            }
-            if (q1.norm() < 1e-9)
-            {
-                q1 = q0;
-            }
-            else
-            {
-                q1.normalize();
-            }
+            if (q0.norm() < 1e-9) q0 = Eigen::Quaterniond::Identity();
+            else q0.normalize();
+            if (q1.norm() < 1e-9) q1 = q0;
+            else q1.normalize();
+            if (q0.dot(q1) < 0.0) q1.coeffs() *= -1.0;
 
-            // 保证走最短弧（避免四元数符号翻转导致绕远）
-            if (q0.dot(q1) < 0.0)
-            {
-                q1.coeffs() *= -1.0;
-            }
             Eigen::Quaterniond q = q0.slerp(alpha, q1);
             q.normalize();
-
-            out(3) = q.x();
-            out(4) = q.y();
-            out(5) = q.z();
-            out(6) = q.w();
+            out(3) = q.x(); out(4) = q.y(); out(5) = q.z(); out(6) = q.w();
             return out;
         };
 
-        // 构建完整的路径点序列（包含起始状态）
         std::vector<vector_t> left_full_path;
-        left_full_path.push_back(left_target_state_); // 起始点
-        left_full_path.insert(left_full_path.end(), left_arm_waypoints.begin(),
-                              left_arm_waypoints.end());
+        left_full_path.push_back(left_target_state_);
+        left_full_path.insert(left_full_path.end(), left_arm_waypoints.begin(), left_arm_waypoints.end());
 
         std::vector<vector_t> right_full_path;
         if (dual_arm_mode_)
         {
-            right_full_path.push_back(right_target_state_); // 起始点
-            right_full_path.insert(right_full_path.end(), right_arm_waypoints.begin(),
-                                   right_arm_waypoints.end());
+            right_full_path.push_back(right_target_state_);
+            right_full_path.insert(right_full_path.end(), right_arm_waypoints.begin(), right_arm_waypoints.end());
         }
 
-        // 生成轨迹
         scalar_array_t time_trajectory;
         time_trajectory.reserve(kNumSamples);
         vector_array_t state_trajectory;
         state_trajectory.reserve(kNumSamples);
 
-        // 辅助函数：根据全局alpha值在路径点序列中插值
         auto interpolateAlongPath =
-            [&interpolatePose7](const std::vector<vector_t>& path,
-                                double global_alpha) -> vector_t
+            [&interpolatePose7](const std::vector<vector_t>& path, double global_alpha) -> vector_t
         {
-            if (path.size() == 1)
-            {
-                return path[0];
-            }
-
-            // 计算当前应该在哪两个路径点之间
+            if (path.size() == 1) return path[0];
             const size_t num_segments = path.size() - 1;
             const double segment_size = 1.0 / static_cast<double>(num_segments);
             size_t segment_idx = static_cast<size_t>(global_alpha / segment_size);
             segment_idx = std::min(segment_idx, num_segments - 1);
-
-            const double segment_start =
-                static_cast<double>(segment_idx) * segment_size;
-            const double segment_alpha = (global_alpha - segment_start) / segment_size;
-            const double clamped_alpha = std::clamp(segment_alpha, 0.0, 1.0);
-
-            return interpolatePose7(path[segment_idx], path[segment_idx + 1],
-                                    clamped_alpha);
+            const double segment_start = static_cast<double>(segment_idx) * segment_size;
+            const double clamped_alpha = std::clamp((global_alpha - segment_start) / segment_size, 0.0, 1.0);
+            return interpolatePose7(path[segment_idx], path[segment_idx + 1], clamped_alpha);
         };
 
         for (size_t i = 0; i < kNumSamples; ++i)
         {
             const double t = t0 + static_cast<double>(i) * dt;
-            const double global_alpha =
-                static_cast<double>(i) / static_cast<double>(kNumSamples - 1);
+            const double global_alpha = static_cast<double>(i) / static_cast<double>(kNumSamples - 1);
 
             vector_t combined_state;
             if (dual_arm_mode_)
             {
-                // 双臂模式：分别插值左右臂，然后合并
-                vector_t left_state = interpolateAlongPath(left_full_path, global_alpha);
-                vector_t right_state =
-                    interpolateAlongPath(right_full_path, global_alpha);
-
-                combined_state = vector_t::Zero(14);
-                combined_state.segment(0, 7) = left_state;
-                combined_state.segment(7, 7) = right_state;
+                combined_state = assembleDualArmReferenceState(
+                    interpolateAlongPath(left_full_path, global_alpha),
+                    interpolateAlongPath(right_full_path, global_alpha));
             }
             else
             {
-                // 单臂模式：只插值左臂
                 combined_state = interpolateAlongPath(left_full_path, global_alpha);
             }
 
@@ -854,41 +932,66 @@ namespace ocs2::mobile_manipulator
             state_trajectory.push_back(combined_state);
         }
 
-        // 更新缓存
-        if (!left_arm_waypoints.empty())
-        {
-            left_target_state_ = left_arm_waypoints.back();
-        }
-        if (dual_arm_mode_ && !right_arm_waypoints.empty())
-        {
-            right_target_state_ = right_arm_waypoints.back();
-        }
+        if (!left_arm_waypoints.empty()) left_target_state_ = left_arm_waypoints.back();
+        if (dual_arm_mode_ && !right_arm_waypoints.empty()) right_target_state_ = right_arm_waypoints.back();
 
-        // 创建并设置轨迹
-        vector_array_t input_trajectory(
-            kNumSamples,
-            vector_t::Zero(interface_->getManipulatorModelInfo().inputDim));
-        TargetTrajectories target_trajectories(time_trajectory, state_trajectory,
-                                               input_trajectory);
+        vector_array_t input_trajectory(kNumSamples, vector_t::Zero(target_context_.input_dim));
+        TargetTrajectories target_trajectories(time_trajectory, state_trajectory, input_trajectory);
         referenceManagerPtr_->setTargetTrajectories(std::move(target_trajectories));
 
-        // 发布当前目标
         publishCurrentTargets();
 
         if (dual_arm_mode_)
-        {
-            RCLCPP_INFO(logger_,
-                        "处理路径（双臂模式）：左臂 %zu 个路径点，右臂 %zu "
-                        "个路径点，生成 %zu 个轨迹点",
-                        left_arm_waypoints.size(), right_arm_waypoints.size(),
-                        kNumSamples);
-        }
+            RCLCPP_INFO(logger_, "处理路径（双臂模式）：左臂 %zu 个路径点，右臂 %zu 个路径点，生成 %zu 个轨迹点",
+                        left_arm_waypoints.size(), right_arm_waypoints.size(), kNumSamples);
         else
-        {
-            RCLCPP_INFO(logger_,
-                        "处理路径（单臂模式）：%zu 个路径点，生成 %zu 个轨迹点",
+            RCLCPP_INFO(logger_, "处理路径（单臂模式）：%zu 个路径点，生成 %zu 个轨迹点",
                         left_arm_waypoints.size(), kNumSamples);
+    }
+
+    void PoseBasedReferenceManager::handleExecutePathService(
+        const std::shared_ptr<arms_ros2_control_msgs::srv::ExecutePath::Request> request,
+        std::shared_ptr<arms_ros2_control_msgs::srv::ExecutePath::Response> response)
+    {
+        updateParam();
+
+        double duration = request->trajectory_duration;
+        if (duration <= 0.0) duration = trajectory_duration_;
+
+        auto poseToState = [](const geometry_msgs::msg::PoseStamped& ps) -> vector_t
+        {
+            vector_t s = vector_t::Zero(7);
+            s(0) = ps.pose.position.x;    s(1) = ps.pose.position.y;    s(2) = ps.pose.position.z;
+            s(3) = ps.pose.orientation.x; s(4) = ps.pose.orientation.y;
+            s(5) = ps.pose.orientation.z; s(6) = ps.pose.orientation.w;
+            return s;
+        };
+
+        std::vector<vector_t> left_arm_waypoints;
+        std::vector<vector_t> right_arm_waypoints;
+
+        for (const auto& ps : request->left_arm_path.poses)
+            left_arm_waypoints.push_back(poseToState(ps));
+        if (dual_arm_mode_)
+            for (const auto& ps : request->right_arm_path.poses)
+                right_arm_waypoints.push_back(poseToState(ps));
+
+        if (dual_arm_mode_ && request->left_arm_path.poses.empty() && request->right_arm_path.poses.empty())
+        {
+            response->success = false;
+            response->message = "both left_arm_path and right_arm_path are empty";
+            response->estimated_duration = 0.0;
+            return;
         }
+
+        if (left_arm_waypoints.empty()) left_arm_waypoints.push_back(left_target_state_);
+        if (dual_arm_mode_ && right_arm_waypoints.empty()) right_arm_waypoints.push_back(right_target_state_);
+
+        runInterpolatedPathTrajectory(left_arm_waypoints, right_arm_waypoints, duration);
+
+        response->success = true;
+        response->message = "trajectory applied";
+        response->estimated_duration = duration;
     }
 
     void PoseBasedReferenceManager::resetTargetStateCache()
@@ -896,6 +999,8 @@ namespace ocs2::mobile_manipulator
         // 重置target state缓存
         left_target_state_ = vector_t::Zero(7);
         right_target_state_ = vector_t::Zero(7);
+        body_pose_7_xyzw_ = vector_t::Zero(7);
+        body_pose_7_xyzw_(6) = 1.0;
 
         RCLCPP_INFO(logger_,
                     "Target state cache reset - cleared all cached target states");
@@ -911,6 +1016,11 @@ namespace ocs2::mobile_manipulator
         if (dual_arm_mode_)
         {
             right_target_state_ = right_ee_pose;
+            // 仅轮式人形 21 维布局需要在此处把缓存推入 ReferenceManager；固定臂控仍保持 7/14 维原行为
+            if (effectiveTargetStateDim() == Ocs2ReferenceTargetContext::kWheelHumanoidTargetStateDim)
+            {
+                updateTargetTrajectory();
+            }
         }
 
         // 发布当前目标
@@ -1559,9 +1669,8 @@ namespace ocs2::mobile_manipulator
             {
                 for (size_t i = 0; i < time_size; i++)
                 {
-                    vector_t current_state = vector_t::Zero(14);
-                    current_state.segment(0, 7) = pose_trajectory[i];
-                    current_state.segment(7, 7) = previous_right_target_state; // 保持右臂不变
+                    vector_t current_state =
+                        assembleDualArmReferenceState(pose_trajectory[i], previous_right_target_state);
                     time_trajectory.push_back(t0 + time_traj[i]);
                     state_trajectory.push_back(current_state);
                 }
@@ -1570,9 +1679,8 @@ namespace ocs2::mobile_manipulator
             {
                 for (size_t i = 0; i < time_size; i++)
                 {
-                    vector_t current_state = vector_t::Zero(14);
-                    current_state.segment(0, 7) = previous_left_target_state;
-                    current_state.segment(7, 7) = pose_trajectory[i];
+                    vector_t current_state =
+                        assembleDualArmReferenceState(previous_left_target_state, pose_trajectory[i]);
                     time_trajectory.push_back(t0 + time_traj[i]);
                     state_trajectory.push_back(current_state);
                 }
@@ -1591,7 +1699,7 @@ namespace ocs2::mobile_manipulator
 
         vector_array_t input_trajectory(
             time_size,
-            vector_t::Zero(interface_->getManipulatorModelInfo().inputDim));
+            vector_t::Zero(target_context_.input_dim));
         TargetTrajectories target_trajectories(time_trajectory, state_trajectory,
                                                input_trajectory);
         referenceManagerPtr_->setTargetTrajectories(std::move(target_trajectories));
@@ -1611,4 +1719,4 @@ namespace ocs2::mobile_manipulator
         }
     }
 #endif
-} // namespace ocs2::mobile_manipulator
+} // namespace ocs2::controller_common
