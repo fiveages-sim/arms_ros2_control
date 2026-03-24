@@ -879,7 +879,7 @@ namespace arms_controller_common
         for (size_t i = 1; i < num_waypoints; i++)
         {
             planning::TrajectoryParameter param;
-            if (!getTrajectoryParameter(waypoints[0], param))
+            if (!getTrajectoryParameter(waypoints[i], param))
             {
                 all_waypoints_has_parameter = false;
                 break;
@@ -895,6 +895,7 @@ namespace arms_controller_common
         else
         {
             planning::TrajectoryInitParameters tmp_params(trajectory_points, first_param, period_);
+            init_params = tmp_params;
         }
 
         try
@@ -977,7 +978,7 @@ namespace arms_controller_common
                 waypoint.max_velocity.size() != num_joints || waypoint.max_acceleration.size() != num_joints || waypoint
                 .max_jerk.size() != num_joints)
             {
-                RCLCPP_ERROR(logger_, "In non-time mode, please enter the correct planned parameters");
+                RCLCPP_INFO(logger_, "In non-time mode, please enter the correct planned parameters");
                 return false;
             }
             planning::TrajectoryParameter param(num_joints);
