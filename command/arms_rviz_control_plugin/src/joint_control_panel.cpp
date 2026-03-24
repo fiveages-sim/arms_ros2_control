@@ -318,18 +318,35 @@ namespace arms_rviz_control_plugin
             "right_current_target", 10,
             std::bind(&JointControlPanel::onRightCurrentTargetReceived, this, std::placeholders::_1));
         
-        waist_lifting_publisher_ = node_->create_publisher<std_msgs::msg::Float64>(
-            "/body_joint_controller/waist_lifting_command", 10);
-
-        waist_turning_publisher_ = node_->create_publisher<std_msgs::msg::Float64>(
-            "/body_joint_controller/waist_turning_command", 10);
-        
         body_current_target_subscriber_ = node_->create_subscription<std_msgs::msg::Float64MultiArray>(
             "/body_joint_controller/current_target_joint", 10,
             std::bind(&JointControlPanel::onBodyCurrentTargetReceived, this, std::placeholders::_1));
 
         // Initialize publisher (will be updated when category changes)
         updatePublisher();
+
+        refreshWaistEnabledState();
+        waist_enabled_checked_ = true;
+
+        if (is_waist_enabled_)
+        {
+            waist_lifting_publisher_ = node_->create_publisher<std_msgs::msg::Float64>(
+                "/body_joint_controller/waist_lifting_command", 10);
+
+            waist_turning_publisher_ = node_->create_publisher<std_msgs::msg::Float64>(
+                "/body_joint_controller/waist_turning_command", 10);
+
+            RCLCPP_INFO(node_->get_logger(),
+                        "Waist control publishers created because waist_lifting_enabled is true");
+        }
+        else
+        {
+            waist_lifting_publisher_.reset();
+            waist_turning_publisher_.reset();
+
+            RCLCPP_INFO(node_->get_logger(),
+                        "Waist control publishers not created because waist_lifting_enabled is false or unavailable");
+        }
 
         // Initialize visibility based on default state (command = 2, not enabled)
         updatePanelVisibility();
@@ -495,12 +512,6 @@ namespace arms_rviz_control_plugin
 
     void JointControlPanel::onJointStateReceived(const sensor_msgs::msg::JointState::SharedPtr msg)
     {
-        if (!waist_enabled_checked_)
-        {
-            refreshWaistEnabledState();
-            waist_enabled_checked_ = true;
-        }
-
         // Initialize joint names and positions on first message
         if (!joints_initialized_ && !msg->name.empty())
         {
