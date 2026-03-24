@@ -1,0 +1,8 @@
+#请求部分
+string[] joint_names                          # 关节名称列表
+JointWaypoint[] waypoints                # 轨迹点列表
+---
+#响应部分
+bool success                  # 是否成功
+string message                # 结果消息
+float64 planned_duration      # 实际规划的总运动时间
