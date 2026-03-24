@@ -326,6 +326,17 @@ namespace arms_controller_common
         {
             return false;
         }
+        Eigen::Vector3d delta_joint = output_joint_angle - init_joint_angle;
+        //有时候满足限制条件的关节角度与当前关节角度相差很远，导致找了另一个逆解，这里增加安全限制检查
+        for (int i = 0; i < 3; ++i)
+        {
+            if (fabs(delta_joint(i)) > 0.05)
+            {
+                std::cerr << "The inverse solution position is too far from the current point" << std::endl;
+                return false;
+            }
+        }
+
         return true;
     }
 
