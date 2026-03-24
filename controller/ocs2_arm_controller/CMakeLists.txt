@@ -52,6 +52,11 @@ ament_target_dependencies(${PROJECT_NAME}
         ${CONTROLLER_INCLUDE_DEPENDS}
 )
 
+target_compile_definitions(${PROJECT_NAME} PRIVATE
+        BOOST_MPL_CFG_NO_PREPROCESSED_HEADERS
+        BOOST_MPL_LIMIT_VECTOR_SIZE=30
+)
+
 pluginlib_export_plugin_description_file(controller_interface ocs2_arm_controller.xml)
 
 install(
