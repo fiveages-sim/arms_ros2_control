@@ -8,6 +8,8 @@ rosidl_generate_interfaces(${PROJECT_NAME}
         "msg/Inputs.msg"
         "msg/CircleMessage.msg"
         "srv/ExecuteCircle.srv"
+        "msg/JointWaypoint.msg"
+        "srv/JointTrajectory.srv"
         DEPENDENCIES std_msgs geometry_msgs
 )
 # 添加export依赖

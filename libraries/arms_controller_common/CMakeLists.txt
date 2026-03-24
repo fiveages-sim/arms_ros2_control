@@ -19,6 +19,7 @@ set(dependencies
         tf2
         geometry_msgs
         trajectory_msgs
+        arms_ros2_control_msgs
 )
 
 find_package(ament_cmake REQUIRED)

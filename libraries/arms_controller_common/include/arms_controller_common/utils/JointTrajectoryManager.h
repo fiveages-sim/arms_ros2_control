@@ -4,6 +4,7 @@
 #include <vector>
 #include <memory>
 #include <rclcpp/rclcpp.hpp>
+#include <arms_ros2_control_msgs/msg/joint_waypoint.hpp>
 
 // 条件编译：只在 lina_planning 可用时包含相关头文件
 #ifdef HAS_LINA_PLANNING
@@ -140,14 +141,38 @@ namespace arms_controller_common
          */
         void setCommonJointBlendRatios(double blend_ratios);
 
+        /**
+             * @brief Plan single target motion using lina_planning
+             * @param start_pos Starting joint positions
+             * @param target_pos Target joint positions
+             * @param waypoint Target joint position and parameters
+             * @param joint_names Joint names for limit checking
+             * @return True if planning successful, false otherwise
+             */
+        bool planSingleTarget(
+            const std::vector<double>& start_pos,
+            const arms_ros2_control_msgs::msg::JointWaypoint& waypoint);
+
+        /**
+         * @brief Plan multi-point trajectory using lina_planning
+         * @param start_pos Starting joint positions
+         * @param waypoints Vector of waypoints
+         * @param joint_names Joint names for limit checking
+         * @return True if planning successful, false otherwise
+         */
+        bool planMultiTrajectory(const std::vector<double>& start_pos,
+                                 const std::vector<arms_ros2_control_msgs::msg::JointWaypoint>& waypoints);
+
+        double getPlanningTime() const;
+
     private:
         // Trajectory mode
         enum class TrajectoryMode
         {
-            NONE,           // Not initialized
-            SINGLE_NODE,    // Single-node trajectory
-            MULTI_NODE_BASIC,  // Multi-node trajectory (basic segment-based interpolation)
-            MULTI_NODE_ADVANCED  // Multi-node trajectory (advanced lina_planning)
+            NONE, // Not initialized
+            SINGLE_NODE, // Single-node trajectory
+            MULTI_NODE_BASIC, // Multi-node trajectory (basic segment-based interpolation)
+            MULTI_NODE_ADVANCED // Multi-node trajectory (advanced lina_planning)
         };
 
         // Single-node trajectory computation
@@ -192,21 +217,30 @@ namespace arms_controller_common
         double duration_{0.0};
         InterpolationType interpolation_type_{InterpolationType::TANH};
         double tanh_scale_{3.0};
-        double percent_{0.0};  // Progress [0.0, 1.0]
+        double percent_{0.0}; // Progress [0.0, 1.0]
 
         // Multi-node trajectory parameters (basic mode)
         std::vector<std::vector<double>> waypoints_;
         std::vector<double> segment_durations_;
         size_t current_segment_{0};
-        std::vector<double> segment_progress_;  // Progress for each segment [0.0, 1.0]
+        std::vector<double> segment_progress_; // Progress for each segment [0.0, 1.0]
 
         // Controller parameters
         double controller_frequency_{100.0};
-        double period_{0.01};  // 1.0 / controller_frequency_
+        double period_{0.01}; // 1.0 / controller_frequency_
 
         // Multi-node trajectory duration (for automatic time calculation in lina planning)
-        double trajectory_duration_ = 3.0;  // Default 3 seconds
-        double common_joint_blend_ratios=0.0;
+        double trajectory_duration_ = 3.0; // Default 3 seconds
+        double common_joint_blend_ratios = 0.0;
+
+        // 辅助函数
+        /**
+        * @brief Clear the current plan
+        */
+        void clearPlan();
+        bool getTrajectoryParameter(const arms_ros2_control_msgs::msg::JointWaypoint& waypoint,
+                                    planning::TrajectoryParameter& res);
+        double planningTime_;
 
         // Advanced mode (lina_planning) - conditionally compiled
 #ifdef HAS_LINA_PLANNING
@@ -218,4 +252,3 @@ namespace arms_controller_common
 #endif
     };
 } // namespace arms_controller_common
-

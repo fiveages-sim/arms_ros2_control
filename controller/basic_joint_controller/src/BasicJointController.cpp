@@ -190,7 +190,7 @@ namespace basic_joint_controller
             {
                 state_list_.movej->updateJointLimitsFromURDF(msg->data);
             });
-
+        state_list_.movej->setupJointTrajectoryService("joint_trajectory_with_para");
 
         // 创建腰部升降规划器并传递给 StateMoveJ
         if (waist_lifting_enabled_)

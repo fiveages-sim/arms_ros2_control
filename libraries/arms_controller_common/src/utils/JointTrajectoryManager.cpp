@@ -196,7 +196,7 @@ namespace arms_controller_common
                     // Convert waypoints to TrajectPoint
                     for (size_t i = 0; i < nr_of_waypoints; i++)
                     {
-                        const auto& waypoint =waypoints_[i];
+                        const auto& waypoint = waypoints_[i];
                         planning::TrajectPoint point(nr_of_joints);
                         for (size_t j = 0; j < nr_of_joints; ++j)
                         {
@@ -204,20 +204,21 @@ namespace arms_controller_common
                         }
                         if (joint_blend_ratios.empty())
                         {
-                            if (i==0 || i==nr_of_waypoints-1)
+                            if (i == 0 || i == nr_of_waypoints - 1)
                             {
-                                point.blend_tolerance_ratio_of_movej=0.0;
+                                point.blend_tolerance_ratio_of_movej = 0.0;
                             }
                             else
                             {
-                                point.blend_tolerance_ratio_of_movej=common_joint_blend_ratios;
+                                point.blend_tolerance_ratio_of_movej = common_joint_blend_ratios;
                             }
                         }
                         else
                         {
-                            point.blend_tolerance_ratio_of_movej=joint_blend_ratios[i];
+                            point.blend_tolerance_ratio_of_movej = joint_blend_ratios[i];
                         }
-                        RCLCPP_INFO(logger_, "%zu th point blend ratio is %.2f",i,point.blend_tolerance_ratio_of_movej);
+                        RCLCPP_INFO(logger_, "%zu th point blend ratio is %.2f", i,
+                                    point.blend_tolerance_ratio_of_movej);
                         trajectory_points.push_back(point);
                     }
 
@@ -406,7 +407,7 @@ namespace arms_controller_common
 
     void JointTrajectoryManager::setCommonJointBlendRatios(double blend_ratios)
     {
-        common_joint_blend_ratios=std::clamp(blend_ratios,0.0,1.0);
+        common_joint_blend_ratios = std::clamp(blend_ratios, 0.0, 1.0);
     }
 
     std::vector<double> JointTrajectoryManager::computeSingleNodePoint()
@@ -766,4 +767,248 @@ namespace arms_controller_common
 
         return true;
     }
+
+    bool JointTrajectoryManager::planSingleTarget(
+        const std::vector<double>& start_pos,
+        const arms_ros2_control_msgs::msg::JointWaypoint& waypoint)
+    {
+        clearPlan();
+#ifdef HAS_LINA_PLANNING
+        interpolation_type_ = InterpolationType::DOUBLES;
+        size_t num_joints = start_pos.size();
+
+        //  起始点和目标点
+        planning::TrajectPoint start_point(num_joints);
+        planning::TrajectPoint end_point(num_joints);
+
+        for (size_t i = 0; i < num_joints; i++)
+        {
+            start_point.joint_pos(i) = start_pos[i];
+            end_point.joint_pos(i) = waypoint.position[i];
+        }
+
+        // 规划参数
+        planning::TrajectoryParameter param;
+        getTrajectoryParameter(waypoint, param);
+
+        // 3. 使用moveJ规划器
+
+        try
+        {
+            movej_planner_ = std::make_unique<planning::moveJ>();
+
+            planning::TrajectoryInitParameters init_params(
+                start_point, end_point, param, period_);
+
+            if (!movej_planner_->init(init_params))
+            {
+                RCLCPP_ERROR(logger_, "Failed to initialize moveJ planner for single target");
+                reset();
+                return false;
+            }
+            movej_planner_->setRealStartTime(0.0);
+            mode_ = TrajectoryMode::SINGLE_NODE;
+            planningTime_ = movej_planner_->getTotalTime();
+
+            initialized_ = true;
+            completed_ = false;
+            percent_ = 0.0;
+
+            RCLCPP_DEBUG(logger_,
+                         "Initialized single-node trajectory: %zu joints, duration=%.3f, type=%s",
+                         start_pos_.size(), planningTime_, toString(interpolation_type_));
+
+
+            return true;
+        }
+        catch (const std::exception& e)
+        {
+            RCLCPP_ERROR(logger_, "Exception in single target planning: %s", e.what());
+            return false;
+        }
+#else
+        RCLCPP_ERROR(logger_, "lina_planning not available");
+        return false;
+#endif
+    }
+
+    bool JointTrajectoryManager::planMultiTrajectory(const std::vector<double>& start_pos,
+                                                     const std::vector<arms_ros2_control_msgs::msg::JointWaypoint>&
+                                                     waypoints)
+    {
+        clearPlan();
+
+        if (waypoints.size() < 2)
+        {
+            RCLCPP_ERROR(logger_, "At least 2 waypoints required for multi-trajectory planning");
+            return false;
+        }
+#ifdef HAS_LINA_PLANNING
+        interpolation_type_ = InterpolationType::DOUBLES;
+        size_t num_joints = start_pos.size();
+        size_t num_waypoints = waypoints.size();
+        std::vector<planning::TrajectPoint> trajectory_points;
+        trajectory_points.reserve(num_waypoints + 1);
+        planning::TrajectPoint point(num_joints);
+        for (size_t i = 0; i < num_joints; i++)
+        {
+            point.joint_pos(i) = start_pos[i];
+        }
+        trajectory_points.push_back(point);
+
+        for (size_t i = 0; i < num_waypoints; i++)
+        {
+            for (size_t j = 0; j < num_joints; j++)
+            {
+                point.joint_pos(j) = waypoints[i].position[j];
+            }
+            point.blend_tolerance_ratio_of_movej = std::clamp(waypoints[i].blend_ratio_percent, 0.0, 1.0);
+            trajectory_points.push_back(point);
+        }
+
+        // 2. 创建公共参数（使用第一个路点的参数）
+        planning::TrajectoryParameter first_param;
+        if (!getTrajectoryParameter(waypoints[0], first_param))
+        {
+            return false;
+        }
+        bool all_waypoints_has_parameter = true;
+        std::vector<planning::TrajectoryParameter> multiple_parameters;
+        multiple_parameters.reserve(num_waypoints);
+        multiple_parameters.push_back(first_param);
+        for (size_t i = 1; i < num_waypoints; i++)
+        {
+            planning::TrajectoryParameter param;
+            if (!getTrajectoryParameter(waypoints[0], param))
+            {
+                all_waypoints_has_parameter = false;
+                break;
+            }
+            multiple_parameters.push_back(param);
+        }
+        planning::TrajectoryInitParameters init_params;
+        if (all_waypoints_has_parameter)
+        {
+            planning::TrajectoryInitParameters tmp_params(trajectory_points, multiple_parameters, period_);
+            init_params = tmp_params;
+        }
+        else
+        {
+            planning::TrajectoryInitParameters tmp_params(trajectory_points, first_param, period_);
+        }
+
+        try
+        {
+            multi_node_planner_ = std::make_unique<planning::SmoothCurveOfMultiJointsUsingBlending>();
+
+
+            if (!multi_node_planner_->init(init_params))
+            {
+                RCLCPP_ERROR(
+                    logger_, "Failed to initialize SmoothCurveOfMultiJointsUsingBlending for DOUBLES interpolation");
+                reset();
+                return false;
+            }
+
+
+            mode_ = TrajectoryMode::MULTI_NODE_ADVANCED;
+
+            multi_node_planner_->setRealStartTime(0.0);
+
+            planningTime_ = multi_node_planner_->getTotalTime();
+
+            initialized_ = true;
+            completed_ = false;
+            RCLCPP_DEBUG(logger_,
+                                     "Initialized single-node trajectory: %zu joints, duration=%.3f, type=%s",
+                                     start_pos_.size(), planningTime_, toString(interpolation_type_));
+            RCLCPP_DEBUG(logger_,
+                         "Initialized multi-node trajectory: %zu waypoints, duration=%.3f, type=%s",
+                         num_waypoints, planningTime_, toString(interpolation_type_));
+
+            return true;
+        }
+        catch (const std::exception& e)
+        {
+            RCLCPP_ERROR(logger_, "Exception in multi-trajectory planning: %s", e.what());
+            return false;
+        }
+#else
+        RCLCPP_ERROR(logger_, "lina_planning not available");
+        return false;
+#endif
+    }
+
+
+    void JointTrajectoryManager::clearPlan()
+    {
+#ifdef HAS_LINA_PLANNING
+        movej_planner_.reset();
+        multi_node_planner_.reset();
+#endif
+    }
+
+    bool JointTrajectoryManager::getTrajectoryParameter(const arms_ros2_control_msgs::msg::JointWaypoint& waypoint,
+                                                        planning::TrajectoryParameter& res)
+    {
+        size_t num_joints = waypoint.position.size();
+        bool is_time_mode = waypoint.time_mode;
+        if (is_time_mode)
+        {
+            double total_time = waypoint.total_time > 0 ? waypoint.total_time : 3.0;
+            planning::TrajectoryParameter param(total_time, num_joints);
+            if (!waypoint.max_velocity.empty() && !waypoint.max_acceleration.empty() && !waypoint.max_jerk.empty() &&
+                waypoint.max_velocity.size() == num_joints && waypoint.max_acceleration.size() == num_joints && waypoint
+                .max_jerk.size() == num_joints)
+            {
+                //时间模式下也可以使用用户设置的参数，不用内部的默认参数，时间模式其实是一个相对比例关系
+                for (size_t i = 0; i < num_joints; i++)
+                {
+                    param.joint_max_vel(i) = waypoint.max_velocity[i];
+                    param.joint_max_acc(i) = waypoint.max_acceleration[i];
+                    param.joint_max_jerk(i) = waypoint.max_jerk[i];
+                }
+            }
+            res = param;
+        }
+        else
+        {
+            if (waypoint.max_velocity.empty() || waypoint.max_acceleration.empty() || waypoint.max_jerk.empty() ||
+                waypoint.max_velocity.size() != num_joints || waypoint.max_acceleration.size() != num_joints || waypoint
+                .max_jerk.size() != num_joints)
+            {
+                RCLCPP_ERROR(logger_, "In non-time mode, please enter the correct planned parameters");
+                return false;
+            }
+            planning::TrajectoryParameter param(num_joints);
+            param.time_mode = false;
+            for (size_t i = 0; i < num_joints; i++)
+            {
+                param.joint_max_vel(i) = waypoint.max_velocity[i];
+                param.joint_max_acc(i) = waypoint.max_acceleration[i];
+                param.joint_max_jerk(i) = waypoint.max_jerk[i];
+            }
+            res = param;
+        }
+        return true;
+    };
+    double JointTrajectoryManager::getPlanningTime() const
+    {
+        if (isDoublesAvailable() && interpolation_type_ == InterpolationType::DOUBLES)
+        {
+            return planningTime_;
+        }
+        else
+        {
+         if (mode_==TrajectoryMode::SINGLE_NODE)
+         {
+             return duration_;
+         }
+         else
+         {
+             return trajectory_duration_;
+         }
+        }
+
+    };
 } // namespace arms_controller_common

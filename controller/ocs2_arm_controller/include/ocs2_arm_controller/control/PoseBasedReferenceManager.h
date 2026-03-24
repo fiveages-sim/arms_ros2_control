@@ -5,7 +5,6 @@
 
 #include <arms_ros2_control_msgs/msg/circle_message.hpp>
 #include <arms_ros2_control_msgs/srv/execute_circle.hpp>
-// #include <arms_ros2_control_msgs/srv/circle_result.hpp>
 #include <functional>
 #include <geometry_msgs/msg/pose.hpp>
 #include <geometry_msgs/msg/pose_stamped.hpp>

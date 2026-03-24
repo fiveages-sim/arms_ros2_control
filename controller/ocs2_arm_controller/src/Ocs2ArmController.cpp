@@ -227,6 +227,7 @@ namespace ocs2::mobile_manipulator
 
         state_list_.movej->setupSubscriptions("target_joint_position", true);
         state_list_.movej->setupTrajectorySubscription();
+        state_list_.movej->setupJointTrajectoryService("joint_trajectory_with_para");
 
         return CallbackReturn::SUCCESS;
     }
