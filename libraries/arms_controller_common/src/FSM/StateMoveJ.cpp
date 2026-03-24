@@ -1132,6 +1132,11 @@ namespace arms_controller_common
         RCLCPP_INFO(node_->get_logger(), "Subscribed to trajectory topic: %s", full_topic.c_str());
     }
 
+    void StateMoveJ::updateWaistParam()
+    {
+        waist_lifting_duration_ = node_->get_parameter("waist_lifting_duration").as_double();
+    }
+
     bool StateMoveJ::moveWaistLifting(double lifting_distance)
     {
         if (!waist_lifting_planer_) // 只在没有规划器时创建
@@ -1145,7 +1150,7 @@ namespace arms_controller_common
             RCLCPP_WARN(node_->get_logger(), "Waist lifting planner not initialized");
             return false;
         }
-
+        StateMoveJ::updateWaistParam();
         // 获取当前腰部关节角度
         Eigen::VectorXd current_angles = getCurrentWaistAngles();
 
