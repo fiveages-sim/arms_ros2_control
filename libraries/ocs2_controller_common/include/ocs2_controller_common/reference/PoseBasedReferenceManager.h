@@ -5,6 +5,7 @@
 
 #include <arms_ros2_control_msgs/msg/circle_message.hpp>
 #include <arms_ros2_control_msgs/srv/execute_circle.hpp>
+#include <arms_ros2_control_msgs/srv/execute_path.hpp>
 #include <chrono>
 #include <functional>
 #include <mutex>
@@ -61,6 +62,13 @@ private:
     void rightPoseStampedCallback(geometry_msgs::msg::PoseStamped::SharedPtr msg);
     void dualTargetStampedCallback(nav_msgs::msg::Path::SharedPtr msg);
     void pathCallback(nav_msgs::msg::Path::SharedPtr msg);
+    void runInterpolatedPathTrajectory(
+        const std::vector<vector_t>& left_arm_waypoints,
+        const std::vector<vector_t>& right_arm_waypoints,
+        double trajectory_duration_sec);
+    void handleExecutePathService(
+        const std::shared_ptr<arms_ros2_control_msgs::srv::ExecutePath::Request> request,
+        std::shared_ptr<arms_ros2_control_msgs::srv::ExecutePath::Response> response);
     void updateTargetTrajectory();
     void updateTrajectory(const vector_t& previous_left_target_state, const vector_t& previous_right_target_state);
 
@@ -90,6 +98,8 @@ private:
     rclcpp::Subscription<geometry_msgs::msg::PoseStamped>::SharedPtr right_pose_stamped_subscriber_;
     rclcpp::Subscription<nav_msgs::msg::Path>::SharedPtr dual_target_stamped_subscriber_;
     rclcpp::Subscription<nav_msgs::msg::Path>::SharedPtr path_subscriber_;
+
+    rclcpp::Service<arms_ros2_control_msgs::srv::ExecutePath>::SharedPtr execute_path_service_;
 
     rclcpp::Publisher<geometry_msgs::msg::PoseStamped>::SharedPtr left_target_publisher_;
     rclcpp::Publisher<geometry_msgs::msg::PoseStamped>::SharedPtr right_target_publisher_;
