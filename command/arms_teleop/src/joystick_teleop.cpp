@@ -127,6 +127,7 @@ void JoystickTeleop::loadButtonMapping() {
     this->declare_parameter("axes_mapping.dpad_y", 7);
     this->declare_parameter("axes_mapping.deadzone", 0.1);
     this->declare_parameter("axes_mapping.dpad_deadzone", 0.5);
+    this->declare_parameter("axes_mapping.arm_activation_threshold", 0.5);
     
     axes_map_.left_stick_x = this->get_parameter("axes_mapping.left_stick_x").as_int();
     axes_map_.left_stick_y = this->get_parameter("axes_mapping.left_stick_y").as_int();
@@ -136,6 +137,8 @@ void JoystickTeleop::loadButtonMapping() {
     axes_map_.dpad_y = this->get_parameter("axes_mapping.dpad_y").as_int();
     axes_map_.deadzone = this->get_parameter("axes_mapping.deadzone").as_double();
     axes_map_.dpad_deadzone = this->get_parameter("axes_mapping.dpad_deadzone").as_double();
+    arm_axes_activation_threshold_ =
+        this->get_parameter("axes_mapping.arm_activation_threshold").as_double();
     
     // Declare and get mirror movement parameter
     this->declare_parameter("mirror_movement", true);
@@ -163,6 +166,7 @@ void JoystickTeleop::printButtonMapping() {
     RCLCPP_INFO(get_logger(), "   D-Pad Y:            %d", axes_map_.dpad_y);
     RCLCPP_INFO(get_logger(), "   Deadzone:           %.2f", axes_map_.deadzone);
     RCLCPP_INFO(get_logger(), "   D-Pad Deadzone:     %.2f", axes_map_.dpad_deadzone);
+    RCLCPP_INFO(get_logger(), "   Arm Activation Thr: %.2f", arm_axes_activation_threshold_);
     RCLCPP_INFO(get_logger(), "📋 Mirror Movement:     %s", mirror_movement_ ? "ENABLED" : "DISABLED");
 }
 
@@ -428,6 +432,10 @@ void JoystickTeleop::processAxes(const sensor_msgs::msg::Joy::SharedPtr msg) {
     // Right stick controls position (z) and rotation (yaw) - use configured mapping
     double right_stick_x = applyDeadzone(msg->axes[axes_map_.right_stick_x], axes_map_.deadzone);
     double right_stick_y = applyDeadzone(msg->axes[axes_map_.right_stick_y], axes_map_.deadzone);
+    // Apply mirror movement to yaw when mirror mode is enabled
+    if (mirror_movement_) {
+        right_stick_x = -right_stick_x;
+    }
 
     // D-pad controls roll and pitch rotation - use configured mapping
     double dpad_x = applyDeadzone(msg->axes[axes_map_.dpad_x], axes_map_.dpad_deadzone);
@@ -438,6 +446,15 @@ void JoystickTeleop::processAxes(const sensor_msgs::msg::Joy::SharedPtr msg) {
         dpad_x = -dpad_x;
         dpad_y = -dpad_y;
     }
+
+    // Apply activation threshold in ARM mode to avoid accidental micro movements.
+    auto applyActivationThreshold = [this](double value) {
+        return (std::abs(value) >= arm_axes_activation_threshold_) ? value : 0.0;
+    };
+    left_stick_x = applyActivationThreshold(left_stick_x);
+    left_stick_y = applyActivationThreshold(left_stick_y);
+    right_stick_x = applyActivationThreshold(right_stick_x);
+    right_stick_y = applyActivationThreshold(right_stick_y);
 
     // Apply speed scaling based on current mode
     double speed_scale = high_speed_mode_ ? high_speed_scale_ : low_speed_scale_;
@@ -493,8 +510,8 @@ void JoystickTeleop::processChassisAxes(const sensor_msgs::msg::Joy::SharedPtr m
     auto waist_turn_cmd = std_msgs::msg::Float64();
     double speed_scale = high_speed_mode_ ? high_speed_scale_ : low_speed_scale_;
 
-    const bool lifting_active = (right_stick_y > 0.5) || (right_stick_y < -0.5);
-    const bool turning_active = (dpad_x > 0.5) || (dpad_x < -0.5);
+    const bool lifting_active = right_stick_y > 0.5 || right_stick_y < -0.5;
+    const bool turning_active = dpad_x > 0.5 || dpad_x < -0.5;
 
     // Priority: lifting > turning when both inputs are active.
     // Waist turning follows mirror mode:

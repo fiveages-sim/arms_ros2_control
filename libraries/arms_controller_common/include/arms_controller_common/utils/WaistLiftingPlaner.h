@@ -1,10 +1,14 @@
 #pragma once
-#include "lina_planning/planning/path_planner/movej.h"
-#include "lina_planning/planning/path_planner/speedj.h"
 #include <array>
 #include <eigen3/Eigen/Dense>
 #include <memory>
 #include <vector>
+
+// Optional dependency: lina_planning
+#ifdef HAS_LINA_PLANNING
+#include "lina_planning/planning/path_planner/movej.h"
+#include "lina_planning/planning/path_planner/speedj.h"
+#endif
 
 namespace arms_controller_common
 {
@@ -46,20 +50,32 @@ namespace arms_controller_common
         {
             if (type_speed_)
             {
-                return speedj_planner_->isMotionOver();
+#ifdef HAS_LINA_PLANNING
+                if (speedj_planner_)
+                {
+                    return speedj_planner_->isMotionOver();
+                }
+#endif
+                return speed_plan_state_.motion_over;
             }
             else
             {
-                return movej_planner_->isMotionOver();
+#ifdef HAS_LINA_PLANNING
+                if (movej_planner_)
+                {
+                    return movej_planner_->isMotionOver();
+                }
+#endif
+                return speed_plan_state_.motion_over;
             }
         }
 
         void setCurrentVelToZero();
 
     private:
-        bool type_three_joint_; // true为三个平行腰部关节，false为单个腰部移动关节
+        bool type_three_joint_{false}; // true为三个平行腰部关节，false为单个腰部移动关节
 
-        bool type_speed_; // true 为speedj，false为movej
+        bool type_speed_{false}; // true 为speedj，false为movej
 
         /*三关节腰部参数*/
         double l1_;
@@ -89,12 +105,29 @@ namespace arms_controller_common
         bool isSingleJointsOverLimts(const double joint_angle);
 
         /*由于只升降腰部，就使用简单的movej单关节*/
+#ifdef HAS_LINA_PLANNING
         std::unique_ptr<planning::moveJ> movej_planner_;
 
         /*假如需要手柄操作或者是按下按钮上升或者下降，松手停止，使用speedj*/
 
         std::unique_ptr<planning::SpeedJ> speedj_planner_;
+#endif
 
         double min_val = 1.0e-9;
+        // Cached waist state shared by speed/length planning in this instance.
+        double waist_position_cache_{0.0};
+        double waist_velocity_cache_{0.0};
+
+        struct SpeedPlanState
+        {
+            double period{0.01};
+            double elapsed_time{0.0};
+            double total_time{0.0};
+            double start_pos{0.0};
+            double target_pos{0.0};
+            double target_speed{0.0};
+            double max_acc{0.0};
+            bool motion_over{true};
+        } speed_plan_state_;
     };
 } // namespace arms_controller_common

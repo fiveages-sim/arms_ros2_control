@@ -1,0 +1,9 @@
+# 请求
+nav_msgs/Path left_arm_path       # 左臂路径点（坐标在 base frame 下）
+nav_msgs/Path right_arm_path      # 右臂路径点（双臂模式有效，单臂模式忽略）
+float64 trajectory_duration       # 轨迹执行时长（秒），0 表示使用参数服务器默认值
+---
+# 响应
+bool success
+string message
+float64 estimated_duration        # 实际使用的轨迹时长（秒）

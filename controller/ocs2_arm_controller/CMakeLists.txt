@@ -16,6 +16,7 @@ set(CONTROLLER_INCLUDE_DEPENDS
         ocs2_mobile_manipulator
         ocs2_ros_interfaces
         ocs2_self_collision_visualization
+        ocs2_controller_common
         arms_controller_common
         tf2_ros
         tf2_geometry_msgs
@@ -34,8 +35,6 @@ add_library(${PROJECT_NAME} SHARED
         src/Ocs2ArmController.cpp
 
         src/control/CtrlComponent.cpp
-        src/control/PoseBasedReferenceManager.cpp
-        src/control/Visualizer.cpp
 
         src/FSM/StateHome.cpp
         src/FSM/StateOCS2.cpp
@@ -51,6 +50,11 @@ target_include_directories(${PROJECT_NAME}
         src)
 ament_target_dependencies(${PROJECT_NAME}
         ${CONTROLLER_INCLUDE_DEPENDS}
+)
+
+target_compile_definitions(${PROJECT_NAME} PRIVATE
+        BOOST_MPL_CFG_NO_PREPROCESSED_HEADERS
+        BOOST_MPL_LIMIT_VECTOR_SIZE=30
 )
 
 pluginlib_export_plugin_description_file(controller_interface ocs2_arm_controller.xml)
