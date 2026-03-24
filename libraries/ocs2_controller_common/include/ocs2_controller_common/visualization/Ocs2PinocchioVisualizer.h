@@ -31,6 +31,8 @@ struct Ocs2VisualizerConfig {
     std::string base_frame;
     std::string left_ee_frame;
     std::string right_ee_frame;
+    /// Body/torso frame for reference FK (wheel humanoid). Empty: callers use identity pose for body reference block.
+    std::string body_frame;
     std::optional<PinocchioGeometryInterface> pinocchio_geometry;
     scalar_t self_collision_activation_distance{0};
 };
@@ -52,6 +54,8 @@ public:
 
     vector_t computeEndEffectorPose(const vector_t& state) const;
     vector_t computeRightEndEffectorPose(const vector_t& state) const;
+    /** 7-dim pose (x,y,z, qx,qy,qz,qw) of body_frame in base; identity at origin if body_frame empty or on error. */
+    vector_t computeBodyFramePose(const vector_t& state) const;
 
     void clearTrajectoryHistory();
 

@@ -240,10 +240,27 @@ namespace ocs2::controller_common
 
     void Ocs2PinocchioVisualizer::publishSelfCollisionVisualization(const vector_t& state) const
     {
-        if (geometry_visualization_)
+        if (!geometry_visualization_)
         {
-            // Use GeometryInterfaceVisualization for self-collision visualization
+            return;
+        }
+        const auto& model = pinocchio_interface_.getModel();
+        if (static_cast<size_t>(state.size()) != static_cast<size_t>(model.nq))
+        {
+            RCLCPP_WARN_THROTTLE(node_->get_logger(), *node_->get_clock(), 5000,
+                                 "Self-collision viz skipped: state size %ld != model.nq %u (check controller joints vs OCS2)",
+                                 static_cast<long>(state.size()), model.nq);
+            return;
+        }
+        try
+        {
             geometry_visualization_->publishDistances(state);
+        }
+        catch (const std::exception& e)
+        {
+            RCLCPP_WARN_THROTTLE(node_->get_logger(), *node_->get_clock(), 5000,
+                                 "Self-collision visualization failed (disable selfCollision in task or fix URDF/collision pairs): %s",
+                                 e.what());
         }
     }
 
@@ -328,6 +345,42 @@ namespace ocs2::controller_common
         }
 
         return ee_state;
+    }
+
+    vector_t Ocs2PinocchioVisualizer::computeBodyFramePose(const vector_t& state) const
+    {
+        vector_t pose = vector_t::Zero(7);
+        pose(6) = 1.0; // identity quaternion (x,y,z,w)
+        if (config_.body_frame.empty())
+        {
+            return pose;
+        }
+
+        try
+        {
+            const auto& model = pinocchio_interface_.getModel();
+            auto data = pinocchio_interface_.getData();
+
+            pinocchio::forwardKinematics(model, data, state);
+            pinocchio::updateFramePlacements(model, data);
+
+            const auto& frame_name = config_.body_frame;
+            const auto frame_id = model.getFrameId(frame_name);
+            const auto& frame_placement = data.oMf[frame_id];
+
+            pose.head<3>() = frame_placement.translation();
+            Eigen::Quaterniond quat(frame_placement.rotation());
+            pose(3) = quat.x();
+            pose(4) = quat.y();
+            pose(5) = quat.z();
+            pose(6) = quat.w();
+        }
+        catch (const std::exception& e)
+        {
+            RCLCPP_WARN(node_->get_logger(), "Failed to compute body frame pose: %s", e.what());
+        }
+
+        return pose;
     }
 
     void Ocs2PinocchioVisualizer::publishLeftEndEffectorPose(const rclcpp::Time& time, const vector_t& state) const

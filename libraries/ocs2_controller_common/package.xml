@@ -25,6 +25,7 @@
   <depend>ocs2_self_collision</depend>
   <depend>ocs2_self_collision_visualization</depend>
   <depend>ocs2_ros_interfaces</depend>
+  <depend>ocs2_wheel_humanoid</depend>
   <depend>pinocchio</depend>
 
   <test_depend>ament_lint_auto</test_depend>

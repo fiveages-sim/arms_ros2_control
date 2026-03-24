@@ -25,6 +25,7 @@ find_package(ocs2_pinocchio_interface REQUIRED)
 find_package(ocs2_self_collision REQUIRED)
 find_package(ocs2_self_collision_visualization REQUIRED)
 find_package(ocs2_ros_interfaces REQUIRED)
+find_package(ocs2_wheel_humanoid REQUIRED)
 find_package(pinocchio REQUIRED)
 
 find_package(lina_planning QUIET)
@@ -56,6 +57,7 @@ ament_target_dependencies(${PROJECT_NAME}
   ocs2_self_collision
   ocs2_self_collision_visualization
   ocs2_ros_interfaces
+  ocs2_wheel_humanoid
 )
 
 target_link_libraries(${PROJECT_NAME} pinocchio::pinocchio)
@@ -99,6 +101,7 @@ ament_export_dependencies(
   ocs2_self_collision
   ocs2_self_collision_visualization
   ocs2_ros_interfaces
+  ocs2_wheel_humanoid
   pinocchio
 )
 if(lina_planning_FOUND)

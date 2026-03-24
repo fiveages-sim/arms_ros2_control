@@ -15,6 +15,8 @@
 #include <fstream>
 #include <iomanip>
 
+#include <ocs2_wheel_humanoid/mode/SwitchedHumanoidReferenceManager.h>
+
 namespace ocs2::controller_common
 {
     PoseBasedReferenceManager::PoseBasedReferenceManager(
@@ -35,6 +37,8 @@ namespace ocs2::controller_common
         // 初始化target state缓存
         left_target_state_ = vector_t::Zero(7);
         right_target_state_ = vector_t::Zero(7);
+        body_pose_7_xyzw_ = vector_t::Zero(7);
+        body_pose_7_xyzw_(6) = 1.0; // identity quaternion (geometry_msgs order)
 
         // 初始化圆弧指针
 #ifdef HAS_LINA_PLANNING
@@ -188,6 +192,63 @@ namespace ocs2::controller_common
         }
     }
 
+    int PoseBasedReferenceManager::effectiveTargetStateDim() const
+    {
+        if (target_context_.reference_target_state_dim > 0)
+        {
+            return target_context_.reference_target_state_dim;
+        }
+        return dual_arm_mode_ ? 14 : 7;
+    }
+
+    vector_t PoseBasedReferenceManager::identityBodyPose7() const
+    {
+        vector_t b = vector_t::Zero(7);
+        b(6) = 1.0;
+        return b;
+    }
+
+    vector_t PoseBasedReferenceManager::bodySegmentForAssembly() const
+    {
+        if (!target_context_.body_pose_from_current_state &&
+            effectiveTargetStateDim() == Ocs2ReferenceTargetContext::kWheelHumanoidTargetStateDim)
+        {
+            return identityBodyPose7();
+        }
+        return body_pose_7_xyzw_;
+    }
+
+    vector_t PoseBasedReferenceManager::assembleDualArmReferenceState(const vector_t& left7, const vector_t& right7) const
+    {
+        if (effectiveTargetStateDim() == Ocs2ReferenceTargetContext::kWheelHumanoidTargetStateDim)
+        {
+            return assembleWheelHumanoidTargetState(left7, right7, bodySegmentForAssembly());
+        }
+        vector_t s = vector_t::Zero(14);
+        s.segment(0, 7) = left7;
+        s.segment(7, 7) = right7;
+        return s;
+    }
+
+    vector_t PoseBasedReferenceManager::assembleWheelHumanoidTargetState(const vector_t& left_pose7_xyzw,
+                                                                         const vector_t& right_pose7_xyzw,
+                                                                         const vector_t& body_pose7_xyzw)
+    {
+        vector_t s = vector_t::Zero(Ocs2ReferenceTargetContext::kWheelHumanoidTargetStateDim);
+        s.segment(0, 7) = left_pose7_xyzw.head<7>();
+        s.segment(7, 7) = right_pose7_xyzw.head<7>();
+        s.segment(14, 7) = body_pose7_xyzw.head<7>();
+        return s;
+    }
+
+    void PoseBasedReferenceManager::setBodyPoseReference(const vector_t& body_pose_xyzw_7)
+    {
+        if (body_pose_xyzw_7.size() >= 7)
+        {
+            body_pose_7_xyzw_ = body_pose_xyzw_7.head<7>();
+        }
+    }
+
     void PoseBasedReferenceManager::setCurrentObservation(
         const SystemObservation& observation)
     {
@@ -196,14 +257,10 @@ namespace ocs2::controller_common
 
     void PoseBasedReferenceManager::updateTargetTrajectory()
     {
-        // 创建合并的target state
         vector_t combined_target_state;
-
         if (dual_arm_mode_)
         {
-            combined_target_state = vector_t::Zero(14);
-            combined_target_state.segment(0, 7) = left_target_state_;
-            combined_target_state.segment(7, 7) = right_target_state_;
+            combined_target_state = assembleDualArmReferenceState(left_target_state_, right_target_state_);
         }
         else
         {
@@ -253,16 +310,8 @@ namespace ocs2::controller_common
         vector_t goal_state;
         if (dual_arm_mode_)
         {
-            start_state = vector_t::Zero(14);
-            goal_state = vector_t::Zero(14);
-
-            // 左臂：从previous到current
-            start_state.segment(0, 7) = previous_left_target_state;
-            goal_state.segment(0, 7) = left_target_state_;
-
-            // 右臂：从previous到current
-            start_state.segment(7, 7) = previous_right_target_state;
-            goal_state.segment(7, 7) = right_target_state_;
+            start_state = assembleDualArmReferenceState(previous_left_target_state, previous_right_target_state);
+            goal_state = assembleDualArmReferenceState(left_target_state_, right_target_state_);
         }
         else
         {
@@ -328,11 +377,11 @@ namespace ocs2::controller_common
             vector_t xt;
             if (dual_arm_mode_)
             {
-                xt = vector_t::Zero(14);
-                xt.segment(0, 7) = interpolatePose7(start_state.segment(0, 7),
-                                                    goal_state.segment(0, 7), alpha);
-                xt.segment(7, 7) = interpolatePose7(start_state.segment(7, 7),
+                const vector_t left_i = interpolatePose7(start_state.segment(0, 7),
+                                                         goal_state.segment(0, 7), alpha);
+                const vector_t right_i = interpolatePose7(start_state.segment(7, 7),
                                                     goal_state.segment(7, 7), alpha);
+                xt = assembleDualArmReferenceState(left_i, right_i);
             }
             else
             {
@@ -358,6 +407,59 @@ namespace ocs2::controller_common
         moveL_duration_ = node_->get_parameter("movel_duration").as_double();
     }
 
+    void PoseBasedReferenceManager::syncWheelHumanoidCoupledOppositeArmIfNeeded(bool left_target_was_updated)
+    {
+        if (!dual_arm_mode_ ||
+            effectiveTargetStateDim() != Ocs2ReferenceTargetContext::kWheelHumanoidTargetStateDim) {
+            return;
+        }
+        auto* sw = dynamic_cast<::ocs2::wheel_humanoid::SwitchedHumanoidReferenceManager*>(referenceManagerPtr_.get());
+        if (sw == nullptr) {
+            return;
+        }
+        const scalar_t t = current_observation_.time;
+        if (!sw->isBimanualCoupled(t) || !sw->hasCapturedCoupling()) {
+            return;
+        }
+        const auto rel = sw->getCouplingParameters(t);
+        const Eigen::Matrix<scalar_t, 3, 1> relPos = rel.first;
+        Eigen::Quaternion<scalar_t> relQuat = rel.second;
+        if (relQuat.norm() < static_cast<scalar_t>(1e-9)) {
+            return;
+        }
+        relQuat.normalize();
+
+        if (left_target_was_updated) {
+            const vector_t& left = left_target_state_;
+            vector_t& right = right_target_state_;
+            const Eigen::Matrix<scalar_t, 3, 1> leftPos = left.head<3>();
+            Eigen::Quaternion<scalar_t> leftQuat(left(6), left(3), left(4), left(5));
+            leftQuat.normalize();
+            const Eigen::Matrix<scalar_t, 3, 1> rightPos = leftPos + leftQuat * relPos;
+            Eigen::Quaternion<scalar_t> rightQuat = (leftQuat * relQuat).normalized();
+            right.head<3>() = rightPos;
+            right(3) = rightQuat.x();
+            right(4) = rightQuat.y();
+            right(5) = rightQuat.z();
+            right(6) = rightQuat.w();
+        } else {
+            vector_t& left = left_target_state_;
+            const vector_t& right = right_target_state_;
+            const Eigen::Matrix<scalar_t, 3, 1> rightPos = right.head<3>();
+            Eigen::Quaternion<scalar_t> rightQuat(right(6), right(3), right(4), right(5));
+            rightQuat.normalize();
+            const Eigen::Quaternion<scalar_t> invRelQuat = relQuat.inverse();
+            const Eigen::Matrix<scalar_t, 3, 1> invRelPos = -(invRelQuat * relPos);
+            const Eigen::Quaternion<scalar_t> leftQuat = (rightQuat * invRelQuat).normalized();
+            const Eigen::Matrix<scalar_t, 3, 1> leftPos = rightPos + rightQuat * invRelPos;
+            left.head<3>() = leftPos;
+            left(3) = leftQuat.x();
+            left(4) = leftQuat.y();
+            left(5) = leftQuat.z();
+            left(6) = leftQuat.w();
+        }
+    }
+
     void PoseBasedReferenceManager::leftPoseCallback(
         const geometry_msgs::msg::Pose::SharedPtr msg)
     {
@@ -373,6 +475,8 @@ namespace ocs2::controller_common
 
         // 更新左臂target state缓存
         left_target_state_ = target_state;
+
+        syncWheelHumanoidCoupledOppositeArmIfNeeded(true);
 
         // 更新target trajectory
         updateTargetTrajectory();
@@ -396,6 +500,8 @@ namespace ocs2::controller_common
 
         // 更新右臂target state缓存
         right_target_state_ = target_state;
+
+        syncWheelHumanoidCoupledOppositeArmIfNeeded(false);
 
         // 更新target trajectory
         updateTargetTrajectory();
@@ -422,6 +528,8 @@ namespace ocs2::controller_common
         target_state(5) = msg->orientation.z;
         target_state(6) = msg->orientation.w;
         left_target_state_ = target_state;
+
+        syncWheelHumanoidCoupledOppositeArmIfNeeded(true);
 
         // 生成轨迹
         if (dual_arm_mode_)
@@ -459,6 +567,8 @@ namespace ocs2::controller_common
         target_state(5) = msg->orientation.z;
         target_state(6) = msg->orientation.w;
         right_target_state_ = target_state;
+
+        syncWheelHumanoidCoupledOppositeArmIfNeeded(false);
 
         // 生成轨迹（在双臂模式下，同时更新两个臂）
         updateTrajectory(previous_left_target_state, previous_right_target_state);
@@ -840,9 +950,7 @@ namespace ocs2::controller_common
                 vector_t right_state =
                     interpolateAlongPath(right_full_path, global_alpha);
 
-                combined_state = vector_t::Zero(14);
-                combined_state.segment(0, 7) = left_state;
-                combined_state.segment(7, 7) = right_state;
+                combined_state = assembleDualArmReferenceState(left_state, right_state);
             }
             else
             {
@@ -896,6 +1004,8 @@ namespace ocs2::controller_common
         // 重置target state缓存
         left_target_state_ = vector_t::Zero(7);
         right_target_state_ = vector_t::Zero(7);
+        body_pose_7_xyzw_ = vector_t::Zero(7);
+        body_pose_7_xyzw_(6) = 1.0;
 
         RCLCPP_INFO(logger_,
                     "Target state cache reset - cleared all cached target states");
@@ -911,6 +1021,11 @@ namespace ocs2::controller_common
         if (dual_arm_mode_)
         {
             right_target_state_ = right_ee_pose;
+            // 仅轮式人形 21 维布局需要在此处把缓存推入 ReferenceManager；固定臂控仍保持 7/14 维原行为
+            if (effectiveTargetStateDim() == Ocs2ReferenceTargetContext::kWheelHumanoidTargetStateDim)
+            {
+                updateTargetTrajectory();
+            }
         }
 
         // 发布当前目标
@@ -1559,9 +1674,8 @@ namespace ocs2::controller_common
             {
                 for (size_t i = 0; i < time_size; i++)
                 {
-                    vector_t current_state = vector_t::Zero(14);
-                    current_state.segment(0, 7) = pose_trajectory[i];
-                    current_state.segment(7, 7) = previous_right_target_state; // 保持右臂不变
+                    vector_t current_state =
+                        assembleDualArmReferenceState(pose_trajectory[i], previous_right_target_state);
                     time_trajectory.push_back(t0 + time_traj[i]);
                     state_trajectory.push_back(current_state);
                 }
@@ -1570,9 +1684,8 @@ namespace ocs2::controller_common
             {
                 for (size_t i = 0; i < time_size; i++)
                 {
-                    vector_t current_state = vector_t::Zero(14);
-                    current_state.segment(0, 7) = previous_left_target_state;
-                    current_state.segment(7, 7) = pose_trajectory[i];
+                    vector_t current_state =
+                        assembleDualArmReferenceState(previous_left_target_state, pose_trajectory[i]);
                     time_trajectory.push_back(t0 + time_traj[i]);
                     state_trajectory.push_back(current_state);
                 }

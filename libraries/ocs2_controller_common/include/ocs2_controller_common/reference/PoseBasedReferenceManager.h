@@ -46,6 +46,13 @@ public:
 
     void setCurrentEndEffectorPoses(const vector_t& left_ee_pose, const vector_t& right_ee_pose);
 
+    /** Body pose (7: x,y,z, qx,qy,qz,qw) for indices [14:21] when using wheel-humanoid 21-dim layout. */
+    void setBodyPoseReference(const vector_t& body_pose_xyzw_7);
+
+    /** Build full reference state for SwitchedHumanoidReferenceManager (dual arms + body). */
+    static vector_t assembleWheelHumanoidTargetState(const vector_t& left_pose7_xyzw, const vector_t& right_pose7_xyzw,
+                                                     const vector_t& body_pose7_xyzw);
+
 private:
     void updateParam();
     void leftPoseCallback(geometry_msgs::msg::Pose::SharedPtr msg);
@@ -57,6 +64,11 @@ private:
     void updateTargetTrajectory();
     void updateTrajectory(const vector_t& previous_left_target_state, const vector_t& previous_right_target_state);
 
+    [[nodiscard]] int effectiveTargetStateDim() const;
+    [[nodiscard]] vector_t identityBodyPose7() const;
+    [[nodiscard]] vector_t bodySegmentForAssembly() const;
+    [[nodiscard]] vector_t assembleDualArmReferenceState(const vector_t& left7, const vector_t& right7) const;
+
     void leftPoseStampedPoseCallback(geometry_msgs::msg::Pose::SharedPtr msg);
     void rightPoseStampedPoseCallback(geometry_msgs::msg::Pose::SharedPtr msg);
 
@@ -64,6 +76,9 @@ private:
                             std::function<void(geometry_msgs::msg::Pose::SharedPtr)> callback);
 
     void publishCurrentTargets(const std::string& arm_type = "");
+
+    /** Wheel-humanoid COUPLED: after updating one arm target, set the other from captured relative pose (matches WheelHumanoidTargetNode). */
+    void syncWheelHumanoidCoupledOppositeArmIfNeeded(bool left_target_was_updated);
 
     const std::string topic_prefix_;
     Ocs2ReferenceTargetContext target_context_;
@@ -90,6 +105,7 @@ private:
     SystemObservation current_observation_;
     vector_t left_target_state_;
     vector_t right_target_state_;
+    vector_t body_pose_7_xyzw_;
 
     double trajectory_duration_{2.0};
     double moveL_duration_{2.0};
