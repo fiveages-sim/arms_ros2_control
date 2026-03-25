@@ -28,7 +28,7 @@ find_package(ocs2_pinocchio_interface REQUIRED)
 find_package(ocs2_self_collision REQUIRED)
 find_package(ocs2_self_collision_visualization REQUIRED)
 find_package(ocs2_ros_interfaces REQUIRED)
-find_package(ocs2_wheel_humanoid REQUIRED)
+find_package(ocs2_wheel_humanoid QUIET)
 find_package(pinocchio REQUIRED)
 
 find_package(lina_planning QUIET)
@@ -60,7 +60,6 @@ ament_target_dependencies(${PROJECT_NAME}
   ocs2_self_collision
   ocs2_self_collision_visualization
   ocs2_ros_interfaces
-  ocs2_wheel_humanoid
 )
 
 target_link_libraries(${PROJECT_NAME} pinocchio::pinocchio)
@@ -71,6 +70,14 @@ if(lina_planning_FOUND)
   message(STATUS "ocs2_controller_common: lina_planning found (circle services enabled)")
 else()
   message(STATUS "ocs2_controller_common: lina_planning not found (circle services disabled)")
+endif()
+
+if(ocs2_wheel_humanoid_FOUND)
+  target_compile_definitions(${PROJECT_NAME} PUBLIC HAS_OCS2_WHEEL_HUMANOID)
+  ament_target_dependencies(${PROJECT_NAME} ocs2_wheel_humanoid)
+  message(STATUS "ocs2_controller_common: ocs2_wheel_humanoid found (wheel-humanoid coupling sync enabled)")
+else()
+  message(STATUS "ocs2_controller_common: ocs2_wheel_humanoid not found (wheel-humanoid coupling sync disabled)")
 endif()
 
 install(
@@ -104,11 +111,13 @@ ament_export_dependencies(
   ocs2_self_collision
   ocs2_self_collision_visualization
   ocs2_ros_interfaces
-  ocs2_wheel_humanoid
   pinocchio
 )
 if(lina_planning_FOUND)
   ament_export_dependencies(lina_planning)
+endif()
+if(ocs2_wheel_humanoid_FOUND)
+  ament_export_dependencies(ocs2_wheel_humanoid)
 endif()
 
 ament_package()
