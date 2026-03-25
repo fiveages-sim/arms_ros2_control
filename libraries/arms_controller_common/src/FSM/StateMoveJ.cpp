@@ -5,6 +5,13 @@
 #include "arms_controller_common/utils/SharedPublishers.h"
 #include <algorithm>
 #include <cmath>
+#include <string>
+
+// // planners/kinematics required for cartesian moveL support
+// #include "lina_planning/planning/path_planner/movel.h"
+// #include "lina_planning/planning/kinematics/fiveages_w2_fk.h"
+// #include "lina_planning/planning/kinematics/fiveages_w2_ik.h"
+
 
 namespace arms_controller_common
 {
@@ -286,11 +293,16 @@ namespace arms_controller_common
                     ;
                     warned = true;
                 }
+
+                //实时更新当前位置，避免起点和当前点不一致
+                target_pos_ = ctrl_interfaces_.last_sent_joint_positions_;
+                start_pos_ = target_pos_;
+                refreshHoldPositions();
                 // Maintain current position
                 for (size_t i = 0; i < ctrl_interfaces_.joint_position_command_interface_.size() &&
-                     i < start_pos_.size(); ++i)
+                     i < hold_positions_.size(); ++i)
                 {
-                    ctrl_interfaces_.setJointPositionCommand(i, start_pos_[i]);
+                    ctrl_interfaces_.setJointPositionCommand(i, hold_positions_[i]);
                 }
             }
             else
@@ -1346,7 +1358,8 @@ namespace arms_controller_common
         Eigen::Vector3d angles3d = Eigen::Vector3d::Zero();
         if (waist_turning_joint_index_ < ctrl_interfaces_.joint_position_state_interface_.size())
         {
-            auto value = ctrl_interfaces_.joint_position_state_interface_[waist_turning_joint_index_].get().get_optional();
+            auto value = ctrl_interfaces_.joint_position_state_interface_[waist_turning_joint_index_].get().
+                get_optional();
             angles3d(0) = value.value_or(0.0);
         }
 
@@ -1360,8 +1373,8 @@ namespace arms_controller_common
         }
 
         if (!waist_turning_planer_->initTargetLiftingSpeed(angles3d, target_speed, default_waist_para_(1),
-                                                            default_waist_para_(2), speedj_time,
-                                                            1.0 / ctrl_interfaces_.frequency_))
+                                                           default_waist_para_(2), speedj_time,
+                                                           1.0 / ctrl_interfaces_.frequency_))
         {
             waist_turning_planer_->setCurrentVelToZero();
             return false;
@@ -1556,5 +1569,234 @@ namespace arms_controller_common
         }
 
         return clamped_positions;
+    }
+
+    void StateMoveJ::setupJointTrajectoryService(const std::string& service_name)
+    {
+        std::string full_service_name = node_->get_name() + std::string("/") + service_name;
+
+        joint_trajectory_service_ = node_->create_service<arms_ros2_control_msgs::srv::JointTrajectory>(
+            full_service_name,
+            std::bind(&StateMoveJ::handleJointTrajectory, this,
+                      std::placeholders::_1, std::placeholders::_2, std::placeholders::_3));
+
+        RCLCPP_INFO(node_->get_logger(), "Created joint trajectory service at %s",
+                    full_service_name.c_str());
+    }
+
+    bool StateMoveJ::validateJointNames(
+        const std::vector<std::string>& request_joint_names,
+        std::string& error_msg)
+    {
+        if (request_joint_names.empty())
+        {
+            error_msg = "Joint names list is empty";
+            return false;
+        }
+
+        // 检查请求的关节名称是否都在控制器的关节列表中
+        for (const auto& req_joint : request_joint_names)
+        {
+            bool found = false;
+            for (const auto& ctrl_joint : joint_names_)
+            {
+                if (req_joint == ctrl_joint)
+                {
+                    found = true;
+                    break;
+                }
+            }
+            if (!found)
+            {
+                error_msg = "Joint '" + req_joint + "' not found in controller joints";
+                return false;
+            }
+        }
+
+        return true;
+    }
+
+    std::vector<double> StateMoveJ::getCurrentJointPositions(
+        const std::vector<std::string>& joint_names)
+    {
+        std::vector<double> positions;
+        positions.reserve(joint_names.size());
+
+        for (const auto& req_joint : joint_names)
+        {
+            // 找到对应关节的索引
+            for (size_t i = 0; i < joint_names_.size() &&
+                 i < ctrl_interfaces_.joint_position_state_interface_.size(); i++)
+            {
+                if (joint_names_[i] == req_joint)
+                {
+                    auto value = ctrl_interfaces_.joint_position_state_interface_[i].get().get_optional();
+                    positions.push_back(value.value_or(0.0));
+                    break;
+                }
+            }
+        }
+
+        return positions;
+    }
+
+    std::vector<double> StateMoveJ::mapToFullJointPositions(
+        const std::vector<std::string>& request_joint_names,
+        const std::vector<double>& request_positions)
+    {
+        std::vector<double> full_positions(joint_names_.size(), 0.0);
+
+        // 先用当前值填充
+        for (size_t i = 0; i < joint_names_.size() &&
+             i < ctrl_interfaces_.joint_position_state_interface_.size(); i++)
+        {
+            auto value = ctrl_interfaces_.joint_position_state_interface_[i].get().get_optional();
+            full_positions[i] = value.value_or(0.0);
+        }
+
+        // 更新请求中指定的关节
+        for (size_t i = 0; i < request_joint_names.size() && i < request_positions.size(); i++)
+        {
+            for (size_t j = 0; j < joint_names_.size(); j++)
+            {
+                if (joint_names_[j] == request_joint_names[i])
+                {
+                    full_positions[j] = request_positions[i];
+                    break;
+                }
+            }
+        }
+
+        return full_positions;
+    }
+
+    void StateMoveJ::handleJointTrajectory(
+        const std::shared_ptr<rmw_request_id_t> request_header,
+        const std::shared_ptr<arms_ros2_control_msgs::srv::JointTrajectory::Request> request,
+        const std::shared_ptr<arms_ros2_control_msgs::srv::JointTrajectory::Response> response)
+    {
+        (void)request_header;
+
+        // 1. 检查状态
+        if (!state_active_)
+        {
+            response->success = false;
+            response->message = "StateMoveJ is not active";
+            return;
+        }
+
+        updateParam();
+
+        // 2. 验证关节名称
+        std::string error_msg;
+        if (!validateJointNames(request->joint_names, error_msg))
+        {
+            response->success = false;
+            response->message = error_msg;
+            return;
+        }
+
+        // 3. 检查waypoints
+        if (request->waypoints.empty())
+        {
+            response->success = false;
+            response->message = "No waypoints provided";
+            return;
+        }
+
+        size_t num_joints = request->joint_names.size();
+        size_t num_waypoints = request->waypoints.size();
+
+        // 4. 验证每个waypoint
+        for (size_t i = 0; i < num_waypoints; i++)
+        {
+            const auto& wp = request->waypoints[i];
+
+            if (wp.position.size() != num_joints)
+            {
+                response->success = false;
+                response->message = "Waypoint " + std::to_string(i) +
+                    " position size mismatch: expected " +
+                    std::to_string(num_joints) + ", got " +
+                    std::to_string(wp.position.size());
+                return;
+            }
+
+            if (!wp.velocity.empty() && wp.velocity.size() != num_joints)
+            {
+                response->success = false;
+                response->message = "Waypoint " + std::to_string(i) +
+                    " velocity size mismatch";
+                return;
+            }
+        }
+
+        // 5. 获取当前关节位置
+        std::vector<double> current_positions = getCurrentJointPositions(request->joint_names);
+
+        // 6. 根据waypoints数量处理
+        if (num_waypoints == 1)
+        {
+            // ========== 单点目标运动 ==========
+            if (trajectory_manager_.isDoublesAvailable() && interpolation_type_ == InterpolationType::DOUBLES)
+            {
+                trajectory_manager_.planSingleTarget(current_positions, request->waypoints[0]);
+            }
+            else
+            {
+                setTargetPosition(request->waypoints[0].position);
+            }
+
+            response->success = true;
+            response->message = "Single target motion accepted";
+            response->planned_duration = trajectory_manager_.getPlanningTime();
+            RCLCPP_INFO(node_->get_logger(),
+                        "Joint trajectory service (single): %zu joints to target, duration=%.3f",
+                        num_joints, response->planned_duration);
+        }
+        else if (num_waypoints >= 2)
+        {
+            // ========== 多点轨迹规划 ==========
+            std::vector<arms_ros2_control_msgs::msg::JointWaypoint> wps;
+            wps.reserve(num_waypoints);
+            for (size_t i = 0; i < num_waypoints; i++)
+            {
+                wps.push_back(request->waypoints[i]);
+            }
+            if (trajectory_manager_.isDoublesAvailable() && interpolation_type_ == InterpolationType::DOUBLES)
+            {
+                trajectory_manager_.planMultiTrajectory(current_positions, wps);
+            }
+            else
+            {
+                //如果没有linaplanning就用普通的
+                // 创建JointTrajectory消息（ROS2标准消息）
+                trajectory_msgs::msg::JointTrajectory trajectory_msg;
+                trajectory_msg.joint_names = request->joint_names;
+
+                // 转换路点到标准消息格式
+                for (const auto& wp : request->waypoints)
+                {
+                    trajectory_msgs::msg::JointTrajectoryPoint point;
+                    // 设置位置
+                    point.positions = wp.position;
+                    trajectory_msg.points.push_back(point);
+                }
+
+                // 调用现有的setTrajectory方法
+                setTrajectory(trajectory_msg);
+            }
+            response->success = true;
+            response->message = "Multi-point trajectory accepted";
+            response->planned_duration = trajectory_manager_.getPlanningTime();
+
+
+            RCLCPP_INFO(node_->get_logger(),
+                        "Joint trajectory service (multi): %zu waypoints, %zu joints, total_time=%.3f",
+                        num_waypoints, num_joints, response->planned_duration);
+
+            // 打印轨迹信息（调试用）
+            RCLCPP_DEBUG(node_->get_logger(), "Trajectory with %zu waypoints", num_waypoints);
+        }
     }
 } // namespace arms_controller_common
