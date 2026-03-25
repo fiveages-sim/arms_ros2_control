@@ -20,6 +20,8 @@
 #include <trajectory_msgs/msg/joint_trajectory.hpp>
 #include <eigen3/Eigen/Dense>
 #include "arms_controller_common/utils/WaistLiftingPlaner.h"
+#include "arms_ros2_control_msgs/msg/joint_waypoint.hpp"
+#include "arms_ros2_control_msgs/srv/joint_trajectory.hpp"
 
 
 namespace arms_controller_common
@@ -160,6 +162,13 @@ namespace arms_controller_common
          */
         bool setWaistTurningFactor(double factor);
 
+
+        /**
+         * @brief Setup joint trajectory service
+         * @param service_name Service name (default: "joint_trajectory")
+         */
+        void setupJointTrajectoryService(const std::string& service_name = "joint_trajectory");
+
     private:
         void updateParam();
 
@@ -293,5 +302,23 @@ namespace arms_controller_common
          */
         Eigen::VectorXd getCurrentWaistAngles();
         std::vector<double> applyWaistJointLimits(const std::vector<double>& waist_positions);
+
+
+        // Service server
+        rclcpp::Service<arms_ros2_control_msgs::srv::JointTrajectory>::SharedPtr joint_trajectory_service_;
+
+        // Service handler
+        void handleJointTrajectory(
+            const std::shared_ptr<rmw_request_id_t> request_header,
+            const std::shared_ptr<arms_ros2_control_msgs::srv::JointTrajectory::Request> request,
+            const std::shared_ptr<arms_ros2_control_msgs::srv::JointTrajectory::Response> response);
+
+        // 辅助函数
+        bool validateJointNames(const std::vector<std::string>& request_joint_names, std::string& error_msg);
+        std::vector<double> getCurrentJointPositions(const std::vector<std::string>& joint_names);
+        std::vector<double> mapToFullJointPositions(
+            const std::vector<std::string>& request_joint_names,
+            const std::vector<double>& request_positions);
     };
+    ;
 } // namespace arms_controller_common
