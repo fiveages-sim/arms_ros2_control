@@ -23,7 +23,6 @@
 #include <std_msgs/msg/int32.hpp>
 #include <std_msgs/msg/float64.hpp>
 #include <std_msgs/msg/string.hpp>
-#include <std_msgs/msg/bool.hpp>
 #include <geometry_msgs/msg/pose_stamped.hpp>
 #include <arms_controller_common/utils/JointLimitsManager.h>
 #include <rclcpp/parameter_client.hpp>
@@ -97,6 +96,8 @@ namespace arms_rviz_control_plugin
 
         void onBodyCurrentTargetReceived(const std_msgs::msg::Float64MultiArray::SharedPtr msg);
 
+        void refreshWaistEnabledState();
+
         // ROS2
         rclcpp::Node::SharedPtr node_;
         rclcpp::Subscription<std_msgs::msg::Int32>::SharedPtr fsm_command_subscriber_;
@@ -110,7 +111,6 @@ namespace arms_rviz_control_plugin
         rclcpp::Publisher<std_msgs::msg::Float64>::SharedPtr waist_lifting_publisher_;
         rclcpp::Publisher<std_msgs::msg::Float64>::SharedPtr waist_turning_publisher_;
         rclcpp::Subscription<std_msgs::msg::Float64MultiArray>::SharedPtr body_current_target_subscriber_;
-        rclcpp::Subscription<std_msgs::msg::Bool>::SharedPtr waist_enabled_subscriber_;
 
         // Frame IDs from current_target topics
         std::string left_target_frame_id_;
@@ -195,5 +195,6 @@ namespace arms_rviz_control_plugin
         bool waist_left_pressed_ = false;
         bool waist_right_pressed_ = false;
         bool is_waist_enabled_ = false;
+        bool waist_enabled_checked_ = false;
     };
 } // namespace arms_rviz_control_plugin

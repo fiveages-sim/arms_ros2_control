@@ -321,38 +321,7 @@ namespace arms_rviz_control_plugin
         body_current_target_subscriber_ = node_->create_subscription<std_msgs::msg::Float64MultiArray>(
             "/body_joint_controller/current_target_joint", 10,
             std::bind(&JointControlPanel::onBodyCurrentTargetReceived, this, std::placeholders::_1));
-        
-        waist_enabled_subscriber_ = node_->create_subscription<std_msgs::msg::Bool>(
-            "/body_joint_controller/waist_enabled",
-            rclcpp::QoS(1).transient_local(),
-            [this](const std_msgs::msg::Bool::SharedPtr msg)
-            {
-                is_waist_enabled_ = msg->data;
 
-                RCLCPP_INFO(node_->get_logger(),
-                            "Waist enabled received: %s",
-                            is_waist_enabled_ ? "true" : "false");
-
-                if (is_waist_enabled_)
-                {
-                    // ✅ 只在 enabled 时创建 publisher
-                    waist_lifting_publisher_ =
-                        node_->create_publisher<std_msgs::msg::Float64>(
-                            "/body_joint_controller/waist_lifting_command", 10);
-
-                    waist_turning_publisher_ =
-                        node_->create_publisher<std_msgs::msg::Float64>(
-                            "/body_joint_controller/waist_turning_command", 10);
-                }
-                else
-                {
-                    waist_lifting_publisher_.reset();
-                    waist_turning_publisher_.reset();
-                }
-
-                // 刷新 UI
-                updatePanelVisibility();
-            });
         // Initialize publisher (will be updated when category changes)
         updatePublisher();
 
@@ -520,6 +489,31 @@ namespace arms_rviz_control_plugin
 
     void JointControlPanel::onJointStateReceived(const sensor_msgs::msg::JointState::SharedPtr msg)
     {
+        if (!waist_enabled_checked_)
+        {
+            refreshWaistEnabledState();
+            waist_enabled_checked_ = true;
+            if (is_waist_enabled_)
+            {
+                waist_lifting_publisher_ = node_->create_publisher<std_msgs::msg::Float64>(
+                    "/body_joint_controller/waist_lifting_command", 10);
+
+                waist_turning_publisher_ = node_->create_publisher<std_msgs::msg::Float64>(
+                    "/body_joint_controller/waist_turning_command", 10);
+
+                RCLCPP_INFO(node_->get_logger(),
+                            "Waist control publishers created because waist_lifting_enabled is true");
+            }
+            else
+            {
+                waist_lifting_publisher_.reset();
+                waist_turning_publisher_.reset();
+
+                RCLCPP_INFO(node_->get_logger(),
+                            "Waist control publishers not created because waist_lifting_enabled is false or unavailable");
+            }
+        }
+
         // Initialize joint names and positions on first message
         if (!joints_initialized_ && !msg->name.empty())
         {
@@ -1459,6 +1453,50 @@ namespace arms_rviz_control_plugin
         {
             publishWaistTurning(getWaistTurningScale());
         }
+    }
+
+    void JointControlPanel::refreshWaistEnabledState()
+    {
+        is_waist_enabled_ = false;
+
+        try
+        {
+            // Use a temporary standalone node to avoid executor conflict with rviz2 node
+            auto temp_node = std::make_shared<rclcpp::Node>("waist_param_checker");
+            auto param_client = std::make_shared<rclcpp::SyncParametersClient>(
+                temp_node, "/body_joint_controller");
+
+            if (!param_client->wait_for_service(std::chrono::milliseconds(1000)))
+            {
+                RCLCPP_WARN(node_->get_logger(),
+                            "Parameter service of /body_joint_controller is not available");
+                updateWaistControlsVisibility(false);
+                return;
+            }
+
+            if (!param_client->has_parameter("waist_lifting_enabled"))
+            {
+                RCLCPP_INFO(node_->get_logger(),
+                            "Parameter /body_joint_controller/waist_lifting_enabled does not exist");
+                updateWaistControlsVisibility(false);
+                return;
+            }
+
+            is_waist_enabled_ = param_client->get_parameter<bool>("waist_lifting_enabled");
+
+            RCLCPP_INFO(node_->get_logger(),
+                        "waist_lifting_enabled = %s",
+                        is_waist_enabled_ ? "true" : "false");
+        }
+        catch (const std::exception& e)
+        {
+            RCLCPP_WARN(node_->get_logger(),
+                        "Failed to query /body_joint_controller/waist_lifting_enabled: %s",
+                        e.what());
+            is_waist_enabled_ = false;
+        }
+
+        updateWaistControlsVisibility(current_category_ == "body" && is_waist_enabled_);
     }
 
     void JointControlPanel::updateSpinboxRanges()
