@@ -4,21 +4,24 @@
 #pragma once
 
 
+#include <functional>
 #include <memory>
 #include <string>
-#include <functional>
+#include <vector>
+
+#include <ament_index_cpp/get_package_share_directory.hpp>
+#include <ocs2_controller_common/reference/PoseBasedReferenceManager.h>
+#include <ocs2_controller_common/visualization/Ocs2PinocchioVisualizer.h>
+#include <ocs2_core/Types.h>
+#include <ocs2_ddp/GaussNewtonDDP_MPC.h>
+#include <ocs2_mobile_manipulator/MobileManipulatorInterface.h>
+#include <ocs2_mpc/MPC_BASE.h>
+#include <ocs2_mpc/MPC_MRT_Interface.h>
+#include <ocs2_msgs/msg/mpc_observation.hpp>
+#include <rcl_interfaces/msg/set_parameters_result.hpp>
 #include <rclcpp/rclcpp.hpp>
 #include <rclcpp_lifecycle/lifecycle_node.hpp>
-#include <ament_index_cpp/get_package_share_directory.hpp>
-#include <ocs2_mobile_manipulator/MobileManipulatorInterface.h>
-#include <ocs2_core/Types.h>
-#include <ocs2_mpc/MPC_MRT_Interface.h>
-#include <ocs2_mpc/MPC_BASE.h>
-#include <ocs2_ddp/GaussNewtonDDP_MPC.h>
-#include "ocs2_arm_controller/control/PoseBasedReferenceManager.h"
-#include <ocs2_msgs/msg/mpc_observation.hpp>
 #include <std_msgs/msg/int32.hpp>
-#include "ocs2_arm_controller/control/Visualizer.h"
 
 #include <arms_controller_common/CtrlInterfaces.h>
 
@@ -58,15 +61,35 @@ namespace ocs2::mobile_manipulator
 
             setupPublisher();
 
-            visualizer_ = std::make_unique<Visualizer>(node_, interface_, robot_name_, urdf_file);
+            {
+                ocs2::controller_common::Ocs2VisualizerConfig viz_cfg;
+                viz_cfg.robot_name = robot_name_;
+                viz_cfg.urdf_file = urdf_file;
+                viz_cfg.dual_arm = interface_->dual_arm_;
+                const auto& minfo = interface_->getManipulatorModelInfo();
+                viz_cfg.base_frame = minfo.baseFrame;
+                viz_cfg.left_ee_frame = minfo.eeFrame;
+                viz_cfg.right_ee_frame = minfo.eeFrame1;
+                if (auto geo = interface_->getPinocchioGeometryInterface())
+                {
+                    viz_cfg.pinocchio_geometry = std::move(*geo);
+                    viz_cfg.self_collision_activation_distance = interface_->getSelfCollisionActivationDistance();
+                }
+                visualizer_ = std::make_unique<ocs2::controller_common::Ocs2PinocchioVisualizer>(
+                    node_, interface_->getPinocchioInterface(), std::move(viz_cfg));
+            }
             visualizer_->initialize();
             RCLCPP_INFO(node_->get_logger(), "Future time offset: %.2f seconds", future_time_offset_);
-            
+
             auto_declare("movel_trajectory_duration", 2.0);
             auto_declare("movel_duration", 2.0);
-            
-            pose_reference_manager_ = std::make_shared<PoseBasedReferenceManager>(
-                robot_name_, interface_->getReferenceManagerPtr(), interface_);
+
+            ocs2::controller_common::Ocs2ReferenceTargetContext ref_ctx;
+            ref_ctx.dual_arm = interface_->dual_arm_;
+            ref_ctx.base_frame = interface_->getManipulatorModelInfo().baseFrame;
+            ref_ctx.input_dim = interface_->getManipulatorModelInfo().inputDim;
+            pose_reference_manager_ = std::make_shared<ocs2::controller_common::PoseBasedReferenceManager>(
+                robot_name_, interface_->getReferenceManagerPtr(), ref_ctx);
             pose_reference_manager_->subscribe(node_);
             
             mpc_ = std::make_unique<GaussNewtonDDP_MPC>(
@@ -117,7 +140,7 @@ namespace ocs2::mobile_manipulator
         // MPC components
         std::unique_ptr<MPC_BASE> mpc_;
         std::unique_ptr<MPC_MRT_Interface> mpc_mrt_interface_;
-        std::shared_ptr<PoseBasedReferenceManager> pose_reference_manager_;
+        std::shared_ptr<ocs2::controller_common::PoseBasedReferenceManager> pose_reference_manager_;
 
         // Observation state
         SystemObservation observation_;
@@ -142,7 +165,7 @@ namespace ocs2::mobile_manipulator
         rclcpp::Publisher<std_msgs::msg::Int32>::SharedPtr fsm_command_publisher_;
 
         // Visualization component
-        std::unique_ptr<Visualizer> visualizer_;
+        std::unique_ptr<ocs2::controller_common::Ocs2PinocchioVisualizer> visualizer_;
 
         // Configuration
         std::string robot_name_;
