@@ -15,6 +15,7 @@
 #include <std_msgs/msg/string.hpp>
 #include <std_msgs/msg/int32.hpp>
 #include <std_msgs/msg/float64.hpp>
+#include <std_msgs/msg/bool.hpp>
 #include <geometry_msgs/msg/pose_stamped.hpp>
 #include <geometry_msgs/msg/pose.hpp>
 #include <hardware_interface/loaned_command_interface.hpp>
@@ -115,5 +116,6 @@ namespace basic_joint_controller
 
         rclcpp::Subscription<std_msgs::msg::Float64>::SharedPtr waist_lifting_command_subscription_;
         rclcpp::Subscription<std_msgs::msg::Float64>::SharedPtr waist_turning_command_subscription_;
+        rclcpp::Publisher<std_msgs::msg::Bool>::SharedPtr waist_enabled_publisher_;
     };
 }

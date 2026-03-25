@@ -142,6 +142,13 @@ namespace basic_joint_controller
 
             // 读取腰部升降配置
             waist_lifting_enabled_ = auto_declare<bool>("waist_lifting_enabled", false);
+            // 创建 latched publisher
+            rclcpp::QoS qos(1);
+            qos.transient_local();
+
+            waist_enabled_publisher_ =
+                get_node()->create_publisher<std_msgs::msg::Bool>(
+                    "/" + controller_name_ + "/waist_enabled", qos);
 
             // 声明腰部参数
             if (waist_lifting_enabled_)
@@ -156,6 +163,9 @@ namespace basic_joint_controller
                     auto_declare<std::vector<double>>("waist_rotation_direction", {1.0, 1.0, 1.0});
                     auto_declare<std::vector<double>>("waist_angle_offset", {0.0, 0.0, 0.0});
                 }
+                std_msgs::msg::Bool msg;
+                msg.data = waist_lifting_enabled_;
+                waist_enabled_publisher_->publish(msg);
 
                 RCLCPP_INFO(get_node()->get_logger(),
                             "Waist lifting enabled for controller %s",
