@@ -8,6 +8,8 @@
 #include <QScrollArea>
 #include <QComboBox>
 #include <QPushButton>
+#include <QSlider>
+#include <QTimer>
 #include <string>
 #include <vector>
 #include <map>
@@ -19,9 +21,11 @@
 #include <sensor_msgs/msg/joint_state.hpp>
 #include <std_msgs/msg/float64_multi_array.hpp>
 #include <std_msgs/msg/int32.hpp>
+#include <std_msgs/msg/float64.hpp>
 #include <std_msgs/msg/string.hpp>
 #include <geometry_msgs/msg/pose_stamped.hpp>
 #include <arms_controller_common/utils/JointLimitsManager.h>
+#include <rclcpp/parameter_client.hpp>
 
 namespace arms_rviz_control_plugin
 {
@@ -42,6 +46,22 @@ namespace arms_rviz_control_plugin
     private Q_SLOTS:
         void onSendButtonClicked();
         void onCategoryChanged();
+        void onWaistLiftingSliderChanged(int value);
+        void onWaistTurningSliderChanged(int value);
+
+        void onWaistUpPressed();
+        void onWaistUpReleased();
+
+        void onWaistDownPressed();
+        void onWaistDownReleased();
+
+        void onWaistLeftPressed();
+        void onWaistLeftReleased();
+
+        void onWaistRightPressed();
+        void onWaistRightReleased();
+
+        void onWaistRepeatTimeout();
 
     private:
         void onFsmCommandReceived(const std_msgs::msg::Int32::SharedPtr msg);
@@ -61,6 +81,22 @@ namespace arms_rviz_control_plugin
         void updateSpinboxRanges();
         void tryParseLimitsFromCache();
         void initializeJoints(const std::vector<std::string>& joint_names_source);
+        void publishWaistLifting(double value);
+        void publishWaistTurning(double value);
+
+        double getWaistLiftingScale() const;
+        double getWaistTurningScale() const;
+        void updateWaistScaleLabels();
+
+        void updateWaistRepeatTimerState();
+        void stopWaistLifting();
+        void stopWaistTurning();
+
+        void updateWaistControlsVisibility(bool visible);
+
+        void onBodyCurrentTargetReceived(const std_msgs::msg::Float64MultiArray::SharedPtr msg);
+
+        void refreshWaistEnabledState();
 
         // ROS2
         rclcpp::Node::SharedPtr node_;
@@ -72,6 +108,9 @@ namespace arms_rviz_control_plugin
         rclcpp::Publisher<geometry_msgs::msg::PoseStamped>::SharedPtr right_target_publisher_;
         rclcpp::Subscription<geometry_msgs::msg::PoseStamped>::SharedPtr left_current_target_subscriber_;
         rclcpp::Subscription<geometry_msgs::msg::PoseStamped>::SharedPtr right_current_target_subscriber_;
+        rclcpp::Publisher<std_msgs::msg::Float64>::SharedPtr waist_lifting_publisher_;
+        rclcpp::Publisher<std_msgs::msg::Float64>::SharedPtr waist_turning_publisher_;
+        rclcpp::Subscription<std_msgs::msg::Float64MultiArray>::SharedPtr body_current_target_subscriber_;
 
         // Frame IDs from current_target topics
         std::string left_target_frame_id_;
@@ -121,5 +160,41 @@ namespace arms_rviz_control_plugin
         std::vector<std::string> available_controllers_;
         std::set<std::string> available_categories_;
         std::map<std::string, std::string> category_to_controller_; // category -> controller name
+        
+        // Waist control
+        std::unique_ptr<QVBoxLayout> waist_control_layout_;
+
+        std::unique_ptr<QVBoxLayout> waist_lifting_layout_;
+        std::unique_ptr<QHBoxLayout> waist_lifting_slider_layout_;
+        std::unique_ptr<QLabel> waist_lifting_label_;
+        std::unique_ptr<QSlider> waist_lifting_slider_;
+        std::unique_ptr<QLabel> waist_lifting_value_label_;
+
+        std::unique_ptr<QVBoxLayout> waist_turning_layout_;
+        std::unique_ptr<QHBoxLayout> waist_turning_slider_layout_;
+        std::unique_ptr<QLabel> waist_turning_label_;
+        std::unique_ptr<QSlider> waist_turning_slider_;
+        std::unique_ptr<QLabel> waist_turning_value_label_;
+
+        std::unique_ptr<QHBoxLayout> waist_button_layout_top_;
+        std::unique_ptr<QHBoxLayout> waist_button_layout_bottom_;
+
+        std::unique_ptr<QPushButton> waist_up_button_;
+        std::unique_ptr<QPushButton> waist_down_button_;
+        std::unique_ptr<QPushButton> waist_left_button_;
+        std::unique_ptr<QPushButton> waist_right_button_;
+
+        std::unique_ptr<QTimer> waist_repeat_timer_;
+
+        std::unique_ptr<QWidget> scroll_content_widget_;
+        std::unique_ptr<QVBoxLayout> scroll_content_layout_;
+        std::unique_ptr<QGroupBox> waist_group_box_;
+
+        bool waist_up_pressed_ = false;
+        bool waist_down_pressed_ = false;
+        bool waist_left_pressed_ = false;
+        bool waist_right_pressed_ = false;
+        bool is_waist_enabled_ = false;
+        bool waist_enabled_checked_ = false;
     };
 } // namespace arms_rviz_control_plugin
