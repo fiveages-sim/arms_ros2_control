@@ -14,6 +14,7 @@
 	<depend>arms_teleop</depend>
 	<depend>robot_common_launch</depend>
 	<depend>std_msgs</depend>
+	<depend>ocs2_core</depend>
 	<depend>ocs2_mobile_manipulator_ros</depend>
 	<depend>ocs2_ros_interfaces</depend>
 	<depend>arms_target_manager</depend>
@@ -23,6 +24,7 @@
 	<depend>tf2_ros</depend>
 	<depend>tf2_geometry_msgs</depend>
 	<depend>arms_ros2_control_msgs</depend>
+	<depend>geometry_msgs</depend>
 
 	<exec_depend>controller_manager</exec_depend>
 	<exec_depend>joint_state_broadcaster</exec_depend>

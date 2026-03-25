@@ -6,10 +6,12 @@
 
 #include <functional>
 #include <memory>
+#include <sstream>
 #include <string>
 #include <vector>
 
 #include <ament_index_cpp/get_package_share_directory.hpp>
+#include <pinocchio/multibody/model.hpp>
 #include <ocs2_controller_common/reference/PoseBasedReferenceManager.h>
 #include <ocs2_controller_common/visualization/Ocs2PinocchioVisualizer.h>
 #include <ocs2_core/Types.h>
@@ -22,6 +24,7 @@
 #include <rclcpp/rclcpp.hpp>
 #include <rclcpp_lifecycle/lifecycle_node.hpp>
 #include <std_msgs/msg/int32.hpp>
+#include "ocs2_arm_controller/control/ExternalWrenchEstimator.h"
 
 #include <arms_controller_common/CtrlInterfaces.h>
 
@@ -39,6 +42,12 @@ namespace ocs2::mobile_manipulator
                                AutoDeclareFunc auto_declare)
             : node_(node), ctrl_interfaces_(ctrl_interfaces)
         {
+            const std::string external_wrench_frame_override =
+                auto_declare("external_wrench_frame_id", std::string(""));
+            estimate_external_wrench_ = auto_declare("estimate_external_wrench", true);
+            external_wrench_damping_ = auto_declare("external_wrench_damping", 0.05);
+            external_wrench_filter_alpha_ = auto_declare("external_wrench_filter_alpha", 0.3);
+
             cached_ob_state_ = auto_declare("cached_ob_state", true);
             joint_speed_threshold_ = auto_declare("joint_speed_threshold", 0.1);
             hardware_latency_ = auto_declare("hardware_latency", 0.2);
@@ -57,9 +66,47 @@ namespace ocs2::mobile_manipulator
 
             setupInterface(task_file, lib_folder, urdf_file);
 
-            dual_arm_mode_ = interface_->dual_arm_;
+            // Validate and log joint ordering between ros2_control and pinocchio q.
+            {
+                const auto& model = interface_->getPinocchioInterface().getModel();
+                if (static_cast<size_t>(model.nq) != joint_names_.size())
+                {
+                    RCLCPP_WARN(node_->get_logger(),
+                                "Joint order check: controller joints=%zu, pinocchio nq=%u. "
+                                "If these differ, external wrench and kinematics will be wrong.",
+                                joint_names_.size(), static_cast<unsigned>(model.nq));
+                }
 
-            setupPublisher();
+                std::ostringstream oss;
+                oss << "Joint order check (controller YAML order):\\n";
+                for (size_t i = 0; i < joint_names_.size(); ++i)
+                {
+                    oss << "  [" << i << "] " << joint_names_[i] << "\\n";
+                }
+
+                oss << "Pinocchio model joints (q layout):\\n";
+                // joint 0 is universe in pinocchio
+                for (size_t j = 1; j < static_cast<size_t>(model.njoints); ++j)
+                {
+                    const auto& jname = model.names[j];
+                    const auto idx_q = model.idx_qs[j];
+                    const auto nq = model.nqs[j];
+                    const auto idx_v = model.idx_vs[j];
+                    const auto nv = model.nvs[j];
+                    oss << "  [" << j << "] " << jname
+                        << "  idx_q=" << idx_q << " nq=" << nq
+                        << "  idx_v=" << idx_v << " nv=" << nv << "\\n";
+                }
+                RCLCPP_INFO(node_->get_logger(), "%s", oss.str().c_str());
+            }
+
+            const std::string resolved_wrench_frame = external_wrench_frame_override.empty()
+                                                            ? interface_->getManipulatorModelInfo().baseFrame
+                                                            : external_wrench_frame_override;
+            external_wrench_estimator_ = std::make_unique<ExternalWrenchEstimator>(
+                node_, estimate_external_wrench_, external_wrench_damping_, external_wrench_filter_alpha_,
+                resolved_wrench_frame);
+            external_wrench_estimator_->setupPublishers(robot_name_, dual_arm_mode_);
 
             {
                 ocs2::controller_common::Ocs2VisualizerConfig viz_cfg;
@@ -166,6 +213,7 @@ namespace ocs2::mobile_manipulator
 
         // Visualization component
         std::unique_ptr<ocs2::controller_common::Ocs2PinocchioVisualizer> visualizer_;
+        std::unique_ptr<ExternalWrenchEstimator> external_wrench_estimator_;
 
         // Configuration
         std::string robot_name_;
@@ -179,6 +227,9 @@ namespace ocs2::mobile_manipulator
         rclcpp::Time          last_execute_time_;
         vector_t     cached_last_action_;
         double       hardware_latency_;
+        bool         estimate_external_wrench_{true};
+        double       external_wrench_damping_{0.05};
+        double       external_wrench_filter_alpha_{0.3};
         rclcpp::node_interfaces::OnSetParametersCallbackHandle::SharedPtr parameter_callback_handle_;
         rcl_interfaces::msg::SetParametersResult on_parameter_change(
         const std::vector<rclcpp::Parameter> &parameters);

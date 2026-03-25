@@ -8,8 +8,6 @@
 #include <ocs2_mpc/MPC_MRT_Interface.h>
 #include <ocs2_ros_interfaces/common/RosMsgConversions.h>
 #include <ocs2_ddp/GaussNewtonDDP_MPC.h>
-#include <pinocchio/algorithm/frames.hpp>
-#include <pinocchio/algorithm/kinematics.hpp>
 #include <pinocchio/algorithm/rnea.hpp>
 #include <exception>
 #include <filesystem>
@@ -44,7 +42,8 @@ namespace ocs2::mobile_manipulator
         // Create Mobile Manipulator interface
         interface_ = std::make_shared<MobileManipulatorInterface>(task_file, lib_folder, urdf_file);
 
-        // Setup publishers
+        dual_arm_mode_ = interface_->dual_arm_;
+
         setupPublisher();
     }
 
@@ -81,6 +80,11 @@ namespace ocs2::mobile_manipulator
 
         visualizer_->publishSelfCollisionVisualization(observation_.state);
         visualizer_->publishEndEffectorPose(time, observation_.state);
+        if (external_wrench_estimator_)
+        {
+            external_wrench_estimator_->publish(time, observation_.state, ctrl_interfaces_, interface_,
+                                                joint_names_);
+        }
     }
 
     void CtrlComponent::evaluatePolicy(const rclcpp::Time& time)

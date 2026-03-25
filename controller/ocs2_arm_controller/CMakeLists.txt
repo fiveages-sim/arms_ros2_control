@@ -13,6 +13,7 @@ set(CONTROLLER_INCLUDE_DEPENDS
         rcpputils
         controller_interface
 
+        ocs2_core
         ocs2_mobile_manipulator
         ocs2_ros_interfaces
         ocs2_self_collision_visualization
@@ -35,6 +36,7 @@ add_library(${PROJECT_NAME} SHARED
         src/Ocs2ArmController.cpp
 
         src/control/CtrlComponent.cpp
+        src/control/ExternalWrenchEstimator.cpp
 
         src/FSM/StateHome.cpp
         src/FSM/StateOCS2.cpp
