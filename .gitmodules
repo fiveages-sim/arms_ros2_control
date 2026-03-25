@@ -33,3 +33,7 @@
 [submodule "hardwares/arx_ros2_control"]
 	path = hardwares/arx_ros2_control
 	url = git@github.com:fiveages-sim/arx-ros2-control.git
+[submodule "controller/ocs2_wbc_controller"]
+	path = controller/ocs2_wbc_controller
+	url = git@github.com:fiveages-sim/ocs2-wbc-controller.git
+	branch = main

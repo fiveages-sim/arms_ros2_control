@@ -1,0 +1,10 @@
+# 请求部分
+nav_msgs/Path.msg left_trajectory
+nav_msgs/Path.msg right_trajectory
+float64 duration
+---
+
+# 响应部分
+bool success
+string message
+float64 estimated_duration

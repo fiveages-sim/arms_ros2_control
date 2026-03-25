@@ -6,7 +6,6 @@
 #include "ocs2_arm_controller/Ocs2ArmController.h"
 #include <ament_index_cpp/get_package_share_directory.hpp>
 #include <ocs2_mpc/MPC_MRT_Interface.h>
-#include "ocs2_arm_controller/control/PoseBasedReferenceManager.h"
 #include <ocs2_ros_interfaces/common/RosMsgConversions.h>
 #include <ocs2_ddp/GaussNewtonDDP_MPC.h>
 #include <pinocchio/algorithm/frames.hpp>
