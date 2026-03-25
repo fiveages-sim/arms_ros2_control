@@ -15,7 +15,9 @@
 #include <fstream>
 #include <iomanip>
 
+#ifdef HAS_OCS2_WHEEL_HUMANOID
 #include <ocs2_wheel_humanoid/mode/SwitchedHumanoidReferenceManager.h>
+#endif
 
 namespace ocs2::controller_common
 {
@@ -421,6 +423,10 @@ namespace ocs2::controller_common
 
     void PoseBasedReferenceManager::syncWheelHumanoidCoupledOppositeArmIfNeeded(bool left_target_was_updated)
     {
+#ifndef HAS_OCS2_WHEEL_HUMANOID
+        (void)left_target_was_updated;
+        return;
+#else
         if (!dual_arm_mode_ ||
             effectiveTargetStateDim() != Ocs2ReferenceTargetContext::kWheelHumanoidTargetStateDim) {
             return;
@@ -470,6 +476,7 @@ namespace ocs2::controller_common
             left(5) = leftQuat.z();
             left(6) = leftQuat.w();
         }
+#endif
     }
 
     void PoseBasedReferenceManager::leftPoseCallback(
