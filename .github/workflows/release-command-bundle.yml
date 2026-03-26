@@ -32,12 +32,12 @@ jobs:
     runs-on: ubuntu-24.04
     env:
       PACKAGE_NAME: arms-ros2-control-jazzy
-      DEB_FILE_PREFIX: arms_ros2_control_jazzy
+      DEB_FILE_PREFIX: arms-ros2-control-jazzy
       INSTALL_PREFIX: /opt/ros/jazzy
       OCS2_PACKAGE_NAME: ocs2-ros2-jazzy-mobile-manipulator
       OCS2_DEB_FILE_PREFIX: ocs2-ros2-jazzy-mobile-manipulator
       COMMON_PACKAGE_NAME: robot-descriptions-jazzy-common
-      COMMON_DEB_FILE_PREFIX: robot_descriptions_jazzy_common
+      COMMON_DEB_FILE_PREFIX: robot-descriptions-jazzy-common
       DEFAULT_ROS_DISTRO: jazzy
       PREFERRED_OCS2_RELEASE_REPO: legubiao/ocs2_ros2
       FALLBACK_OCS2_RELEASE_REPO: YangLuo-Bionics/ocs2_ros2
