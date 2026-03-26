@@ -35,12 +35,14 @@ jobs:
       DEB_FILE_PREFIX: arms_ros2_control_jazzy
       INSTALL_PREFIX: /opt/ros/jazzy
       OCS2_PACKAGE_NAME: ocs2-ros2-jazzy-mobile-manipulator
-      OCS2_DEB_FILE_PREFIX: ocs2_ros2_jazzy_mobile_manipulator
+      OCS2_DEB_FILE_PREFIX: ocs2-ros2-jazzy-mobile-manipulator
       COMMON_PACKAGE_NAME: robot-descriptions-jazzy-common
       COMMON_DEB_FILE_PREFIX: robot_descriptions_jazzy_common
       DEFAULT_ROS_DISTRO: jazzy
-      OCS2_RELEASE_REPO: YangLuo-Bionics/ocs2_ros2
-      COMMON_RELEASE_REPO: YangLuo-Bionics/robot_descriptions
+      PREFERRED_OCS2_RELEASE_REPO: legubiao/ocs2_ros2
+      FALLBACK_OCS2_RELEASE_REPO: YangLuo-Bionics/ocs2_ros2
+      PREFERRED_COMMON_RELEASE_REPO: fiveages/robot_descriptions
+      FALLBACK_COMMON_RELEASE_REPO: YangLuo-Bionics/robot_descriptions
 
     steps:
       - name: Checkout repository
@@ -80,12 +82,50 @@ jobs:
         id: meta
         shell: bash
         env:
+          GH_TOKEN: ${{ github.token }}
           INPUT_TAG: ${{ github.event.inputs.tag }}
           INPUT_ROS_DISTRO: ${{ github.event.inputs.ros_distro }}
           INPUT_OCS2_TAG: ${{ github.event.inputs.ocs2_release_tag }}
           INPUT_COMMON_TAG: ${{ github.event.inputs.common_release_tag }}
         run: |
           set -eo pipefail
+
+          resolve_release_source() {
+            local requested_tag="$1"
+            local primary_repo="$2"
+            local fallback_repo="$3"
+            local dependency_name="$4"
+            local resolved_repo=""
+            local resolved_tag=""
+
+            if [[ -n "${requested_tag:-}" ]]; then
+              if gh release view "$requested_tag" --repo "$primary_repo" --json tagName >/dev/null 2>&1; then
+                resolved_repo="$primary_repo"
+                resolved_tag="$requested_tag"
+              elif gh release view "$requested_tag" --repo "$fallback_repo" --json tagName >/dev/null 2>&1; then
+                resolved_repo="$fallback_repo"
+                resolved_tag="$requested_tag"
+              else
+                echo "Unable to find release tag ${requested_tag} for ${dependency_name} in ${primary_repo} or ${fallback_repo}." >&2
+                exit 1
+              fi
+            else
+              resolved_tag="$(gh release view --repo "$primary_repo" --json tagName --jq .tagName 2>/dev/null || true)"
+              if [[ -n "${resolved_tag}" ]]; then
+                resolved_repo="$primary_repo"
+              else
+                resolved_tag="$(gh release view --repo "$fallback_repo" --json tagName --jq .tagName 2>/dev/null || true)"
+                if [[ -n "${resolved_tag}" ]]; then
+                  resolved_repo="$fallback_repo"
+                else
+                  echo "Unable to find any published release for ${dependency_name} in ${primary_repo} or ${fallback_repo}." >&2
+                  exit 1
+                fi
+              fi
+            fi
+
+            printf '%s\n%s\n' "$resolved_repo" "$resolved_tag"
+          }
 
           if [[ -n "${INPUT_TAG:-}" ]]; then
             tag="$INPUT_TAG"
@@ -103,13 +143,29 @@ jobs:
           ros_distro="${INPUT_ROS_DISTRO:-$DEFAULT_ROS_DISTRO}"
           deb_file="${DEB_FILE_PREFIX}_${version}_amd64.deb"
 
-          ocs2_tag="${INPUT_OCS2_TAG:-$tag}"
+          mapfile -t ocs2_release_info < <(
+            resolve_release_source \
+              "${INPUT_OCS2_TAG:-}" \
+              "$PREFERRED_OCS2_RELEASE_REPO" \
+              "$FALLBACK_OCS2_RELEASE_REPO" \
+              "ocs2_ros2"
+          )
+          ocs2_repo="${ocs2_release_info[0]}"
+          ocs2_tag="${ocs2_release_info[1]}"
           ocs2_version="${ocs2_tag#v}"
           ocs2_version="${ocs2_version#V}"
           ocs2_version="$(printf '%s' "$ocs2_version" | sed 's/-/~/g')"
           ocs2_deb_file="${OCS2_DEB_FILE_PREFIX}_${ocs2_version}_amd64.deb"
 
-          common_tag="${INPUT_COMMON_TAG:-$tag}"
+          mapfile -t common_release_info < <(
+            resolve_release_source \
+              "${INPUT_COMMON_TAG:-}" \
+              "$PREFERRED_COMMON_RELEASE_REPO" \
+              "$FALLBACK_COMMON_RELEASE_REPO" \
+              "robot_descriptions"
+          )
+          common_repo="${common_release_info[0]}"
+          common_tag="${common_release_info[1]}"
           common_version="${common_tag#v}"
           common_version="${common_version#V}"
           common_version="$(printf '%s' "$common_version" | sed 's/-/~/g')"
@@ -119,8 +175,10 @@ jobs:
           echo "version=$version" >> "$GITHUB_OUTPUT"
           echo "ros_distro=$ros_distro" >> "$GITHUB_OUTPUT"
           echo "deb_file=$deb_file" >> "$GITHUB_OUTPUT"
+          echo "ocs2_repo=$ocs2_repo" >> "$GITHUB_OUTPUT"
           echo "ocs2_tag=$ocs2_tag" >> "$GITHUB_OUTPUT"
           echo "ocs2_deb_file=$ocs2_deb_file" >> "$GITHUB_OUTPUT"
+          echo "common_repo=$common_repo" >> "$GITHUB_OUTPUT"
           echo "common_tag=$common_tag" >> "$GITHUB_OUTPUT"
           echo "common_deb_file=$common_deb_file" >> "$GITHUB_OUTPUT"
 
@@ -172,6 +230,8 @@ jobs:
         shell: bash
         env:
           GH_TOKEN: ${{ github.token }}
+          OCS2_RELEASE_REPO: ${{ steps.meta.outputs.ocs2_repo }}
+          COMMON_RELEASE_REPO: ${{ steps.meta.outputs.common_repo }}
         run: |
           set -eo pipefail
 
@@ -268,26 +328,7 @@ jobs:
             --install-base "${install_root}" \
             --merge-install
 
-          python3 - "$install_root" "$install_prefix" <<'PY'
-import os
-import sys
-
-install_root = sys.argv[1]
-runtime_prefix = sys.argv[2]
-
-for dirpath, _, filenames in os.walk(install_root):
-    for filename in filenames:
-        path = os.path.join(dirpath, filename)
-        try:
-            with open(path, "r", encoding="utf-8") as f:
-                content = f.read()
-        except Exception:
-            continue
-        if install_root not in content:
-            continue
-        with open(path, "w", encoding="utf-8") as f:
-            f.write(content.replace(install_root, runtime_prefix))
-PY
+          python3 -c "import sys; exec('''import os\ninstall_root = sys.argv[1]\nruntime_prefix = sys.argv[2]\nfor dirpath, _, filenames in os.walk(install_root):\n    for filename in filenames:\n        path = os.path.join(dirpath, filename)\n        try:\n            with open(path, 'r', encoding='utf-8') as f:\n                content = f.read()\n        except Exception:\n            continue\n        if install_root not in content:\n            continue\n        with open(path, 'w', encoding='utf-8') as f:\n            f.write(content.replace(install_root, runtime_prefix))''')" "$install_root" "$install_prefix"
 
           rm -f \
             "${install_root}/setup.bash" \
