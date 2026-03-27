@@ -1,4 +1,4 @@
-name: Build Arms Deb
+name: Build arms-ros2-control deb
 
 on:
   push:
@@ -28,7 +28,7 @@ permissions:
   contents: write
 
 jobs:
-  build-arms-deb:
+  build-arms-ros2-control-deb:
     runs-on: ubuntu-24.04
     env:
       PACKAGE_NAME: arms-ros2-control-jazzy
@@ -50,42 +50,6 @@ jobs:
         with:
           fetch-depth: 0
           submodules: false
-
-      - name: Initialize required private submodules
-        shell: bash
-        env:
-          SUBMODULES_TOKEN: ${{ secrets.SUBMODULES_TOKEN }}
-        run: |
-          set -eo pipefail
-
-          if [[ ! -f .gitmodules ]]; then
-            exit 0
-          fi
-
-          if [[ -z "${SUBMODULES_TOKEN:-}" ]]; then
-            echo "SUBMODULES_TOKEN is required to fetch private submodules libraries/lina_planning and libraries/ocs2_humanoid." >&2
-            exit 1
-          fi
-
-          while IFS=$'\t' read -r path url; do
-            case "$path" in
-              libraries/lina_planning|libraries/ocs2_humanoid)
-                url="${url/git@github.com:/https://x-access-token:${SUBMODULES_TOKEN}@github.com/}"
-                url="${url/https:\/\/github.com\//https://x-access-token:${SUBMODULES_TOKEN}@github.com/}"
-                git submodule set-url "$path" "$url"
-                ;;
-            esac
-          done < <(
-            git config --file .gitmodules --get-regexp '^submodule\..*\.path$' \
-              | while read -r key path; do
-                  name="${key#submodule.}"
-                  name="${name%.path}"
-                  url="$(git config --file .gitmodules --get "submodule.${name}.url")"
-                  printf '%s\t%s\n' "$path" "$url"
-                done
-          )
-
-          git submodule update --init --depth 1 libraries/lina_planning libraries/ocs2_humanoid
 
       - name: Resolve release metadata
         id: meta
@@ -291,13 +255,11 @@ jobs:
           mkdir -p "$source_root"
 
           rsync -a "${GITHUB_WORKSPACE}/command/" "${source_root}/"
-          rsync -a "${GITHUB_WORKSPACE}/controller/" "${source_root}/"
+          rsync -a "${GITHUB_WORKSPACE}/controller/ocs2_arm_controller/" "${source_root}/ocs2_arm_controller/"
+          rsync -a "${GITHUB_WORKSPACE}/controller/basic_joint_controller/" "${source_root}/basic_joint_controller/"
+          rsync -a "${GITHUB_WORKSPACE}/controller/adaptive_gripper_controller/" "${source_root}/adaptive_gripper_controller/"
           rsync -a "${GITHUB_WORKSPACE}/libraries/arms_controller_common/" "${source_root}/arms_controller_common/"
-          rsync -a "${GITHUB_WORKSPACE}/libraries/gripper_hardware_common/" "${source_root}/gripper_hardware_common/"
           rsync -a "${GITHUB_WORKSPACE}/libraries/ocs2_controller_common/" "${source_root}/ocs2_controller_common/"
-          rsync -a "${GITHUB_WORKSPACE}/libraries/lina_planning/" "${source_root}/lina_planning/"
-          rsync -a "${GITHUB_WORKSPACE}/libraries/ocs2_humanoid/ocs2_wheel_humanoid/" "${source_root}/ocs2_wheel_humanoid/"
-          rsync -a "${GITHUB_WORKSPACE}/libraries/ocs2_humanoid/ocs2_wheel_humanoid_ros/" "${source_root}/ocs2_wheel_humanoid_ros/"
 
       - name: Install workspace dependencies
         shell: bash
@@ -317,7 +279,7 @@ jobs:
             --reinstall \
             -r \
             -y \
-            --skip-keys "robot_common_launch ocs2_mobile_manipulator ocs2_mobile_manipulator_ros ocs2_ros_interfaces qt5 eigen3"
+            --skip-keys "robot_common_launch ocs2_mobile_manipulator ocs2_mobile_manipulator_ros ocs2_ros_interfaces ocs2_wheel_humanoid ocs2_wheel_humanoid_ros lina_planning qt5 eigen3"
 
       - name: Build arms install space
         shell: bash
@@ -392,7 +354,7 @@ jobs:
           Maintainer: ${GITHUB_REPOSITORY} maintainers <github-actions[bot]@users.noreply.github.com>
           Installed-Size: ${installed_size}
           Description: Prebuilt arms_ros2_control ROS workspace bundle
-           Prebuilt ROS packages from arms_ros2_control command, controller, and libraries directories, installed into ${INSTALL_PREFIX} while excluding shared prefix setup files.
+           command (full), controller (excluding ocs2_wbc_controller submodule), libraries arms_controller_common and ocs2_controller_common only. Excludes private submodules, gripper_hardware_common (separate deb), and hardwares. Installed into ${INSTALL_PREFIX} without shared prefix setup files.
           EOF
 
           if [[ ! -d "${install_root}/share/ocs2_arm_controller" ]]; then
