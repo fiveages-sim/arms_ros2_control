@@ -23,6 +23,7 @@ qt5_wrap_cpp(MOC_FILES
         include/arms_rviz_control_plugin/gripper_control_panel.hpp
         include/arms_rviz_control_plugin/joint_control_panel.hpp
         include/arms_rviz_control_plugin/wbc_capability_panel.hpp
+        include/arms_rviz_control_plugin/wbc_current_state_panel.hpp
 )
 
 # 设置源代码文件列表
@@ -31,6 +32,7 @@ set(SRC_FILES
         src/gripper_control_panel.cpp
         src/joint_control_panel.cpp
         src/wbc_capability_panel.cpp
+        src/wbc_current_state_panel.cpp
 )
 
 # Include directories

@@ -23,4 +23,10 @@
     base_class_type="rviz_common::Panel">
     <description>WBC capability status panel</description>
   </class>
+  <class
+    name="arms_rviz_control_plugin/WbcCurrentStatePanel"
+    type="arms_rviz_control_plugin::WbcCurrentStatePanel"
+    base_class_type="rviz_common::Panel">
+    <description>WBC current state display panel</description>
+  </class>
 </library>
