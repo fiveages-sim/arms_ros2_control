@@ -1,0 +1,8 @@
+# WbcCapability.msg
+# ocs2_wbc_controller约束功能启用信息
+
+bool has_mobile_base
+bool has_body_relative_constraint
+bool has_waist_lock
+bool has_bimanual_coupling
+bool body_tracking_ee_enabled
