@@ -13,6 +13,7 @@ rosidl_generate_interfaces(${PROJECT_NAME}
         "srv/JointTrajectory.srv"
         "srv/ExecutePath.srv"
         "msg/WbcCapability.msg"
+        "msg/WbcCurrentState.msg"
         DEPENDENCIES std_msgs geometry_msgs nav_msgs
 )
 # 添加export依赖
