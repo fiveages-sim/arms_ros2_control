@@ -62,19 +62,28 @@ jobs:
             exit 0
           fi
 
-          for path in libraries/lina_planning libraries/ocs2_humanoid; do
-            url="$(git config --file .gitmodules --get "submodule.${path}.url")"
-            [[ -n "${url:-}" ]] || continue
+          if [[ -z "${SUBMODULES_TOKEN:-}" ]]; then
+            echo "SUBMODULES_TOKEN is required to fetch private submodules libraries/lina_planning and libraries/ocs2_humanoid." >&2
+            exit 1
+          fi
 
-            if [[ -n "${SUBMODULES_TOKEN:-}" ]]; then
-              url="${url/git@github.com:/https://x-access-token:${SUBMODULES_TOKEN}@github.com/}"
-              url="${url/https:\/\/github.com\//https://x-access-token:${SUBMODULES_TOKEN}@github.com/}"
-            else
-              url="${url/git@github.com:/https://github.com/}"
-            fi
-
-            git submodule set-url "$path" "$url"
-          done
+          while IFS=$'\t' read -r path url; do
+            case "$path" in
+              libraries/lina_planning|libraries/ocs2_humanoid)
+                url="${url/git@github.com:/https://x-access-token:${SUBMODULES_TOKEN}@github.com/}"
+                url="${url/https:\/\/github.com\//https://x-access-token:${SUBMODULES_TOKEN}@github.com/}"
+                git submodule set-url "$path" "$url"
+                ;;
+            esac
+          done < <(
+            git config --file .gitmodules --get-regexp '^submodule\..*\.path$' \
+              | while read -r key path; do
+                  name="${key#submodule.}"
+                  name="${name%.path}"
+                  url="$(git config --file .gitmodules --get "submodule.${name}.url")"
+                  printf '%s\t%s\n' "$path" "$url"
+                done
+          )
 
           git submodule update --init --depth 1 libraries/lina_planning libraries/ocs2_humanoid
 
