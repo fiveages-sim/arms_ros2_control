@@ -8,13 +8,16 @@
 #include <std_msgs/msg/string.hpp>
 
 #include <QLabel>
-#include <QPushButton>
 #include <QVBoxLayout>
 #include <QGridLayout>
+#include <QHBoxLayout>
+#include <QComboBox>
 #include <QMetaObject>
 
 #include <arms_ros2_control_msgs/msg/wbc_capability.hpp>
 #include <arms_ros2_control_msgs/msg/wbc_current_state.hpp>
+
+#include "arms_rviz_control_plugin/switch_button.hpp"
 
 namespace arms_rviz_control_plugin
 {
@@ -32,19 +35,23 @@ public:
     void save(rviz_common::Config config) const override;
 
 private Q_SLOTS:
-    void onBaseButtonClicked();
-    void onBimanualButtonClicked();
-    void onLeftArmButtonClicked();
-    void onRightArmButtonClicked();
-
-    void onBodyFreeButtonClicked();
-    void onBodyVerticalButtonClicked();
-    void onBodyTrackingButtonClicked();
-    void onBodyLockButtonClicked();
+    void onBaseToggled();
+    void onBimanualToggled();
+    void onLeftArmToggled();
+    void onRightArmToggled();
+    void onBodyModeChanged(int index);
 
 private:
     using WbcCapabilityMsg = arms_ros2_control_msgs::msg::WbcCapability;
     using WbcCurrentStateMsg = arms_ros2_control_msgs::msg::WbcCurrentState;
+
+    enum BodyModeIndex
+    {
+        BODY_MODE_FREE = 0,
+        BODY_MODE_VERTICAL = 1,
+        BODY_MODE_TRACKING = 2,
+        BODY_MODE_LOCKED = 3
+    };
 
     struct CapabilityState
     {
@@ -81,9 +88,14 @@ private:
     bool isBodyTracking() const;
     bool isBodyLocked() const;
 
-    QString capabilityText() const;
-    QString stateText() const;
-    QString bodyStateText() const;
+    int getCurrentBodyModeIndex() const;
+    QString getBodyModeCommand(int modeIndex) const;
+    void updateBodyComboBox();
+
+    void updateSwitchVisualState(
+        SwitchButton* sw,
+        bool capability_available,
+        bool logical_on);
 
 private:
     rclcpp::Node::SharedPtr node_;
@@ -97,21 +109,20 @@ private:
 
     std::unique_ptr<QVBoxLayout> main_layout_;
     std::unique_ptr<QGridLayout> upper_button_layout_;
-    std::unique_ptr<QGridLayout> body_button_layout_;
+    std::unique_ptr<QHBoxLayout> body_control_layout_;
 
-    std::unique_ptr<QLabel> title_label_;
-    std::unique_ptr<QLabel> capability_label_;
-    std::unique_ptr<QLabel> state_label_;
+    std::unique_ptr<QLabel> base_label_;
+    std::unique_ptr<QLabel> bimanual_label_;
+    std::unique_ptr<QLabel> left_arm_label_;
+    std::unique_ptr<QLabel> right_arm_label_;
 
-    std::unique_ptr<QPushButton> base_button_;
-    std::unique_ptr<QPushButton> bimanual_button_;
-    std::unique_ptr<QPushButton> left_arm_button_;
-    std::unique_ptr<QPushButton> right_arm_button_;
+    std::unique_ptr<SwitchButton> base_switch_;
+    std::unique_ptr<SwitchButton> bimanual_switch_;
+    std::unique_ptr<SwitchButton> left_arm_switch_;
+    std::unique_ptr<SwitchButton> right_arm_switch_;
 
-    std::unique_ptr<QPushButton> body_free_button_;
-    std::unique_ptr<QPushButton> body_vertical_button_;
-    std::unique_ptr<QPushButton> body_tracking_button_;
-    std::unique_ptr<QPushButton> body_lock_button_;
+    std::unique_ptr<QLabel> body_label_;
+    std::unique_ptr<QComboBox> body_combo_box_;
 };
 
 }  // namespace arms_rviz_control_plugin

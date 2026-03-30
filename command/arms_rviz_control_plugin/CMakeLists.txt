@@ -24,6 +24,7 @@ qt5_wrap_cpp(MOC_FILES
         include/arms_rviz_control_plugin/joint_control_panel.hpp
         include/arms_rviz_control_plugin/wbc_capability_panel.hpp
         include/arms_rviz_control_plugin/wbc_current_state_panel.hpp
+        include/arms_rviz_control_plugin/switch_button.hpp
 )
 
 # 设置源代码文件列表
@@ -33,6 +34,7 @@ set(SRC_FILES
         src/joint_control_panel.cpp
         src/wbc_capability_panel.cpp
         src/wbc_current_state_panel.cpp
+        src/switch_button.cpp
 )
 
 # Include directories
