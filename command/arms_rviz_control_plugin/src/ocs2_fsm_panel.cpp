@@ -511,7 +511,7 @@ namespace arms_rviz_control_plugin
 
     bool OCS2FSMPanel::isBaseLocked() const
     {
-        return current_wbc_state_.base_state == 1; // BASE_LOCKED
+        return current_wbc_state_.base_state == 0; // BASE_LOCKED
     }
 
     bool OCS2FSMPanel::isBimanualCoupled() const
