@@ -350,7 +350,7 @@ void WbcCurrentStatePanel::refreshUi()
     base_label_->setText("启用底盘:");
     updateSwitchVisualState(base_switch_.get(),
                             capability_state_.has_mobile_base,
-                            isBaseLocked());
+                            !isBaseLocked());
 
     bimanual_label_->setText("双臂耦合:");
     updateSwitchVisualState(bimanual_switch_.get(),
