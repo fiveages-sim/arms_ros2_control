@@ -238,9 +238,11 @@ namespace arms_controller_common
         * @brief Clear the current plan
         */
         void clearPlan();
+#ifdef HAS_LINA_PLANNING
         bool getTrajectoryParameter(const arms_ros2_control_msgs::msg::JointWaypoint& waypoint,
                                     planning::TrajectoryParameter& res);
-        double planningTime_;
+#endif
+        double planningTime_{0.0};
 
         // Advanced mode (lina_planning) - conditionally compiled
 #ifdef HAS_LINA_PLANNING
