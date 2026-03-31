@@ -132,10 +132,6 @@ jobs:
           )
           ocs2_repo="${ocs2_release_info[0]}"
           ocs2_tag="${ocs2_release_info[1]}"
-          ocs2_version="${ocs2_tag#v}"
-          ocs2_version="${ocs2_version#V}"
-          ocs2_version="$(printf '%s' "$ocs2_version" | sed 's/-/~/g')"
-          ocs2_deb_file="${OCS2_DEB_FILE_PREFIX}_${ocs2_version}_amd64.deb"
 
           mapfile -t common_release_info < <(
             resolve_release_source \
@@ -146,10 +142,6 @@ jobs:
           )
           common_repo="${common_release_info[0]}"
           common_tag="${common_release_info[1]}"
-          common_version="${common_tag#v}"
-          common_version="${common_version#V}"
-          common_version="$(printf '%s' "$common_version" | sed 's/-/~/g')"
-          common_deb_file="${COMMON_DEB_FILE_PREFIX}_${common_version}_amd64.deb"
 
           echo "tag=$tag" >> "$GITHUB_OUTPUT"
           echo "version=$version" >> "$GITHUB_OUTPUT"
@@ -157,10 +149,8 @@ jobs:
           echo "deb_file=$deb_file" >> "$GITHUB_OUTPUT"
           echo "ocs2_repo=$ocs2_repo" >> "$GITHUB_OUTPUT"
           echo "ocs2_tag=$ocs2_tag" >> "$GITHUB_OUTPUT"
-          echo "ocs2_deb_file=$ocs2_deb_file" >> "$GITHUB_OUTPUT"
           echo "common_repo=$common_repo" >> "$GITHUB_OUTPUT"
           echo "common_tag=$common_tag" >> "$GITHUB_OUTPUT"
-          echo "common_deb_file=$common_deb_file" >> "$GITHUB_OUTPUT"
 
       - name: Install system tools
         shell: bash
@@ -212,6 +202,8 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           OCS2_RELEASE_REPO: ${{ steps.meta.outputs.ocs2_repo }}
           COMMON_RELEASE_REPO: ${{ steps.meta.outputs.common_repo }}
+          OCS2_TAG: ${{ steps.meta.outputs.ocs2_tag }}
+          COMMON_TAG: ${{ steps.meta.outputs.common_tag }}
         run: |
           set -eo pipefail
 
@@ -219,28 +211,64 @@ jobs:
           rm -rf "$deps_dir"
           mkdir -p "$deps_dir"
 
-          gh release download "${{ steps.meta.outputs.ocs2_tag }}" \
-            --repo "$OCS2_RELEASE_REPO" \
-            --pattern "${{ steps.meta.outputs.ocs2_deb_file }}" \
-            --dir "$deps_dir"
+          # Glob patterns: deb names may differ from tag-derived names (epoch, ~, revision suffix).
+          try_download() {
+            local tag="$1" repo="$2" label="$3"
+            shift 3
+            local p
+            for p in "$@"; do
+              if gh release download "$tag" --repo "$repo" --pattern "$p" --dir "$deps_dir" 2>/dev/null; then
+                return 0
+              fi
+            done
+            echo "No asset matched any pattern for ${label} (${repo}@${tag}). Published assets:" >&2
+            gh release view "$tag" --repo "$repo" --json assets --jq '.assets[].name' >&2 || true
+            return 1
+          }
 
-          gh release download "${{ steps.meta.outputs.common_tag }}" \
-            --repo "$COMMON_RELEASE_REPO" \
-            --pattern "${{ steps.meta.outputs.common_deb_file }}" \
-            --dir "$deps_dir"
+          try_download "$OCS2_TAG" "$OCS2_RELEASE_REPO" "ocs2" \
+            "${OCS2_DEB_FILE_PREFIX}_*_amd64.deb" \
+            "*${OCS2_DEB_FILE_PREFIX}*_amd64.deb" \
+            "*ocs2*jazzy*mobile-manipulator*_amd64.deb"
+
+          try_download "$COMMON_TAG" "$COMMON_RELEASE_REPO" "robot_descriptions common" \
+            "${COMMON_DEB_FILE_PREFIX}_*_amd64.deb" \
+            "*${COMMON_DEB_FILE_PREFIX}*_amd64.deb" \
+            "*robot-descriptions*jazzy*common*_amd64.deb"
+
+          resolve_one_deb() {
+            local dir="$1" prefix="$2" label="$3"
+            shopt -s nullglob
+            local matches=("$dir/${prefix}"_*_amd64.deb)
+            if [[ ${#matches[@]} -eq 0 ]]; then
+              matches=("$dir"/*"${prefix}"*_amd64.deb)
+            fi
+            if [[ ${#matches[@]} -ne 1 ]]; then
+              echo "Expected exactly one ${label} .deb in ${dir}, got ${#matches[@]}: ${matches[*]}" >&2
+              ls -la "$dir" >&2 || true
+              exit 1
+            fi
+            printf '%s\n' "${matches[0]}"
+          }
+
+          ocs2_path="$(resolve_one_deb "$deps_dir" "$OCS2_DEB_FILE_PREFIX" "OCS2")"
+          common_path="$(resolve_one_deb "$deps_dir" "$COMMON_DEB_FILE_PREFIX" "common")"
+          {
+            echo "OCS2_DEB_PATH=$ocs2_path"
+            echo "COMMON_DEB_PATH=$common_path"
+          } >> "$GITHUB_ENV"
 
       - name: Install dependency files into ROS prefix
         shell: bash
         run: |
           set -eo pipefail
 
-          deps_dir="${RUNNER_TEMP}/dependency-debs"
           extract_root="${RUNNER_TEMP}/dependency-extract"
           rm -rf "$extract_root"
           mkdir -p "$extract_root/ocs2" "$extract_root/common"
 
-          dpkg-deb -x "$deps_dir/${{ steps.meta.outputs.ocs2_deb_file }}" "$extract_root/ocs2"
-          dpkg-deb -x "$deps_dir/${{ steps.meta.outputs.common_deb_file }}" "$extract_root/common"
+          dpkg-deb -x "$OCS2_DEB_PATH" "$extract_root/ocs2"
+          dpkg-deb -x "$COMMON_DEB_PATH" "$extract_root/common"
 
           sudo rsync -a "$extract_root/ocs2${INSTALL_PREFIX}/" "${INSTALL_PREFIX}/"
           sudo rsync -a "$extract_root/common${INSTALL_PREFIX}/" "${INSTALL_PREFIX}/"
