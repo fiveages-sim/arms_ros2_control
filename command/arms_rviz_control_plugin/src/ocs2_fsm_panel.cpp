@@ -276,6 +276,36 @@ namespace arms_rviz_control_plugin
         // Use RViz display context to get the node
         node_ = this->getDisplayContext()->getRosNodeAbstraction().lock()->get_raw_node();
 
+        // Check if ocs2_wbc_controller is available
+        if (!node_->has_parameter("joint_controllers")) {
+            node_->declare_parameter("joint_controllers", std::vector<std::string>{});
+        }
+        const std::vector<std::string> available_controllers = node_->get_parameter("joint_controllers").as_string_array();
+
+        for (const auto& controller : available_controllers)
+        {
+            std::string controller_lower = controller;
+            std::transform(controller_lower.begin(), controller_lower.end(),
+                           controller_lower.begin(), ::tolower);
+
+            if (controller_lower.find("ocs2_wbc_controller") != std::string::npos)
+            {
+                wbc_available_ = true;
+                RCLCPP_INFO(node_->get_logger(), "ocs2_wbc_controller detected, enabling WBC controls");
+                break;
+            }
+        }
+
+        if (!wbc_available_)
+        {
+            RCLCPP_INFO(node_->get_logger(), "ocs2_wbc_controller not found, WBC controls will be hidden");
+            // Hide WBC container if not available
+            if (wbc_container_)
+            {
+                wbc_container_->setVisible(false);
+            }
+        }
+
         // Create FSM command publisher
         fsm_command_publisher_ = node_->create_publisher<std_msgs::msg::Int32>(
             "/fsm_command", 10);
@@ -285,22 +315,26 @@ namespace arms_rviz_control_plugin
             "/fsm_command", 10,
             std::bind(&OCS2FSMPanel::onFsmCommandReceived, this, std::placeholders::_1));
 
-        // Create WBC mode command publisher
-        mode_command_pub_ = node_->create_publisher<std_msgs::msg::String>(
-            "mode_command", 10);
+        // Only create WBC related ROS2 interfaces if controller is available
+        if (wbc_available_)
+        {
+            // Create WBC mode command publisher
+            mode_command_pub_ = node_->create_publisher<std_msgs::msg::String>(
+                "mode_command", 10);
 
-        // Create WBC subscribers
-        capability_sub_ = node_->create_subscription<arms_ros2_control_msgs::msg::WbcCapability>(
-            "/ocs2_wbc_controller/wbc_capabilities",
-            rclcpp::QoS(1).transient_local(),
-            std::bind(&OCS2FSMPanel::onReceiveCapability, this, std::placeholders::_1));
+            // Create WBC subscribers
+            capability_sub_ = node_->create_subscription<arms_ros2_control_msgs::msg::WbcCapability>(
+                "/ocs2_wbc_controller/wbc_capabilities",
+                rclcpp::QoS(1).transient_local(),
+                std::bind(&OCS2FSMPanel::onReceiveCapability, this, std::placeholders::_1));
 
-        state_sub_ = node_->create_subscription<arms_ros2_control_msgs::msg::WbcCurrentState>(
-            "/ocs2_wbc_controller/current_state",
-            10,
-            std::bind(&OCS2FSMPanel::onReceiveCurrentState, this, std::placeholders::_1));
+            state_sub_ = node_->create_subscription<arms_ros2_control_msgs::msg::WbcCurrentState>(
+                "/ocs2_wbc_controller/current_state",
+                10,
+                std::bind(&OCS2FSMPanel::onReceiveCurrentState, this, std::placeholders::_1));
+    }
 
-        RCLCPP_INFO(node_->get_logger(), "OCS2 FSM Panel initialized with /fsm_command and WBC topics");
+    RCLCPP_INFO(node_->get_logger(), "OCS2 FSM Panel initialized with /fsm_command topic");
     }
 
     void OCS2FSMPanel::onHomeToHold()
@@ -387,8 +421,11 @@ namespace arms_rviz_control_plugin
             switch_pose_btn_->setVisible(true);
             switch_pose_btn_->setEnabled(true);
 
-            // Hide WBC controls in HOME mode
-            wbc_container_->setVisible(false);
+            // Hide WBC controls in HOME mode (if available)
+            if (wbc_container_)
+            {
+                wbc_container_->setVisible(false);
+            }
         }
         else if (current_state_ == "HOLD")
         {
@@ -406,17 +443,45 @@ namespace arms_rviz_control_plugin
             hold_to_movej_btn_->setVisible(true);
             hold_to_movej_btn_->setEnabled(true);
 
-            // Hide WBC controls in HOLD mode
-            wbc_container_->setVisible(false);
+            // Hide WBC controls in HOLD mode (if available)
+            if (wbc_container_)
+            {
+                wbc_container_->setVisible(false);
+            }
         }
         else if (current_state_ == "OCS2")
         {
-            // Hide entire button group in OCS2 mode
-            button_group_->setVisible(false);
+            if (wbc_available_)
+            {
+                // WBC模式：隐藏原按钮组，显示WBC控件
+                button_group_->setVisible(false);
 
-            // Show WBC controls in OCS2 mode
-            wbc_container_->setVisible(true);
-            refreshWbcUi();
+                if (wbc_container_)
+                {
+                    wbc_container_->setVisible(true);
+                }
+                refreshWbcUi();
+            }
+            else
+            {
+                // 非WBC模式：仍显示原按钮组，但只保留 OCS2 -> HOLD 按钮
+                button_group_->setVisible(true);
+
+                home_to_hold_btn_->setVisible(false);
+                switch_pose_btn_->setVisible(false);
+                hold_to_ocs2_btn_->setVisible(false);
+                hold_to_movej_btn_->setVisible(false);
+                movej_to_hold_btn_->setVisible(false);
+                hold_to_home_btn_->setVisible(false);
+
+                ocs2_to_hold_btn_->setVisible(true);
+                ocs2_to_hold_btn_->setEnabled(true);
+
+                if (wbc_container_)
+                {
+                    wbc_container_->setVisible(false);
+                }
+            }
         }
         else if (current_state_ == "MOVEJ")
         {
@@ -433,7 +498,10 @@ namespace arms_rviz_control_plugin
             movej_to_hold_btn_->setEnabled(true);
 
             // Hide WBC controls in MOVEJ mode
-            wbc_container_->setVisible(false);
+            if (wbc_container_)
+            {
+                wbc_container_->setVisible(false);
+            }
         }
         else
         {
@@ -447,7 +515,11 @@ namespace arms_rviz_control_plugin
             ocs2_to_hold_btn_->setVisible(false);
             movej_to_hold_btn_->setVisible(false);
             hold_to_home_btn_->setVisible(false);
-            wbc_container_->setVisible(false);
+
+            if (wbc_container_)
+            {
+                wbc_container_->setVisible(false);
+            }
         }
     }
 
@@ -635,7 +707,7 @@ namespace arms_rviz_control_plugin
 
     void OCS2FSMPanel::refreshWbcUi()
     {
-        if (!wbc_container_->isVisible()) return;
+        if (!wbc_container_ || !wbc_container_->isVisible() || !wbc_available_) return;
 
         updateSwitchVisualState(base_switch_.get(),
                                 capability_state_.has_mobile_base,

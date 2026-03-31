@@ -67,6 +67,7 @@ private:
   void onFsmCommandReceived(const std_msgs::msg::Int32::SharedPtr msg);
 
   // WBC related methods
+  bool wbc_available_ = false;
   void publishModeCommand(const std::string& cmd);
   void onReceiveCapability(const arms_ros2_control_msgs::msg::WbcCapability::SharedPtr msg);
   void onReceiveCurrentState(const arms_ros2_control_msgs::msg::WbcCurrentState::SharedPtr msg);

@@ -217,8 +217,11 @@ namespace arms_rviz_control_plugin
             });
 
         // Declare parameter with empty default
-        node_->declare_parameter("joint_controllers", std::vector<std::string>());
-
+        // node_->declare_parameter("joint_controllers", std::vector<std::string>());
+        if (!node_->has_parameter("joint_controllers")) {
+            node_->declare_parameter<std::vector<std::string>>(
+                "joint_controllers", std::vector<std::string>{});
+        }
         // Get joint controllers from parameters
         available_controllers_ = node_->get_parameter("joint_controllers").as_string_array();
 
