@@ -41,7 +41,7 @@ jobs:
       DEFAULT_ROS_DISTRO: jazzy
       PREFERRED_OCS2_RELEASE_REPO: legubiao/ocs2_ros2
       FALLBACK_OCS2_RELEASE_REPO: YangLuo-Bionics/ocs2_ros2
-      PREFERRED_COMMON_RELEASE_REPO: fiveages/robot_descriptions
+      PREFERRED_COMMON_RELEASE_REPO: fiveages-sim/robot_descriptions
       FALLBACK_COMMON_RELEASE_REPO: YangLuo-Bionics/robot_descriptions
 
     steps:
@@ -63,45 +63,40 @@ jobs:
         run: |
           set -eo pipefail
 
-          resolve_release_source() {
+          # Resolve tag only. Download step tries preferred repo first, then fallback, so we do not pin a single repo here.
+          resolve_dependency_release_tag() {
             local requested_tag="$1"
             local primary_repo="$2"
             local fallback_repo="$3"
             local dependency_name="$4"
-            local resolved_repo=""
-            local resolved_tag=""
 
             if [[ -n "${requested_tag:-}" && "${requested_tag}" != [vV]* ]]; then
               requested_tag="v${requested_tag}"
             fi
 
             if [[ -n "${requested_tag:-}" ]]; then
-              if gh release view "$requested_tag" --repo "$primary_repo" --json tagName >/dev/null 2>&1; then
-                resolved_repo="$primary_repo"
-                resolved_tag="$requested_tag"
-              elif gh release view "$requested_tag" --repo "$fallback_repo" --json tagName >/dev/null 2>&1; then
-                resolved_repo="$fallback_repo"
-                resolved_tag="$requested_tag"
-              else
-                echo "Unable to find release tag ${requested_tag} for ${dependency_name} in ${primary_repo} or ${fallback_repo}." >&2
-                exit 1
+              if gh release view "$requested_tag" --repo "$primary_repo" --json tagName >/dev/null 2>&1 \
+                || gh release view "$requested_tag" --repo "$fallback_repo" --json tagName >/dev/null 2>&1; then
+                printf '%s\n' "$requested_tag"
+                return 0
               fi
-            else
-              resolved_tag="$(gh release view --repo "$primary_repo" --json tagName --jq .tagName 2>/dev/null || true)"
-              if [[ -n "${resolved_tag}" ]]; then
-                resolved_repo="$primary_repo"
-              else
-                resolved_tag="$(gh release view --repo "$fallback_repo" --json tagName --jq .tagName 2>/dev/null || true)"
-                if [[ -n "${resolved_tag}" ]]; then
-                  resolved_repo="$fallback_repo"
-                else
-                  echo "Unable to find any published release for ${dependency_name} in ${primary_repo} or ${fallback_repo}." >&2
-                  exit 1
-                fi
-              fi
+              echo "Unable to find release tag ${requested_tag} for ${dependency_name} in ${primary_repo} or ${fallback_repo}." >&2
+              exit 1
             fi
 
-            printf '%s\n%s\n' "$resolved_repo" "$resolved_tag"
+            local resolved_tag=""
+            resolved_tag="$(gh release view --repo "$primary_repo" --json tagName --jq .tagName 2>/dev/null || true)"
+            if [[ -n "${resolved_tag}" ]]; then
+              printf '%s\n' "$resolved_tag"
+              return 0
+            fi
+            resolved_tag="$(gh release view --repo "$fallback_repo" --json tagName --jq .tagName 2>/dev/null || true)"
+            if [[ -n "${resolved_tag}" ]]; then
+              printf '%s\n' "$resolved_tag"
+              return 0
+            fi
+            echo "Unable to find any published release for ${dependency_name} in ${primary_repo} or ${fallback_repo}." >&2
+            exit 1
           }
 
           if [[ -n "${INPUT_TAG:-}" ]]; then
@@ -123,33 +118,23 @@ jobs:
           ros_distro="${INPUT_ROS_DISTRO:-$DEFAULT_ROS_DISTRO}"
           deb_file="${DEB_FILE_PREFIX}_${version}_amd64.deb"
 
-          mapfile -t ocs2_release_info < <(
-            resolve_release_source \
-              "${INPUT_OCS2_TAG:-}" \
-              "$PREFERRED_OCS2_RELEASE_REPO" \
-              "$FALLBACK_OCS2_RELEASE_REPO" \
-              "ocs2_ros2"
-          )
-          ocs2_repo="${ocs2_release_info[0]}"
-          ocs2_tag="${ocs2_release_info[1]}"
+          ocs2_tag="$(resolve_dependency_release_tag \
+            "${INPUT_OCS2_TAG:-}" \
+            "$PREFERRED_OCS2_RELEASE_REPO" \
+            "$FALLBACK_OCS2_RELEASE_REPO" \
+            "ocs2_ros2")"
 
-          mapfile -t common_release_info < <(
-            resolve_release_source \
-              "${INPUT_COMMON_TAG:-}" \
-              "$PREFERRED_COMMON_RELEASE_REPO" \
-              "$FALLBACK_COMMON_RELEASE_REPO" \
-              "robot_descriptions"
-          )
-          common_repo="${common_release_info[0]}"
-          common_tag="${common_release_info[1]}"
+          common_tag="$(resolve_dependency_release_tag \
+            "${INPUT_COMMON_TAG:-}" \
+            "$PREFERRED_COMMON_RELEASE_REPO" \
+            "$FALLBACK_COMMON_RELEASE_REPO" \
+            "robot_descriptions")"
 
           echo "tag=$tag" >> "$GITHUB_OUTPUT"
           echo "version=$version" >> "$GITHUB_OUTPUT"
           echo "ros_distro=$ros_distro" >> "$GITHUB_OUTPUT"
           echo "deb_file=$deb_file" >> "$GITHUB_OUTPUT"
-          echo "ocs2_repo=$ocs2_repo" >> "$GITHUB_OUTPUT"
           echo "ocs2_tag=$ocs2_tag" >> "$GITHUB_OUTPUT"
-          echo "common_repo=$common_repo" >> "$GITHUB_OUTPUT"
           echo "common_tag=$common_tag" >> "$GITHUB_OUTPUT"
 
       - name: Install system tools
@@ -200,8 +185,6 @@ jobs:
         shell: bash
         env:
           GH_TOKEN: ${{ github.token }}
-          OCS2_RELEASE_REPO: ${{ steps.meta.outputs.ocs2_repo }}
-          COMMON_RELEASE_REPO: ${{ steps.meta.outputs.common_repo }}
           OCS2_TAG: ${{ steps.meta.outputs.ocs2_tag }}
           COMMON_TAG: ${{ steps.meta.outputs.common_tag }}
         run: |
@@ -211,7 +194,7 @@ jobs:
           rm -rf "$deps_dir"
           mkdir -p "$deps_dir"
 
-          # Glob patterns: deb names may differ from tag-derived names (epoch, ~, revision suffix).
+          # Glob patterns: deb names may differ from tag-derived names (epoch, ~, revision suffix). Preferred repo first, then fallback.
           try_download() {
             local tag="$1" repo="$2" label="$3"
             shift 3
@@ -226,12 +209,35 @@ jobs:
             return 1
           }
 
-          try_download "$OCS2_TAG" "$OCS2_RELEASE_REPO" "ocs2" \
+          try_download_from_repos() {
+            local tag="$1" label="$2" primary="$3" fallback="$4"
+            shift 4
+            local repo
+            for repo in "$primary" "$fallback"; do
+              if ! gh release view "$tag" --repo "$repo" --json tagName >/dev/null 2>&1; then
+                continue
+              fi
+              if try_download "$tag" "$repo" "$label" "$@"; then
+                return 0
+              fi
+            done
+            echo "Could not download ${label} from ${primary} or ${fallback} @ ${tag} (no matching asset)." >&2
+            for repo in "$primary" "$fallback"; do
+              if gh release view "$tag" --repo "$repo" --json tagName >/dev/null 2>&1; then
+                echo "Assets on ${repo}@${tag}:" >&2
+                gh release view "$tag" --repo "$repo" --json assets --jq '.assets[].name' >&2 || true
+              fi
+            done
+            return 1
+          }
+
+          try_download_from_repos "$OCS2_TAG" "ocs2" "$PREFERRED_OCS2_RELEASE_REPO" "$FALLBACK_OCS2_RELEASE_REPO" \
             "${OCS2_DEB_FILE_PREFIX}_*_amd64.deb" \
             "*${OCS2_DEB_FILE_PREFIX}*_amd64.deb" \
             "*ocs2*jazzy*mobile-manipulator*_amd64.deb"
 
-          try_download "$COMMON_TAG" "$COMMON_RELEASE_REPO" "robot_descriptions common" \
+          try_download_from_repos "$COMMON_TAG" "robot_descriptions common" \
+            "$PREFERRED_COMMON_RELEASE_REPO" "$FALLBACK_COMMON_RELEASE_REPO" \
             "${COMMON_DEB_FILE_PREFIX}_*_amd64.deb" \
             "*${COMMON_DEB_FILE_PREFIX}*_amd64.deb" \
             "*robot-descriptions*jazzy*common*_amd64.deb"
