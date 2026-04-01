@@ -920,6 +920,8 @@ namespace ocs2::controller_common
 
         /* 先停止上一轮的 actual_ee 记录，避免竞态写入污染 planned 数据 */
         logging_active_ = false;
+        waiting_for_motion_start_ = false;
+        has_motion_baseline_ = false;
         has_previous_logged_ee_ = false;
         stationary_sample_count_ = 0;
         previous_logged_ee_time_ = 0.0;
@@ -927,7 +929,7 @@ namespace ocs2::controller_common
             ee_log_file_.close();
 
         /* 保存轨迹到文件 */
-        std::ofstream traj_file("/home/zn/fa-py-libraries/ros2_robot_interface/interpolated_path_trajectory.csv", std::ios::app);
+        std::ofstream traj_file("/home/z/fa-py-libraries/ros2_robot_interface/interpolated_path_trajectory.csv", std::ios::app);
         if (traj_file.is_open())
         {
             // 确保块头一定从新的一行开始，避免粘在上一行数据后面
@@ -978,7 +980,7 @@ namespace ocs2::controller_common
         if (ee_log_file_.is_open())
             ee_log_file_.close();
         ee_log_file_.open(
-            "/home/zn/fa-py-libraries/ros2_robot_interface/interpolated_path_trajectory.csv",
+            "/home/z/fa-py-libraries/ros2_robot_interface/interpolated_path_trajectory.csv",
             std::ios::app);
         if (ee_log_file_.is_open())
         {
@@ -997,6 +999,9 @@ namespace ocs2::controller_common
         has_previous_logged_ee_ = false;
         stationary_sample_count_ = 0;
         previous_logged_ee_time_ = 0.0;
+        /* 等待末端真正开始移动后再写入数据 */
+        waiting_for_motion_start_ = true;
+        has_motion_baseline_ = false;
         logging_active_   = true;
 
         if (!left_arm_waypoints.empty()) left_target_state_ = left_arm_waypoints.back();
@@ -1070,6 +1075,36 @@ namespace ocs2::controller_common
 
         if (!ee_log_file_.is_open())
             return;
+
+        /* 等待末端真正开始移动：先采集基准，再检测位移 */
+        if (waiting_for_motion_start_)
+        {
+            if (!has_motion_baseline_)
+            {
+                /* 第一次调用：记录静止基准位姿 */
+                motion_baseline_left_ee_  = left_ee;
+                motion_baseline_right_ee_ = right_ee;
+                has_motion_baseline_ = true;
+                return;
+            }
+
+            /* 检测左臂位移是否超过阈值（3mm） */
+            constexpr double kMotionStartThreshold = 0.003;
+            const double left_disp = (left_ee.head<3>() - motion_baseline_left_ee_.head<3>()).norm();
+            bool motion_detected = (left_disp >= kMotionStartThreshold);
+
+            if (!motion_detected && dual_arm_mode_ && right_ee.size() >= 3 && motion_baseline_right_ee_.size() >= 3)
+            {
+                const double right_disp = (right_ee.head<3>() - motion_baseline_right_ee_.head<3>()).norm();
+                motion_detected = (right_disp >= kMotionStartThreshold);
+            }
+
+            if (!motion_detected)
+                return;  /* 还没动，继续等待 */
+
+            /* 末端开始移动，关闭等待状态并从本帧开始记录 */
+            waiting_for_motion_start_ = false;
+        }
 
         ee_log_file_ << std::fixed << std::setprecision(9) << t;
         for (int j = 0; j < std::min((int)left_ee.size(), 7); ++j)

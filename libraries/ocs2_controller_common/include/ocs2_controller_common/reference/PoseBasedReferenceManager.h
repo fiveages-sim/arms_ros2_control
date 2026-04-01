@@ -128,6 +128,10 @@ private:
     double moveL_duration_{2.0};
 
     bool logging_active_{false};
+    bool waiting_for_motion_start_{false};  /* 等待末端真正开始移动 */
+    vector_t motion_baseline_left_ee_;      /* 运动检测基准位姿（左臂） */
+    vector_t motion_baseline_right_ee_;     /* 运动检测基准位姿（右臂） */
+    bool has_motion_baseline_{false};       /* 基准位姿是否已采集 */
     double logging_end_time_{0.0};  /* 记录实际末端位姿结束时间 */
     double logging_hard_end_time_{0.0};  /* 超时兜底结束时间 */
     bool has_previous_logged_ee_{false};
