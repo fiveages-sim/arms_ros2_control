@@ -119,6 +119,16 @@ namespace ocs2::controller_common
                 node->create_subscription<geometry_msgs::msg::PoseStamped>(
                     "right_target/stamped", 1, rightStampedCallback);
         }
+        // body PoseStamped订阅者
+        auto bodyStampedCallback =
+            [this](const geometry_msgs::msg::PoseStamped::SharedPtr msg)
+            {
+                this->bodyPoseStampedCallback(msg);
+            };
+
+        body_pose_stamped_subscriber_ =
+            node->create_subscription<geometry_msgs::msg::PoseStamped>(
+                "body_target/stamped", 1, bodyStampedCallback);
         // 删除圆弧订阅者，添加Service
 #ifdef HAS_LINA_PLANNING
         // 左臂圆弧Service
@@ -652,6 +662,48 @@ namespace ocs2::controller_common
         {
             rightPoseStampedPoseCallback(pose_msg);
         });
+    }
+
+    void PoseBasedReferenceManager::bodyPoseStampedCallback(
+        const geometry_msgs::msg::PoseStamped::SharedPtr msg)
+    {
+        geometry_msgs::msg::PoseStamped transformed_pose;
+
+        // Step 1: TF到 base_frame（和手臂完全一致）
+        if (msg->header.frame_id == base_frame_)
+        {
+            transformed_pose = *msg;
+        }
+        else
+        {
+            try
+            {
+                auto transform = tf_buffer_->lookupTransform(
+                    base_frame_,
+                    msg->header.frame_id,
+                    tf2::TimePointZero);
+
+                tf2::doTransform(*msg, transformed_pose, transform);
+            }
+            catch (const tf2::TransformException& ex)
+            {
+                RCLCPP_WARN(logger_, "Body pose TF失败: %s", ex.what());
+                return;
+            }
+        }
+
+        // Step 2: 写入 body_pose_7_xyzw_
+        body_pose_7_xyzw_(0) = transformed_pose.pose.position.x;
+        body_pose_7_xyzw_(1) = transformed_pose.pose.position.y;
+        body_pose_7_xyzw_(2) = transformed_pose.pose.position.z;
+
+        body_pose_7_xyzw_(3) = transformed_pose.pose.orientation.x;
+        body_pose_7_xyzw_(4) = transformed_pose.pose.orientation.y;
+        body_pose_7_xyzw_(5) = transformed_pose.pose.orientation.z;
+        body_pose_7_xyzw_(6) = transformed_pose.pose.orientation.w;
+
+        // Step 3: 更新 target trajectory（关键）
+        updateTargetTrajectory();
     }
 
     void PoseBasedReferenceManager::dualTargetStampedCallback(

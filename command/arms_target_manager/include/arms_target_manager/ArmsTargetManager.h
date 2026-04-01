@@ -26,11 +26,13 @@
 #include <std_msgs/msg/float64_multi_array.hpp>
 #include <std_msgs/msg/int32.hpp>
 #include <sensor_msgs/msg/joint_state.hpp>
+#include <arms_ros2_control_msgs/msg/wbc_current_state.hpp>
 #include <std_msgs/msg/string.hpp>
 #include <nav_msgs/msg/path.hpp>
 #include "arms_target_manager/MarkerFactory.h"
 #include "arms_target_manager/marker/HeadMarker.h"
 #include "arms_target_manager/marker/ArmMarker.h"
+#include "arms_target_manager/marker/BodyMarker.h"
 
 namespace arms_ros2_control::command
 {
@@ -140,6 +142,11 @@ namespace arms_ros2_control::command
         void sendDualArmTargetPose();
 
         /**
+         * 发送 body 目标位姿
+         */
+        void sendBodyTargetPose();
+
+        /**
          * 检查指定状态是否在禁用列表中
          * @param state 要检查的状态值
          * @return 如果状态在禁用列表中返回true
@@ -153,6 +160,8 @@ namespace arms_ros2_control::command
          * @return 如果应该执行返回true
          */
         bool shouldThrottle(rclcpp::Time& last_time, double interval);
+
+        bool shouldShowBodyMarker() const;
 
         /**
          * 标记有待应用的更改（由定时器定期检查并应用）
@@ -169,6 +178,8 @@ namespace arms_ros2_control::command
          * @param msg FSM 命令消息
          */
         void fsmCommandCallback(std_msgs::msg::Int32::ConstSharedPtr msg);
+
+        void wbcStateCallback(const arms_ros2_control_msgs::msg::WbcCurrentState::SharedPtr msg);
 
         /**
          * 设置 current pose 回调函数（用于通知外部收到原始 current_pose 消息，如 VRInputHandler）
@@ -263,6 +274,8 @@ namespace arms_ros2_control::command
         void updateHeadMarkerFromTopic(
             const sensor_msgs::msg::JointState::ConstSharedPtr& joint_msg);
 
+        void updateBodyMarkerVisibility();
+
         /**
          * 将pose从源frame_id转换到指定的目标frame_id
          * 默认使用最新的可用变换（tf2::TimePointZero）
@@ -288,14 +301,19 @@ namespace arms_ros2_control::command
         rclcpp::Subscription<arms_ros2_control_msgs::msg::Inputs>::SharedPtr control_input_subscription_;
         rclcpp::Subscription<sensor_msgs::msg::JointState>::SharedPtr head_joint_state_subscription_;
         rclcpp::Subscription<std_msgs::msg::Float64MultiArray>::SharedPtr current_target_joint_subscription_;
+        rclcpp::Subscription<arms_ros2_control_msgs::msg::WbcCurrentState>::SharedPtr wbc_state_subscriber_;
         
         // 发布器：双臂目标（仅双臂模式）
         rclcpp::Publisher<nav_msgs::msg::Path>::SharedPtr dual_target_stamped_publisher_;
+
+        // 发布器：body目标
+        rclcpp::Publisher<geometry_msgs::msg::PoseStamped>::SharedPtr body_target_stamped_publisher_;
 
         // 菜单系统
         std::shared_ptr<interactive_markers::MenuHandler> left_menu_handler_;
         std::shared_ptr<interactive_markers::MenuHandler> right_menu_handler_;
         std::shared_ptr<interactive_markers::MenuHandler> head_menu_handler_;
+        std::shared_ptr<interactive_markers::MenuHandler> body_menu_handler_;
 
         // 菜单句柄
         interactive_markers::MenuHandler::EntryHandle left_send_handle_{};
@@ -306,6 +324,8 @@ namespace arms_ros2_control::command
         interactive_markers::MenuHandler::EntryHandle right_both_handle_{};  // 发送双臂按钮（仅双臂模式）
         interactive_markers::MenuHandler::EntryHandle head_send_handle_{};
         interactive_markers::MenuHandler::EntryHandle head_toggle_handle_{};
+        interactive_markers::MenuHandler::EntryHandle body_send_handle_{};
+        interactive_markers::MenuHandler::EntryHandle body_toggle_handle_{};
 
         // 配置
         bool dual_arm_mode_;
@@ -325,6 +345,7 @@ namespace arms_ros2_control::command
         int32_t current_controller_state_ = 2; // 当前控制器状态（命令值）
         std::string current_fsm_state_ = "HOLD"; // 当前FSM状态（字符串，用于状态转换验证）
         std::vector<int32_t> disable_auto_update_states_; // 禁用自动更新的状态值数组
+        int body_state_{0};
 
         // 更新节流
         rclcpp::Time last_marker_update_time_;
@@ -339,5 +360,6 @@ namespace arms_ros2_control::command
         std::shared_ptr<ArmMarker> left_arm_marker_;
         std::shared_ptr<ArmMarker> right_arm_marker_;
         std::shared_ptr<HeadMarker> head_marker_;
+        std::shared_ptr<BodyMarker> body_marker_;
     };
 } // namespace arms_ros2_control::command

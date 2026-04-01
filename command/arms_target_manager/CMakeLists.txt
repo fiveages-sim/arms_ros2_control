@@ -35,6 +35,7 @@ add_library(${PROJECT_NAME} SHARED
         src/VRInputHandler.cpp
         src/marker/HeadMarker.cpp
         src/marker/ArmMarker.cpp
+        src/marker/BodyMarker.cpp
 )
 
 target_include_directories(${PROJECT_NAME}
