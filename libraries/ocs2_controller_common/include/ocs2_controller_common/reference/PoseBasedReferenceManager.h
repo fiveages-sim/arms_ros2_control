@@ -129,6 +129,12 @@ private:
 
     bool logging_active_{false};
     double logging_end_time_{0.0};  /* 记录实际末端位姿结束时间 */
+    double logging_hard_end_time_{0.0};  /* 超时兜底结束时间 */
+    bool has_previous_logged_ee_{false};
+    double previous_logged_ee_time_{0.0};
+    vector_t previous_left_logged_ee_;
+    vector_t previous_right_logged_ee_;
+    size_t stationary_sample_count_{0};
     std::ofstream ee_log_file_;
 
 #ifdef HAS_LINA_PLANNING

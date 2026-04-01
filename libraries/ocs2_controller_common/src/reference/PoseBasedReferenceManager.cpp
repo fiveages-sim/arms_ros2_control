@@ -920,6 +920,9 @@ namespace ocs2::controller_common
 
         /* 先停止上一轮的 actual_ee 记录，避免竞态写入污染 planned 数据 */
         logging_active_ = false;
+        has_previous_logged_ee_ = false;
+        stationary_sample_count_ = 0;
+        previous_logged_ee_time_ = 0.0;
         if (ee_log_file_.is_open())
             ee_log_file_.close();
 
@@ -989,6 +992,11 @@ namespace ocs2::controller_common
             ee_log_file_ << "\n";
         }
         logging_end_time_ = t0 + trajectory_duration_sec;
+        /* 记录在规划时间结束后继续，直到实际末端稳定或超时兜底 */
+        logging_hard_end_time_ = logging_end_time_ + 3.0;
+        has_previous_logged_ee_ = false;
+        stationary_sample_count_ = 0;
+        previous_logged_ee_time_ = 0.0;
         logging_active_   = true;
 
         if (!left_arm_waypoints.empty()) left_target_state_ = left_arm_waypoints.back();
@@ -1060,14 +1068,6 @@ namespace ocs2::controller_common
         if (!logging_active_)
             return;
 
-        if (t > logging_end_time_)
-        {
-            logging_active_ = false;
-            if (ee_log_file_.is_open())
-                ee_log_file_.close();
-            return;
-        }
-
         if (!ee_log_file_.is_open())
             return;
 
@@ -1078,6 +1078,89 @@ namespace ocs2::controller_common
             for (int j = 0; j < 7; ++j)
                 ee_log_file_ << "," << right_ee(j);
         ee_log_file_ << "\n";
+
+        auto poseDelta = [](const vector_t& prev, const vector_t& curr,
+                            double& position_delta, double& orientation_delta) -> bool
+        {
+            if (prev.size() < 7 || curr.size() < 7)
+            {
+                return false;
+            }
+
+            const double dx = curr(0) - prev(0);
+            const double dy = curr(1) - prev(1);
+            const double dz = curr(2) - prev(2);
+            position_delta = std::sqrt(dx * dx + dy * dy + dz * dz);
+
+            const double dot =
+                curr(3) * prev(3) + curr(4) * prev(4) + curr(5) * prev(5) + curr(6) * prev(6);
+            const double clamped_dot = std::max(-1.0, std::min(1.0, dot));
+            orientation_delta = 1.0 - std::abs(clamped_dot);
+            return true;
+        };
+
+        if (!has_previous_logged_ee_)
+        {
+            previous_left_logged_ee_ = left_ee;
+            previous_right_logged_ee_ = right_ee;
+            previous_logged_ee_time_ = t;
+            has_previous_logged_ee_ = true;
+            return;
+        }
+
+        const double dt = std::max(1e-6, t - previous_logged_ee_time_);
+        previous_logged_ee_time_ = t;
+
+        double left_pos_delta = 0.0;
+        double left_ori_delta = 0.0;
+        const bool left_valid = poseDelta(previous_left_logged_ee_, left_ee, left_pos_delta, left_ori_delta);
+
+        double right_pos_delta = 0.0;
+        double right_ori_delta = 0.0;
+        bool right_valid = true;
+        if (dual_arm_mode_)
+        {
+            right_valid = poseDelta(previous_right_logged_ee_, right_ee, right_pos_delta, right_ori_delta);
+        }
+
+        previous_left_logged_ee_ = left_ee;
+        previous_right_logged_ee_ = right_ee;
+
+        constexpr double kPositionSpeedThreshold = 0.003;      // m/s
+        constexpr double kOrientationSpeedThreshold = 0.02;    // quaternion-distance/s
+        constexpr size_t kRequiredStableSamples = 8;           // ~0.3s at 25Hz
+
+        bool stable_now = false;
+        if (left_valid && right_valid)
+        {
+            const double left_pos_speed = left_pos_delta / dt;
+            const double left_ori_speed = left_ori_delta / dt;
+            bool left_stable = left_pos_speed < kPositionSpeedThreshold &&
+                               left_ori_speed < kOrientationSpeedThreshold;
+
+            bool right_stable = true;
+            if (dual_arm_mode_)
+            {
+                const double right_pos_speed = right_pos_delta / dt;
+                const double right_ori_speed = right_ori_delta / dt;
+                right_stable = right_pos_speed < kPositionSpeedThreshold &&
+                               right_ori_speed < kOrientationSpeedThreshold;
+            }
+            stable_now = left_stable && right_stable;
+        }
+
+        if (t >= logging_end_time_)
+        {
+            stationary_sample_count_ = stable_now ? (stationary_sample_count_ + 1) : 0;
+            const bool settled = stationary_sample_count_ >= kRequiredStableSamples;
+            const bool timeout = t >= logging_hard_end_time_;
+            if (settled || timeout)
+            {
+                logging_active_ = false;
+                if (ee_log_file_.is_open())
+                    ee_log_file_.close();
+            }
+        }
     }
 
     void PoseBasedReferenceManager::resetTargetStateCache()
