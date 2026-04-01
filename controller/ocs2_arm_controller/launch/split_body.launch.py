@@ -228,6 +228,8 @@ def launch_setup(context, *args, **kwargs):
         # Add joint_controllers parameter for JointControlPanel
         rviz_parameters.append({'joint_controllers': joint_controller_names})
 
+        rviz_parameters.append({'wbc_available': False})
+
         rviz_node = Node(
             package="rviz2",
             executable="rviz2",

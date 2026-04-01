@@ -277,24 +277,10 @@ namespace arms_rviz_control_plugin
         node_ = this->getDisplayContext()->getRosNodeAbstraction().lock()->get_raw_node();
 
         // Check if ocs2_wbc_controller is available
-        if (!node_->has_parameter("joint_controllers")) {
-            node_->declare_parameter("joint_controllers", std::vector<std::string>{});
+        if (!node_->has_parameter("wbc_available")) {
+            node_->declare_parameter("wbc_available", false);
         }
-        const std::vector<std::string> available_controllers = node_->get_parameter("joint_controllers").as_string_array();
-
-        for (const auto& controller : available_controllers)
-        {
-            std::string controller_lower = controller;
-            std::transform(controller_lower.begin(), controller_lower.end(),
-                           controller_lower.begin(), ::tolower);
-
-            if (controller_lower.find("ocs2_wbc_controller") != std::string::npos)
-            {
-                wbc_available_ = true;
-                RCLCPP_INFO(node_->get_logger(), "ocs2_wbc_controller detected, enabling WBC controls");
-                break;
-            }
-        }
+        wbc_available_ = node_->get_parameter("wbc_available").as_bool();
 
         if (!wbc_available_)
         {

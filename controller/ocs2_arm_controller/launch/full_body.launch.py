@@ -66,6 +66,17 @@ def launch_setup(context, *args, **kwargs):
         except KeyError:
             pass
 
+    wbc_available = False
+    if config is not None:
+        try:
+            controller_manager_params = config.get('controller_manager', {}).get('ros__parameters', {})
+            wbc_controller_cfg = controller_manager_params.get('ocs2_wbc_controller', {})
+            wbc_controller_type = wbc_controller_cfg.get('type', "")
+            wbc_available = (wbc_controller_type == 'ocs2_wbc_controller/Ocs2WbcController')
+            print(f"[INFO] ocs2_wbc_controller.type = {wbc_controller_type}, wbc_available = {wbc_available}")
+        except Exception as e:
+            print(f"[WARN] Failed to parse ocs2_wbc_controller.type from config: {e}")
+
     # Planning URDF path is now handled by Visualizer in ocs2_arm_controller
     # The Visualizer will publish /ocs2_robot_description after loading the interface
 
@@ -214,6 +225,8 @@ def launch_setup(context, *args, **kwargs):
 
         # Add joint_controllers parameter for JointControlPanel
         rviz_parameters.append({'joint_controllers': joint_controller_names})
+
+        rviz_parameters.append({'wbc_available': wbc_available})
 
         rviz_node = Node(
             package="rviz2",
