@@ -81,6 +81,16 @@ namespace ocs2::mobile_manipulator
 
         visualizer_->publishSelfCollisionVisualization(observation_.state);
         visualizer_->publishEndEffectorPose(time, observation_.state);
+
+        /*8888888888888888888888888888888888888888888888*/
+        if (pose_reference_manager_ && pose_reference_manager_->isLoggingActive())
+        {
+            vector_t left_ee  = visualizer_->computeEndEffectorPose(observation_.state);
+            vector_t right_ee = dual_arm_mode_
+                                ? visualizer_->computeRightEndEffectorPose(observation_.state)
+                                : vector_t{};
+            pose_reference_manager_->logActualEePose(observation_.time, left_ee, right_ee);
+        }
     }
 
     void CtrlComponent::evaluatePolicy(const rclcpp::Time& time)

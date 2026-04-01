@@ -7,6 +7,7 @@
 #include <arms_ros2_control_msgs/srv/execute_circle.hpp>
 #include <arms_ros2_control_msgs/srv/execute_path.hpp>
 #include <chrono>
+#include <fstream>  /* 记录实际末端位姿 */
 #include <functional>
 #include <mutex>
 #include <geometry_msgs/msg/pose.hpp>
@@ -46,6 +47,10 @@ public:
     void resetTargetStateCache();
 
     void setCurrentEndEffectorPoses(const vector_t& left_ee_pose, const vector_t& right_ee_pose);
+
+    /** 记录实际末端位姿（用于轨迹日志记录） */
+    bool isLoggingActive() const { return logging_active_; }
+    void logActualEePose(double t, const vector_t& left_ee, const vector_t& right_ee);
 
     /** Body pose (7: x,y,z, qx,qy,qz,qw) for indices [14:21] when using wheel-humanoid 21-dim layout. */
     void setBodyPoseReference(const vector_t& body_pose_xyzw_7);
@@ -117,8 +122,14 @@ private:
     vector_t right_target_state_;
     vector_t body_pose_7_xyzw_;
 
+
+
     double trajectory_duration_{2.0};
     double moveL_duration_{2.0};
+
+    bool logging_active_{false};
+    double logging_end_time_{0.0};  /* 记录实际末端位姿结束时间 */
+    std::ofstream ee_log_file_;
 
 #ifdef HAS_LINA_PLANNING
     std::shared_ptr<planning::CircularCurver> left_circle_curve_;

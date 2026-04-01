@@ -918,6 +918,26 @@ namespace ocs2::controller_common
             return interpolatePose7(path[segment_idx], path[segment_idx + 1], clamped_alpha);
         };
 
+        /* 先停止上一轮的 actual_ee 记录，避免竞态写入污染 planned 数据 */
+        logging_active_ = false;
+        if (ee_log_file_.is_open())
+            ee_log_file_.close();
+
+        /* 保存轨迹到文件 */
+        std::ofstream traj_file("/home/zn/fa-py-libraries/ros2_robot_interface/interpolated_path_trajectory.csv", std::ios::app);
+        if (traj_file.is_open())
+        {
+            // 确保块头一定从新的一行开始，避免粘在上一行数据后面
+            traj_file << "\n";
+            traj_file << "# t0=" << std::fixed << std::setprecision(3) << t0
+                      << " duration=" << trajectory_duration_sec
+                      << " samples=" << kNumSamples << "\n";
+            traj_file << "t,x,y,z,qx,qy,qz,qw";
+            if (dual_arm_mode_)
+                traj_file << ",rx,ry,rz,rqx,rqy,rqz,rqw";
+            traj_file << "\n";
+        }
+        /*8888888888888888888888888888888888888888888888*/
         for (size_t i = 0; i < kNumSamples; ++i)
         {
             const double t = t0 + static_cast<double>(i) * dt;
@@ -937,7 +957,39 @@ namespace ocs2::controller_common
 
             time_trajectory.push_back(t);
             state_trajectory.push_back(combined_state);
+
+            // /* 保存轨迹到文件 */
+            if (traj_file.is_open())
+            {
+                traj_file << std::fixed << std::setprecision(9) << t;
+                for (int j = 0; j < combined_state.size(); ++j)
+                    traj_file << "," << combined_state(j);
+                traj_file << "\n";
+            }
         }
+
+        if (traj_file.is_open())
+            traj_file.close();
+
+        // 开启实际末端位姿记录：追加 actual_ee 块到同一文件
+        if (ee_log_file_.is_open())
+            ee_log_file_.close();
+        ee_log_file_.open(
+            "/home/zn/fa-py-libraries/ros2_robot_interface/interpolated_path_trajectory.csv",
+            std::ios::app);
+        if (ee_log_file_.is_open())
+        {
+            // 同样保证 actual_ee 块头从新行开始
+            ee_log_file_ << "\n";
+            ee_log_file_ << "# actual_ee t_start=" << std::fixed << std::setprecision(3) << t0
+                         << " duration=" << trajectory_duration_sec << "\n";
+            ee_log_file_ << "t,lx,ly,lz,lqx,lqy,lqz,lqw";
+            if (dual_arm_mode_)
+                ee_log_file_ << ",rx,ry,rz,rqx,rqy,rqz,rqw";
+            ee_log_file_ << "\n";
+        }
+        logging_end_time_ = t0 + trajectory_duration_sec;
+        logging_active_   = true;
 
         if (!left_arm_waypoints.empty()) left_target_state_ = left_arm_waypoints.back();
         if (dual_arm_mode_ && !right_arm_waypoints.empty()) right_target_state_ = right_arm_waypoints.back();
@@ -999,6 +1051,33 @@ namespace ocs2::controller_common
         response->success = true;
         response->message = "trajectory applied";
         response->estimated_duration = duration;
+    }
+
+    /* 记录实际末端位姿 */
+    void PoseBasedReferenceManager::logActualEePose(
+        double t, const vector_t& left_ee, const vector_t& right_ee)
+    {
+        if (!logging_active_)
+            return;
+
+        if (t > logging_end_time_)
+        {
+            logging_active_ = false;
+            if (ee_log_file_.is_open())
+                ee_log_file_.close();
+            return;
+        }
+
+        if (!ee_log_file_.is_open())
+            return;
+
+        ee_log_file_ << std::fixed << std::setprecision(9) << t;
+        for (int j = 0; j < std::min((int)left_ee.size(), 7); ++j)
+            ee_log_file_ << "," << left_ee(j);
+        if (dual_arm_mode_ && right_ee.size() >= 7)
+            for (int j = 0; j < 7; ++j)
+                ee_log_file_ << "," << right_ee(j);
+        ee_log_file_ << "\n";
     }
 
     void PoseBasedReferenceManager::resetTargetStateCache()
