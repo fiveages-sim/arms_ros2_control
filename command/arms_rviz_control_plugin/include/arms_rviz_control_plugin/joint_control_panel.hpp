@@ -74,6 +74,7 @@ namespace arms_rviz_control_plugin
         std::string classifyJoint(const std::string& joint_name);
         void updateJointVisibility();
         std::string getControllerNameForCategory(const std::string& category);
+        std::string getWaistControllerName() const;
         void updatePublisher();
         void updateCategoryOptions();
         bool hasControllerForCategory(const std::string& category);
@@ -196,5 +197,6 @@ namespace arms_rviz_control_plugin
         bool waist_right_pressed_ = false;
         bool is_waist_enabled_ = false;
         bool waist_enabled_checked_ = false;
+        bool shouldShowWaistControls() const;
     };
 } // namespace arms_rviz_control_plugin
