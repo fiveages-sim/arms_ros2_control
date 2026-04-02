@@ -126,6 +126,7 @@ private:
 
     double trajectory_duration_{2.0};
     double moveL_duration_{2.0};
+    double trajectory_start_offset_{0.0};  // 轨迹起点时间偏移（秒），补偿计算耗时
 
     bool logging_active_{false};
     bool waiting_for_motion_start_{false};  /* 等待末端真正开始移动 */

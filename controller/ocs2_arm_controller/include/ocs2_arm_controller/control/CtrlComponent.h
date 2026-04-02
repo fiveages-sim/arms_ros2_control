@@ -83,6 +83,7 @@ namespace ocs2::mobile_manipulator
 
             auto_declare("movel_trajectory_duration", 2.0);
             auto_declare("movel_duration", 2.0);
+            auto_declare("trajectory_start_offset", 0.0);
 
             ocs2::controller_common::Ocs2ReferenceTargetContext ref_ctx;
             ref_ctx.dual_arm = interface_->dual_arm_;

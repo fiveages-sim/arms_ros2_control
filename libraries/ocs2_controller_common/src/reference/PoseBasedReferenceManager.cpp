@@ -419,6 +419,9 @@ namespace ocs2::controller_common
         trajectory_duration_ =
             node_->get_parameter("movel_trajectory_duration").as_double();
         moveL_duration_ = node_->get_parameter("movel_duration").as_double();
+        trajectory_start_offset_ =
+            node_->get_parameter("trajectory_start_offset").as_double();
+        RCLCPP_WARN(logger_, ">>>>>> trajectory_start_offset = %.3f s (%.1f ms) <<<<<<", trajectory_start_offset_, trajectory_start_offset_ * 1000.0);
     }
 
     void PoseBasedReferenceManager::syncWheelHumanoidCoupledOppositeArmIfNeeded(bool left_target_was_updated)
@@ -859,12 +862,13 @@ namespace ocs2::controller_common
         const std::vector<vector_t>& right_arm_waypoints,
         double trajectory_duration_sec)
     {
+        const auto traj_compute_start = std::chrono::steady_clock::now();
         constexpr double kSampleInterval = 0.04;
         const size_t kNumSamples = std::max(
             static_cast<size_t>(std::ceil(trajectory_duration_sec / kSampleInterval)) + 1,
             static_cast<size_t>(2));
 
-        const double t0 = current_observation_.time;
+        const double t0 = current_observation_.time + trajectory_start_offset_;
         const double t1 = t0 + trajectory_duration_sec;
         const double dt = (t1 - t0) / static_cast<double>(kNumSamples - 1);
 
@@ -929,7 +933,7 @@ namespace ocs2::controller_common
             ee_log_file_.close();
 
         /* 保存轨迹到文件 */
-        std::ofstream traj_file("/home/z/fa-py-libraries/ros2_robot_interface/interpolated_path_trajectory.csv", std::ios::app);
+        std::ofstream traj_file("/home/zn/fa-py-libraries/ros2_robot_interface/interpolated_path_trajectory.csv", std::ios::app);
         if (traj_file.is_open())
         {
             // 确保块头一定从新的一行开始，避免粘在上一行数据后面
@@ -980,7 +984,7 @@ namespace ocs2::controller_common
         if (ee_log_file_.is_open())
             ee_log_file_.close();
         ee_log_file_.open(
-            "/home/z/fa-py-libraries/ros2_robot_interface/interpolated_path_trajectory.csv",
+            "/home/zn/fa-py-libraries/ros2_robot_interface/interpolated_path_trajectory.csv",
             std::ios::app);
         if (ee_log_file_.is_open())
         {
@@ -1011,14 +1015,17 @@ namespace ocs2::controller_common
         TargetTrajectories target_trajectories(time_trajectory, state_trajectory, input_trajectory);
         referenceManagerPtr_->setTargetTrajectories(std::move(target_trajectories));
 
+        const auto traj_compute_end = std::chrono::steady_clock::now();
+        const double traj_compute_ms = std::chrono::duration<double, std::milli>(traj_compute_end - traj_compute_start).count();
+
         publishCurrentTargets();
 
         if (dual_arm_mode_)
-            RCLCPP_INFO(logger_, "处理路径（双臂模式）：左臂 %zu 个路径点，右臂 %zu 个路径点，生成 %zu 个轨迹点",
-                        left_arm_waypoints.size(), right_arm_waypoints.size(), kNumSamples);
+            RCLCPP_WARN(logger_, ">>>>>> 轨迹计算耗时 %.3f ms | 双臂模式 | 左臂 %zu 路径点, 右臂 %zu 路径点, 生成 %zu 轨迹点 <<<<<<",
+                        traj_compute_ms, left_arm_waypoints.size(), right_arm_waypoints.size(), kNumSamples);
         else
-            RCLCPP_INFO(logger_, "处理路径（单臂模式）：%zu 个路径点，生成 %zu 个轨迹点",
-                        left_arm_waypoints.size(), kNumSamples);
+            RCLCPP_WARN(logger_, ">>>>>> 轨迹计算耗时 %.3f ms | 单臂模式 | %zu 路径点, 生成 %zu 轨迹点 <<<<<<",
+                        traj_compute_ms, left_arm_waypoints.size(), kNumSamples);
     }
 
     void PoseBasedReferenceManager::handleExecutePathService(
