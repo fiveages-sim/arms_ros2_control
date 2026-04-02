@@ -1088,8 +1088,8 @@ namespace ocs2::controller_common
                 return;
             }
 
-            /* 检测左臂位移是否超过阈值（3mm） */
-            constexpr double kMotionStartThreshold = 0.003;
+            /* 检测左臂位移是否超过阈值（1.5mm） */
+            constexpr double kMotionStartThreshold = 0.001;
             const double left_disp = (left_ee.head<3>() - motion_baseline_left_ee_.head<3>()).norm();
             bool motion_detected = (left_disp >= kMotionStartThreshold);
 
