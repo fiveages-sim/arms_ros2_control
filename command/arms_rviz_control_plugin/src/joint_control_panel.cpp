@@ -320,10 +320,6 @@ namespace arms_rviz_control_plugin
         right_current_target_subscriber_ = node_->create_subscription<geometry_msgs::msg::PoseStamped>(
             "right_current_target", 10,
             std::bind(&JointControlPanel::onRightCurrentTargetReceived, this, std::placeholders::_1));
-        
-        body_current_target_subscriber_ = node_->create_subscription<std_msgs::msg::Float64MultiArray>(
-            "/body_joint_controller/current_target_joint", 10,
-            std::bind(&JointControlPanel::onBodyCurrentTargetReceived, this, std::placeholders::_1));
 
         // Initialize publisher (will be updated when category changes)
         updatePublisher();
@@ -503,6 +499,10 @@ namespace arms_rviz_control_plugin
 
                 waist_turning_publisher_ = node_->create_publisher<std_msgs::msg::Float64>(
                     "/body_joint_controller/waist_turning_command", 10);
+
+                body_current_target_subscriber_ = node_->create_subscription<std_msgs::msg::Float64MultiArray>(
+                    "/body_joint_controller/current_target_joint", 10,
+                    std::bind(&JointControlPanel::onBodyCurrentTargetReceived, this, std::placeholders::_1));
 
                 RCLCPP_INFO(node_->get_logger(),
                             "Waist control publishers created because waist_lifting_enabled is true");

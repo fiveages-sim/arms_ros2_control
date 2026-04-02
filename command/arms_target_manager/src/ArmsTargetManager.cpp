@@ -711,50 +711,11 @@ namespace arms_ros2_control::command
                 "dual_target/stamped", 1);
         }
 
-        current_target_joint_subscription_ = node_->create_subscription<std_msgs::msg::Float64MultiArray>(
-            "/body_joint_controller/current_target_joint", 10,
-            [this](const std_msgs::msg::Float64MultiArray::ConstSharedPtr msg)
-            {
-                currentTargetJointCallback(msg);
-            });
-
         wbc_state_subscriber_ =
             node_->create_subscription<arms_ros2_control_msgs::msg::WbcCurrentState>(
                 "/ocs2_wbc_controller/current_state",
                 10,
                 std::bind(&ArmsTargetManager::wbcStateCallback, this, std::placeholders::_1));
-    }
-
-    void ArmsTargetManager::currentTargetJointCallback(
-        const std_msgs::msg::Float64MultiArray::ConstSharedPtr& msg)
-    {
-        if (!msg)
-        {
-            return;
-        }
-        if (current_controller_state_ != 3)
-        {
-            return;
-        }
-
-        // 关键修复：
-        // body marker 显示时，不允许自动从 SINGLE_SHOT 切到 CONTINUOUS；
-        // 否则单次发布会失效。
-        if (current_mode_ == MarkerState::SINGLE_SHOT && !shouldShowBodyMarker())
-        {
-            togglePublishMode();
-            RCLCPP_INFO(node_->get_logger(),
-                        "Switched ArmsTargetManager to CONTINUOUS mode on current_target_joint update");
-        }
-
-        if (left_arm_marker_)
-        {
-            left_arm_marker_->refreshFromLatestCurrentTarget();
-        }
-        if (dual_arm_mode_ && right_arm_marker_)
-        {
-            right_arm_marker_->refreshFromLatestCurrentTarget();
-        }
     }
 
     void ArmsTargetManager::fsmCommandCallback(std_msgs::msg::Int32::ConstSharedPtr msg)

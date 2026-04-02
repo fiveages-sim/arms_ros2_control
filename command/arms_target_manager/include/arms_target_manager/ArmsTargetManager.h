@@ -300,7 +300,6 @@ namespace arms_ros2_control::command
         // 订阅器（注意：左臂和右臂的订阅器现在在 ArmMarker 内部管理）
         rclcpp::Subscription<arms_ros2_control_msgs::msg::Inputs>::SharedPtr control_input_subscription_;
         rclcpp::Subscription<sensor_msgs::msg::JointState>::SharedPtr head_joint_state_subscription_;
-        rclcpp::Subscription<std_msgs::msg::Float64MultiArray>::SharedPtr current_target_joint_subscription_;
         rclcpp::Subscription<arms_ros2_control_msgs::msg::WbcCurrentState>::SharedPtr wbc_state_subscriber_;
         
         // 发布器：双臂目标（仅双臂模式）
