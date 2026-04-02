@@ -268,7 +268,7 @@ namespace ocs2::mobile_manipulator
         if (waist_lifting_enabled_)
         {
             // 1) absolute lifting distance command
-            std::string waist_lifting_topic = "/body_joint_controller/waist_lifting";
+            std::string waist_lifting_topic = "/" + controller_name_ + "/waist_lifting";
             waist_lifting_subscription_ = get_node()->create_subscription<std_msgs::msg::Float64>(
                 waist_lifting_topic, 10,
                 [this](const std_msgs::msg::Float64::SharedPtr msg)
@@ -298,7 +298,7 @@ namespace ocs2::mobile_manipulator
                 });
 
             // 2) speedj-like lifting factor command
-            std::string waist_lifting_command_topic = "/body_joint_controller/waist_lifting_command";
+            std::string waist_lifting_command_topic = "/" + controller_name_ + "/waist_lifting_command";
             waist_lifting_command_subscription_ = get_node()->create_subscription<std_msgs::msg::Float64>(
                 waist_lifting_command_topic, 10,
                 [this](const std_msgs::msg::Float64::SharedPtr msg)
@@ -322,7 +322,7 @@ namespace ocs2::mobile_manipulator
                 });
 
             // 3) waist turning factor command
-            std::string waist_turning_command_topic = "/body_joint_controller/waist_turning_command";
+            std::string waist_turning_command_topic = "/" + controller_name_ + "/waist_turning_command";
             waist_turning_command_subscription_ = get_node()->create_subscription<std_msgs::msg::Float64>(
                 waist_turning_command_topic, 10,
                 [this](const std_msgs::msg::Float64::SharedPtr msg)
