@@ -68,41 +68,9 @@ namespace arms_ros2_control::command
             current_target_topic, 10,
             [this](const geometry_msgs::msg::PoseStamped::ConstSharedPtr msg)
             {
-                // 更新 frame_id
+                // 仅更新 target frame_id，用于后续 publishTargetPose() 的坐标系选择。
+                // marker 可视化位置统一由 current_pose 驱动，避免被未初始化/缓存 target 拉回基坐标。
                 current_target_frame_id_ = msg->header.frame_id;
-
-                // 获取消息的 frame_id
-                std::string source_frame_id = msg->header.frame_id;
-                
-                // 如果 frame_id 为空，跳过更新
-                if (source_frame_id.empty())
-                {
-                    return;
-                }
-
-                // 冷却机制检查：只有当超过1秒不是由marker这边发送的指令，才允许topic的数据来更新marker位置
-                auto now = node_->now();
-                if (last_marker_command_time_.seconds() > 0)  // 如果曾经发送过指令
-                {
-                    auto time_since_last_command = (now - last_marker_command_time_).seconds();
-                    if (time_since_last_command < 1.0)  // 如果距离上次marker发送指令不足1秒，跳过更新
-                    {
-                        return;
-                    }
-                }
-
-                // 转换 pose 到 marker 的坐标系（frame_id_）
-                geometry_msgs::msg::Pose transformed_pose = transformPose(
-                    msg->pose, source_frame_id, frame_id_);
-
-                // 更新内部 pose 存储
-                pose_ = transformed_pose;
-
-                // 调用更新回调，通知外部更新可视化
-                if (update_callback_)
-                {
-                    update_callback_(getMarkerName(), pose_);
-                }
             });
     }
 
@@ -129,6 +97,18 @@ namespace arms_ros2_control::command
     void ArmMarker::updateFromTopic(
         const geometry_msgs::msg::PoseStamped::ConstSharedPtr& pose_msg)
     {
+        // Marker 手动拖动后短时间内，不使用 current_pose 覆盖 marker，
+        // 否则会出现“球拖不动、立刻弹回”的现象。
+        auto now = node_->now();
+        if (last_marker_command_time_.seconds() > 0)
+        {
+            const auto time_since_last_command = (now - last_marker_command_time_).seconds();
+            if (time_since_last_command < 5)
+            {
+                return;
+            }
+        }
+
         // 先检查是否允许自动更新（只有在非禁用状态下才更新 pose_）
         if (state_check_callback_ && !state_check_callback_())
         {
@@ -137,7 +117,6 @@ namespace arms_ros2_control::command
         }
 
         // 节流检查：限制更新频率为最多30Hz（1/30秒间隔）
-        auto now = node_->now();
         auto time_since_last = (now - last_subscription_update_time_).seconds();
         if (time_since_last < 1.0 / 30.0)  // 30Hz = 1/30秒
         {
@@ -147,6 +126,10 @@ namespace arms_ros2_control::command
 
         // 转换 pose 到目标 frame
         std::string source_frame_id = pose_msg->header.frame_id;
+        if (source_frame_id.empty())
+        {
+            return;
+        }
         pose_ = transformPose(pose_msg->pose, source_frame_id, frame_id_);
 
         // 调用更新回调，通知外部更新可视化
@@ -307,4 +290,3 @@ namespace arms_ros2_control::command
         return false;
     }
 } // namespace arms_ros2_control::command
-

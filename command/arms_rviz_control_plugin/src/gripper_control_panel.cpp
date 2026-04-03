@@ -61,42 +61,34 @@ namespace arms_rviz_control_plugin
         // Get hand controllers from parameters
         hand_controllers_ = node_->get_parameter("hand_controllers").as_string_array();
 
-        // First check if we have any controllers
         if (hand_controllers_.empty())
         {
             RCLCPP_INFO(node_->get_logger(), "No gripper controllers detected");
-            is_dual_arm_mode_ = false; // Not relevant when no controllers
-        }
-        else
-        {
-            // Detect if this is a dual-arm robot using controller information
-            is_dual_arm_mode_ = hand_controllers_.size() > 1;
-            RCLCPP_INFO(node_->get_logger(), "Detected mode: %s",
-                        is_dual_arm_mode_ ? "DUAL-ARM" : "SINGLE-ARM");
-        }
-
-        // Update button visibility based on mode
-        updateButtonVisibility();
-
-        // Only create publishers and subscribers if we have controllers
-        if (!hand_controllers_.empty())
-        {
-            // Determine controller mapping (left/right)
-            determineControllerMapping();
-
-            // Create target_command publishers
-            createTargetCommandPublishers();
-
-            // Create target_command subscriptions for state synchronization
-            createTargetCommandSubscriptions();
-
-            RCLCPP_INFO(node_->get_logger(), "Gripper Control Panel initialized with %zu controllers",
-                        hand_controllers_.size());
-        }
-        else
-        {
+            is_dual_arm_mode_ = false;
+            updateButtonVisibility();
             RCLCPP_INFO(node_->get_logger(), "Gripper Control Panel initialized (no controllers)");
+            return;
         }
+
+        // Determine actual left/right mapping first, then infer UI mode from it.
+        determineControllerMapping();
+        is_dual_arm_mode_ = !left_controller_name_.empty() && !right_controller_name_.empty();
+
+        RCLCPP_INFO(node_->get_logger(),
+                    "Detected mode: %s (mapped left='%s', mapped right='%s')",
+                    is_dual_arm_mode_ ? "DUAL-ARM" : "SINGLE-ARM",
+                    left_controller_name_.c_str(),
+                    right_controller_name_.c_str());
+
+        updateButtonVisibility();
+        updateGripperDisplay();
+
+        // Create target_command publishers/subscriptions only for detected gripper controllers.
+        createTargetCommandPublishers();
+        createTargetCommandSubscriptions();
+
+        RCLCPP_INFO(node_->get_logger(), "Gripper Control Panel initialized with %zu controllers",
+                    hand_controllers_.size());
     }
 
     void GripperControlPanel::load(const rviz_common::Config& config)
@@ -369,6 +361,23 @@ namespace arms_rviz_control_plugin
                     controller_to_state_[controller_name] = &left_gripper_open_;
                 }
             }
+        }
+
+        // Support single-arm robots whose only controller name contains "right".
+        // In that case we still want to present a single primary button instead of
+        // forcing the UI into a right-only/dual-arm layout.
+        if (left_controller_name_.empty() && !right_controller_name_.empty() && hand_controllers_.size() == 1)
+        {
+            left_controller_name_ = right_controller_name_;
+            left_display_name_ = right_display_name_;
+            left_gripper_open_ = right_gripper_open_;
+
+            right_controller_name_.clear();
+            right_display_name_.clear();
+            right_gripper_open_ = false;
+
+            controller_to_state_.clear();
+            controller_to_state_[left_controller_name_] = &left_gripper_open_;
         }
 
         RCLCPP_INFO(node_->get_logger(),

@@ -20,6 +20,10 @@ namespace arms_controller_common
     void StateHold::updateParam()
     {
         joint_position_threshold_ = node_->get_parameter("hold_position_threshold").as_double();
+        hold_use_current_position_on_enter_ =
+            node_->get_parameter("hold_use_current_position_on_enter").as_bool();
+        hold_allow_threshold_rebaseline_ =
+            node_->get_parameter("hold_allow_threshold_rebaseline").as_bool();
     }
 
     void StateHold::enter()
@@ -30,12 +34,22 @@ namespace arms_controller_common
         first_threshold_check_passed_ = false;
         for (size_t i = 0; i < num_joints; ++i)
         {
-            hold_positions_[i] = ctrl_interfaces_.last_sent_joint_positions_[i];
+            if (hold_use_current_position_on_enter_)
+            {
+                auto value = ctrl_interfaces_.joint_position_state_interface_[i].get().get_optional();
+                hold_positions_[i] = value.value_or(0.0);
+            }
+            else
+            {
+                hold_positions_[i] = ctrl_interfaces_.last_sent_joint_positions_[i];
+            }
         }
-        
-        RCLCPP_INFO(node_->get_logger(),
-                   "HOLD state entered, using last sent joint positions for %zu joints (avoids jumps)", 
-                   hold_positions_.size());
+
+        RCLCPP_INFO(
+            node_->get_logger(),
+            "HOLD state entered, baseline=%s for %zu joints",
+            hold_use_current_position_on_enter_ ? "current joint states" : "last sent joint positions",
+            hold_positions_.size());
     }
 
     void StateHold::run(const rclcpp::Time& time, const rclcpp::Duration& /* period */)
@@ -86,25 +100,37 @@ namespace arms_controller_common
             {
                 if (exceeds_threshold)
                 {
-                    size_t num_joints = ctrl_interfaces_.joint_position_state_interface_.size();
-                    hold_positions_.resize(num_joints);
-                    for (size_t i = 0; i < num_joints; ++i)
-                    {
-                        auto value = ctrl_interfaces_.joint_position_state_interface_[i].get().get_optional();
-                        hold_positions_[i] = value.value_or(0.0);
-                    }
-
                     static rclcpp::Time last_warn_time(0, 0, RCL_ROS_TIME);
                     static bool first_warn = true;
-                    
                     rclcpp::Duration time_since_last_warn = time - last_warn_time;
-                    
+
+                    if (hold_allow_threshold_rebaseline_)
+                    {
+                        size_t num_joints = ctrl_interfaces_.joint_position_state_interface_.size();
+                        hold_positions_.resize(num_joints);
+                        for (size_t i = 0; i < num_joints; ++i)
+                        {
+                            auto value = ctrl_interfaces_.joint_position_state_interface_[i].get().get_optional();
+                            hold_positions_[i] = value.value_or(0.0);
+                        }
+                    }
+
                     if (first_warn || time_since_last_warn.seconds() >= 1.0)
                     {
-                        RCLCPP_WARN(node_->get_logger(),
-                                   "HOLD state: position difference (max: %.4f rad) exceeds threshold (%.4f rad). "
-                                   "Updating hold positions to current positions for safety.",
-                                   max_diff, joint_position_threshold_);
+                        if (hold_allow_threshold_rebaseline_)
+                        {
+                            RCLCPP_WARN(node_->get_logger(),
+                                       "HOLD state: position difference (max: %.4f rad) exceeds threshold (%.4f rad). "
+                                       "Updating hold positions to current positions for safety.",
+                                       max_diff, joint_position_threshold_);
+                        }
+                        else
+                        {
+                            RCLCPP_WARN(node_->get_logger(),
+                                       "HOLD state: position difference (max: %.4f rad) exceeds threshold (%.4f rad). "
+                                       "Baseline re-lock is disabled, keeping original HOLD target.",
+                                       max_diff, joint_position_threshold_);
+                        }
                         last_warn_time = time;
                         first_warn = false;
                     }
@@ -116,7 +142,7 @@ namespace arms_controller_common
             first_threshold_check_passed_ = true;
         }
 
-        for (size_t i = 0; i < ctrl_interfaces_.joint_position_command_interface_.size() &&
+        for (size_t i = 0; i < ctrl_interfaces_.controlledJointCount() &&
              i < hold_positions_.size(); ++i)
         {
             ctrl_interfaces_.setJointPositionCommand(i, hold_positions_[i]);
@@ -177,4 +203,3 @@ namespace arms_controller_common
         }
     }
 } // namespace arms_controller_common
-

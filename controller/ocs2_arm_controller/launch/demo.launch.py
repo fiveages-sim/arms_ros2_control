@@ -28,6 +28,14 @@ def launch_setup(context, *args, **kwargs):
     robot_type = context.launch_configurations.get('type', '')
     hardware = context.launch_configurations.get('hardware', 'mock_components')
     world = context.launch_configurations.get('world', 'dart')
+    force_control_mode = context.launch_configurations.get('force_control_mode', 'native_commands')
+    enable_servoj_stream = context.launch_configurations.get('enable_servoj_stream', 'true')
+    allow_servoj_with_force_drag = context.launch_configurations.get('allow_servoj_with_force_drag', 'false')
+    enable_gripper_io = context.launch_configurations.get('enable_gripper_io', 'true')
+    ros2_control_config_file = context.launch_configurations.get('ros2_control_config_file', '')
+    spawn_ocs2_arm_controller = (
+        context.launch_configurations.get('spawn_ocs2_arm_controller', 'true').lower() == 'true'
+    )
 
     # 基本参数
     use_sim_time = hardware in ['gz', 'isaac']
@@ -48,6 +56,11 @@ def launch_setup(context, *args, **kwargs):
             ('use_sim_time', str(use_sim_time)),
             ('world', world),
             ('hardware', hardware),  # 传递硬件类型，controller_manager 会根据此参数自动判断是否使用 Gazebo
+            ('force_control_mode', force_control_mode),
+            ('enable_servoj_stream', enable_servoj_stream),
+            ('allow_servoj_with_force_drag', allow_servoj_with_force_drag),
+            ('enable_gripper_io', enable_gripper_io),
+            ('ros2_control_config_file', ros2_control_config_file),
         ],
     )
 
@@ -191,7 +204,8 @@ def launch_setup(context, *args, **kwargs):
         if rviz_node:
             nodes.append(rviz_node)
         nodes.append(controller_manager_launch)
-        nodes.append(ocs2_arm_controller_spawner)
+        if spawn_ocs2_arm_controller:
+            nodes.append(ocs2_arm_controller_spawner)
     
     # Add ArmsTargetManager node if created (skip in rviz_only mode)
     if not rviz_only and ocs2_arms_target_manager:
@@ -227,6 +241,37 @@ def generate_launch_description():
     world_arg = DeclareLaunchArgument(
         'world', default_value='dart', description='Gz sim World (only used when hardware=gz)'
     )
+    force_control_mode_arg = DeclareLaunchArgument(
+        "force_control_mode",
+        default_value="native_commands",
+        description="Dobot force mode: native_commands or ros2_control_controllers"
+    )
+    enable_servoj_stream_arg = DeclareLaunchArgument(
+        "enable_servoj_stream",
+        default_value="true",
+        description="Whether dobot hardware write loop sends ServoJ"
+    )
+    enable_gripper_io_arg = DeclareLaunchArgument(
+        "enable_gripper_io",
+        default_value="true",
+        description="Whether to enable gripper Modbus I/O in dobot hardware"
+    )
+    allow_servoj_with_force_drag_arg = DeclareLaunchArgument(
+        "allow_servoj_with_force_drag",
+        default_value="false",
+        description="Keep ServoJ streaming while ForceDrive drag is active (experimental)"
+    )
+    ros2_control_config_file_arg = DeclareLaunchArgument(
+        "ros2_control_config_file",
+        default_value="",
+        description="Optional absolute path to ros2_control yaml override"
+    )
+
+    spawn_ocs2_arm_controller_arg = DeclareLaunchArgument(
+        "spawn_ocs2_arm_controller",
+        default_value="true",
+        description="Whether demo.launch.py should spawn ocs2_arm_controller"
+    )
 
     enable_arms_target_manager_arg = DeclareLaunchArgument(
         'enable_arms_target_manager',
@@ -248,6 +293,12 @@ def generate_launch_description():
         robot_type_arg,
         hardware_arg,
         world_arg,
+        force_control_mode_arg,
+        enable_servoj_stream_arg,
+        allow_servoj_with_force_drag_arg,
+        ros2_control_config_file_arg,
+        spawn_ocs2_arm_controller_arg,
+        enable_gripper_io_arg,
         enable_arms_target_manager_arg,
         enable_gripper_arg,
         *launch_mode_args,  # Unpack the list of arguments

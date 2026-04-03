@@ -93,10 +93,11 @@ namespace arms_controller_common
                         "No target position set, waiting for target position...");
         }
     }
-
+    //将一个“大跨度”的关节目标，拆解成一串平滑的“小步长”指令发送给电机，并根据需要处理重力补偿
     void StateMoveJ::run(const rclcpp::Time& /*time*/, const rclcpp::Duration& /*period*/)
     {
         std::lock_guard lock(target_mutex_);
+        const size_t controlled_joint_count = ctrl_interfaces_.controlledJointCount();
 
         // Check if multi-node trajectory is initialized (from setTrajectory)
         if (trajectory_manager_.isInitialized())
@@ -112,7 +113,7 @@ namespace arms_controller_common
         else if (!has_target_ || target_pos_.size() != start_pos_.size())
         {
             // No valid target, maintain current position
-            for (size_t i = 0; i < ctrl_interfaces_.joint_position_command_interface_.size() &&
+            for (size_t i = 0; i < controlled_joint_count &&
                  i < hold_positions_.size(); ++i)
             {
                 ctrl_interfaces_.setJointPositionCommand(i, hold_positions_[i]);
@@ -158,7 +159,7 @@ namespace arms_controller_common
                     warned = true;
                 }
                 // Maintain current position
-                for (size_t i = 0; i < ctrl_interfaces_.joint_position_command_interface_.size() &&
+                for (size_t i = 0; i < controlled_joint_count &&
                      i < start_pos_.size(); ++i)
                 {
                     ctrl_interfaces_.setJointPositionCommand(i, start_pos_[i]);
@@ -167,7 +168,7 @@ namespace arms_controller_common
             else
             {
                 // Trajectory not initialized - maintain current position
-                for (size_t i = 0; i < ctrl_interfaces_.joint_position_command_interface_.size() &&
+                for (size_t i = 0; i < controlled_joint_count &&
                      i < start_pos_.size(); ++i)
                 {
                     ctrl_interfaces_.setJointPositionCommand(i, start_pos_[i]);
@@ -176,19 +177,19 @@ namespace arms_controller_common
             return;
         }
 
-        if (next_positions.size() != ctrl_interfaces_.joint_position_command_interface_.size())
+        if (next_positions.size() != controlled_joint_count)
         {
             static bool warned = false;
             if (!warned)
             {
                 RCLCPP_WARN(node_->get_logger(),
                             "Trajectory manager returned positions with size mismatch: expected %zu, got %zu",
-                            ctrl_interfaces_.joint_position_command_interface_.size(),
+                            controlled_joint_count,
                             next_positions.size());
                 warned = true;
             }
             // Maintain current position on size mismatch
-            for (size_t i = 0; i < ctrl_interfaces_.joint_position_command_interface_.size() &&
+            for (size_t i = 0; i < controlled_joint_count &&
                  i < start_pos_.size(); ++i)
             {
                 ctrl_interfaces_.setJointPositionCommand(i, start_pos_[i]);
@@ -198,12 +199,12 @@ namespace arms_controller_common
 
         // Apply interpolated position to joints (with joint mask filtering for multi-node trajectory)
         // For joints not in the mask, keep them at cached hold positions
-        if (hold_positions_.size() != ctrl_interfaces_.joint_position_command_interface_.size())
+        if (hold_positions_.size() != controlled_joint_count)
         {
             refreshHoldPositions();
         }
-
-        for (size_t i = 0; i < ctrl_interfaces_.joint_position_command_interface_.size() &&
+        //这段代码实现得非常巧妙，它就像是在控制器的输出端加了一个“电子锁”。
+        for (size_t i = 0; i < controlled_joint_count &&
              i < next_positions.size(); ++i)
         {
             double position_to_set;
@@ -252,7 +253,7 @@ namespace arms_controller_common
                 interpolated_positions.push_back(value.value_or(0.0));
             }
 
-            // Calculate static torques
+            // Calculate static torques  计算静态力矩  让运动过程更轻松
             std::vector<double> static_torques =
                 gravity_compensation_->calculateStaticTorques(interpolated_positions);
 

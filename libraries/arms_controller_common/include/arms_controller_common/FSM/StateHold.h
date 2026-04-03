@@ -45,7 +45,8 @@ namespace arms_controller_common
         std::shared_ptr<GravityCompensation> gravity_compensation_;
         std::vector<double> hold_positions_;           // Positions recorded when entering
         double joint_position_threshold_{0.1};         // Threshold for joint position difference (radians). If <= 0, checking is disabled.
+        bool hold_use_current_position_on_enter_{true}; // Use current joint states as HOLD baseline on enter.
+        bool hold_allow_threshold_rebaseline_{true};   // Allow HOLD baseline to move to current state when threshold is exceeded.
         bool first_threshold_check_passed_;            // Flag to track if first threshold check has passed
     };
 } // namespace arms_controller_common
-

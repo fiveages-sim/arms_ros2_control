@@ -12,6 +12,11 @@ set(CONTROLLER_INCLUDE_DEPENDS
         pluginlib
         rcpputils
         controller_interface
+        rclcpp
+        std_msgs
+        geometry_msgs
+        trajectory_msgs
+        dobot_force_msgs
 
         ocs2_mobile_manipulator
         ocs2_ros_interfaces
@@ -65,6 +70,26 @@ install(
         LIBRARY DESTINATION lib/${PROJECT_NAME}
         RUNTIME DESTINATION bin
 )
+
+
+add_executable(force_drag_fusion_guard src/force_drag_fusion_guard.cpp)
+ament_target_dependencies(force_drag_fusion_guard
+        rclcpp
+        std_msgs
+        geometry_msgs
+        dobot_force_msgs)
+
+add_executable(hold_force_drag_guard src/hold_force_drag_guard.cpp)
+ament_target_dependencies(hold_force_drag_guard
+        rclcpp
+        std_msgs
+        geometry_msgs
+        dobot_force_msgs)
+
+install(TARGETS
+        force_drag_fusion_guard
+        hold_force_drag_guard
+        DESTINATION lib/${PROJECT_NAME})
 
 install(
         DIRECTORY launch config

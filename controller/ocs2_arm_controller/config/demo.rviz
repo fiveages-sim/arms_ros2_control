@@ -55,6 +55,13 @@ Visualization Manager:
       Plane Cell Count: 100
       Reference Frame: <Fixed Frame>
       Value: true
+    - Class: rviz_default_plugins/Axes
+      Enabled: true
+      Length: 0.12000000476837158
+      Name: EE Axes
+      Radius: 0.012000000104308128
+      Reference Frame: eef
+      Value: true
     - Alpha: 1
       Class: rviz_default_plugins/RobotModel
       Collision Enabled: false

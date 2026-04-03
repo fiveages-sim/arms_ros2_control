@@ -113,6 +113,8 @@ namespace basic_joint_controller
 
             // HOLD state
             auto_declare<double>("hold_position_threshold", 0.1);
+            auto_declare<bool>("hold_use_current_position_on_enter", true);
+            auto_declare<bool>("hold_allow_threshold_rebaseline", true);
             state_list_.hold = std::make_shared<StateHold>(
                 ctrl_interfaces_, get_node());
 

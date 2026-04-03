@@ -13,6 +13,7 @@
 
 #include <controller_interface/controller_interface.hpp>
 #include <std_msgs/msg/int32.hpp>
+#include <trajectory_msgs/msg/joint_trajectory_point.hpp>
 #include <hardware_interface/loaned_command_interface.hpp>
 #include <hardware_interface/loaned_state_interface.hpp>
 #include "ocs2_arm_controller/control/CtrlComponent.h"
@@ -67,12 +68,15 @@ namespace ocs2::mobile_manipulator
 
     private:
         std::shared_ptr<FSMState> getNextState(FSMStateName stateName) const;
+        void publishJointReference();
 
         // Hardware parameters
         std::string command_prefix_;
         std::vector<std::string> joint_names_;
         std::vector<std::string> command_interface_types_;
         std::vector<std::string> state_interface_types_;
+        bool reference_output_mode_{false};
+        std::string reference_topic_;
 
         // Control interfaces
         CtrlInterfaces ctrl_interfaces_;
@@ -107,7 +111,8 @@ namespace ocs2::mobile_manipulator
 
         // ROS subscriptions
         rclcpp::Subscription<std_msgs::msg::Int32>::SharedPtr fsm_command_subscription_;
-        
+        rclcpp::Publisher<trajectory_msgs::msg::JointTrajectoryPoint>::SharedPtr joint_reference_publisher_;
+
         // CtrlComponent for OCS2 interface access
         std::shared_ptr<CtrlComponent> ctrl_comp_;
     };

@@ -305,6 +305,20 @@ namespace ocs2::mobile_manipulator
                 RCLCPP_INFO(node_->get_logger(), "Using type-specific URDF: %s", type_specific_urdf.c_str());
                 return type_specific_urdf;
             }
+
+            // AG2F90 family fallback: use ft-90c URDF (contains eef frame) if dedicated URDF file is missing.
+            if (robot_type.rfind("AG2F90", 0) == 0)
+            {
+                const std::string ag2_fallback_urdf = urdf_dir + robot_name + "_ft-90c.urdf";
+                if (std::filesystem::exists(ag2_fallback_urdf))
+                {
+                    RCLCPP_WARN(node_->get_logger(),
+                                "Type-specific URDF not found: %s. Falling back to AG2-compatible URDF: %s",
+                                type_specific_urdf.c_str(), ag2_fallback_urdf.c_str());
+                    return ag2_fallback_urdf;
+                }
+            }
+
             RCLCPP_WARN(node_->get_logger(),
                         "Type-specific URDF not found: %s, falling back to default", type_specific_urdf.c_str());
         }

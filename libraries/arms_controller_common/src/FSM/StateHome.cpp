@@ -157,11 +157,12 @@ namespace arms_controller_common
         // Get next trajectory point from unified manager
         std::vector<double> next_positions = trajectory_manager_.getNextPoint();
 
+        const size_t controlled_joint_count = ctrl_interfaces_.controlledJointCount();
         if (!next_positions.empty() &&
-            next_positions.size() == ctrl_interfaces_.joint_position_command_interface_.size())
+            next_positions.size() == controlled_joint_count)
         {
             // Apply interpolated position to joints
-            for (size_t i = 0; i < ctrl_interfaces_.joint_position_command_interface_.size() &&
+            for (size_t i = 0; i < controlled_joint_count &&
                  i < next_positions.size(); ++i)
             {
                 ctrl_interfaces_.setJointPositionCommand(i, next_positions[i]);
@@ -180,7 +181,7 @@ namespace arms_controller_common
             // Maintain current position if trajectory manager is not initialized
             if (!trajectory_manager_.isInitialized() && !current_target_.empty())
             {
-                for (size_t i = 0; i < ctrl_interfaces_.joint_position_command_interface_.size() &&
+                for (size_t i = 0; i < controlled_joint_count &&
                      i < current_target_.size(); ++i)
                 {
                     ctrl_interfaces_.setJointPositionCommand(i, current_target_[i]);
@@ -194,7 +195,7 @@ namespace arms_controller_common
             {
                 RCLCPP_WARN(node_->get_logger(),
                             "Trajectory manager returned positions with size mismatch: got %zu, expected %zu",
-                            next_positions.size(), ctrl_interfaces_.joint_position_command_interface_.size());
+                            next_positions.size(), controlled_joint_count);
                 warned = true;
             }
         }

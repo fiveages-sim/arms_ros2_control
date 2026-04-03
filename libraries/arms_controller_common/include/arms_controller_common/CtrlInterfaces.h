@@ -5,6 +5,7 @@
 
 #include <vector>
 #include <string>
+#include <cstddef>
 #include <hardware_interface/loaned_command_interface.hpp>
 #include <hardware_interface/loaned_state_interface.hpp>
 #include <std_msgs/msg/int32.hpp>
@@ -65,8 +66,32 @@ namespace arms_controller_common
 
         void setJointPositionCommand(size_t index, double value)
         {
-            std::ignore = joint_position_command_interface_[index].get().set_value(value);
+            if (index >= last_sent_joint_positions_.size())
+            {
+                last_sent_joint_positions_.resize(index + 1, 0.0);
+            }
+
+            if (index < joint_position_command_interface_.size())
+            {
+                std::ignore = joint_position_command_interface_[index].get().set_value(value);
+            }
+
             last_sent_joint_positions_[index] = value;
+        }
+
+        size_t controlledJointCount() const
+        {
+            if (!last_sent_joint_positions_.empty())
+            {
+                return last_sent_joint_positions_.size();
+            }
+
+            if (!joint_position_command_interface_.empty())
+            {
+                return joint_position_command_interface_.size();
+            }
+
+            return joint_position_state_interface_.size();
         }
 
         void initializeLastSentPositions()
@@ -125,4 +150,3 @@ namespace arms_controller_common
         }
     };
 } // namespace arms_controller_common
-

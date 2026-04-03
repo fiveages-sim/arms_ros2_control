@@ -281,6 +281,7 @@ namespace ocs2::mobile_manipulator
     vector_t Visualizer::computeEndEffectorPose(const vector_t& state) const
     {
         vector_t ee_state = vector_t::Zero(7);
+        ee_state(6) = 1.0; // default identity quaternion
 
         try
         {
@@ -288,11 +289,45 @@ namespace ocs2::mobile_manipulator
             const auto& model = pinocchio_interface.getModel();
             auto data = pinocchio_interface.getData();
 
-            pinocchio::forwardKinematics(model, data, state);
+            if (state.size() < static_cast<int>(model.nq))
+            {
+                RCLCPP_WARN(node_->get_logger(),
+                            "State dimension (%d) is smaller than model.nq (%d), cannot compute EE pose.",
+                            static_cast<int>(state.size()), static_cast<int>(model.nq));
+                return ee_state;
+            }
+            const vector_t q = state.head(model.nq);
+            pinocchio::forwardKinematics(model, data, q);
             pinocchio::updateFramePlacements(model, data);
 
             const auto& ee_frame_name = interface_->getManipulatorModelInfo().eeFrame;
-            const auto ee_frame_id = model.getFrameId(ee_frame_name);
+            auto ee_frame_id = model.getFrameId(ee_frame_name);
+
+            if (ee_frame_id >= model.nframes)
+            {
+                static const std::array<std::string, 3> fallback_frames = {"eef", "tcp", "Link6"};
+                for (const auto& candidate : fallback_frames)
+                {
+                    const auto id = model.getFrameId(candidate);
+                    if (id < model.nframes)
+                    {
+                        ee_frame_id = id;
+                        RCLCPP_WARN(node_->get_logger(),
+                                    "eeFrame '%s' not found in URDF. Falling back to '%s'.",
+                                    ee_frame_name.c_str(), candidate.c_str());
+                        break;
+                    }
+                }
+            }
+
+            if (ee_frame_id >= model.nframes)
+            {
+                RCLCPP_WARN(node_->get_logger(),
+                            "No valid EE frame found (requested: '%s'). Keeping identity pose.",
+                            ee_frame_name.c_str());
+                return ee_state;
+            }
+
             const auto& frame_placement = data.oMf[ee_frame_id];
 
             ee_state.head<3>() = frame_placement.translation();
@@ -313,6 +348,7 @@ namespace ocs2::mobile_manipulator
     vector_t Visualizer::computeRightEndEffectorPose(const vector_t& state) const
     {
         vector_t ee_state = vector_t::Zero(7);
+        ee_state(6) = 1.0; // default identity quaternion
 
         try
         {
@@ -320,11 +356,26 @@ namespace ocs2::mobile_manipulator
             const auto& model = pinocchio_interface.getModel();
             auto data = pinocchio_interface.getData();
 
-            pinocchio::forwardKinematics(model, data, state);
+            if (state.size() < static_cast<int>(model.nq))
+            {
+                RCLCPP_WARN(node_->get_logger(),
+                            "State dimension (%d) is smaller than model.nq (%d), cannot compute right EE pose.",
+                            static_cast<int>(state.size()), static_cast<int>(model.nq));
+                return ee_state;
+            }
+            const vector_t q = state.head(model.nq);
+            pinocchio::forwardKinematics(model, data, q);
             pinocchio::updateFramePlacements(model, data);
 
             const auto& ee_frame_name = interface_->getManipulatorModelInfo().eeFrame1;
             const auto ee_frame_id = model.getFrameId(ee_frame_name);
+            if (ee_frame_id >= model.nframes)
+            {
+                RCLCPP_WARN(node_->get_logger(),
+                            "Right eeFrame '%s' not found in URDF. Keeping identity pose.",
+                            ee_frame_name.c_str());
+                return ee_state;
+            }
             const auto& frame_placement = data.oMf[ee_frame_id];
 
             ee_state.head<3>() = frame_placement.translation();

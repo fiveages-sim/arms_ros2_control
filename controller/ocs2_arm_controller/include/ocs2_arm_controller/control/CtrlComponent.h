@@ -7,6 +7,7 @@
 #include <memory>
 #include <string>
 #include <functional>
+#include <filesystem>
 #include <rclcpp/rclcpp.hpp>
 #include <rclcpp_lifecycle/lifecycle_node.hpp>
 #include <ament_index_cpp/get_package_share_directory.hpp>
@@ -43,10 +44,17 @@ namespace ocs2::mobile_manipulator
             robot_name_ = auto_declare("robot_name", std::string("cr5"));
             robot_type_ = auto_declare("robot_type", std::string(""));
             future_time_offset_ = auto_declare("future_time_offset", 1.0);
-            const std::string info_file_name = auto_declare("info_file_name", std::string("task"));
             joint_names_ = node_->get_parameter("joints").as_string_array();
             const std::string robot_pkg = robot_name_ + "_description";
             const std::string config_path = ament_index_cpp::get_package_share_directory(robot_pkg);
+            std::string info_file_name = auto_declare("info_file_name", std::string(""));
+            if (info_file_name.empty())
+            {
+                const std::filesystem::path type_specific_info =
+                    std::filesystem::path(config_path) / "config" / "ocs2" / (robot_type_ + ".info");
+                info_file_name =
+                    (!robot_type_.empty() && std::filesystem::exists(type_specific_info)) ? robot_type_ : "task";
+            }
 
             const std::string task_file = config_path + "/config/ocs2/" + info_file_name + ".info";
             const std::string lib_folder = config_path + "/ocs2";

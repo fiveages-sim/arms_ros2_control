@@ -16,6 +16,11 @@ namespace ocs2::mobile_manipulator
 
     controller_interface::InterfaceConfiguration Ocs2ArmController::command_interface_configuration() const
     {
+        if (reference_output_mode_)
+        {
+            return {config_type::NONE, {}};
+        }
+
         controller_interface::InterfaceConfiguration conf = {config_type::INDIVIDUAL, {}};
 
         conf.names.reserve(joint_names_.size() * command_interface_types_.size());
@@ -80,6 +85,11 @@ namespace ocs2::mobile_manipulator
             ctrl_interfaces_.fsm_command_ = 0;
         }
 
+        if (reference_output_mode_)
+        {
+            publishJointReference();
+        }
+
         return controller_interface::return_type::OK;
     }
 
@@ -98,6 +108,9 @@ namespace ocs2::mobile_manipulator
                 auto_declare<std::vector<std::string>>("command_interfaces", command_interface_types_);
             state_interface_types_ =
                 auto_declare<std::vector<std::string>>("state_interfaces", state_interface_types_);
+            reference_output_mode_ = auto_declare<bool>("reference_output_mode", false);
+            reference_topic_ =
+                auto_declare<std::string>("reference_topic", "/admittance_controller/joint_references");
 
             // State machine parameters
             home_pos_ = auto_declare<std::vector<double>>("home_pos", home_pos_);
@@ -164,6 +177,8 @@ namespace ocs2::mobile_manipulator
 
             // Hold state
             auto_declare<double>("hold_position_threshold", 0.1);
+            auto_declare<bool>("hold_use_current_position_on_enter", true);
+            auto_declare<bool>("hold_allow_threshold_rebaseline", true);
             state_list_.hold = std::make_shared<StateHold>(
                 ctrl_interfaces_, get_node(), gravity_compensation);
 
@@ -228,6 +243,13 @@ namespace ocs2::mobile_manipulator
         state_list_.movej->setupSubscriptions("target_joint_position", true);
         state_list_.movej->setupTrajectorySubscription();
 
+        if (reference_output_mode_)
+        {
+            joint_reference_publisher_ =
+                get_node()->create_publisher<trajectory_msgs::msg::JointTrajectoryPoint>(
+                    reference_topic_, rclcpp::SystemDefaultsQoS());
+        }
+
         return CallbackReturn::SUCCESS;
     }
 
@@ -268,8 +290,18 @@ namespace ocs2::mobile_manipulator
         }
         else
         {
-            RCLCPP_INFO(get_node()->get_logger(),
-                        "Position control mode enabled - standard position control interfaces detected");
+            if (reference_output_mode_)
+            {
+                RCLCPP_INFO(
+                    get_node()->get_logger(),
+                    "Reference output mode enabled - publishing joint references to %s",
+                    reference_topic_.c_str());
+            }
+            else
+            {
+                RCLCPP_INFO(get_node()->get_logger(),
+                            "Position control mode enabled - standard position control interfaces detected");
+            }
         }
 
         ctrl_interfaces_.initializeLastSentPositions();
@@ -324,6 +356,18 @@ namespace ocs2::mobile_manipulator
         default:
             return state_list_.invalid;
         }
+    }
+
+    void Ocs2ArmController::publishJointReference()
+    {
+        if (!joint_reference_publisher_ || ctrl_interfaces_.last_sent_joint_positions_.empty())
+        {
+            return;
+        }
+
+        trajectory_msgs::msg::JointTrajectoryPoint msg;
+        msg.positions = ctrl_interfaces_.last_sent_joint_positions_;
+        joint_reference_publisher_->publish(msg);
     }
 } // namespace mobile_manipulator
 
