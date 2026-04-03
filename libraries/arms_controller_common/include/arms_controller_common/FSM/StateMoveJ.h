@@ -22,6 +22,9 @@
 #include "arms_controller_common/utils/WaistLiftingPlaner.h"
 #include "arms_ros2_control_msgs/msg/joint_waypoint.hpp"
 #include "arms_ros2_control_msgs/srv/joint_trajectory.hpp"
+#include "arms_controller_common/utils/Kinematics.h"
+#include "arms_controller_common/utils/CartesianTrajectoryManager.h"
+#include "arms_ros2_control_msgs/srv/execute_linear.hpp"
 
 
 namespace arms_controller_common
@@ -132,6 +135,7 @@ namespace arms_controller_common
         enum class MotionMode
         {
             MOVEJ,
+            MOVEL,
             WAIST_CONTROL
         };
 
@@ -168,6 +172,14 @@ namespace arms_controller_common
          * @param service_name Service name (default: "joint_trajectory")
          */
         void setupJointTrajectoryService(const std::string& service_name = "joint_trajectory");
+
+        void setKinematicsSolver(const std::shared_ptr<M6CCSKinematics>& kinematics = nullptr);
+        // 在 StateMoveJ.h 的 public 部分添加
+        /**
+        * @brief Setup linear trajectory service for MoveL planning
+        * @param service_name Service name (default: "execute_linear")
+        */
+        void setupLinearTrajectoryService(const std::string& service_name = "execute_linear");
 
     private:
         void updateParam();
@@ -319,6 +331,24 @@ namespace arms_controller_common
         std::vector<double> mapToFullJointPositions(
             const std::vector<std::string>& request_joint_names,
             const std::vector<double>& request_positions);
+
+        //增加movel相关的代码
+        CartesianTrajectoryManager cartesian_manager_;
+
+        // Service server for MoveL
+        rclcpp::Service<arms_ros2_control_msgs::srv::ExecuteLinear>::SharedPtr linear_trajectory_service_;
+
+        // Service handler for MoveL
+        void handleLinearTrajectory(
+            const std::shared_ptr<rmw_request_id_t> request_header,
+            const std::shared_ptr<arms_ros2_control_msgs::srv::ExecuteLinear::Request> request,
+            const std::shared_ptr<arms_ros2_control_msgs::srv::ExecuteLinear::Response> response);
+
+        // 添加 MoveL 相关的辅助方法
+        bool validateLinearRequest(const arms_ros2_control_msgs::msg::LinearMessage& linear_params,
+                                   std::string& error_msg);
+
+        bool movel_active_{false};
+        std::vector<std::string> movel_joint_names_;
     };
-    ;
 } // namespace arms_controller_common

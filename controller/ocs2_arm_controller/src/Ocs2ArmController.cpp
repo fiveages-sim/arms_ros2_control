@@ -9,6 +9,7 @@
 #include "ocs2_arm_controller/FSM/StateHold.h"
 #include "ocs2_arm_controller/FSM/StateMoveJ.h"
 #include <arms_controller_common/utils/GravityCompensation.h>
+#include "arms_controller_common/utils/Kinematics.h"
 
 namespace ocs2::mobile_manipulator
 {
@@ -120,10 +121,12 @@ namespace ocs2::mobile_manipulator
             };
             ctrl_comp_ = std::make_shared<CtrlComponent>(get_node(), ctrl_interfaces_, auto_declare_func);
             std::shared_ptr<arms_controller_common::GravityCompensation> gravity_compensation = nullptr;
+            std::shared_ptr<arms_controller_common::M6CCSKinematics> kinematics = nullptr;
             if (ctrl_comp_->interface_)
             {
                 const auto& pinocchio_model = ctrl_comp_->interface_->getPinocchioInterface().getModel();
                 gravity_compensation = std::make_shared<arms_controller_common::GravityCompensation>(pinocchio_model);
+                kinematics=std::make_shared<arms_controller_common::M6CCSKinematics>(pinocchio_model);
                 RCLCPP_INFO(get_node()->get_logger(),
                             "Gravity compensation initialized from OCS2 Pinocchio model");
             }
@@ -176,6 +179,7 @@ namespace ocs2::mobile_manipulator
 
             state_list_.movej = std::make_shared<StateMoveJ>(
                 ctrl_interfaces_, get_node(), joint_names_, gravity_compensation);
+            state_list_.movej->setKinematicsSolver(kinematics);
 
             // Set joint limit checker from Pinocchio model
             if (ctrl_comp_->interface_)
@@ -228,7 +232,7 @@ namespace ocs2::mobile_manipulator
         state_list_.movej->setupSubscriptions("target_joint_position", true);
         state_list_.movej->setupTrajectorySubscription();
         state_list_.movej->setupJointTrajectoryService("joint_trajectory_with_para");
-
+        state_list_.movej->setupLinearTrajectoryService("execute_linear");
         return CallbackReturn::SUCCESS;
     }
 

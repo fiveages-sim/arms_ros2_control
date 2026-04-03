@@ -40,6 +40,8 @@ add_library(${PROJECT_NAME} SHARED
         src/utils/JointLimitsManager.cpp
         src/utils/JointTrajectoryManager.cpp
         src/utils/WaistLiftingPlaner.cpp
+        src/utils/Kinematics.cpp
+        src/utils/CartesianTrajectoryManager.cpp
 )
 
 target_include_directories(${PROJECT_NAME}
