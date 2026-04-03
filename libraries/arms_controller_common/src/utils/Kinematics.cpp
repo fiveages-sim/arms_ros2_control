@@ -5,7 +5,7 @@
 
 namespace arms_controller_common
 {
-    M6CCSKinematics::M6CCSKinematics(
+    ArmKinematics::ArmKinematics(
         const std::string& urdf_path,
         const std::string& baseFrameName)
     {
@@ -18,7 +18,7 @@ namespace arms_controller_common
         extractJointLimits();
     }
 
-    M6CCSKinematics::M6CCSKinematics(const pinocchio::Model& model)
+    ArmKinematics::ArmKinematics(const pinocchio::Model& model)
         : model_(model)
     {
         data_ = pinocchio::Data(model_);
@@ -27,12 +27,12 @@ namespace arms_controller_common
         extractJointLimits();
     }
 
-    M6CCSKinematics::~M6CCSKinematics() = default;
+    ArmKinematics::~ArmKinematics() = default;
 
     // ==================== 正运动学 ====================
     EndEffectorPose
-    M6CCSKinematics::computeSingleEndEffectorPose(const RobotState& state,
-                                                  std::string arm_type)
+    ArmKinematics::computeSingleEndEffectorPose(const RobotState& state,
+                                                std::string arm_type)
     {
         if (arm_type == "right")
         {
@@ -48,9 +48,9 @@ namespace arms_controller_common
         }
     };
 
-    void M6CCSKinematics::computeBothEndEffectorPose(const RobotState& state,
-                                                     EndEffectorPose& leftPose,
-                                                     EndEffectorPose& rightPose)
+    void ArmKinematics::computeBothEndEffectorPose(const RobotState& state,
+                                                   EndEffectorPose& leftPose,
+                                                   EndEffectorPose& rightPose)
     {
         Eigen::VectorXd joints = stateToJointVector(state);
         updateKinematics(joints);
@@ -74,8 +74,8 @@ namespace arms_controller_common
     }
 
     EndEffectorPose
-    M6CCSKinematics::computeFramePose(const RobotState& state,
-                                      const std::string& frameName)
+    ArmKinematics::computeFramePose(const RobotState& state,
+                                    const std::string& frameName)
     {
         Eigen::VectorXd joints = stateToJointVector(state);
         updateKinematics(joints);
@@ -96,11 +96,11 @@ namespace arms_controller_common
     }
 
     // ==================== 逆运动学 ====================
-    bool M6CCSKinematics::solveSingleArmIK(const EndEffectorPose& targetPose,
-                                           const Eigen::VectorXd& initialGuess,
-                                           Eigen::VectorXd& solution,
-                                           std::string arm_type, int maxIterations,
-                                           double tolerance)
+    bool ArmKinematics::solveSingleArmIK(const EndEffectorPose& targetPose,
+                                         const Eigen::VectorXd& initialGuess,
+                                         Eigen::VectorXd& solution,
+                                         std::string arm_type, int maxIterations,
+                                         double tolerance, double damping)
     {
         solution = initialGuess;
         RobotState state(leftArmJointCount_, rightArmJointCount_);
@@ -147,7 +147,7 @@ namespace arms_controller_common
 
             Eigen::MatrixXd jacobian = getJacbian(arm_type);
 
-            Eigen::VectorXd deltaQ = dampedLeastSquares(jacobian, error);
+            Eigen::VectorXd deltaQ = dampedLeastSquares(jacobian, error, damping);
             solution += deltaQ;
             applyJointLimits(solution, arm_type);
             if (arm_type == "left")
@@ -162,11 +162,11 @@ namespace arms_controller_common
         return false;
     }
 
-    bool M6CCSKinematics::solveBothArmsIK(const EndEffectorPose& leftTargetPose,
-                                          const EndEffectorPose& rightTargetPose,
-                                          const Eigen::VectorXd& initialGuess,
-                                          Eigen::VectorXd& solution,
-                                          int maxIterations, double tolerance)
+    bool ArmKinematics::solveBothArmsIK(const EndEffectorPose& leftTargetPose,
+                                        const EndEffectorPose& rightTargetPose,
+                                        const Eigen::VectorXd& initialGuess,
+                                        Eigen::VectorXd& solution,
+                                        int maxIterations, double tolerance, double damping)
     {
         if (initialGuess.size() != static_cast<Eigen::Index>(leftArmJointCount_ + rightArmJointCount_))
             return false;
@@ -198,7 +198,7 @@ namespace arms_controller_common
                     }
                 }
                 Eigen::MatrixXd leftJacobian = getJacbian("left");
-                Eigen::VectorXd left_deltaQ = dampedLeastSquares(leftJacobian, leftError);
+                Eigen::VectorXd left_deltaQ = dampedLeastSquares(leftJacobian, leftError, damping);
                 Eigen::VectorXd leftSol = solution.head(leftArmJointCount_) + left_deltaQ;
                 applyJointLimits(leftSol, "left");
                 solution.head(leftArmJointCount_) = leftSol;
@@ -225,7 +225,7 @@ namespace arms_controller_common
 
                 Eigen::MatrixXd rightJacobian = getJacbian("right");
                 Eigen::VectorXd right_deltaQ =
-                    dampedLeastSquares(rightJacobian, rightError);
+                    dampedLeastSquares(rightJacobian, rightError, damping);
                 Eigen::VectorXd rightSol = solution.tail(rightArmJointCount_) + right_deltaQ;
                 applyJointLimits(rightSol, "right");
                 solution.tail(rightArmJointCount_) = rightSol;
@@ -236,8 +236,8 @@ namespace arms_controller_common
 
 
     // 雅可比矩阵计算函数
-    Eigen::MatrixXd M6CCSKinematics::computeJacobian(const RobotState& state,
-                                                     const std::string& armType)
+    Eigen::MatrixXd ArmKinematics::computeJacobian(const RobotState& state,
+                                                   const std::string& armType)
     {
         Eigen::VectorXd joints = stateToJointVector(state);
         updateKinematics(joints);
@@ -246,9 +246,9 @@ namespace arms_controller_common
         return Jacobian;
     }
 
-    void M6CCSKinematics::getJointLimits(const std::string& armType,
-                                         Eigen::VectorXd& lower,
-                                         Eigen::VectorXd& upper) const
+    void ArmKinematics::getJointLimits(const std::string& armType,
+                                       Eigen::VectorXd& lower,
+                                       Eigen::VectorXd& upper) const
     {
         if (armType == "left")
         {
@@ -262,8 +262,8 @@ namespace arms_controller_common
         }
     }
 
-    void M6CCSKinematics::applyJointLimits(Eigen::VectorXd& joints,
-                                           const std::string& armType)
+    void ArmKinematics::applyJointLimits(Eigen::VectorXd& joints,
+                                         const std::string& armType)
     {
         Eigen::VectorXd lower, upper;
         getJointLimits(armType, lower, upper);
@@ -276,7 +276,7 @@ namespace arms_controller_common
 
 
     // 一些内部辅助函数的实现
-    void M6CCSKinematics::buildMappings()
+    void ArmKinematics::buildMappings()
     {
         // 建立关节名称到ID的映射
         for (size_t i = 0; i < model_.names.size(); ++i)
@@ -291,7 +291,7 @@ namespace arms_controller_common
         }
     };
 
-    void M6CCSKinematics::get_joint_names_from_model()
+    void ArmKinematics::get_joint_names_from_model()
     {
         // 定义双臂的前缀
         std::string leftPrefix = "left_";
@@ -341,7 +341,7 @@ namespace arms_controller_common
         }
     };
 
-    void M6CCSKinematics::extractJointLimits()
+    void ArmKinematics::extractJointLimits()
     {
         // 提取左臂关节限位
         leftLowerLimits_.resize(leftArmJointCount_);
@@ -382,14 +382,14 @@ namespace arms_controller_common
         }
     }
 
-    void M6CCSKinematics::updateKinematics(const Eigen::VectorXd& jointPositions)
+    void ArmKinematics::updateKinematics(const Eigen::VectorXd& jointPositions)
     {
         pinocchio::forwardKinematics(model_, data_, jointPositions);
         pinocchio::updateFramePlacements(model_, data_);
         pinocchio::computeJointJacobians(model_, data_, jointPositions);
     }
 
-    int M6CCSKinematics::getFrameId(const std::string& frameName) const
+    int ArmKinematics::getFrameId(const std::string& frameName) const
     {
         auto it = frameNameToId_.find(frameName);
         if (it != frameNameToId_.end())
@@ -399,7 +399,7 @@ namespace arms_controller_common
         return -1;
     }
 
-    int M6CCSKinematics::getJointId(const std::string& jointName) const
+    int ArmKinematics::getJointId(const std::string& jointName) const
     {
         auto it = jointNameToId_.find(jointName);
         if (it != jointNameToId_.end())
@@ -409,7 +409,7 @@ namespace arms_controller_common
         return -1;
     }
 
-    Eigen::MatrixXd M6CCSKinematics::getJacbian(std::string armType)
+    Eigen::MatrixXd ArmKinematics::getJacbian(std::string armType)
     {
         if (armType == "left")
         {
@@ -481,7 +481,7 @@ namespace arms_controller_common
     }
 
     Eigen::VectorXd
-    M6CCSKinematics::stateToJointVector(const RobotState& state) const
+    ArmKinematics::stateToJointVector(const RobotState& state) const
     {
         if (leftArmJointCount_ != state.leftArmJointCount ||
             rightArmJointCount_ != state.rightArmJointCount)
@@ -498,8 +498,8 @@ namespace arms_controller_common
     }
 
     Eigen::Matrix<double, 6, 1>
-    M6CCSKinematics::compute6DError(const EndEffectorPose& current,
-                                    const EndEffectorPose& target) const
+    ArmKinematics::compute6DError(const EndEffectorPose& current,
+                                  const EndEffectorPose& target) const
     {
         Eigen::Matrix < double, 6, 1 > error;
 
@@ -516,13 +516,350 @@ namespace arms_controller_common
     }
 
     Eigen::VectorXd
-    M6CCSKinematics::dampedLeastSquares(const Eigen::MatrixXd& J,
-                                        const Eigen::VectorXd& error,
-                                        double damping) const
+    ArmKinematics::dampedLeastSquares(const Eigen::MatrixXd& J,
+                                      const Eigen::VectorXd& error,
+                                      double damping) const
     {
         Eigen::MatrixXd JTJ = J.transpose() * J;
         JTJ.diagonal().array() += damping;
 
         return JTJ.ldlt().solve(J.transpose() * error);
+    }
+
+    geometry_msgs::msg::Pose ArmKinematics::endEffectorPoseToROSPose(const EndEffectorPose& pose)
+    {
+        geometry_msgs::msg::Pose ros_pose;
+
+        // 设置位置
+        ros_pose.position.x = pose.position.x();
+        ros_pose.position.y = pose.position.y();
+        ros_pose.position.z = pose.position.z();
+
+        // 设置四元数
+        ros_pose.orientation.x = pose.quaternion.x();
+        ros_pose.orientation.y = pose.quaternion.y();
+        ros_pose.orientation.z = pose.quaternion.z();
+        ros_pose.orientation.w = pose.quaternion.w();
+
+        return ros_pose;
+    }
+
+    EndEffectorPose ArmKinematics::rosPoseToEndEffectorPose(const geometry_msgs::msg::Pose& pose)
+    {
+        EndEffectorPose end_effector_pose;
+
+        // 设置位置
+        end_effector_pose.position.x() = pose.position.x;
+        end_effector_pose.position.y() = pose.position.y;
+        end_effector_pose.position.z() = pose.position.z;
+
+        // 设置四元数
+        Eigen::Quaterniond q(pose.orientation.w, pose.orientation.x,
+                             pose.orientation.y, pose.orientation.z);
+        end_effector_pose.setQuaternion(q);
+
+        return end_effector_pose;
+    }
+
+    bool ArmKinematics::computeForwardKinematics(
+        const std::string& arm_type,
+        const std::vector<double>& joint_angles,
+        std::vector<EndEffectorPose>& result_poses,
+        std::string& error_msg)
+    {
+        result_poses.clear();
+
+        // 构建机器人状态
+        RobotState state(leftArmJointCount_, rightArmJointCount_);
+
+        if (arm_type == "left")
+        {
+            if (joint_angles.size() != leftArmJointCount_)
+            {
+                error_msg = "Left arm requires " + std::to_string(leftArmJointCount_) +
+                    " joints, got " + std::to_string(joint_angles.size());
+                return false;
+            }
+
+            for (size_t i = 0; i < leftArmJointCount_; ++i)
+            {
+                state.leftArmJoints(i) = joint_angles[i];
+            }
+
+            EndEffectorPose pose = computeSingleEndEffectorPose(state, "left");
+            result_poses.push_back(pose);
+        }
+        else if (arm_type == "right")
+        {
+            if (joint_angles.size() != rightArmJointCount_)
+            {
+                error_msg = "Right arm requires " + std::to_string(rightArmJointCount_) +
+                    " joints, got " + std::to_string(joint_angles.size());
+                return false;
+            }
+
+            for (size_t i = 0; i < rightArmJointCount_; ++i)
+            {
+                state.rightArmJoints(i) = joint_angles[i];
+            }
+
+            EndEffectorPose pose = computeSingleEndEffectorPose(state, "right");
+            result_poses.push_back(pose);
+        }
+        else if (arm_type == "both")
+        {
+            if (joint_angles.size() != leftArmJointCount_ + rightArmJointCount_)
+            {
+                error_msg = "Both arms require " + std::to_string(leftArmJointCount_ + rightArmJointCount_) +
+                    " joints, got " + std::to_string(joint_angles.size());
+                return false;
+            }
+
+            for (size_t i = 0; i < leftArmJointCount_; ++i)
+            {
+                state.leftArmJoints(i) = joint_angles[i];
+            }
+            for (size_t i = 0; i < rightArmJointCount_; ++i)
+            {
+                state.rightArmJoints(i) = joint_angles[i];
+            }
+
+            EndEffectorPose left_pose, right_pose;
+            computeBothEndEffectorPose(state, left_pose, right_pose);
+            result_poses.push_back(left_pose);
+            result_poses.push_back(right_pose);
+        }
+        else
+        {
+            error_msg = "Invalid arm_type: " + arm_type + ". Must be 'left', 'right', or 'both'";
+            return false;
+        }
+
+        return true;
+    }
+
+    bool ArmKinematics::computeInverseKinematics(
+        const std::string& arm_type,
+        const std::vector<double>& initial_guess,
+        const std::vector<EndEffectorPose>& target_poses,
+        std::vector<double>& result_joint_angles,
+        int max_iterations,
+        double tolerance,
+        double damping,
+        std::string& error_msg)
+    {
+        result_joint_angles.clear();
+
+        if (arm_type == "left")
+        {
+            if (target_poses.size() != 1)
+            {
+                error_msg = "Left arm IK requires exactly 1 target pose";
+                return false;
+            }
+
+            if (initial_guess.size() != leftArmJointCount_)
+            {
+                error_msg = "Left arm initial guess requires " + std::to_string(leftArmJointCount_) +
+                    " joints, got " + std::to_string(initial_guess.size());
+                return false;
+            }
+
+            Eigen::VectorXd initial_eigen(leftArmJointCount_);
+            for (size_t i = 0; i < leftArmJointCount_; ++i)
+            {
+                initial_eigen(i) = initial_guess[i];
+            }
+
+            Eigen::VectorXd solution;
+            bool success = solveSingleArmIK(target_poses[0], initial_eigen, solution,
+                                            "left", max_iterations, tolerance, damping);
+
+            if (success)
+            {
+                result_joint_angles.resize(leftArmJointCount_);
+                for (size_t i = 0; i < leftArmJointCount_; ++i)
+                {
+                    result_joint_angles[i] = solution(i);
+                }
+            }
+            else
+            {
+                error_msg = "Left arm IK failed to converge";
+                return false;
+            }
+        }
+        else if (arm_type == "right")
+        {
+            if (target_poses.size() != 1)
+            {
+                error_msg = "Right arm IK requires exactly 1 target pose";
+                return false;
+            }
+
+            if (initial_guess.size() != rightArmJointCount_)
+            {
+                error_msg = "Right arm initial guess requires " + std::to_string(rightArmJointCount_) +
+                    " joints, got " + std::to_string(initial_guess.size());
+                return false;
+            }
+
+            Eigen::VectorXd initial_eigen(rightArmJointCount_);
+            for (size_t i = 0; i < rightArmJointCount_; ++i)
+            {
+                initial_eigen(i) = initial_guess[i];
+            }
+
+            Eigen::VectorXd solution;
+            bool success = solveSingleArmIK(target_poses[0], initial_eigen, solution,
+                                            "right", max_iterations, tolerance, damping);
+
+            if (success)
+            {
+                result_joint_angles.resize(rightArmJointCount_);
+                for (size_t i = 0; i < rightArmJointCount_; ++i)
+                {
+                    result_joint_angles[i] = solution(i);
+                }
+            }
+            else
+            {
+                error_msg = "Right arm IK failed to converge";
+                return false;
+            }
+        }
+        else if (arm_type == "both")
+        {
+            if (target_poses.size() != 2)
+            {
+                error_msg = "Both arms IK requires exactly 2 target poses (left, right)";
+                return false;
+            }
+
+            if (initial_guess.size() != leftArmJointCount_ + rightArmJointCount_)
+            {
+                error_msg = "Both arms initial guess requires " +
+                    std::to_string(leftArmJointCount_ + rightArmJointCount_) +
+                    " joints, got " + std::to_string(initial_guess.size());
+                return false;
+            }
+
+            Eigen::VectorXd initial_eigen(leftArmJointCount_ + rightArmJointCount_);
+            for (size_t i = 0; i < initial_guess.size(); ++i)
+            {
+                initial_eigen(i) = initial_guess[i];
+            }
+
+            Eigen::VectorXd solution;
+            bool success = solveBothArmsIK(target_poses[0], target_poses[1],
+                                           initial_eigen, solution,
+                                           max_iterations, tolerance, damping);
+
+            if (success)
+            {
+                result_joint_angles.resize(leftArmJointCount_ + rightArmJointCount_);
+                for (size_t i = 0; i < leftArmJointCount_ + rightArmJointCount_; ++i)
+                {
+                    result_joint_angles[i] = solution(i);
+                }
+            }
+            else
+            {
+                error_msg = "Both arms IK failed to converge";
+                return false;
+            }
+        }
+        else
+        {
+            error_msg = "Invalid arm_type: " + arm_type + ". Must be 'left', 'right', or 'both'";
+            return false;
+        }
+
+        return true;
+    }
+
+    void ArmKinematics::handleKinematicsService(
+        const std::shared_ptr<arms_ros2_control_msgs::srv::KinematicsService::Request> request,
+        const std::shared_ptr<arms_ros2_control_msgs::srv::KinematicsService::Response> response)
+    {
+        auto start_time = std::chrono::high_resolution_clock::now();
+
+        // 设置默认参数
+        int max_iterations = request->max_iterations > 0 ? request->max_iterations : 100;
+        double tolerance = request->tolerance > 0 ? request->tolerance : 1e-6;
+        double damping = request->damping > 0 ? request->damping : 0.01;
+
+        if (request->operation_type == "fk")
+        {
+            // 正运动学
+            std::vector<EndEffectorPose> result_poses;
+            std::string error_msg;
+
+            bool success = computeForwardKinematics(
+                request->arm_type,
+                request->joint_angles,
+                result_poses,
+                error_msg);
+
+            if (success)
+            {
+                response->success = true;
+                response->message = "Forward kinematics computed successfully";
+
+                for (const auto& pose : result_poses)
+                {
+                    response->result_poses.push_back(endEffectorPoseToROSPose(pose));
+                }
+            }
+            else
+            {
+                response->success = false;
+                response->message = error_msg;
+            }
+        }
+        else if (request->operation_type == "ik")
+        {
+            // 逆运动学
+            std::vector<EndEffectorPose> target_poses;
+            for (const auto& pose_msg : request->target_poses)
+            {
+                target_poses.push_back(rosPoseToEndEffectorPose(pose_msg));
+            }
+
+            std::vector<double> result_joint_angles;
+            std::string error_msg;
+
+            bool success = computeInverseKinematics(
+                request->arm_type,
+                request->joint_angles, // 这里 joint_angles 作为初始猜测
+                target_poses,
+                result_joint_angles,
+                max_iterations,
+                tolerance,
+                damping,
+                error_msg);
+
+            if (success)
+            {
+                response->success = true;
+                response->message = "Inverse kinematics computed successfully";
+                response->result_joint_angles = result_joint_angles;
+            }
+            else
+            {
+                response->success = false;
+                response->message = error_msg;
+            }
+        }
+        else
+        {
+            response->success = false;
+            response->message = "Invalid operation_type: " + request->operation_type +
+                ". Must be 'fk' or 'ik'";
+        }
+
+        auto end_time = std::chrono::high_resolution_clock::now();
+        response->computation_time_ms = std::chrono::duration<double, std::milli>(
+            end_time - start_time).count();
     }
 } // namespace arms_controller_common

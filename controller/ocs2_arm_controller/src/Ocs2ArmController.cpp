@@ -121,12 +121,12 @@ namespace ocs2::mobile_manipulator
             };
             ctrl_comp_ = std::make_shared<CtrlComponent>(get_node(), ctrl_interfaces_, auto_declare_func);
             std::shared_ptr<arms_controller_common::GravityCompensation> gravity_compensation = nullptr;
-            std::shared_ptr<arms_controller_common::M6CCSKinematics> kinematics = nullptr;
+
             if (ctrl_comp_->interface_)
             {
                 const auto& pinocchio_model = ctrl_comp_->interface_->getPinocchioInterface().getModel();
                 gravity_compensation = std::make_shared<arms_controller_common::GravityCompensation>(pinocchio_model);
-                kinematics=std::make_shared<arms_controller_common::M6CCSKinematics>(pinocchio_model);
+                kinematics_=std::make_shared<arms_controller_common::ArmKinematics>(pinocchio_model);
                 RCLCPP_INFO(get_node()->get_logger(),
                             "Gravity compensation initialized from OCS2 Pinocchio model");
             }
@@ -179,7 +179,7 @@ namespace ocs2::mobile_manipulator
 
             state_list_.movej = std::make_shared<StateMoveJ>(
                 ctrl_interfaces_, get_node(), joint_names_, gravity_compensation);
-            state_list_.movej->setKinematicsSolver(kinematics);
+            state_list_.movej->setKinematicsSolver(kinematics_);
 
             // Set joint limit checker from Pinocchio model
             if (ctrl_comp_->interface_)
@@ -233,6 +233,11 @@ namespace ocs2::mobile_manipulator
         state_list_.movej->setupTrajectorySubscription();
         state_list_.movej->setupJointTrajectoryService("joint_trajectory_with_para");
         state_list_.movej->setupLinearTrajectoryService("execute_linear");
+
+        kinematics_service_ = get_node()->create_service<arms_ros2_control_msgs::srv::KinematicsService>(
+            "kinematics_service",
+            std::bind(&Ocs2ArmController::handleKinematicsService, this,
+                      std::placeholders::_1, std::placeholders::_2));
         return CallbackReturn::SUCCESS;
     }
 
@@ -330,6 +335,21 @@ namespace ocs2::mobile_manipulator
             return state_list_.invalid;
         }
     }
+    void Ocs2ArmController::handleKinematicsService(
+        const std::shared_ptr<arms_ros2_control_msgs::srv::KinematicsService::Request> request,
+        const std::shared_ptr<arms_ros2_control_msgs::srv::KinematicsService::Response> response)
+    {
+        if (kinematics_)
+        {
+            kinematics_->handleKinematicsService(request, response);
+        }
+        else
+        {
+            response->success = false;
+            response->message = "Kinematics not initialized";
+        }
+    }
+
 } // namespace mobile_manipulator
 
 #include "pluginlib/class_list_macros.hpp"

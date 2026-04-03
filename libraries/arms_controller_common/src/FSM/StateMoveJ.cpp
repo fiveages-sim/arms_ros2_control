@@ -1868,7 +1868,7 @@ namespace arms_controller_common
         }
     }
 
-    void StateMoveJ::setKinematicsSolver(const std::shared_ptr<M6CCSKinematics>& kinematics)
+    void StateMoveJ::setKinematicsSolver(const std::shared_ptr<ArmKinematics>& kinematics)
     {
         cartesian_manager_.setKinematicsSolver(kinematics);
     }

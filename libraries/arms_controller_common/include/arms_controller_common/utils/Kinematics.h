@@ -9,6 +9,9 @@
 #include <pinocchio/parsers/urdf.hpp>
 #include <string>
 #include <vector>
+#include <chrono>
+#include <geometry_msgs/msg/pose.hpp>
+#include "arms_ros2_control_msgs/srv/kinematics_service.hpp"
 
 namespace arms_controller_common
 {
@@ -78,13 +81,13 @@ namespace arms_controller_common
         }
     };
 
-    class M6CCSKinematics
+    class ArmKinematics
     {
     public:
-        M6CCSKinematics(const std::string& urdf_path,
-                        const std::string& baseFrameName = "base_link");
-        M6CCSKinematics(const pinocchio::Model& model);
-        ~M6CCSKinematics();
+        ArmKinematics(const std::string& urdf_path,
+                      const std::string& baseFrameName = "base_link");
+        ArmKinematics(const pinocchio::Model& model);
+        ~ArmKinematics();
 
         // ==================== 正运动学 ====================
 
@@ -130,7 +133,7 @@ namespace arms_controller_common
         bool solveSingleArmIK(const EndEffectorPose& targetPose,
                               const Eigen::VectorXd& initialGuess,
                               Eigen::VectorXd& solution, std::string arm_type,
-                              int maxIterations = 100, double tolerance = 1e-6);
+                              int maxIterations = 100, double tolerance = 1e-6,double damping=0.01);
 
         /**
          * @brief 双臂协同逆运动学（同时求解双臂）
@@ -146,7 +149,7 @@ namespace arms_controller_common
                              const EndEffectorPose& rightTargetPose,
                              const Eigen::VectorXd& initialGuess,
                              Eigen::VectorXd& solution, int maxIterations = 100,
-                             double tolerance = 1e-6);
+                             double tolerance = 1e-6,double damping=0.01);
         // ==================== 雅可比矩阵计算 ====================
         /**
          * @brief 计算雅可比矩阵
@@ -185,6 +188,50 @@ namespace arms_controller_common
 
         std::vector<std::string> getLeftArmJointNames() const { return leftArmJointNames_; }
         std::vector<std::string> getRightArmJointNames() const { return rightArmJointNames_; }
+
+
+        // 添加服务
+
+        /**
+         * @brief 处理运动学服务请求
+         * @param request 服务请求
+         * @param response 服务响应
+         */
+        void handleKinematicsService(
+            const std::shared_ptr<arms_ros2_control_msgs::srv::KinematicsService::Request> request,
+            const std::shared_ptr<arms_ros2_control_msgs::srv::KinematicsService::Response> response);
+
+        /**
+         * @brief 执行正运动学计算
+         */
+        bool computeForwardKinematics(
+            const std::string& arm_type,
+            const std::vector<double>& joint_angles,
+            std::vector<EndEffectorPose>& result_poses,
+            std::string& error_msg);
+
+        /**
+         * @brief 执行逆运动学计算
+         */
+        bool computeInverseKinematics(
+            const std::string& arm_type,
+            const std::vector<double>& initial_guess,
+            const std::vector<EndEffectorPose>& target_poses,
+            std::vector<double>& result_joint_angles,
+            int max_iterations,
+            double tolerance,
+            double damping,
+            std::string& error_msg);
+
+        /**
+         * @brief 转换 EndEffectorPose 到 ROS Pose 消息
+         */
+        geometry_msgs::msg::Pose endEffectorPoseToROSPose(const EndEffectorPose& pose);
+
+        /**
+         * @brief 转换 ROS Pose 消息到 EndEffectorPose
+         */
+        EndEffectorPose rosPoseToEndEffectorPose(const geometry_msgs::msg::Pose& pose);
 
     private:
         // Pinocchio模型和数据

@@ -1,0 +1,38 @@
+# 运动学服务定义
+# 支持正运动学（FK）和逆运动学（IK）
+
+# ====== 请求部分 ======
+# 操作类型: "fk" 或 "ik"
+string operation_type
+
+# 手臂类型: "left", "right", "both"
+string arm_type
+
+# 关节角度 (用于FK，或作为IK的初始猜测)
+# 对于单臂: 7个关节
+# 对于双臂: 14个关节 (左臂7个 + 右臂7个)
+float64[] joint_angles
+
+# 目标位姿 (用于IK)
+# 对于单臂: 1个位姿
+# 对于双臂: 2个位姿 (左臂和右臂)
+geometry_msgs/Pose[] target_poses
+
+# IK参数
+int32 max_iterations      # 最大迭代次数 (默认: 100)
+float64 tolerance         # 容差 (默认: 1e-6)
+float64 damping           # 阻尼系数 (默认: 0.01)
+
+---
+# ====== 响应部分 ======
+bool success
+string message
+
+# 计算结果
+# 对于FK: 计算出的位姿 (单臂: 1个, 双臂: 2个)
+# 对于IK: 计算出的关节角度
+geometry_msgs/Pose[] result_poses
+float64[] result_joint_angles
+
+# 计算耗时 (毫秒)
+float64 computation_time_ms

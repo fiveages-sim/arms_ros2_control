@@ -16,7 +16,7 @@ namespace arms_controller_common
         CartesianTrajectoryManager();
         ~CartesianTrajectoryManager();
 
-        void setKinematicsSolver(const std::shared_ptr<M6CCSKinematics>& kinematics = nullptr);
+        void setKinematicsSolver(const std::shared_ptr<ArmKinematics>& kinematics = nullptr);
 
         bool planSingleArmMoveL(const std::vector<double>& start_joint_pos,
                                 const arms_ros2_control_msgs::msg::LinearMessage& target_point_msg,
@@ -33,7 +33,7 @@ namespace arms_controller_common
         bool hasKinematics() { return arm_kinematics_ != nullptr; }
 
     private:
-        std::shared_ptr<M6CCSKinematics> arm_kinematics_;
+        std::shared_ptr<ArmKinematics> arm_kinematics_;
         std::unique_ptr<planning::moveL> movel_planner_;
         Eigen::VectorXd current_joint_pos_;
         std::string arm_type_;

@@ -18,7 +18,8 @@
 // Use common FSM types from arms_controller_common
 #include <arms_controller_common/FSM/FSMState.h>
 #include <arms_controller_common/CtrlInterfaces.h>
-
+#include "arms_ros2_control_msgs/srv/kinematics_service.hpp"
+#include "arms_controller_common/utils/Kinematics.h"
 namespace ocs2::mobile_manipulator
 {
     // Use FSM types from arms_controller_common
@@ -108,5 +109,14 @@ namespace ocs2::mobile_manipulator
         
         // CtrlComponent for OCS2 interface access
         std::shared_ptr<CtrlComponent> ctrl_comp_;
+
+        // Kinematics service
+        rclcpp::Service<arms_ros2_control_msgs::srv::KinematicsService>::SharedPtr kinematics_service_;
+        std::shared_ptr<arms_controller_common::ArmKinematics> kinematics_;
+
+        // Service handler
+        void handleKinematicsService(
+            const std::shared_ptr<arms_ros2_control_msgs::srv::KinematicsService::Request> request,
+            const std::shared_ptr<arms_ros2_control_msgs::srv::KinematicsService::Response> response);
     };
 }

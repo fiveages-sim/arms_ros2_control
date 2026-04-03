@@ -173,7 +173,7 @@ namespace arms_controller_common
          */
         void setupJointTrajectoryService(const std::string& service_name = "joint_trajectory");
 
-        void setKinematicsSolver(const std::shared_ptr<M6CCSKinematics>& kinematics = nullptr);
+        void setKinematicsSolver(const std::shared_ptr<ArmKinematics>& kinematics = nullptr);
         // 在 StateMoveJ.h 的 public 部分添加
         /**
         * @brief Setup linear trajectory service for MoveL planning

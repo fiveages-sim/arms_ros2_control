@@ -13,7 +13,7 @@ namespace arms_controller_common
     CartesianTrajectoryManager::~CartesianTrajectoryManager() = default;
 
     void CartesianTrajectoryManager::setKinematicsSolver(
-        const std::shared_ptr<M6CCSKinematics>& kinematics)
+        const std::shared_ptr<ArmKinematics>& kinematics)
     {
         arm_kinematics_ = kinematics;
     }
