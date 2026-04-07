@@ -14,7 +14,7 @@ namespace adaptive_gripper_controller
     controller_interface::CallbackReturn AdaptiveGripperController::on_init()
     {
         joint_name_ = auto_declare<std::string>("joint", "gripper_joint");
-        
+
         // 获取控制器名称（节点名称就是控制器名称）
         controller_name_ = get_node()->get_name();
 
@@ -25,23 +25,10 @@ namespace adaptive_gripper_controller
 
         target_position_ = 0.0;
 
-        // 根据关节名称自动判断手臂标识
-        if (joint_name_.find("left") != std::string::npos)
-        {
-            arm_id_ = 1; // 左臂
-        }
-        else if (joint_name_.find("right") != std::string::npos)
-        {
-            arm_id_ = 2; // 右臂
-        }
-        else
-        {
-            arm_id_ = 1; // 默认为左臂（单臂机器人）
-        }
-
         RCLCPP_INFO(get_node()->get_logger(),
-                    "Adaptive Gripper Controller initialized - controller: %s, joint: %s, arm_id: %d, use_effort: %s, force threshold: %.3f, force feedback ratio: %.3f",
-                    controller_name_.c_str(), joint_name_.c_str(), arm_id_, use_effort_interface_ ? "true" : "false", force_threshold_,
+                    "Adaptive Gripper Controller initialized - controller: %s, joint: %s, use_effort: %s, force threshold: %.3f, force feedback ratio: %.3f",
+                    controller_name_.c_str(), joint_name_.c_str(), use_effort_interface_ ? "true" : "false",
+                    force_threshold_,
                     force_feedback_ratio_);
 
         return controller_interface::CallbackReturn::SUCCESS;
@@ -77,11 +64,11 @@ namespace adaptive_gripper_controller
 
         // 直接位置控制订阅器 - 无力反馈的精细控制
         // 话题名称格式：/<joint_name>/position_command
+        // 回调只做校验/截断，将有效值存入原子收件箱；状态变量由 update() 独占修改
         std::string position_command_topic = "/" + joint_name_ + "/position_command";
         direct_position_subscription_ = get_node()->create_subscription<std_msgs::msg::Float64>(
             position_command_topic, 10, [this](const std_msgs::msg::Float64::SharedPtr msg)
             {
-                // 如果限位还未初始化，不处理位置指令
                 if (!limits_initialized_)
                 {
                     RCLCPP_WARN(get_node()->get_logger(),
@@ -90,33 +77,35 @@ namespace adaptive_gripper_controller
                     return;
                 }
 
-                // 切换到直接位置控制模式（无力反馈）
-                direct_position_mode_ = true;
-                force_threshold_triggered_ = false; // 重置力反馈触发标志
-
-                // 限制目标位置在关节限位范围内
                 double commanded_position = msg->data;
-                target_position_ = std::clamp(commanded_position, joint_lower_limit_, joint_upper_limit_);
+                if (std::isnan(commanded_position) || std::isinf(commanded_position))
+                {
+                    RCLCPP_WARN(get_node()->get_logger(),
+                                "Position command is NaN/Inf, ignoring");
+                    return;
+                }
 
-                // 只在位置被截断时输出警告
-                if (target_position_ != commanded_position)
+                double clamped = std::clamp(commanded_position, joint_lower_limit_, joint_upper_limit_);
+                if (clamped != commanded_position)
                 {
                     RCLCPP_WARN(get_node()->get_logger(),
                                 "Position command %.6f clamped to [%.6f, %.6f], using %.6f",
-                                commanded_position, joint_lower_limit_, joint_upper_limit_, target_position_);
+                                commanded_position, joint_lower_limit_, joint_upper_limit_, clamped);
                 }
+
+                pending_direct_position_.store(clamped, std::memory_order_relaxed);
             });
 
         RCLCPP_INFO(get_node()->get_logger(),
                     "Direct position control subscribed to topic: %s", position_command_topic.c_str());
 
-        // 开关控制订阅器 - 通过 0/1 控制夹爪开合（带力反馈）
+        // 开关控制订阅器 - 通过 0/1 控制夹爪全开/全关（关闭时带力反馈）
         // 话题名称格式：/<controller_name>/target_command
+        // 回调只做校验，将 0/1 存入原子收件箱；状态变量由 update() 独占修改
         std::string target_command_topic = "/" + controller_name_ + "/target_command";
         target_command_subscription_ = get_node()->create_subscription<std_msgs::msg::Int32>(
             target_command_topic, 10, [this](const std_msgs::msg::Int32::SharedPtr msg)
             {
-                // 如果限位还未初始化，不处理指令
                 if (!limits_initialized_)
                 {
                     RCLCPP_WARN(get_node()->get_logger(),
@@ -125,7 +114,6 @@ namespace adaptive_gripper_controller
                     return;
                 }
 
-                // 验证输入值（只接受 0 或 1）
                 int32_t target = msg->data;
                 if (target != 0 && target != 1)
                 {
@@ -135,33 +123,45 @@ namespace adaptive_gripper_controller
                     return;
                 }
 
-                // 切换到开关控制模式（启用力反馈）
-                direct_position_mode_ = false;
-                gripper_target_ = target;
-
-                // 根据目标值设置位置
-                if (target == 1)
-                {
-                    // 打开夹爪
-                    force_threshold_triggered_ = false;
-                    target_position_ = open_position_;
-                    RCLCPP_INFO(get_node()->get_logger(),
-                                "Opening gripper via target_command to position: %.6f (switch mode%s)",
-                                target_position_, has_effort_interface_ ? " with force feedback" : "");
-                }
-                else
-                {
-                    // 关闭夹爪
-                    force_threshold_triggered_ = false; // 重置力反馈触发标志
-                    target_position_ = closed_position_;
-                    RCLCPP_INFO(get_node()->get_logger(),
-                                "Closing gripper via target_command to position: %.6f (switch mode%s)",
-                                target_position_, has_effort_interface_ ? " with force feedback" : "");
-                }
+                pending_target_switch_.store(target, std::memory_order_relaxed);
             });
 
         RCLCPP_INFO(get_node()->get_logger(),
-                    "Target command control subscribed to topic: %s (0=close, 1=open, using controller name)", target_command_topic.c_str());
+                    "Target command control subscribed to topic: %s (0=close, 1=open, using controller name)",
+                    target_command_topic.c_str());
+
+        // 百分比控制订阅器 - 通过 0.0~1.0 比例控制夹爪开合，自动选择力反馈方向
+        // 话题名称格式：/<controller_name>/target_percent
+        // 0.0 = 完全关闭（closed_position_），1.0 = 完全打开（open_position_）
+        // 向关闭方向运动时启用力反馈；向打开方向运动时使用纯位置控制
+        std::string target_percent_topic = "/" + controller_name_ + "/target_percent";
+        target_percent_subscription_ = get_node()->create_subscription<std_msgs::msg::Float64>(
+            target_percent_topic, 10, [this](const std_msgs::msg::Float64::SharedPtr msg)
+            {
+                if (!limits_initialized_)
+                {
+                    RCLCPP_WARN(get_node()->get_logger(),
+                                "Joint limits not initialized yet, ignoring target_percent command %.3f",
+                                msg->data);
+                    return;
+                }
+
+                double percent = msg->data;
+                if (percent < 0.0 || percent > 1.0)
+                {
+                    RCLCPP_WARN(get_node()->get_logger(),
+                                "target_percent %.3f out of range [0.0, 1.0], clamping",
+                                percent);
+                    percent = std::clamp(percent, 0.0, 1.0);
+                }
+
+                // 将百分比存入原子变量，由 update() 线程安全地消费
+                pending_percent_command_.store(percent, std::memory_order_relaxed);
+            });
+
+        RCLCPP_INFO(get_node()->get_logger(),
+                    "Target percent control subscribed to topic: %s (0.0=closed, 1.0=open, auto force feedback)",
+                    target_percent_topic.c_str());
 
         return controller_interface::CallbackReturn::SUCCESS;
     }
@@ -203,12 +203,8 @@ namespace adaptive_gripper_controller
             return controller_interface::CallbackReturn::ERROR;
         }
 
-        // 如果配置中包含 effort 接口，则查找并绑定
-        auto it = std::find(available_state_interface_types_.begin(),
-                            available_state_interface_types_.end(),
-                            hardware_interface::HW_IF_EFFORT);
-
-        if (it != available_state_interface_types_.end())
+        // 如果配置了 effort 接口参数，则查找并绑定（use_effort_interface_ 直接决定是否请求过 effort 接口）
+        if (use_effort_interface_)
         {
             auto effort_state_interface_it = std::find_if(
                 state_interfaces_.begin(), state_interfaces_.end(),
@@ -241,6 +237,14 @@ namespace adaptive_gripper_controller
         gripper_interfaces_.position_command_interface_ = *command_interface_it;
         gripper_interfaces_.position_state_interface_ = *position_state_interface_it;
 
+        // 重置所有运行时状态，确保重新激活时不携带上一次的脏值
+        force_threshold_triggered_ = false;
+        direct_position_mode_ = false;
+        gripper_target_ = 0;
+        pending_direct_position_.store(std::numeric_limits<double>::quiet_NaN(), std::memory_order_relaxed);
+        pending_target_switch_.store(-1, std::memory_order_relaxed);
+        pending_percent_command_.store(-1.0, std::memory_order_relaxed);
+
         // 注意：夹爪位置计算需要等待 robot_description 解析完成
         // 暂时使用配置的初始值作为关闭位置
         target_position_ = config_initial_position_;
@@ -258,30 +262,106 @@ namespace adaptive_gripper_controller
     controller_interface::return_type AdaptiveGripperController::update(
         const rclcpp::Time& /*time*/, const rclcpp::Duration& /*period*/)
     {
-        // 读取当前位置
-        const double current_position = gripper_interfaces_.position_state_interface_->get().get_optional().value();
-
-        // 只在开关控制模式（非直接位置模式）下启用力反馈
-        if (!direct_position_mode_ && has_effort_interface_)
+        // 读取当前位置（get_optional() 在硬件报错时可能返回 nullopt，需安全处理）
+        const double current_position =
+            gripper_interfaces_.position_state_interface_->get().get_optional().value_or(
+                std::numeric_limits<double>::quiet_NaN());
+        if (std::isnan(current_position))
         {
-            double current_effort = gripper_interfaces_.effort_state_interface_->get().get_optional().value();
-            if (gripper_target_ == 0 && !force_threshold_triggered_ && std::abs(current_effort) > force_threshold_)
-            {
-                // 根据比例参数计算目标位置
-                // force_feedback_ratio_ = 0.0: 保持在当前位置
-                // force_feedback_ratio_ = 1.0: 完全移动到目标关闭位置
-                double original_target = target_position_;
-                double distance_to_target = original_target - current_position;
-                double target_offset = distance_to_target * force_feedback_ratio_;
-                target_position_ = current_position + target_offset;
-
-                force_threshold_triggered_ = true; // 设置已触发标志
-                RCLCPP_INFO(get_node()->get_logger(),
-                            "Force threshold triggered for closing target, moving %.1f%% toward target position: %.6f (current: %.6f, original target: %.6f)",
-                            force_feedback_ratio_ * 100.0, target_position_, current_position, original_target);
-            }
+            RCLCPP_ERROR_THROTTLE(get_node()->get_logger(), *get_node()->get_clock(), 1000,
+                                  "Position state interface returned no value for joint: %s",
+                                  joint_name_.c_str());
+            return controller_interface::return_type::ERROR;
         }
 
+        // ---------------------------------------------------------------
+        // 命令通道消费（RT 线程独占修改所有状态变量）
+        //
+        // 优先级：direct_position < target_switch < target_percent
+        // 若同一 update 周期内多个通道同时有待命令（极少发生），
+        // 后处理的通道会覆盖前者，target_percent 最终生效。
+        // ---------------------------------------------------------------
+
+        // 通道 1：直接位置控制（NaN 哨兵表示无命令）
+        const double pending_pos = pending_direct_position_.exchange(
+            std::numeric_limits<double>::quiet_NaN(), std::memory_order_relaxed);
+        if (!std::isnan(pending_pos))
+        {
+            target_position_ = pending_pos;
+            direct_position_mode_ = true;
+            force_threshold_triggered_ = false;
+            RCLCPP_INFO(get_node()->get_logger(),
+                        "Direct position command: %.6f (force feedback disabled)",
+                        target_position_);
+        }
+
+        // 通道 2：开关控制 0/1（-1 哨兵表示无命令）
+        const int32_t pending_switch = pending_target_switch_.exchange(-1, std::memory_order_relaxed);
+        if (pending_switch >= 0)
+        {
+            direct_position_mode_ = false;
+            gripper_target_ = pending_switch;
+            force_threshold_triggered_ = false;
+            target_position_ = (pending_switch == 1) ? open_position_ : closed_position_;
+            RCLCPP_INFO(get_node()->get_logger(),
+                        "%s gripper via target_command to position: %.6f (switch mode%s)",
+                        (pending_switch == 1) ? "Opening" : "Closing",
+                        target_position_,
+                        has_effort_interface_ ? " with force feedback" : "");
+        }
+
+        // 通道 3：百分比控制（-1.0 哨兵表示无命令）
+        const double pending_percent = pending_percent_command_.exchange(-1.0, std::memory_order_relaxed);
+        if (pending_percent >= 0.0)
+        {
+            // 将 [0.0, 1.0] 线性映射到实际关节位置
+            const double gripper_range = open_position_ - closed_position_;
+            double new_target = closed_position_ + pending_percent * gripper_range;
+            new_target = std::clamp(new_target, joint_lower_limit_, joint_upper_limit_);
+
+            // 判断运动方向：closing_sign 描述"位置值增大时是否为关闭方向"
+            const double delta = new_target - current_position;
+            const double closing_sign = (closed_position_ > open_position_) ? 1.0 : -1.0;
+            const bool is_closing = (delta * closing_sign) > 1e-6;
+
+            target_position_ = new_target;
+            direct_position_mode_ = false;
+            force_threshold_triggered_ = false;
+            gripper_target_ = is_closing ? 0 : 1;
+
+            RCLCPP_INFO(get_node()->get_logger(),
+                        "Target percent %.1f%% -> position: %.6f (%s, force feedback: %s)",
+                        pending_percent * 100.0, new_target,
+                        is_closing ? "closing" : "opening",
+                        (is_closing && has_effort_interface_) ? "enabled" : "disabled");
+        }
+
+        // ---------------------------------------------------------------
+        // 力反馈逻辑
+        // 仅在开关/百分比模式（非直接位置模式）且有 effort 接口时生效；
+        // gripper_target_ == 0 表示当前朝关闭方向运动，需检测接触力。
+        // ---------------------------------------------------------------
+        if (!direct_position_mode_ && has_effort_interface_)
+        {
+            const double current_effort =
+                gripper_interfaces_.effort_state_interface_->get().get_optional().value_or(0.0);
+            if (gripper_target_ == 0 && !force_threshold_triggered_ &&
+                std::abs(current_effort) > force_threshold_)
+            {
+                // force_feedback_ratio_ = 0.0 → 停在当前位置
+                // force_feedback_ratio_ = 1.0 → 继续推进到原始目标
+                const double original_target = target_position_;
+                const double distance_to_target = original_target - current_position;
+                target_position_ = current_position + distance_to_target * force_feedback_ratio_;
+                force_threshold_triggered_ = true;
+
+                RCLCPP_INFO(get_node()->get_logger(),
+                            "Force threshold triggered (closing), moving %.1f%% toward target: "
+                            "%.6f (current: %.6f, original target: %.6f)",
+                            force_feedback_ratio_ * 100.0, target_position_,
+                            current_position, original_target);
+            }
+        }
 
         // 输出位置命令
         if (!gripper_interfaces_.position_command_interface_->get().set_value(target_position_))
@@ -306,17 +386,36 @@ namespace adaptive_gripper_controller
                 return;
             }
 
-            // 查找limit标签
+            // 确定该 joint 标签的范围，防止跨关节错误匹配
+            const size_t joint_end = [&]()
+            {
+                size_t end = robot_description.find("</joint>", joint_pos);
+                return (end != std::string::npos) ? end : robot_description.size();
+            }();
+
+            // 查找 <limit> 标签，必须在当前 </joint> 范围内
             size_t limit_pos = robot_description.find("<limit", joint_pos);
-            if (limit_pos == std::string::npos)
+            if (limit_pos == std::string::npos || limit_pos > joint_end)
             {
                 RCLCPP_WARN(get_node()->get_logger(), "No limits found for joint %s", joint_name_.c_str());
+                return;
+            }
+
+            // upper/lower 属性也必须在同一个 <limit .../> 标签内
+            const size_t limit_tag_end = robot_description.find('>', limit_pos);
+            if (limit_tag_end == std::string::npos || limit_tag_end > joint_end)
+            {
+                RCLCPP_WARN(get_node()->get_logger(), "Malformed <limit> tag for joint %s", joint_name_.c_str());
                 return;
             }
 
             // 解析upper和lower限制
             size_t upper_pos = robot_description.find("upper=\"", limit_pos);
             size_t lower_pos = robot_description.find("lower=\"", limit_pos);
+
+            // 确保 upper/lower 属性在同一个 <limit> 标签内
+            if (upper_pos != std::string::npos && upper_pos > limit_tag_end) upper_pos = std::string::npos;
+            if (lower_pos != std::string::npos && lower_pos > limit_tag_end) lower_pos = std::string::npos;
 
             if (upper_pos != std::string::npos && lower_pos != std::string::npos)
             {
@@ -360,7 +459,7 @@ namespace adaptive_gripper_controller
             size_t ros2_control_start = std::string::npos;
             size_t ros2_control_end = std::string::npos;
             size_t joint_pos = std::string::npos;
-            
+
             while (true)
             {
                 // 查找下一个 ros2_control 标签的起始位置
@@ -383,8 +482,8 @@ namespace adaptive_gripper_controller
                 {
                     // 找到了目标关节，跳出循环
                     RCLCPP_DEBUG(get_node()->get_logger(),
-                                "Found joint %s in ros2_control section at position %zu", 
-                                joint_name_.c_str(), joint_pos);
+                                 "Found joint %s in ros2_control section at position %zu",
+                                 joint_name_.c_str(), joint_pos);
                     break;
                 }
 
