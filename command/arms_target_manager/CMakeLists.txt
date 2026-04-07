@@ -54,6 +54,15 @@ add_executable(arms_target_manager_node src/arms_target_manager_node.cpp)
 ament_target_dependencies(arms_target_manager_node ${TARGET_MANAGER_INCLUDE_DEPENDS})
 target_link_libraries(arms_target_manager_node ${PROJECT_NAME})
 
+# Ensure the loader finds libarms_target_manager.so next to the executable (same dir as install).
+if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
+  set_target_properties(arms_target_manager_node PROPERTIES
+    BUILD_RPATH "$ORIGIN"
+    INSTALL_RPATH "$ORIGIN"
+    BUILD_WITH_INSTALL_RPATH FALSE
+  )
+endif()
+
 install(
         DIRECTORY include/
         DESTINATION include/${PROJECT_NAME}

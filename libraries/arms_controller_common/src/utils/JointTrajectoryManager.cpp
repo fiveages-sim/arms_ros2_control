@@ -949,6 +949,7 @@ namespace arms_controller_common
 #endif
     }
 
+#ifdef HAS_LINA_PLANNING
     bool JointTrajectoryManager::getTrajectoryParameter(const arms_ros2_control_msgs::msg::JointWaypoint& waypoint,
                                                         planning::TrajectoryParameter& res)
     {
@@ -992,7 +993,8 @@ namespace arms_controller_common
             res = param;
         }
         return true;
-    };
+    }
+#endif
     double JointTrajectoryManager::getPlanningTime() const
     {
         if (isDoublesAvailable() && interpolation_type_ == InterpolationType::DOUBLES)
@@ -1011,5 +1013,5 @@ namespace arms_controller_common
          }
         }
 
-    };
+    }
 } // namespace arms_controller_common
