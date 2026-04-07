@@ -1,20 +1,8 @@
-// Copyright 2024, Your Organization
-//
-// Licensed under the Apache License, Version 2.0 (the "License");
-// you may not use this file except in compliance with the License.
-// You may obtain a copy of the License at
-//
-//     http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing, software
-// distributed under the License is distributed on an "AS IS" BASIS,
-// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-// See the License for the specific language governing permissions and
-// limitations under the License.
-
-
 // C++ standard
 #pragma once
+#include <atomic>
+#include <cmath>
+#include <limits>
 #include <memory>
 #include <string>
 
@@ -38,12 +26,12 @@ namespace adaptive_gripper_controller
         /**
          * @brief 命令接口配置
          */
-        controller_interface::InterfaceConfiguration command_interface_configuration() const override;
+        [[nodiscard]] controller_interface::InterfaceConfiguration command_interface_configuration() const override;
 
         /**
          * @brief 状态接口配置
          */
-        controller_interface::InterfaceConfiguration state_interface_configuration() const override;
+        [[nodiscard]] controller_interface::InterfaceConfiguration state_interface_configuration() const override;
 
         /**
          * @brief 控制器更新函数
@@ -114,9 +102,26 @@ namespace adaptive_gripper_controller
         // 是否有 effort 接口（运行时自动检测）
         bool has_effort_interface_ = false;
         
-        // 控制模式：true=直接位置控制（无力反馈），false=开关控制（有力反馈）
+        // 控制模式：true=直接位置控制（无力反馈），false=开关/百分比控制（有力反馈）
         bool direct_position_mode_ = false;
-        
+
+        // ---------------------------------------------------------------
+        // 跨线程命令收件箱（原子变量）
+        //
+        // ros2_control 中 update() 运行在 RT 线程，订阅回调运行在 executor
+        // 线程。所有命令通道只写各自的原子"收件箱"，update() 用 exchange()
+        // 原子消费，从而使 target_position_ / direct_position_mode_ 等状态
+        // 变量完全归 update() 独占，消除数据竞争。
+        //
+        // 哨兵值含义：
+        //   pending_direct_position_  : quiet_NaN = 无待处理命令
+        //   pending_target_switch_    : -1         = 无待处理命令 (0=close, 1=open)
+        //   pending_percent_command_  : -1.0       = 无待处理命令
+        // ---------------------------------------------------------------
+        std::atomic<double>  pending_direct_position_{std::numeric_limits<double>::quiet_NaN()};
+        std::atomic<int32_t> pending_target_switch_{-1};
+        std::atomic<double>  pending_percent_command_{-1.0};
+
         // 需要的状态接口类型列表（从 hardware 查询）
         std::vector<std::string> available_state_interface_types_;
 
@@ -143,13 +148,11 @@ namespace adaptive_gripper_controller
 
         GripperInterfaces gripper_interfaces_;
 
-        // 手臂标识 (1=左臂, 2=右臂)
-        int32_t arm_id_ = 1;  // 默认为左臂
-
         // ROS订阅器
         rclcpp::Subscription<std_msgs::msg::String>::SharedPtr robot_description_subscription_;
         rclcpp::Subscription<std_msgs::msg::Float64>::SharedPtr direct_position_subscription_;
         rclcpp::Subscription<std_msgs::msg::Int32>::SharedPtr target_command_subscription_;
+        rclcpp::Subscription<std_msgs::msg::Float64>::SharedPtr target_percent_subscription_;
 
         // 解析robot description获取关节限制
         void parse_joint_limits(const std::string& robot_description);
