@@ -4,6 +4,8 @@
 #pragma once
 
 
+#include <cstdlib>
+
 #include <functional>
 #include <memory>
 #include <string>
@@ -30,6 +32,20 @@ namespace ocs2::mobile_manipulator
     // Use CtrlInterfaces from arms_controller_common
     using CtrlInterfaces = arms_controller_common::CtrlInterfaces;
 
+    /** Writable directory for OCS2 CppAD generated libraries (must not live under read-only share/). */
+    inline std::string defaultOcs2LibraryFolder(const std::string& robot_pkg)
+    {
+        if (const char* xdg = std::getenv("XDG_CACHE_HOME"); xdg && xdg[0] != '\0')
+        {
+            return std::string(xdg) + "/ocs2_ros2/" + robot_pkg;
+        }
+        if (const char* home = std::getenv("HOME"); home && home[0] != '\0')
+        {
+            return std::string(home) + "/.ros/ocs2_cache/" + robot_pkg;
+        }
+        return std::string("/tmp/ocs2_ros2/") + robot_pkg;
+    }
+
     class CtrlComponent
     {
     public:
@@ -52,7 +68,8 @@ namespace ocs2::mobile_manipulator
             const std::string config_path = ament_index_cpp::get_package_share_directory(robot_pkg);
 
             const std::string task_file = config_path + "/config/ocs2/" + info_file_name + ".info";
-            const std::string lib_folder = config_path + "/ocs2";
+            const std::string lib_folder =
+                auto_declare("ocs2_library_folder", defaultOcs2LibraryFolder(robot_pkg));
             const std::string urdf_file = generateUrdfPath(robot_name_, robot_type_, config_path);
 
             setupInterface(task_file, lib_folder, urdf_file);

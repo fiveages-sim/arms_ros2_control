@@ -348,6 +348,73 @@ namespace basic_joint_controller
             RCLCPP_INFO(get_node()->get_logger(),
                         "Subscribed to target_command topic: %s (close_config=%d, open_config=%d)",
                         target_command_topic.c_str(), target_command_close_config_, target_command_open_config_);
+
+            // 百分比控制：在关闭配置和打开配置之间按比例插值
+            // 0.0 = 完全关闭（close_config），1.0 = 完全打开（open_config）
+            // 逐关节线性插值：target[i] = close[i] + percent * (open[i] - close[i])
+            std::string target_percent_topic = "/" + controller_name_ + "/target_percent";
+            target_percent_subscription_ = get_node()->create_subscription<std_msgs::msg::Float64>(
+                target_percent_topic, rclcpp::QoS(10),
+                [this](const std_msgs::msg::Float64::SharedPtr msg)
+                {
+                    if (!current_state_ || current_state_->state_name != FSMStateName::MOVEJ)
+                    {
+                        RCLCPP_DEBUG(get_node()->get_logger(),
+                                     "target_percent received but ignored (current state is not MOVEJ)");
+                        return;
+                    }
+
+                    double percent = msg->data;
+                    if (percent < 0.0 || percent > 1.0)
+                    {
+                        RCLCPP_WARN(get_node()->get_logger(),
+                                    "target_percent %.3f out of range [0.0, 1.0], clamping",
+                                    percent);
+                        percent = std::clamp(percent, 0.0, 1.0);
+                    }
+
+                    if (!state_list_.home || !state_list_.movej)
+                    {
+                        return;
+                    }
+
+                    const std::vector<double> close_config = state_list_.home->getConfiguration(
+                        static_cast<size_t>(target_command_close_config_));
+                    const std::vector<double> open_config = state_list_.home->getConfiguration(
+                        static_cast<size_t>(target_command_open_config_));
+
+                    if (close_config.empty() || open_config.empty())
+                    {
+                        RCLCPP_WARN(get_node()->get_logger(),
+                                    "target_percent: close_config(%d) or open_config(%d) not available",
+                                    target_command_close_config_, target_command_open_config_);
+                        return;
+                    }
+
+                    if (close_config.size() != open_config.size())
+                    {
+                        RCLCPP_WARN(get_node()->get_logger(),
+                                    "target_percent: close_config size(%zu) != open_config size(%zu), ignoring",
+                                    close_config.size(), open_config.size());
+                        return;
+                    }
+
+                    // 逐关节线性插值
+                    std::vector<double> target(close_config.size());
+                    for (size_t i = 0; i < target.size(); ++i)
+                    {
+                        target[i] = close_config[i] + percent * (open_config[i] - close_config[i]);
+                    }
+
+                    state_list_.movej->setTargetPosition(target);
+                    RCLCPP_INFO(get_node()->get_logger(),
+                                "target_percent %.1f%% -> interpolated target set (%zu joints)",
+                                percent * 100.0, target.size());
+                });
+
+            RCLCPP_INFO(get_node()->get_logger(),
+                        "Subscribed to target_percent topic: %s (0.0=close_config[%d], 1.0=open_config[%d])",
+                        target_percent_topic.c_str(), target_command_close_config_, target_command_open_config_);
         }
         else
         {
