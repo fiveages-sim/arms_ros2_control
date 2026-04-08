@@ -307,6 +307,11 @@ def generate_launch_description():
         description='Enable gripper controllers and gripper control panel'
     )
 
+    enable_head_arg = DeclareLaunchArgument(
+        'enable_head',
+        default_value='true',
+        description='Enable head joint controller (disable when head is managed by ocs2_wbc_controller)'
+    )
 
     # Get launch mode arguments from common utilities
     launch_mode_args = create_launch_mode_arguments()
@@ -318,6 +323,7 @@ def generate_launch_description():
         world_arg,
         enable_arms_target_manager_arg,
         enable_gripper_arg,
+        enable_head_arg,
         *launch_mode_args,  # Unpack the list of arguments
         OpaqueFunction(function=launch_setup),
     ])
