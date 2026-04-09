@@ -229,7 +229,7 @@ namespace arms_rviz_control_plugin
         available_categories_.clear();
         category_to_controller_.clear();
 
-        std::string wbc_controller; // ocs2_wbc_controller (handles left, right, body)
+        std::string wbc_controller; // ocs2_wbc_controller (handles left, right, body, head)
         std::string arm_controller; // ocs2_arm_controller (handles left, right only)
 
         for (const auto& controller : available_controllers_)
@@ -263,11 +263,12 @@ namespace arms_rviz_control_plugin
             }
             else if (controller_lower.find("ocs2_wbc_controller") != std::string::npos)
             {
-                // ocs2_wbc_controller handles left, right, and body
+                // ocs2_wbc_controller handles left, right, body, and head
                 wbc_controller = controller;
                 available_categories_.insert("left");
                 available_categories_.insert("right");
                 available_categories_.insert("body");
+                available_categories_.insert("head");
             }
             else if (controller_lower.find("ocs2_arm_controller") != std::string::npos)
             {
@@ -278,7 +279,7 @@ namespace arms_rviz_control_plugin
             }
         }
 
-        // Map left and right to WBC controller if found
+        // Map left, right, body, head to WBC controller if found
         if (!wbc_controller.empty())
         {
             category_to_controller_["left"] = wbc_controller;
@@ -287,6 +288,11 @@ namespace arms_rviz_control_plugin
             if (category_to_controller_.find("body") == category_to_controller_.end())
             {
                 category_to_controller_["body"] = wbc_controller;
+            }
+            // Only map head to WBC controller if not already mapped to a dedicated head controller
+            if (category_to_controller_.find("head") == category_to_controller_.end())
+            {
+                category_to_controller_["head"] = wbc_controller;
             }
         }
 
@@ -813,8 +819,8 @@ namespace arms_rviz_control_plugin
             std::transform(controller_lower.begin(), controller_lower.end(),
                            controller_lower.begin(), ::tolower);
 
-            // For ocs2_wbc_controller with left/right/body, use sub-topics
-            if ((category == "left" || category == "right" || category == "body") &&
+            // For ocs2_wbc_controller with left/right/body/head, use sub-topics
+            if ((category == "left" || category == "right" || category == "body" || category == "head") &&
                 controller_lower.find("ocs2_wbc_controller") != std::string::npos)
             {
                 return "/" + controller + "/target_joint_position/" + category;

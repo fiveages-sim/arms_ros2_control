@@ -121,15 +121,8 @@ def launch_setup(context, *args, **kwargs):
         hand_controllers = detect_controllers(robot_name, robot_type, ['hand', 'gripper'], robot_description=robot_description)
         hand_controller_spawners = create_controller_spawners(hand_controllers, use_sim_time)
 
-    # Detect body controllers using robot_common_launch (body, head)
-    enable_head = context.launch_configurations.get('enable_head', 'true').lower() == 'true'
     body_controller_spawners = []
     joint_controller_names = ['ocs2_wbc_controller']
-
-    if enable_head:
-        head_controllers = detect_controllers(robot_name, robot_type, ['head'])
-        body_controller_spawners = create_controller_spawners(head_controllers, use_sim_time)
-        joint_controller_names.extend([c['name'] for c in head_controllers])
 
 
     # Get info file name from ocs2_wbc_controller configuration
@@ -307,12 +300,6 @@ def generate_launch_description():
         description='Enable gripper controllers and gripper control panel'
     )
 
-    enable_head_arg = DeclareLaunchArgument(
-        'enable_head',
-        default_value='true',
-        description='Enable head joint controller (disable when head is managed by ocs2_wbc_controller)'
-    )
-
     # Get launch mode arguments from common utilities
     launch_mode_args = create_launch_mode_arguments()
 
@@ -323,7 +310,6 @@ def generate_launch_description():
         world_arg,
         enable_arms_target_manager_arg,
         enable_gripper_arg,
-        enable_head_arg,
         *launch_mode_args,  # Unpack the list of arguments
         OpaqueFunction(function=launch_setup),
     ])

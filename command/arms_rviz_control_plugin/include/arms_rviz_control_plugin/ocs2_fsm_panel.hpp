@@ -85,6 +85,7 @@ private:
   bool isBodyVertical() const;
   bool isBodyTracking() const;
   bool isBodyLocked() const;
+  bool isBodyHeadCoupled() const;
 
   int getCurrentBodyModeIndex() const;
   QString getBodyModeCommand(int modeIndex) const;
@@ -95,7 +96,8 @@ private:
     BODY_MODE_FREE = 0,
     BODY_MODE_VERTICAL = 1,
     BODY_MODE_TRACKING = 2,
-    BODY_MODE_LOCKED = 3
+    BODY_MODE_LOCKED = 3,
+    BODY_MODE_HEAD_COUPLED = 4
   };
 
   struct CapabilityState
@@ -103,6 +105,7 @@ private:
     bool has_mobile_base = false;
     bool has_body_relative_constraint = false;
     bool has_waist_lock = false;
+    bool has_head_coupling = false;
     bool has_bimanual_coupling = false;
     bool body_tracking_ee_enabled = false;
   };
