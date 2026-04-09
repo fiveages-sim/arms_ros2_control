@@ -37,6 +37,16 @@ namespace arms_ros2_control::command
     {
     }
 
+    bool ArmsTargetManager::shouldShowLeftArmMarker() const
+    {
+        return left_arm_state_ != 0;
+    }
+
+    bool ArmsTargetManager::shouldShowRightArmMarker() const
+    {
+        return right_arm_state_ != 0;
+    }
+
     bool ArmsTargetManager::shouldShowBodyMarker() const
     {
         return (current_controller_state_ == 3) && (body_state_ == 2);
@@ -83,12 +93,22 @@ namespace arms_ros2_control::command
             return;
         }
 
+        const int prev_left_arm_state = left_arm_state_;
+        const int prev_right_arm_state = right_arm_state_;
         const int prev_body_state = body_state_;
+
+        left_arm_state_ = msg->left_arm_state;
+        right_arm_state_ = msg->right_arm_state;
         body_state_ = msg->body_state;
 
-        if (prev_body_state != body_state_)
+        if (prev_left_arm_state != left_arm_state_ ||
+            prev_right_arm_state != right_arm_state_ ||
+            prev_body_state != body_state_)
         {
+            updateMarkerShape();
+            updateMenuVisibility();
             updateBodyMarkerVisibility();
+            markPendingChanges();
         }
     }
 
@@ -98,15 +118,12 @@ namespace arms_ros2_control::command
         rclcpp::Publisher<geometry_msgs::msg::Pose>::SharedPtr pub_right_target,
         rclcpp::Publisher<geometry_msgs::msg::PoseStamped>::SharedPtr pub_right_target_stamped)
     {
-        // 创建 MarkerFactory（必须在 Marker 类之前创建）
         marker_factory_ = std::make_unique<MarkerFactory>(
             node_, marker_fixed_frame_, disable_auto_update_states_);
 
-        // 初始化TF2 buffer和listener（必须在 Marker 类之前创建）
         tf_buffer_ = std::make_shared<tf2_ros::Buffer>(node_->get_clock());
         tf_listener_ = std::make_shared<tf2_ros::TransformListener>(*tf_buffer_);
 
-        // 创建左臂 Marker（带更新回调和状态检查回调，使用外部发布器）
         left_arm_marker_ = std::make_shared<ArmMarker>(
             node_, marker_factory_, tf_buffer_, marker_fixed_frame_, control_base_frame_,
             ArmType::LEFT, std::array<double, 3>{0.0, 0.5, 1.0},
@@ -124,6 +141,15 @@ namespace arms_ros2_control::command
                     return;
                 }
 
+                if (!shouldShowLeftArmMarker() && marker_name == "left_arm_target")
+                {
+                    return;
+                }
+                if (!shouldShowRightArmMarker() && marker_name == "right_arm_target")
+                {
+                    return;
+                }
+
                 server_->setPose(marker_name, pose);
                 markPendingChanges();
             });
@@ -131,7 +157,6 @@ namespace arms_ros2_control::command
         left_arm_marker_->setStateCheckCallback(
             [this]() { return !isStateDisabled(current_controller_state_); });
 
-        // 创建右臂 Marker
         if (dual_arm_mode_)
         {
             right_arm_marker_ = std::make_shared<ArmMarker>(
@@ -151,6 +176,15 @@ namespace arms_ros2_control::command
                         return;
                     }
 
+                    if (!shouldShowLeftArmMarker() && marker_name == "left_arm_target")
+                    {
+                        return;
+                    }
+                    if (!shouldShowRightArmMarker() && marker_name == "right_arm_target")
+                    {
+                        return;
+                    }
+
                     server_->setPose(marker_name, pose);
                     markPendingChanges();
                 });
@@ -159,17 +193,14 @@ namespace arms_ros2_control::command
                 [this]() { return !isStateDisabled(current_controller_state_); });
         }
 
-        // 创建 HeadMarker
         head_marker_ = std::make_shared<HeadMarker>(
             node_, marker_factory_, tf_buffer_, marker_fixed_frame_, publish_rate_);
         head_marker_->initialize();
 
-        // body target publisher
         body_target_stamped_publisher_ =
             node_->create_publisher<geometry_msgs::msg::PoseStamped>(
                 "body_target/stamped", 10);
 
-        // 创建 BodyMarker
         body_marker_ = std::make_shared<BodyMarker>(
             node_,
             marker_factory_,
@@ -181,25 +212,18 @@ namespace arms_ros2_control::command
             publish_rate_,
             [this](const std::string& marker_name, const geometry_msgs::msg::Pose& pose)
             {
-                // body marker 显示时，不允许 current pose 回刷可视化
-                // 这样 marker 始终代表“目标”，不会被当前位置拖着走
                 if (shouldShowBodyMarker())
                 {
                     return;
                 }
 
-                // body marker 隐藏时也不需要刷新可视化
                 (void)marker_name;
                 (void)pose;
             });
 
-        // 关键：
-        // 只有在 body marker 不显示时，才允许 body_current_pose 更新内部 pose 缓存；
-        // 一旦 body marker 显示，就冻结为“目标”，不会被当前位置覆盖。
         body_marker_->setStateCheckCallback(
             [this]() { return !shouldShowBodyMarker(); });
 
-        // 创建 InteractiveMarkerServer
         server_ = std::make_shared<interactive_markers::InteractiveMarkerServer>(
             "arms_target_manager", node_);
 
@@ -209,6 +233,10 @@ namespace arms_ros2_control::command
                                  std::shared_ptr<interactive_markers::MenuHandler>& menuHandler)
         {
             auto marker = buildMarker(markerName, markerType);
+            if (marker.name.empty())
+            {
+                return;
+            }
             server_->insert(marker);
             server_->setCallback(marker.name,
                                  [this](
@@ -219,12 +247,12 @@ namespace arms_ros2_control::command
             menuHandler->apply(*server_, marker.name);
         };
 
-        if (left_arm_marker_)
+        if (left_arm_marker_ && shouldShowLeftArmMarker())
         {
             initMarker("left_arm_target", "left_arm", left_menu_handler_);
         }
 
-        if (dual_arm_mode_ && right_arm_marker_)
+        if (dual_arm_mode_ && right_arm_marker_ && shouldShowRightArmMarker())
         {
             initMarker("right_arm_target", "right_arm", right_menu_handler_);
         }
@@ -234,7 +262,6 @@ namespace arms_ros2_control::command
             initMarker("head_target", "head", head_menu_handler_);
         }
 
-        // body marker 初始化时不强行插入，统一走可见性逻辑
         createPublishersAndSubscribers();
 
         marker_update_timer_ = node_->create_wall_timer(
@@ -269,12 +296,26 @@ namespace arms_ros2_control::command
 
         if (markerType == "left_arm" && left_arm_marker_)
         {
+            if (!shouldShowLeftArmMarker())
+            {
+                visualization_msgs::msg::InteractiveMarker empty_marker;
+                empty_marker.name = name;
+                return empty_marker;
+            }
             return left_arm_marker_->createMarker(name, current_mode_, enable_interaction);
         }
+
         if (markerType == "right_arm" && right_arm_marker_)
         {
+            if (!shouldShowRightArmMarker())
+            {
+                visualization_msgs::msg::InteractiveMarker empty_marker;
+                empty_marker.name = name;
+                return empty_marker;
+            }
             return right_arm_marker_->createMarker(name, current_mode_, enable_interaction);
         }
+
         if (markerType == "head")
         {
             if (head_marker_ && head_marker_->isEnabled())
@@ -285,6 +326,7 @@ namespace arms_ros2_control::command
             empty_marker.name = name;
             return empty_marker;
         }
+
         if (markerType == "body" && body_marker_)
         {
             if (!shouldShowBodyMarker())
@@ -317,6 +359,11 @@ namespace arms_ros2_control::command
 
         if (marker_name == "left_arm_target" && left_arm_marker_)
         {
+            if (!shouldShowLeftArmMarker())
+            {
+                return;
+            }
+
             geometry_msgs::msg::Pose new_pose = left_arm_marker_->handleFeedback(feedback, source_frame_id);
             left_arm_marker_->setPose(new_pose);
 
@@ -331,6 +378,11 @@ namespace arms_ros2_control::command
         }
         else if (marker_name == "right_arm_target" && right_arm_marker_)
         {
+            if (!shouldShowRightArmMarker())
+            {
+                return;
+            }
+
             geometry_msgs::msg::Pose new_pose = right_arm_marker_->handleFeedback(feedback, source_frame_id);
             right_arm_marker_->setPose(new_pose);
 
@@ -425,7 +477,7 @@ namespace arms_ros2_control::command
             return;
         }
 
-        if (marker_type == "left_arm" && left_arm_marker_)
+        if (marker_type == "left_arm" && left_arm_marker_ && shouldShowLeftArmMarker())
         {
             left_arm_marker_->publishTargetPose(true, true);
             if (body_marker_ && shouldShowBodyMarker())
@@ -435,7 +487,7 @@ namespace arms_ros2_control::command
             return;
         }
 
-        if (marker_type == "right_arm" && right_arm_marker_)
+        if (marker_type == "right_arm" && right_arm_marker_ && shouldShowRightArmMarker())
         {
             right_arm_marker_->publishTargetPose(true, true);
             if (body_marker_ && shouldShowBodyMarker())
@@ -451,6 +503,12 @@ namespace arms_ros2_control::command
         if (!dual_arm_mode_ || !dual_target_stamped_publisher_ || !left_arm_marker_ || !right_arm_marker_)
         {
             RCLCPP_WARN(node_->get_logger(), "Cannot send dual arm target pose: dual arm mode not enabled or publishers not initialized");
+            return;
+        }
+
+        if (!shouldShowLeftArmMarker() || !shouldShowRightArmMarker())
+        {
+            RCLCPP_WARN(node_->get_logger(), "Cannot send dual arm target pose: one or both arm markers are hidden");
             return;
         }
 
@@ -582,17 +640,28 @@ namespace arms_ros2_control::command
             handleMarkerFeedback(feedback);
         };
 
-        auto leftMarker = buildMarker("left_arm_target", "left_arm");
-        server_->insert(leftMarker);
-        server_->setCallback(leftMarker.name, markerCallback);
-        left_menu_handler_->apply(*server_, leftMarker.name);
+        if (left_arm_marker_ && shouldShowLeftArmMarker())
+        {
+            auto leftMarker = buildMarker("left_arm_target", "left_arm");
+            server_->insert(leftMarker);
+            server_->setCallback(leftMarker.name, markerCallback);
+            left_menu_handler_->apply(*server_, leftMarker.name);
+        }
+        else if (left_arm_marker_)
+        {
+            server_->erase("left_arm_target");
+        }
 
-        if (dual_arm_mode_)
+        if (dual_arm_mode_ && right_arm_marker_ && shouldShowRightArmMarker())
         {
             auto rightMarker = buildMarker("right_arm_target", "right_arm");
             server_->insert(rightMarker);
             server_->setCallback(rightMarker.name, markerCallback);
             right_menu_handler_->apply(*server_, rightMarker.name);
+        }
+        else if (dual_arm_mode_ && right_arm_marker_)
+        {
+            server_->erase("right_arm_target");
         }
 
         if (head_marker_ && head_marker_->isEnabled())
@@ -620,8 +689,11 @@ namespace arms_ros2_control::command
     {
         setupMenu();
 
-        left_menu_handler_->apply(*server_, "left_arm_target");
-        if (dual_arm_mode_)
+        if (left_arm_marker_ && shouldShowLeftArmMarker())
+        {
+            left_menu_handler_->apply(*server_, "left_arm_target");
+        }
+        if (dual_arm_mode_ && right_arm_marker_ && shouldShowRightArmMarker())
         {
             right_menu_handler_->apply(*server_, "right_arm_target");
         }
@@ -638,12 +710,28 @@ namespace arms_ros2_control::command
 
         if (current_mode_ == MarkerState::CONTINUOUS)
         {
-            left_menu_handler_->setVisible(left_send_handle_, false);
-            if (dual_arm_mode_)
+            if (left_arm_marker_ && shouldShowLeftArmMarker())
+            {
+                left_menu_handler_->setVisible(left_send_handle_, false);
+            }
+
+            if (dual_arm_mode_ && right_arm_marker_ && shouldShowRightArmMarker())
             {
                 right_menu_handler_->setVisible(right_send_handle_, false);
-                left_menu_handler_->setVisible(left_both_handle_, false);
-                right_menu_handler_->setVisible(right_both_handle_, false);
+            }
+
+            if (dual_arm_mode_)
+            {
+                if (shouldShowLeftArmMarker() && shouldShowRightArmMarker())
+                {
+                    left_menu_handler_->setVisible(left_both_handle_, false);
+                    right_menu_handler_->setVisible(right_both_handle_, false);
+                }
+                else
+                {
+                    left_menu_handler_->setVisible(left_both_handle_, false);
+                    right_menu_handler_->setVisible(right_both_handle_, false);
+                }
             }
 
             if (head_marker_ && head_marker_->isEnabled())
@@ -658,12 +746,21 @@ namespace arms_ros2_control::command
         }
         else
         {
-            left_menu_handler_->setVisible(left_send_handle_, true);
-            if (dual_arm_mode_)
+            if (left_arm_marker_ && shouldShowLeftArmMarker())
+            {
+                left_menu_handler_->setVisible(left_send_handle_, true);
+            }
+
+            if (dual_arm_mode_ && right_arm_marker_ && shouldShowRightArmMarker())
             {
                 right_menu_handler_->setVisible(right_send_handle_, true);
-                left_menu_handler_->setVisible(left_both_handle_, true);
-                right_menu_handler_->setVisible(right_both_handle_, true);
+            }
+
+            if (dual_arm_mode_)
+            {
+                const bool show_both = shouldShowLeftArmMarker() && shouldShowRightArmMarker();
+                left_menu_handler_->setVisible(left_both_handle_, show_both);
+                right_menu_handler_->setVisible(right_both_handle_, show_both);
             }
 
             if (head_marker_ && head_marker_->isEnabled())
@@ -677,8 +774,11 @@ namespace arms_ros2_control::command
             }
         }
 
-        left_menu_handler_->reApply(*server_);
-        if (dual_arm_mode_)
+        if (left_arm_marker_ && shouldShowLeftArmMarker())
+        {
+            left_menu_handler_->reApply(*server_);
+        }
+        if (dual_arm_mode_ && right_arm_marker_ && shouldShowRightArmMarker())
         {
             right_menu_handler_->reApply(*server_);
         }
@@ -737,6 +837,7 @@ namespace arms_ros2_control::command
             current_controller_state_ = command;
 
             updateMarkerShape();
+            updateMenuVisibility();
             updateBodyMarkerVisibility();
             markPendingChanges();
         }
@@ -861,16 +962,24 @@ namespace arms_ros2_control::command
         const geometry_msgs::msg::Quaternion& orientation)
     {
         std::shared_ptr<ArmMarker> arm_marker = nullptr;
+        bool should_show = false;
 
         if (armType == "left" && left_arm_marker_)
         {
             arm_marker = left_arm_marker_;
+            should_show = shouldShowLeftArmMarker();
         }
         else if (armType == "right" && dual_arm_mode_ && right_arm_marker_)
         {
             arm_marker = right_arm_marker_;
+            should_show = shouldShowRightArmMarker();
         }
         else
+        {
+            return;
+        }
+
+        if (!should_show)
         {
             return;
         }
@@ -905,16 +1014,24 @@ namespace arms_ros2_control::command
         }
 
         std::shared_ptr<ArmMarker> arm_marker = nullptr;
+        bool should_show = false;
 
         if (armType == "left" && left_arm_marker_)
         {
             arm_marker = left_arm_marker_;
+            should_show = shouldShowLeftArmMarker();
         }
         else if (armType == "right" && dual_arm_mode_ && right_arm_marker_)
         {
             arm_marker = right_arm_marker_;
+            should_show = shouldShowRightArmMarker();
         }
         else
+        {
+            return;
+        }
+
+        if (!should_show)
         {
             return;
         }
@@ -965,11 +1082,11 @@ namespace arms_ros2_control::command
 
     geometry_msgs::msg::Pose ArmsTargetManager::getMarkerPose(const std::string& armType) const
     {
-        if (armType == "left" && left_arm_marker_)
+        if (armType == "left" && left_arm_marker_ && shouldShowLeftArmMarker())
         {
             return left_arm_marker_->getPose();
         }
-        if (armType == "right" && dual_arm_mode_ && right_arm_marker_)
+        if (armType == "right" && dual_arm_mode_ && right_arm_marker_ && shouldShowRightArmMarker())
         {
             return right_arm_marker_->getPose();
         }
