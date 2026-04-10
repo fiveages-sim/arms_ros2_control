@@ -119,6 +119,14 @@ namespace ocs2::controller_common
                 node->create_subscription<geometry_msgs::msg::PoseStamped>(
                     "right_target/stamped", 1, rightStampedCallback);
         }
+        // body Pose订阅者：收到后立即更新（不插值）
+        auto bodyCallback = [this](const geometry_msgs::msg::Pose::SharedPtr msg)
+        {
+            this->bodyPoseCallback(msg);
+        };
+        body_pose_subscriber_ = node->create_subscription<geometry_msgs::msg::Pose>(
+            "body_target", 1, bodyCallback);
+
         // body PoseStamped订阅者
         auto bodyStampedCallback =
             [this](const geometry_msgs::msg::PoseStamped::SharedPtr msg)
@@ -424,6 +432,82 @@ namespace ocs2::controller_common
         referenceManagerPtr_->setTargetTrajectories(std::move(target_trajectories));
     }
 
+    void PoseBasedReferenceManager::updateBodyTrajectory(const vector_t& previous_body_target_state)
+    {
+        // 仅在轮式人形 21 维目标布局下对 body 做插值；其余布局保持单点更新行为
+        if (effectiveTargetStateDim() != Ocs2ReferenceTargetContext::kWheelHumanoidTargetStateDim)
+        {
+            updateTargetTrajectory();
+            return;
+        }
+
+        const double actual_duration = moveL_duration_;
+        constexpr double kSampleInterval = 0.04; // 25Hz
+        const size_t kNumSamples = std::max(
+            static_cast<size_t>(std::ceil(actual_duration / kSampleInterval)) + 1,
+            static_cast<size_t>(2));
+
+        const double t0 = current_observation_.time;
+        const double t1 = t0 + actual_duration;
+        const double dt = (t1 - t0) / static_cast<double>(kNumSamples - 1);
+
+        auto interpolatePose7 = [](const vector_t& s0, const vector_t& s1, double alpha) -> vector_t
+        {
+            vector_t out = vector_t::Zero(7);
+            out.segment<3>(0) =
+                (1.0 - alpha) * s0.segment<3>(0) + alpha * s1.segment<3>(0);
+
+            // quaternion stored as [qx, qy, qz, qw]
+            Eigen::Quaterniond q0(s0(6), s0(3), s0(4), s0(5));
+            Eigen::Quaterniond q1(s1(6), s1(3), s1(4), s1(5));
+            if (q0.norm() < 1e-9) q0 = Eigen::Quaterniond::Identity();
+            else q0.normalize();
+            if (q1.norm() < 1e-9) q1 = q0;
+            else q1.normalize();
+            if (q0.dot(q1) < 0.0) q1.coeffs() *= -1.0;
+
+            Eigen::Quaterniond q = q0.slerp(alpha, q1);
+            q.normalize();
+            out(3) = q.x();
+            out(4) = q.y();
+            out(5) = q.z();
+            out(6) = q.w();
+            return out;
+        };
+
+        vector_t start_body = previous_body_target_state;
+        if (start_body.size() < 7)
+        {
+            start_body = body_pose_7_xyzw_;
+        }
+        const vector_t goal_body = body_pose_7_xyzw_;
+        const vector_t fixed_left = left_target_state_;
+        const vector_t fixed_right = dual_arm_mode_ ? right_target_state_ : vector_t::Zero(7);
+
+        scalar_array_t time_trajectory;
+        time_trajectory.reserve(kNumSamples);
+        vector_array_t state_trajectory;
+        state_trajectory.reserve(kNumSamples);
+
+        for (size_t i = 0; i < kNumSamples; ++i)
+        {
+            const double t = t0 + static_cast<double>(i) * dt;
+            const double alpha = std::clamp(
+                static_cast<double>(i) / static_cast<double>(kNumSamples - 1), 0.0, 1.0);
+
+            const vector_t body_i = interpolatePose7(start_body, goal_body, alpha);
+            const vector_t xt = assembleWheelHumanoidTargetState(fixed_left, fixed_right, body_i);
+
+            time_trajectory.push_back(t);
+            state_trajectory.push_back(xt);
+        }
+
+        vector_array_t input_trajectory(
+            kNumSamples, vector_t::Zero(target_context_.input_dim));
+        TargetTrajectories target_trajectories(time_trajectory, state_trajectory, input_trajectory);
+        referenceManagerPtr_->setTargetTrajectories(std::move(target_trajectories));
+    }
+
     void PoseBasedReferenceManager::updateParam()
     {
         trajectory_duration_ =
@@ -539,6 +623,21 @@ namespace ocs2::controller_common
         publishCurrentTargets();
     }
 
+    void PoseBasedReferenceManager::bodyPoseCallback(
+        const geometry_msgs::msg::Pose::SharedPtr msg)
+    {
+        // body_target: 直接更新，不插值
+        body_pose_7_xyzw_(0) = msg->position.x;
+        body_pose_7_xyzw_(1) = msg->position.y;
+        body_pose_7_xyzw_(2) = msg->position.z;
+        body_pose_7_xyzw_(3) = msg->orientation.x;
+        body_pose_7_xyzw_(4) = msg->orientation.y;
+        body_pose_7_xyzw_(5) = msg->orientation.z;
+        body_pose_7_xyzw_(6) = msg->orientation.w;
+
+        updateTargetTrajectory();
+    }
+
     void PoseBasedReferenceManager::leftPoseStampedPoseCallback(
         const geometry_msgs::msg::Pose::SharedPtr msg)
     {
@@ -606,6 +705,24 @@ namespace ocs2::controller_common
         publishCurrentTargets("right");
     }
 
+    void PoseBasedReferenceManager::bodyPoseStampedPoseCallback(
+        const geometry_msgs::msg::Pose::SharedPtr msg)
+    {
+        // body_target/stamped: 与手臂一致，使用 moveL_duration 插值
+        updateParam();
+        const vector_t previous_body_target_state = body_pose_7_xyzw_;
+
+        body_pose_7_xyzw_(0) = msg->position.x;
+        body_pose_7_xyzw_(1) = msg->position.y;
+        body_pose_7_xyzw_(2) = msg->position.z;
+        body_pose_7_xyzw_(3) = msg->orientation.x;
+        body_pose_7_xyzw_(4) = msg->orientation.y;
+        body_pose_7_xyzw_(5) = msg->orientation.z;
+        body_pose_7_xyzw_(6) = msg->orientation.w;
+
+        updateBodyTrajectory(previous_body_target_state);
+    }
+
     void PoseBasedReferenceManager::processPoseStamped(
         const geometry_msgs::msg::PoseStamped::SharedPtr& msg,
         std::function<void(geometry_msgs::msg::Pose::SharedPtr)> callback)
@@ -667,43 +784,10 @@ namespace ocs2::controller_common
     void PoseBasedReferenceManager::bodyPoseStampedCallback(
         const geometry_msgs::msg::PoseStamped::SharedPtr msg)
     {
-        geometry_msgs::msg::PoseStamped transformed_pose;
-
-        // Step 1: TF到 base_frame（和手臂完全一致）
-        if (msg->header.frame_id == base_frame_)
+        processPoseStamped(msg, [this](geometry_msgs::msg::Pose::SharedPtr pose_msg)
         {
-            transformed_pose = *msg;
-        }
-        else
-        {
-            try
-            {
-                auto transform = tf_buffer_->lookupTransform(
-                    base_frame_,
-                    msg->header.frame_id,
-                    tf2::TimePointZero);
-
-                tf2::doTransform(*msg, transformed_pose, transform);
-            }
-            catch (const tf2::TransformException& ex)
-            {
-                RCLCPP_WARN(logger_, "Body pose TF失败: %s", ex.what());
-                return;
-            }
-        }
-
-        // Step 2: 写入 body_pose_7_xyzw_
-        body_pose_7_xyzw_(0) = transformed_pose.pose.position.x;
-        body_pose_7_xyzw_(1) = transformed_pose.pose.position.y;
-        body_pose_7_xyzw_(2) = transformed_pose.pose.position.z;
-
-        body_pose_7_xyzw_(3) = transformed_pose.pose.orientation.x;
-        body_pose_7_xyzw_(4) = transformed_pose.pose.orientation.y;
-        body_pose_7_xyzw_(5) = transformed_pose.pose.orientation.z;
-        body_pose_7_xyzw_(6) = transformed_pose.pose.orientation.w;
-
-        // Step 3: 更新 target trajectory（关键）
-        updateTargetTrajectory();
+            bodyPoseStampedPoseCallback(pose_msg);
+        });
     }
 
     void PoseBasedReferenceManager::dualTargetStampedCallback(

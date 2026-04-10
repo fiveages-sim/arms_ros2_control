@@ -219,11 +219,6 @@ namespace arms_rviz_control_plugin
             }
         )");
 
-        body_combo_box_->addItem("自由", BODY_MODE_FREE);
-        body_combo_box_->addItem("竖直", BODY_MODE_VERTICAL);
-        body_combo_box_->addItem("跟随", BODY_MODE_TRACKING);
-        body_combo_box_->addItem("锁定", BODY_MODE_LOCKED);
-
         // Add OCS2 to HOLD button on the right of body mode dropdown
         auto* ocs2_to_hold_wbc_btn = new QPushButton("HOLD", this);
         ocs2_to_hold_wbc_btn->setStyleSheet("QPushButton { background-color: #FF9800; color: white; font-weight: bold; min-width: 130px; }");
