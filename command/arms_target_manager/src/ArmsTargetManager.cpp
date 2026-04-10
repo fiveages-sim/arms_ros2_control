@@ -534,6 +534,12 @@ namespace arms_ros2_control::command
         dual_path.poses[1].pose = right_transformed;
 
         dual_target_stamped_publisher_->publish(dual_path);
+
+        // 同步发送腰部（body）目标：点击“发送双臂”时，若body marker可用则一并发布
+        if (body_marker_ && shouldShowBodyMarker())
+        {
+            body_marker_->publishTargetPose(true);
+        }
     }
 
     void ArmsTargetManager::sendBodyTargetPose()
