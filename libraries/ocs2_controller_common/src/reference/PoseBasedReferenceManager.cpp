@@ -432,6 +432,84 @@ namespace ocs2::controller_common
         referenceManagerPtr_->setTargetTrajectories(std::move(target_trajectories));
     }
 
+    void PoseBasedReferenceManager::updateTrajectoryWithBody(
+        const vector_t& previous_left_target_state,
+        const vector_t& previous_right_target_state,
+        const vector_t& previous_body_target_state)
+    {
+        // 仅在轮式人形 21 维目标布局下执行“左/右/腰”统一插值；其余布局退化为双臂插值
+        if (effectiveTargetStateDim() != Ocs2ReferenceTargetContext::kWheelHumanoidTargetStateDim)
+        {
+            updateTrajectory(previous_left_target_state, previous_right_target_state);
+            return;
+        }
+
+        const double actual_duration = moveL_duration_;
+        constexpr double kSampleInterval = 0.04; // 25Hz
+        const size_t kNumSamples = std::max(
+            static_cast<size_t>(std::ceil(actual_duration / kSampleInterval)) + 1,
+            static_cast<size_t>(2));
+
+        const double t0 = current_observation_.time;
+        const double t1 = t0 + actual_duration;
+        const double dt = (t1 - t0) / static_cast<double>(kNumSamples - 1);
+
+        auto interpolatePose7 = [](const vector_t& s0, const vector_t& s1, double alpha) -> vector_t
+        {
+            vector_t out = vector_t::Zero(7);
+            out.segment<3>(0) =
+                (1.0 - alpha) * s0.segment<3>(0) + alpha * s1.segment<3>(0);
+
+            Eigen::Quaterniond q0(s0(6), s0(3), s0(4), s0(5));
+            Eigen::Quaterniond q1(s1(6), s1(3), s1(4), s1(5));
+            if (q0.norm() < 1e-9) q0 = Eigen::Quaterniond::Identity();
+            else q0.normalize();
+            if (q1.norm() < 1e-9) q1 = q0;
+            else q1.normalize();
+            if (q0.dot(q1) < 0.0) q1.coeffs() *= -1.0;
+
+            Eigen::Quaterniond q = q0.slerp(alpha, q1);
+            q.normalize();
+            out(3) = q.x();
+            out(4) = q.y();
+            out(5) = q.z();
+            out(6) = q.w();
+            return out;
+        };
+
+        vector_t start_left = previous_left_target_state.size() >= 7 ? previous_left_target_state : left_target_state_;
+        vector_t start_right = previous_right_target_state.size() >= 7 ? previous_right_target_state : right_target_state_;
+        vector_t start_body = previous_body_target_state.size() >= 7 ? previous_body_target_state : body_pose_7_xyzw_;
+        const vector_t goal_left = left_target_state_;
+        const vector_t goal_right = right_target_state_;
+        const vector_t goal_body = body_pose_7_xyzw_;
+
+        scalar_array_t time_trajectory;
+        time_trajectory.reserve(kNumSamples);
+        vector_array_t state_trajectory;
+        state_trajectory.reserve(kNumSamples);
+
+        for (size_t i = 0; i < kNumSamples; ++i)
+        {
+            const double t = t0 + static_cast<double>(i) * dt;
+            const double alpha = std::clamp(
+                static_cast<double>(i) / static_cast<double>(kNumSamples - 1), 0.0, 1.0);
+
+            const vector_t left_i = interpolatePose7(start_left, goal_left, alpha);
+            const vector_t right_i = interpolatePose7(start_right, goal_right, alpha);
+            const vector_t body_i = interpolatePose7(start_body, goal_body, alpha);
+            const vector_t xt = assembleWheelHumanoidTargetState(left_i, right_i, body_i);
+
+            time_trajectory.push_back(t);
+            state_trajectory.push_back(xt);
+        }
+
+        vector_array_t input_trajectory(
+            kNumSamples, vector_t::Zero(target_context_.input_dim));
+        TargetTrajectories target_trajectories(time_trajectory, state_trajectory, input_trajectory);
+        referenceManagerPtr_->setTargetTrajectories(std::move(target_trajectories));
+    }
+
     void PoseBasedReferenceManager::updateBodyTrajectory(const vector_t& previous_body_target_state)
     {
         // 仅在轮式人形 21 维目标布局下对 body 做插值；其余布局保持单点更新行为
@@ -803,12 +881,12 @@ namespace ocs2::controller_common
             return;
         }
 
-        // 检查path长度必须为2
-        if (msg->poses.size() != 2)
+        // 支持两种格式：
+        //   2 poses: [left, right]
+        //   3 poses: [left, right, body]  -> 三条轨迹统一插值规划
+        if (msg->poses.size() != 2 && msg->poses.size() != 3)
         {
-            RCLCPP_WARN(logger_,
-                        "Dual target path must contain exactly 2 poses (left and "
-                        "right), got %zu",
+            RCLCPP_WARN(logger_, "Dual target path must contain 2 or 3 poses ([left,right] or [left,right,body]), got %zu",
                         msg->poses.size());
             return;
         }
@@ -816,6 +894,7 @@ namespace ocs2::controller_common
         // 保存上一帧缓存（用于插值起点）
         const vector_t previous_left_target_state = left_target_state_;
         const vector_t previous_right_target_state = right_target_state_;
+        const vector_t previous_body_target_state = body_pose_7_xyzw_;
 
         // 转换pose到状态向量的辅助函数
         auto poseToState = [](const geometry_msgs::msg::Pose& pose) -> vector_t
@@ -831,70 +910,66 @@ namespace ocs2::controller_common
             return state;
         };
 
-        // 处理左臂（第一个pose）
-        const auto& left_pose_stamped = msg->poses[0];
-        vector_t left_target_state;
-
-        if (left_pose_stamped.header.frame_id == base_frame_)
+        auto parsePoseStampedToState = [this, &poseToState](const geometry_msgs::msg::PoseStamped& pose_stamped,
+                                                             const char* tag, vector_t& out_state) -> bool
         {
-            left_target_state = poseToState(left_pose_stamped.pose);
-        }
-        else
-        {
+            if (pose_stamped.header.frame_id == base_frame_)
+            {
+                out_state = poseToState(pose_stamped.pose);
+                return true;
+            }
             try
             {
                 geometry_msgs::msg::PoseStamped transformed_pose;
                 geometry_msgs::msg::TransformStamped transform =
-                    tf_buffer_->lookupTransform(base_frame_,
-                                                left_pose_stamped.header.frame_id,
-                                                tf2::TimePointZero);
-                tf2::doTransform(left_pose_stamped, transformed_pose, transform);
-                left_target_state = poseToState(transformed_pose.pose);
+                    tf_buffer_->lookupTransform(base_frame_, pose_stamped.header.frame_id, tf2::TimePointZero);
+                tf2::doTransform(pose_stamped, transformed_pose, transform);
+                out_state = poseToState(transformed_pose.pose);
+                return true;
             }
             catch (const tf2::TransformException& ex)
             {
-                RCLCPP_WARN(logger_, "无法将左臂pose从 %s 转换到 %s: %s",
-                            left_pose_stamped.header.frame_id.c_str(),
-                            base_frame_.c_str(), ex.what());
-                return;
+                RCLCPP_WARN(logger_, "无法将%s pose从 %s 转换到 %s: %s",
+                            tag, pose_stamped.header.frame_id.c_str(), base_frame_.c_str(), ex.what());
+                return false;
             }
+        };
+
+        // 处理左臂（第一个pose）
+        vector_t left_target_state;
+        if (!parsePoseStampedToState(msg->poses[0], "左臂", left_target_state))
+        {
+            return;
         }
 
         // 处理右臂（第二个pose）
-        const auto& right_pose_stamped = msg->poses[1];
         vector_t right_target_state;
-
-        if (right_pose_stamped.header.frame_id == base_frame_)
+        if (!parsePoseStampedToState(msg->poses[1], "右臂", right_target_state))
         {
-            right_target_state = poseToState(right_pose_stamped.pose);
-        }
-        else
-        {
-            try
-            {
-                geometry_msgs::msg::PoseStamped transformed_pose;
-                geometry_msgs::msg::TransformStamped transform =
-                    tf_buffer_->lookupTransform(base_frame_,
-                                                right_pose_stamped.header.frame_id,
-                                                tf2::TimePointZero);
-                tf2::doTransform(right_pose_stamped, transformed_pose, transform);
-                right_target_state = poseToState(transformed_pose.pose);
-            }
-            catch (const tf2::TransformException& ex)
-            {
-                RCLCPP_WARN(logger_, "无法将右臂pose从 %s 转换到 %s: %s",
-                            right_pose_stamped.header.frame_id.c_str(),
-                            base_frame_.c_str(), ex.what());
-                return;
-            }
+            return;
         }
 
         // 更新缓存到新目标
         left_target_state_ = left_target_state;
         right_target_state_ = right_target_state;
 
-        // 同时更新两个臂的轨迹
-        updateTrajectory(previous_left_target_state, previous_right_target_state);
+        if (msg->poses.size() == 3)
+        {
+            vector_t body_target_state;
+            if (!parsePoseStampedToState(msg->poses[2], "腰部", body_target_state))
+            {
+                return;
+            }
+            body_pose_7_xyzw_ = body_target_state;
+
+            // 三条轨迹统一插值规划（左/右/腰）
+            updateTrajectoryWithBody(previous_left_target_state, previous_right_target_state, previous_body_target_state);
+        }
+        else
+        {
+            // 兼容旧格式：仅双臂
+            updateTrajectory(previous_left_target_state, previous_right_target_state);
+        }
 
         // 发布当前目标
         publishCurrentTargets();

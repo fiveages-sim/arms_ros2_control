@@ -73,6 +73,8 @@ private:
         std::shared_ptr<arms_ros2_control_msgs::srv::ExecutePath::Response> response);
     void updateTargetTrajectory();
     void updateTrajectory(const vector_t& previous_left_target_state, const vector_t& previous_right_target_state);
+    void updateTrajectoryWithBody(const vector_t& previous_left_target_state, const vector_t& previous_right_target_state,
+                                  const vector_t& previous_body_target_state);
     void updateBodyTrajectory(const vector_t& previous_body_target_state);
 
     [[nodiscard]] int effectiveTargetStateDim() const;

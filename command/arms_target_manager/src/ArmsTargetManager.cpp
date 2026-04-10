@@ -515,7 +515,8 @@ namespace arms_ros2_control::command
         nav_msgs::msg::Path dual_path;
         dual_path.header.stamp = node_->get_clock()->now();
         dual_path.header.frame_id = control_base_frame_;
-        dual_path.poses.resize(2);
+        const bool include_body = (body_marker_ && shouldShowBodyMarker());
+        dual_path.poses.resize(include_body ? 3 : 2);
 
         dual_path.poses[0].header.stamp = dual_path.header.stamp;
         dual_path.poses[0].header.frame_id = control_base_frame_;
@@ -525,13 +526,19 @@ namespace arms_ros2_control::command
         dual_path.poses[1].header.frame_id = control_base_frame_;
         dual_path.poses[1].pose = right_transformed;
 
-        dual_target_stamped_publisher_->publish(dual_path);
-
-        // 同步发送腰部（body）目标：点击“发送双臂”时，若body marker可用则一并发布
-        if (body_marker_ && shouldShowBodyMarker())
+        // 若 body marker 可用，三条轨迹（左/右/腰）合并成一次 dual_target/stamped 下发，
+        // 由接收端统一插值规划，避免多topic覆盖。
+        if (include_body)
         {
-            body_marker_->publishTargetPose(true);
+            geometry_msgs::msg::Pose body_pose = body_marker_->getPose();
+            geometry_msgs::msg::Pose body_transformed = transformPose(
+                body_pose, marker_fixed_frame_, control_base_frame_);
+            dual_path.poses[2].header.stamp = dual_path.header.stamp;
+            dual_path.poses[2].header.frame_id = control_base_frame_;
+            dual_path.poses[2].pose = body_transformed;
         }
+
+        dual_target_stamped_publisher_->publish(dual_path);
     }
 
     void ArmsTargetManager::sendBodyTargetPose()
