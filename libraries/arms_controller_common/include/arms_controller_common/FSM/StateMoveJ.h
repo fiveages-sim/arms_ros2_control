@@ -25,7 +25,7 @@
 #include "arms_controller_common/utils/Kinematics.h"
 #include "arms_controller_common/utils/CartesianTrajectoryManager.h"
 #include "arms_ros2_control_msgs/srv/execute_linear.hpp"
-
+#include "arms_ros2_control_msgs/srv/movec_use_ik.hpp"
 
 namespace arms_controller_common
 {
@@ -135,7 +135,7 @@ namespace arms_controller_common
         enum class MotionMode
         {
             MOVEJ,
-            MOVEL,
+            MOVECARTESIAN,
             WAIST_CONTROL
         };
 
@@ -180,6 +180,12 @@ namespace arms_controller_common
         * @param service_name Service name (default: "execute_linear")
         */
         void setupLinearTrajectoryService(const std::string& service_name = "execute_linear");
+
+        /**
+        * @brief Setup linear trajectory service for MoveL planning
+        * @param service_name Service name (default: "execute_linear")
+        */
+        void setupCircleTrajectoryService(const std::string& service_name = "execute_circle_use_ik");
 
     private:
         void updateParam();
@@ -348,7 +354,19 @@ namespace arms_controller_common
         bool validateLinearRequest(const arms_ros2_control_msgs::msg::LinearMessage& linear_params,
                                    std::string& error_msg);
 
-        bool movel_active_{false};
-        std::vector<std::string> movel_joint_names_;
+        bool move_cartesian_active_{false};
+        std::vector<std::string> move_cartesian_joint_names_;
+        //Service for movec
+        rclcpp::Service<arms_ros2_control_msgs::srv::MovecUseIK>::SharedPtr circle_trajectory_service_;
+
+        // Service handler for Movec
+        void handleCircleTrajectory(
+            const std::shared_ptr<rmw_request_id_t> request_header,
+            const std::shared_ptr<arms_ros2_control_msgs::srv::MovecUseIK::Request> request,
+            const std::shared_ptr<arms_ros2_control_msgs::srv::MovecUseIK::Response> response);
+
+        // 添加 MoveL 相关的辅助方法
+        bool validateCircleRequest(const arms_ros2_control_msgs::msg::CircleMessage& circle_params,
+                                   std::string& error_msg);
     };
 } // namespace arms_controller_common

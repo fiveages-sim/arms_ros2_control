@@ -235,14 +235,15 @@ namespace arms_controller_common
         }
 
         // ===== 新增：处理 MoveL 直线运动 =====
-        if (motion_mode_ == MotionMode::MOVEL && movel_active_)
+        if (motion_mode_ == MotionMode::MOVECARTESIAN && move_cartesian_active_)
         {
             std::vector<double> next_joint_pos;
 
             // 获取下一个关节位置
             if (cartesian_manager_.getNextJointPos(next_joint_pos))
             {
-                std::vector<double> full_joint_pos = mapToFullJointPositions(movel_joint_names_, next_joint_pos);
+                std::vector<double> full_joint_pos = mapToFullJointPositions(
+                    move_cartesian_joint_names_, next_joint_pos);
 
 
                 // 检查 next_joint_pos 的大小是否正确
@@ -267,7 +268,7 @@ namespace arms_controller_common
                     {
                         RCLCPP_INFO(node_->get_logger(),
                                     "MoveL trajectory completed successfully");
-                        movel_active_ = false;
+                        move_cartesian_active_ = false;
                         motion_mode_ = MotionMode::MOVEJ;
                         // 更新保持位置
                         refreshHoldPositions();
@@ -278,16 +279,17 @@ namespace arms_controller_common
                     RCLCPP_ERROR(node_->get_logger(),
                                  "MoveL joint position size mismatch: expected %zu, got %zu",
                                  expected_size, next_joint_pos.size());
-                    movel_active_ = false;
+                    move_cartesian_active_ = false;
                     motion_mode_ = MotionMode::MOVEJ;
                 }
             }
             else
             {
+                refreshHoldPositions();
+                move_cartesian_active_ = false;
+                motion_mode_ = MotionMode::MOVEJ;
                 RCLCPP_WARN(node_->get_logger(),
                             "Failed to get next joint position from MoveL planner");
-                movel_active_ = false;
-                motion_mode_ = MotionMode::MOVEJ;
             }
 
             return; // MoveL 优先级高于 MOVEJ
@@ -488,7 +490,7 @@ namespace arms_controller_common
 
         motion_mode_ = MotionMode::MOVEJ;
 
-        movel_active_ = false;
+        move_cartesian_active_ = false;
         cartesian_manager_.clearPlanner();
 
         last_waist_factor_ = 0.0;
@@ -1914,7 +1916,7 @@ namespace arms_controller_common
             return;
         }
 
-        if (movel_joint_names_.empty())
+        if (move_cartesian_joint_names_.empty())
         {
             response->success = false;
             response->message = "MoveL joint names not initialized";
@@ -1923,7 +1925,7 @@ namespace arms_controller_common
         }
 
         // 3. 获取当前关节位置
-        std::vector<double> current_joint_positions = getCurrentJointPositions(movel_joint_names_);
+        std::vector<double> current_joint_positions = getCurrentJointPositions(move_cartesian_joint_names_);
         if (current_joint_positions.empty())
         {
             response->success = false;
@@ -1950,8 +1952,8 @@ namespace arms_controller_common
         interpolation_active_ = false;
         has_target_ = false;
 
-        motion_mode_ = MotionMode::MOVEL;
-        movel_active_ = true;
+        motion_mode_ = MotionMode::MOVECARTESIAN;
+        move_cartesian_active_ = true;
 
         response->success = true;
         response->message = "MoveL trajectory planned successfully";
@@ -2054,6 +2056,202 @@ namespace arms_controller_common
             // 可以选择自动归一化，这里只是警告
         }
 
+        // 添加 kinematics 检查cartesian_manager_
+        if (!cartesian_manager_.hasKinematics()) // 需要添加这个方法
+        {
+            error_msg = "Kinematics solver not set for MoveL planning";
+            return false;
+        }
+
+        //更新movel要用的关节名称列表
+        move_cartesian_joint_names_ = cartesian_manager_.getMovelJointNames(linear_params.arm_name);
+
+        return true;
+    }
+
+
+    void StateMoveJ::setupCircleTrajectoryService(const std::string& service_name)
+    {
+        std::string full_service_name = node_->get_name() + std::string("/") + service_name;
+
+        circle_trajectory_service_ = node_->create_service<arms_ros2_control_msgs::srv::MovecUseIK>(
+            full_service_name,
+            std::bind(&StateMoveJ::handleCircleTrajectory, this,
+                      std::placeholders::_1, std::placeholders::_2, std::placeholders::_3));
+
+        RCLCPP_INFO(node_->get_logger(), "Created circle trajectory service at %s",
+                    full_service_name.c_str());
+    }
+
+    // Service handler for Movec
+    void StateMoveJ::handleCircleTrajectory(
+        const std::shared_ptr<rmw_request_id_t> request_header,
+        const std::shared_ptr<arms_ros2_control_msgs::srv::MovecUseIK::Request> request,
+        const std::shared_ptr<arms_ros2_control_msgs::srv::MovecUseIK::Response> response)
+    {
+        (void)request_header;
+
+        // 1. 检查状态
+        if (!state_active_)
+        {
+            response->success = false;
+            response->message = "StateMoveJ is not active";
+            response->estimated_duration = 0.0;
+            return;
+        }
+
+        updateParam();
+
+        // 2. 验证请求参数
+        std::string error_msg;
+        if (!validateCircleRequest(request->circle_params, error_msg))
+        {
+            response->success = false;
+            response->message = error_msg;
+            response->estimated_duration = 0.0;
+            return;
+        }
+
+        if (move_cartesian_joint_names_.empty())
+        {
+            response->success = false;
+            response->message = "Move cartesian joint names not initialized";
+            response->estimated_duration = 0.0;
+            return;
+        }
+
+        // 3. 获取当前关节位置
+        std::vector<double> current_joint_positions = getCurrentJointPositions(move_cartesian_joint_names_);
+        if (current_joint_positions.empty())
+        {
+            response->success = false;
+            response->message = "Failed to get current joint positions for " + request->circle_params.arm_name + " arm";
+            response->estimated_duration = 0.0;
+            return;
+        }
+
+        // 4. 规划 MoveC 轨迹
+        double period = 1.0 / ctrl_interfaces_.frequency_;
+
+        if (!cartesian_manager_.planSingleArmMoveC(current_joint_positions,
+                                                   request->circle_params,
+                                                   period))
+        {
+            response->success = false;
+            response->message = "Failed to plan MoveC trajectory";
+            response->estimated_duration = 0.0;
+            return;
+        }
+
+        // 5. 设置成功响应
+        trajectory_manager_.reset();
+        interpolation_active_ = false;
+        has_target_ = false;
+
+        motion_mode_ = MotionMode::MOVECARTESIAN;
+        move_cartesian_active_ = true;
+
+        response->success = true;
+        response->message = "MoveC trajectory planned successfully";
+        response->estimated_duration = cartesian_manager_.getPlanningTime();
+        RCLCPP_INFO(node_->get_logger(),
+                    "Circle trajectory service: planned MoveC for arm '%s', duration=%.3f",
+                    request->circle_params.arm_name.c_str(),
+                    response->estimated_duration);
+    }
+
+    // 添加 MoveL 相关的辅助方法
+    bool StateMoveJ::validateCircleRequest(const arms_ros2_control_msgs::msg::CircleMessage& circle_params,
+                                           std::string& error_msg)
+    {
+        // 验证手臂名称
+        if (circle_params.arm_name.empty())
+        {
+            error_msg = "arm_name is empty";
+            return false;
+        }
+
+        if (circle_params.arm_name != "left" && circle_params.arm_name != "right")
+        {
+            error_msg = "arm_name must be 'left' or 'right', got: " + circle_params.arm_name;
+            return false;
+        }
+
+        // 验证坐标系
+        if (circle_params.frame_id.empty())
+        {
+            error_msg = "frame_id is empty";
+            return false;
+        }
+
+        // 验证运动参数
+        if (circle_params.time_mode)
+        {
+            // 时间模式：需要有效的 duration
+            if (circle_params.duration <= 0.001)
+            {
+                error_msg = "Invalid duration in time mode: " + std::to_string(circle_params.duration);
+                return false;
+            }
+        }
+        else
+        {
+            // 参数约束模式：验证速度、加速度等参数
+            if (circle_params.max_linear_velocity <= 0.0)
+            {
+                error_msg = "max_linear_velocity must be > 0 in constraint mode";
+                return false;
+            }
+
+            if (circle_params.max_linear_acceleration <= 0.0)
+            {
+                error_msg = "max_linear_acceleration must be > 0 in constraint mode";
+                return false;
+            }
+
+            if (circle_params.max_angular_velocity <= 0.0)
+            {
+                error_msg = "max_angular_velocity must be > 0 in constraint mode";
+                return false;
+            }
+
+            if (circle_params.max_angular_acceleration <= 0.0)
+            {
+                error_msg = "max_angular_acceleration must be > 0 in constraint mode";
+                return false;
+            }
+        }
+
+        // 验证终点位姿
+        // 检查位置是否有效（非 NaN）
+        if (std::isnan(circle_params.endpoint.position.x) ||
+            std::isnan(circle_params.endpoint.position.y) ||
+            std::isnan(circle_params.endpoint.position.z))
+        {
+            error_msg = "Endpoint position contains NaN values";
+            return false;
+        }
+
+        // 检查四元数是否有效（非 NaN 且模长接近 1）
+        double qx = circle_params.endpoint.orientation.x;
+        double qy = circle_params.endpoint.orientation.y;
+        double qz = circle_params.endpoint.orientation.z;
+        double qw = circle_params.endpoint.orientation.w;
+
+        if (std::isnan(qx) || std::isnan(qy) || std::isnan(qz) || std::isnan(qw))
+        {
+            error_msg = "Endpoint orientation contains NaN values";
+            return false;
+        }
+
+        double norm = std::sqrt(qx * qx + qy * qy + qz * qz + qw * qw);
+        if (std::abs(norm - 1.0) > 0.01)
+        {
+            RCLCPP_WARN(node_->get_logger(),
+                        "Quaternion norm is %.3f (should be 1.0), auto-normalizing", norm);
+            // 可以选择自动归一化，这里只是警告
+        }
+
         // 添加 kinematics 检查
         if (!cartesian_manager_.hasKinematics()) // 需要添加这个方法
         {
@@ -2062,7 +2260,7 @@ namespace arms_controller_common
         }
 
         //更新movel要用的关节名称列表
-        movel_joint_names_ = cartesian_manager_.getMovelJointNames(linear_params.arm_name);
+        move_cartesian_joint_names_ = cartesian_manager_.getMovelJointNames(circle_params.arm_name);
 
         return true;
     }

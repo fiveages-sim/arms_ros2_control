@@ -1,0 +1,8 @@
+# 请求部分
+arms_ros2_control_msgs/CircleMessage circle_params
+
+---
+# 响应部分
+bool success
+string message
+float64 estimated_duration

@@ -232,6 +232,33 @@ namespace arms_controller_common
          * @brief 转换 ROS Pose 消息到 EndEffectorPose
          */
         EndEffectorPose rosPoseToEndEffectorPose(const geometry_msgs::msg::Pose& pose);
+        // 新增：从参数接口初始化的方法
+        void initializeFromParameters(
+            const std::vector<std::string>& joint_names,
+            const std::string& left_ee_name = "left_tcp",
+            const std::string& right_ee_name = "right_tcp");
+
+        // 新增：设置末端执行器名称
+        void setEndEffectorNames(const std::string& left_name, const std::string& right_name)
+        {
+            leftEndEffectorName_ = left_name;
+            rightEndEffectorName_ = right_name;
+        }
+
+        // 新增：设置关节名称
+        void setJointNames(const std::vector<std::string>& joint_names)
+        {
+            // 分离左右臂关节（假设前7个是左臂，后7个是右臂）
+            size_t half = joint_names.size() / 2;
+            leftArmJointNames_.assign(joint_names.begin(), joint_names.begin() + half);
+            rightArmJointNames_.assign(joint_names.begin() + half, joint_names.end());
+
+            leftArmJointCount_ = leftArmJointNames_.size();
+            rightArmJointCount_ = rightArmJointNames_.size();
+            extractJointLimits();
+        }
+
+
 
     private:
         // Pinocchio模型和数据
@@ -262,7 +289,7 @@ namespace arms_controller_common
         Eigen::VectorXd rightUpperLimits_;
         // 内部辅助函数
         void buildMappings();
-        void get_joint_names_from_model();
+        // void get_joint_names_from_model();
         void extractJointLimits();
         void updateKinematics(const Eigen::VectorXd& jointPositions);
 
@@ -283,5 +310,16 @@ namespace arms_controller_common
         Eigen::VectorXd dampedLeastSquares(const Eigen::MatrixXd& J,
                                            const Eigen::VectorXd& error,
                                            double damping = 0.01) const;
+
+        // 缓存上次求解结果用于热启动
+        mutable Eigen::VectorXd lastLeftSolution_;
+        mutable Eigen::VectorXd lastRightSolution_;
+        mutable std::string lastArmType_;
+
+        // 新增：自适应阻尼计算
+        double computeAdaptiveDamping(const Eigen::MatrixXd& J, double baseDamping) const;
+
+        // 新增：限制步长
+        void limitStepSize(Eigen::VectorXd& deltaQ, double maxStep = 0.3);
     };
 } // namespace arms_controller_common

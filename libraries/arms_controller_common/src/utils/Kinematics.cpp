@@ -14,8 +14,8 @@ namespace arms_controller_common
         data_ = pinocchio::Data(model_);
         baseFrameName_ = baseFrameName;
         buildMappings();
-        get_joint_names_from_model();
-        extractJointLimits();
+        // get_joint_names_from_model();
+        // extractJointLimits();
     }
 
     ArmKinematics::ArmKinematics(const pinocchio::Model& model)
@@ -23,8 +23,17 @@ namespace arms_controller_common
     {
         data_ = pinocchio::Data(model_);
         buildMappings();
-        get_joint_names_from_model();
-        extractJointLimits();
+        // get_joint_names_from_model();
+        // extractJointLimits();
+    }
+
+    void ArmKinematics::initializeFromParameters(
+        const std::vector<std::string>& joint_names,
+        const std::string& left_ee_name,
+        const std::string& right_ee_name)
+    {
+        setJointNames(joint_names);
+        setEndEffectorNames(left_ee_name, right_ee_name);
     }
 
     ArmKinematics::~ArmKinematics() = default;
@@ -96,60 +105,166 @@ namespace arms_controller_common
     }
 
     // ==================== 逆运动学 ====================
+    // 优化后的单臂逆运动学求解器
     bool ArmKinematics::solveSingleArmIK(const EndEffectorPose& targetPose,
                                          const Eigen::VectorXd& initialGuess,
                                          Eigen::VectorXd& solution,
-                                         std::string arm_type, int maxIterations,
-                                         double tolerance, double damping)
+                                         std::string arm_type,
+                                         int maxIterations,
+                                         double tolerance,
+                                         double damping)
     {
-        solution = initialGuess;
-        RobotState state(leftArmJointCount_, rightArmJointCount_);
-        int frameId;
-        if (arm_type == "left")
+        // 1. 参数验证
+        int jointCount = (arm_type == "left") ? leftArmJointCount_ : rightArmJointCount_;
+        if (initialGuess.size() != static_cast<Eigen::Index>(jointCount))
         {
-            if (initialGuess.size() != static_cast<Eigen::Index>(leftArmJointCount_))
-                return false;
-            state.leftArmJoints = solution;
-            state.rightArmJoints.setZero();
-            frameId = getFrameId(leftEndEffectorName_);
-            if (frameId < 0)
-                return false;
-        }
-        else if (arm_type == "right")
-        {
-            if (initialGuess.size() != static_cast<Eigen::Index>(rightArmJointCount_))
-                return false;
-            state.leftArmJoints.setZero();
-            state.rightArmJoints = solution;
-            frameId = getFrameId(rightEndEffectorName_);
-            if (frameId < 0)
-                return false;
-        }
-        else
-        {
-            std::cerr << "Invalid arm type: " << arm_type << std::endl;
+            std::cerr << "Initial guess size mismatch: expected " << jointCount
+                << ", got " << initialGuess.size() << std::endl;
             return false;
         }
 
+        // 2. 热启动：使用上次求解结果作为初始猜测
+        if (lastArmType_ == arm_type)
+        {
+            if (arm_type == "left" && lastLeftSolution_.size() == jointCount)
+            {
+                solution = lastLeftSolution_;
+            }
+            else if (arm_type == "right" && lastRightSolution_.size() == jointCount)
+            {
+                solution = lastRightSolution_;
+            }
+            else
+            {
+                solution = initialGuess;
+            }
+        }
+        else
+        {
+            solution = initialGuess;
+        }
+
+        // 3. 准备工作
+        RobotState state(leftArmJointCount_, rightArmJointCount_);
+        int frameId;
+
+        if (arm_type == "left")
+        {
+            state.leftArmJoints = solution;
+            frameId = getFrameId(leftEndEffectorName_);
+        }
+        else
+        {
+            state.rightArmJoints = solution;
+            frameId = getFrameId(rightEndEffectorName_);
+        }
+
+        if (frameId < 0)
+        {
+            std::cerr << "End effector frame not found: "
+                << (arm_type == "left" ? leftEndEffectorName_ : rightEndEffectorName_) << std::endl;
+            return false;
+        }
+
+        // 4. 预分配内存（避免重复分配）
+        Eigen::MatrixXd jacobian(6, jointCount);
+        Eigen::Matrix < double, 6, 1 > error;
+        Eigen::VectorXd deltaQ(jointCount);
+        Eigen::VectorXd joints = stateToJointVector(state);
+
+        double previousError = std::numeric_limits<double>::max();
+        int stagnationCount = 0;
+
+        // 5. 迭代求解
         for (int iter = 0; iter < maxIterations; ++iter)
         {
-            Eigen::VectorXd joints = stateToJointVector(state);
+            // 更新运动学
             updateKinematics(joints);
 
+            // 获取当前位姿
             const auto& placement = data_.oMf[frameId];
             EndEffectorPose currentPose;
             currentPose.position = placement.translation();
             currentPose.setRotation(placement.rotation());
 
-            Eigen::Matrix < double, 6, 1 > error = compute6DError(currentPose, targetPose);
-            if (error.norm() < tolerance)
+            // 计算误差
+            error = compute6DError(currentPose, targetPose);
+            double currentError = error.norm();
+
+            // 收敛检查
+            if (currentError < tolerance)
+            {
+                // 缓存成功解
+                if (arm_type == "left")
+                {
+                    lastLeftSolution_ = solution;
+                }
+                else
+                {
+                    lastRightSolution_ = solution;
+                }
+                lastArmType_ = arm_type;
+                std::cout << "IK Iter " << iter << ": error=" << currentError
+                    << ", step=" << deltaQ.norm() << std::endl;
                 return true;
+            }
 
-            Eigen::MatrixXd jacobian = getJacbian(arm_type);
+            // 停滞检测（误差不再减小）
+            if (currentError >= previousError * 0.99)
+            {
+                stagnationCount++;
+                if (stagnationCount > 8)
+                {
+                    // 如果不是从初始猜测开始的，尝试重置到初始猜测
+                    if (solution != initialGuess)
+                    {
+                        solution = initialGuess;
+                        stagnationCount = 0;
+                        previousError = std::numeric_limits<double>::max();
+                        if (arm_type == "left")
+                        {
+                            state.leftArmJoints = solution;
+                        }
+                        else
+                        {
+                            state.rightArmJoints = solution;
+                        }
+                        joints = stateToJointVector(state);
+                        continue;
+                    }
+                    return false;
+                }
+            }
+            else
+            {
+                stagnationCount = 0;
+            }
+            previousError = currentError;
 
-            Eigen::VectorXd deltaQ = dampedLeastSquares(jacobian, error, damping);
+            // 计算雅可比矩阵
+            jacobian = getJacbian(arm_type);
+
+            // 自适应阻尼
+            double currentDamping = damping;
+            if (iter > 5)
+            {
+                // 前几次迭代使用固定阻尼，之后开始自适应
+                currentDamping = computeAdaptiveDamping(jacobian, damping);
+            }
+
+            // 求解增量
+            deltaQ = dampedLeastSquares(jacobian, error, currentDamping);
+
+            // 限制步长，防止震荡
+            limitStepSize(deltaQ, 0.3);
+
+            // 更新解
             solution += deltaQ;
+
+            // 应用关节限位
             applyJointLimits(solution, arm_type);
+
+            // 更新状态
             if (arm_type == "left")
             {
                 state.leftArmJoints = solution;
@@ -158,7 +273,19 @@ namespace arms_controller_common
             {
                 state.rightArmJoints = solution;
             }
+            joints = stateToJointVector(state);
+
+            // 调试输出（可选，每10次迭代打印一次）
+            // if (iter % 20 == 0 && iter > 0)
+            // {
+            //     std::cout << "IK Iter " << iter << ": error=" << currentError
+            //         << ", damping=" << currentDamping
+            //         << ", step=" << deltaQ.norm() << std::endl;
+            // }
         }
+
+        std::cerr << "IK failed to converge after " << maxIterations
+            << " iterations, final error: " << previousError << std::endl;
         return false;
     }
 
@@ -291,55 +418,65 @@ namespace arms_controller_common
         }
     };
 
-    void ArmKinematics::get_joint_names_from_model()
-    {
-        // 定义双臂的前缀
-        std::string leftPrefix = "left_";
-        std::string rightPrefix = "right_";
-        // 遍历所有关节名
-        for (size_t i = 0; i < model_.names.size(); ++i)
-        {
-            const auto& jointName = model_.names[i];
-
-            if (jointName.find(leftPrefix) == 0)
-            {
-                leftArmJointNames_.push_back(jointName);
-            }
-            else if (jointName.find(rightPrefix) == 0)
-            {
-                rightArmJointNames_.push_back(jointName);
-            }
-        }
-
-        // 更新关节数量
-        leftArmJointCount_ = leftArmJointNames_.size();
-        rightArmJointCount_ = rightArmJointNames_.size();
-
-        if (leftArmJointCount_ != rightArmJointCount_)
-        {
-            std::cerr << "Warning: Left and right arm joint counts do not match! Left: "
-                << leftArmJointCount_ << ", Right: " << rightArmJointCount_
-                << std::endl;
-        }
-
-        bool print_joint_names = false; // 设置为true以输出关节名称
-        if (print_joint_names)
-        {
-            std::cout << "Extracted Joint Names from Model:" << std::endl;
-            std::cout << "Left Arm Joints: ";
-            for (const auto& name : leftArmJointNames_)
-            {
-                std::cout << name << " ";
-            }
-            std::cout << std::endl;
-            std::cout << "Right Arm Joints: ";
-            for (const auto& name : rightArmJointNames_)
-            {
-                std::cout << name << " ";
-            }
-            std::cout << std::endl;
-        }
-    };
+    // void ArmKinematics::get_joint_names_from_model()
+    // {
+    //     // 定义双臂的前缀
+    //     std::string leftPrefix = "left_";
+    //     std::string rightPrefix = "right_";
+    //
+    //     // 清空现有列表
+    //     leftArmJointNames_.clear();
+    //     rightArmJointNames_.clear();
+    //
+    //     // 修复：将 int 改为 size_t 或使用 static_cast
+    //     for (pinocchio::JointIndex i = 1; i <= static_cast<pinocchio::JointIndex>(model_.njoints); ++i)
+    //     {
+    //         const auto& jointName = model_.names[i];
+    //         const auto& jointModel = model_.joints[i];
+    //
+    //         // 检查关节是否有自由度（nv() > 0 表示非固定关节）
+    //         if (jointModel.nv() > 0)
+    //         {
+    //             if (jointName.find(leftPrefix) == 0)
+    //             {
+    //                 leftArmJointNames_.push_back(jointName);
+    //             }
+    //             else if (jointName.find(rightPrefix) == 0)
+    //             {
+    //                 rightArmJointNames_.push_back(jointName);
+    //             }
+    //         }
+    //     }
+    //
+    //     // 更新关节数量
+    //     leftArmJointCount_ = leftArmJointNames_.size();
+    //     rightArmJointCount_ = rightArmJointNames_.size();
+    //
+    //     if (leftArmJointCount_ != rightArmJointCount_)
+    //     {
+    //         std::cerr << "Warning: Left and right arm joint counts do not match! Left: "
+    //             << leftArmJointCount_ << ", Right: " << rightArmJointCount_
+    //             << std::endl;
+    //     }
+    //
+    //     bool print_joint_names = false; // 设置为true以输出关节名称
+    //     if (print_joint_names)
+    //     {
+    //         std::cout << "Extracted Joint Names from Model:" << std::endl;
+    //         std::cout << "Left Arm Joints (" << leftArmJointCount_ << "): ";
+    //         for (const auto& name : leftArmJointNames_)
+    //         {
+    //             std::cout << name << " ";
+    //         }
+    //         std::cout << std::endl;
+    //         std::cout << "Right Arm Joints (" << rightArmJointCount_ << "): ";
+    //         for (const auto& name : rightArmJointNames_)
+    //         {
+    //             std::cout << name << " ";
+    //         }
+    //         std::cout << std::endl;
+    //     }
+    // }
 
     void ArmKinematics::extractJointLimits()
     {
@@ -861,5 +998,28 @@ namespace arms_controller_common
         auto end_time = std::chrono::high_resolution_clock::now();
         response->computation_time_ms = std::chrono::duration<double, std::milli>(
             end_time - start_time).count();
+    }
+
+    // 自适应阻尼计算
+    double ArmKinematics::computeAdaptiveDamping(const Eigen::MatrixXd& J, double baseDamping) const
+    {
+        // 基于雅可比条件数调整阻尼
+        Eigen::JacobiSVD<Eigen::MatrixXd> svd(J);
+        double cond = svd.singularValues()(0) / svd.singularValues()(svd.singularValues().size() - 1);
+
+        // 条件数越大（接近奇异），阻尼越大
+        double condDamping = baseDamping * (1.0 + std::min(10.0, cond / 100.0));
+
+        return std::min(0.1, condDamping); // 限制最大阻尼
+    }
+
+    // 限制步长
+    void ArmKinematics::limitStepSize(Eigen::VectorXd& deltaQ, double maxStep)
+    {
+        double norm = deltaQ.norm();
+        if (norm > maxStep)
+        {
+            deltaQ *= (maxStep / norm);
+        }
     }
 } // namespace arms_controller_common

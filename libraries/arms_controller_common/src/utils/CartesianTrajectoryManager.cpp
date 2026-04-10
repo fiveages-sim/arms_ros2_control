@@ -46,6 +46,11 @@ namespace arms_controller_common
             std::cout << "invalid arm type: " << arm_type_ << std::endl;
             return false;
         }
+        if (!movel_planner_)
+        {
+            movel_planner_ = std::make_unique<planning::moveL>();
+        }
+
         current_joint_pos_ = Eigen::Map<const Eigen::VectorXd>(
             start_joint_pos.data(), start_joint_pos.size());
 
@@ -54,85 +59,106 @@ namespace arms_controller_common
 
         // 初始化movel_planner_
         movel_planner_ = std::make_unique<planning::moveL>();
-        planning::TrajectPoint ps;
-        ps.cart_pos = start_pose.position;
-        ps.quaternion_point.q.w = start_pose.quaternion.w();
-        ps.quaternion_point.q.x = start_pose.quaternion.x();
-        ps.quaternion_point.q.y = start_pose.quaternion.y();
-        ps.quaternion_point.q.z = start_pose.quaternion.z();
+        planning::TrajectPoint ps = setCartesianPoint(start_pose);
 
-        planning::TrajectPoint pe;
-        pe.cart_pos(0) = target_point_msg.endpoint.position.x;
-        pe.cart_pos(1) = target_point_msg.endpoint.position.y;
-        pe.cart_pos(2) = target_point_msg.endpoint.position.z;
-        pe.quaternion_point.q.x = target_point_msg.endpoint.orientation.x;
-        pe.quaternion_point.q.y = target_point_msg.endpoint.orientation.y;
-        pe.quaternion_point.q.z = target_point_msg.endpoint.orientation.z;
-        pe.quaternion_point.q.w = target_point_msg.endpoint.orientation.w;
+        planning::TrajectPoint pe = setCartesianPoint(target_point_msg.endpoint);
 
-        if (target_point_msg.time_mode)
+        planning::TrajectoryParameter para = setCartesianParameter(target_point_msg);
+        planning::TrajectoryInitParameters init_para(ps, pe, para, period);
+        if (!movel_planner_->init(init_para))
         {
-            // 时间模式
-            double duration = target_point_msg.duration;
-            if (duration <= 0.001)
-            {
-                std::cout << "Invalid duration: " << duration << std::endl;
-                return false;
-            }
-            planning::TrajectoryParameter time_mode_para(true, duration);
-            if (fabs(target_point_msg.max_linear_velocity) > min_val &&
-                fabs(target_point_msg.max_linear_acceleration) > min_val &&
-                fabs(target_point_msg.max_linear_jerk) > min_val &&
-                fabs(target_point_msg.max_angular_velocity) > min_val &&
-                fabs(target_point_msg.max_angular_acceleration) > min_val &&
-                fabs(target_point_msg.max_angular_jerk) > min_val)
-            {
-                time_mode_para.max_linear_vel = target_point_msg.max_linear_velocity;
-                time_mode_para.max_linear_acc = target_point_msg.max_linear_acceleration;
-                time_mode_para.max_linear_jerk = target_point_msg.max_linear_jerk;
-                time_mode_para.max_angular_vel = target_point_msg.max_angular_velocity;
-                time_mode_para.max_angular_acc =
-                    target_point_msg.max_angular_acceleration;
-                time_mode_para.max_angular_jerk = target_point_msg.max_angular_jerk;
-            }
+            std::cout << "Failed to initialize moveL planner" << std::endl;
+            return false;
+        }
+        movel_planner_->setRealStartTime(0.0);
+        planningTime_ = movel_planner_->getTotalTime();
+        path_type_ = PathType::LINE;
+        return true;
+    }
 
-            planning::TrajectoryInitParameters init_para(ps, pe, time_mode_para,
-                                                         period);
-            if (!movel_planner_->init(init_para))
+    bool CartesianTrajectoryManager::planSingleArmMoveC(
+        const std::vector<double>& start_joint_pos,
+        const arms_ros2_control_msgs::msg::CircleMessage& target_circle_msg,
+        const double period)
+    {
+        if (!arm_kinematics_)
+        {
+            std::cout << "kinematics is not set" << std::endl;
+            return false;
+        }
+        std::string error_msg;
+        if (!validateCircleMsg(target_circle_msg, error_msg))
+        {
+            std::cout << error_msg << std::endl;
+            return false;
+        }
+
+        if (!movec_planner_)
+        {
+            movec_planner_ = std::make_unique<planning::CircularCurver>();
+        }
+
+        arm_type_ = target_circle_msg.arm_name;
+        RobotState js(arm_kinematics_->getLeftArmJointCount(),
+                      arm_kinematics_->getRightArmJointCount());
+        if (arm_type_ == "left")
+        {
+            js.leftArmJoints = Eigen::Map<const Eigen::VectorXd>(
+                start_joint_pos.data(), start_joint_pos.size());
+        }
+        else if (arm_type_ == "right")
+        {
+            js.rightArmJoints = Eigen::Map<const Eigen::VectorXd>(
+                start_joint_pos.data(), start_joint_pos.size());
+        }
+        else
+        {
+            std::cout << "invalid arm type: " << arm_type_ << std::endl;
+            return false;
+        }
+        current_joint_pos_ = Eigen::Map<const Eigen::VectorXd>(
+            start_joint_pos.data(), start_joint_pos.size());
+
+        EndEffectorPose start_pose =
+            arm_kinematics_->computeSingleEndEffectorPose(js, arm_type_);
+
+        // 更新起点
+        planning::TrajectPoint ps = setCartesianPoint(start_pose);
+        // 更新终点
+        planning::TrajectPoint pe = setCartesianPoint(target_circle_msg.endpoint);
+
+        planning::TrajectoryParameter para = setCartesianParameter(target_circle_msg);
+
+        if (!target_circle_msg.use_three_point_method)
+        {
+            planning::TrajectoryInitParameters init_para(ps, pe, para, period);
+            if (!movec_planner_->init(init_para))
             {
-                std::cout
-                    << "Failed to initialize moveL planner with time mode parameters."
-                    << std::endl;
                 return false;
             }
         }
         else
         {
-            // 速度模式
-            planning::TrajectoryParameter speed_mode_para(
-                target_point_msg.max_linear_velocity,
-                target_point_msg.max_linear_acceleration,
-                target_point_msg.max_linear_jerk, target_point_msg.max_angular_velocity,
-                target_point_msg.max_angular_acceleration,
-                target_point_msg.max_angular_jerk, true);
-            planning::TrajectoryInitParameters init_para(ps, pe, speed_mode_para,
-                                                         period);
-            if (!movel_planner_->init(init_para))
+            planning::TrajectPoint pm = setCartesianPoint(target_circle_msg.midpoint);
+            planning::TrajectoryInitParameters init_para(ps, pm, pe, para, period);
+            if (!movec_planner_->init(init_para))
             {
-                std::cout
-                    << "Failed to initialize moveL planner with speed mode parameters."
-                    << std::endl;
                 return false;
             }
         }
-        movel_planner_->setRealStartTime(0.0);
-        planningTime_ = movel_planner_->getTotalTime();
+        movec_planner_->setRealStartTime(0.0);
+        planningTime_ = movec_planner_->getTotalTime();
+        path_type_ = PathType::CIRCLE;
         return true;
     }
 
     bool CartesianTrajectoryManager::getNextJointPos(std::vector<double>& res)
     {
-        if (movel_planner_)
+        if (movel_planner_&& path_type_
+
+        ==
+        PathType::LINE
+        )
         {
             planning::TrajectPoint movel_point = movel_planner_->run();
             if (movel_planner_->isMotionOver())
@@ -164,14 +190,54 @@ namespace arms_controller_common
             return true;
         }
         else
+        if (movec_planner_&& path_type_
+
+
+        ==
+        PathType::CIRCLE
+        )
         {
-            RCLCPP_ERROR(logger_,
-                         "moveL planner not initialized for DOUBLES interpolation");
+            planning::TrajectPoint movec_point = movec_planner_->run();
+            if (movec_planner_->isMotionOver())
+            {
+                completed_ = true;
+            }
+
+            EndEffectorPose pose;
+            pose.position = movec_point.cart_pos;
+            Eigen::Quaterniond q(
+                movec_point.quaternion_point.q.w, movec_point.quaternion_point.q.x,
+                movec_point.quaternion_point.q.y, movec_point.quaternion_point.q.z);
+            pose.setQuaternion(q);
+            Eigen::VectorXd solution;
+            if (!arm_kinematics_->solveSingleArmIK(pose, current_joint_pos_, solution,
+                                                   arm_type_, 50,1e-4))
+            {
+                RCLCPP_ERROR(logger_, "Failed to calculate the inverse solution for the "
+                             "current Cartesian point: position:[%f,%f,%f],quaternion:[%f,%f,%f,%f]", pose.position[0],
+                             pose.position[1], pose.position[2], pose.quaternion.x(), pose.quaternion.y(),
+                             pose.quaternion.z(), pose.quaternion.w());
+                return false;
+            }
+            // 更新当前关节角度
+            current_joint_pos_ = solution;
+            res.clear();
+            for (size_t i = 0; i < static_cast<size_t>(solution.size()); i++)
+            {
+                res.push_back(current_joint_pos_(i));
+            }
+            return true;
+        }
+        else
+        {
+            RCLCPP_ERROR(logger_, "moveL planner or moveC planner not initialized for "
+                         "DOUBLES interpolation");
             return false;
         }
     };
 
-    std::vector<std::string> CartesianTrajectoryManager::getMovelJointNames(std::string arm_name)
+    std::vector<std::string>
+    CartesianTrajectoryManager::getMovelJointNames(std::string arm_name)
     {
         if (!arm_kinematics_)
         {
@@ -193,10 +259,269 @@ namespace arms_controller_common
         }
     }
 
-
     void CartesianTrajectoryManager::clearPlanner()
     {
         movel_planner_.reset();
+        movec_planner_.reset();
         completed_ = false;
+    }
+
+    bool CartesianTrajectoryManager::validateCircleMsg(
+        const arms_ros2_control_msgs::msg::CircleMessage& target_circle_msg,
+        std::string& error_message)
+    {
+        // 检查时间模式下的时间参数
+        if (target_circle_msg.time_mode && target_circle_msg.duration < 0.001)
+        {
+            error_message = "In time mode, a valid time parameter (duration > 0.001) "
+                "must be provided";
+            return false;
+        }
+
+        // 检查速度模式下的速度参数
+        if (!target_circle_msg.time_mode)
+        {
+            if (fabs(target_circle_msg.max_linear_velocity) < min_val)
+            {
+                error_message =
+                    "In speed mode, the maximum linear speed must be provided";
+                return false;
+            }
+            if (fabs(target_circle_msg.max_angular_velocity) < min_val)
+            {
+                error_message = "When using attitude interpolation in velocity mode, the "
+                    "maximum angular velocity must be provided";
+                return false;
+            }
+            if (fabs(target_circle_msg.max_linear_acceleration) < min_val)
+            {
+                error_message =
+                    "In speed mode, the maximum linear acceleration must be provided";
+                return false;
+            }
+            if (fabs(target_circle_msg.max_angular_acceleration) < min_val)
+            {
+                error_message = "When using pose interpolation in velocity mode, the "
+                    "maximum angular acceleration must be provided";
+                return false;
+            }
+            if (fabs(target_circle_msg.max_linear_jerk) < min_val)
+            {
+                error_message =
+                    "In speed mode, the maximum linear acceleration must be provided";
+                return false;
+            }
+            if (fabs(target_circle_msg.max_angular_jerk) < min_val)
+            {
+                error_message = "When using attitude interpolation in velocity mode, the "
+                    "maximum angular jerk must be provided";
+                return false;
+            }
+        }
+
+        if (target_circle_msg.use_three_point_method)
+        {
+            // 检查输入的中间点和终点是不是有问题
+            if (fabs(target_circle_msg.midpoint.position.x) < min_val &&
+                fabs(target_circle_msg.midpoint.position.y) < min_val &&
+                fabs(target_circle_msg.midpoint.position.z) < min_val &&
+                fabs(target_circle_msg.midpoint.orientation.x) < min_val &&
+                fabs(target_circle_msg.midpoint.orientation.y) < min_val &&
+                fabs(target_circle_msg.midpoint.orientation.z) < min_val &&
+                fabs(target_circle_msg.midpoint.orientation.w) < min_val)
+            {
+                error_message = "The midpoint of the arc must be inputted";
+                return false;
+            }
+            if (std::isnan(target_circle_msg.midpoint.position.x) ||
+                std::isnan(target_circle_msg.midpoint.position.y) ||
+                std::isnan(target_circle_msg.midpoint.position.z) ||
+                std::isnan(target_circle_msg.midpoint.orientation.x) ||
+                std::isnan(target_circle_msg.midpoint.orientation.y) ||
+                std::isnan(target_circle_msg.midpoint.orientation.z) ||
+                std::isnan(target_circle_msg.midpoint.orientation.w))
+            {
+                error_message = "The midpoint of the arc must be inputted";
+                return false;
+            }
+            if (fabs(target_circle_msg.endpoint.position.x) < min_val &&
+                fabs(target_circle_msg.endpoint.position.y) < min_val &&
+                fabs(target_circle_msg.endpoint.position.z) < min_val &&
+                fabs(target_circle_msg.endpoint.orientation.x) < min_val &&
+                fabs(target_circle_msg.endpoint.orientation.y) < min_val &&
+                fabs(target_circle_msg.endpoint.orientation.z) < min_val &&
+                fabs(target_circle_msg.endpoint.orientation.w) < min_val)
+            {
+                error_message = "The endpoint of the arc must be inputted";
+                return false;
+            }
+            if (std::isnan(target_circle_msg.endpoint.position.x) ||
+                std::isnan(target_circle_msg.endpoint.position.y) ||
+                std::isnan(target_circle_msg.endpoint.position.z) ||
+                std::isnan(target_circle_msg.endpoint.orientation.x) ||
+                std::isnan(target_circle_msg.endpoint.orientation.y) ||
+                std::isnan(target_circle_msg.endpoint.orientation.z) ||
+                std::isnan(target_circle_msg.endpoint.orientation.w))
+            {
+                error_message = "The endpoint of the arc must be inputted";
+                return false;
+            }
+        }
+        else
+        {
+            if (fabs(target_circle_msg.axis.x) < min_val && fabs(target_circle_msg.axis.y) < min_val &&
+                fabs(target_circle_msg.axis.z) < min_val)
+            {
+                error_message = "Please input the axis of rotation for the circular arc";
+                return false;
+            }
+
+            if (target_circle_msg.rotate_angle < min_val)
+            {
+                error_message = "Please input the axis of rotation for the circular arc";
+                return false;
+            }
+        }
+
+        return true;
+    }
+
+    planning::TrajectPoint CartesianTrajectoryManager::setCartesianPoint(
+        const EndEffectorPose& input_point)
+    {
+        planning::TrajectPoint res;
+        res.cart_pos = input_point.position;
+        res.quaternion_point.q.w = input_point.quaternion.w();
+        res.quaternion_point.q.x = input_point.quaternion.x();
+        res.quaternion_point.q.y = input_point.quaternion.y();
+        res.quaternion_point.q.z = input_point.quaternion.z();
+        return res;
+    }
+
+    planning::TrajectPoint CartesianTrajectoryManager::setCartesianPoint(
+        const geometry_msgs::msg::Pose& input_point)
+    {
+        planning::TrajectPoint res;
+        res.cart_pos(0) = input_point.position.x;
+        res.cart_pos(1) = input_point.position.y;
+        res.cart_pos(2) = input_point.position.z;
+        res.quaternion_point.q.x = input_point.orientation.x;
+        res.quaternion_point.q.y = input_point.orientation.y;
+        res.quaternion_point.q.z = input_point.orientation.z;
+        res.quaternion_point.q.w = input_point.orientation.w;
+        return res;
+    }
+
+    planning::TrajectoryParameter CartesianTrajectoryManager::setCartesianParameter(
+        const arms_ros2_control_msgs::msg::LinearMessage& target_point_msg)
+    {
+        if (target_point_msg.time_mode)
+        {
+            // 时间模式
+            double duration = target_point_msg.duration;
+            duration = duration > 0.01 ? duration : 5.0;
+            planning::TrajectoryParameter time_mode_para(true, duration);
+            if (fabs(target_point_msg.max_linear_velocity) > min_val &&
+                fabs(target_point_msg.max_linear_acceleration) > min_val &&
+                fabs(target_point_msg.max_linear_jerk) > min_val &&
+                fabs(target_point_msg.max_angular_velocity) > min_val &&
+                fabs(target_point_msg.max_angular_acceleration) > min_val &&
+                fabs(target_point_msg.max_angular_jerk) > min_val)
+            {
+                time_mode_para.max_linear_vel = target_point_msg.max_linear_velocity;
+                time_mode_para.max_linear_acc = target_point_msg.max_linear_acceleration;
+                time_mode_para.max_linear_jerk = target_point_msg.max_linear_jerk;
+                time_mode_para.max_angular_vel = target_point_msg.max_angular_velocity;
+                time_mode_para.max_angular_acc =
+                    target_point_msg.max_angular_acceleration;
+                time_mode_para.max_angular_jerk = target_point_msg.max_angular_jerk;
+            }
+            return time_mode_para;
+        }
+        else
+        {
+            // 速度模式
+            planning::TrajectoryParameter speed_mode_para(
+                target_point_msg.max_linear_velocity,
+                target_point_msg.max_linear_acceleration,
+                target_point_msg.max_linear_jerk, target_point_msg.max_angular_velocity,
+                target_point_msg.max_angular_acceleration,
+                target_point_msg.max_angular_jerk, true);
+            return speed_mode_para;
+        }
+    }
+
+    planning::TrajectoryParameter CartesianTrajectoryManager::setCartesianParameter(
+        const arms_ros2_control_msgs::msg::CircleMessage& target_circle_msg)
+    {
+        if (target_circle_msg.time_mode)
+        {
+            // 时间模式
+            double duration = target_circle_msg.duration;
+            duration = duration > 0.01 ? duration : 5.0;
+
+            planning::TrajectoryParameter time_mode_para(
+                target_circle_msg.use_slerp_for_orientation, duration);
+            if (fabs(target_circle_msg.max_linear_velocity) > min_val &&
+                fabs(target_circle_msg.max_linear_acceleration) > min_val &&
+                fabs(target_circle_msg.max_linear_jerk) > min_val &&
+                fabs(target_circle_msg.max_angular_velocity) > min_val &&
+                fabs(target_circle_msg.max_angular_acceleration) > min_val &&
+                fabs(target_circle_msg.max_angular_jerk) > min_val)
+            {
+                time_mode_para.max_linear_vel = target_circle_msg.max_linear_velocity;
+                time_mode_para.max_linear_acc = target_circle_msg.max_linear_acceleration;
+                time_mode_para.max_linear_jerk = target_circle_msg.max_linear_jerk;
+                time_mode_para.max_angular_vel = target_circle_msg.max_angular_velocity;
+                time_mode_para.max_angular_acc =
+                    target_circle_msg.max_angular_acceleration;
+                time_mode_para.max_angular_jerk = target_circle_msg.max_angular_jerk;
+            }
+            if (!target_circle_msg.use_three_point_method)
+            {
+                // 直接输入参数
+                time_mode_para.circular_rotation_axis(0) = target_circle_msg.axis.x;
+                time_mode_para.circular_rotation_axis(1) = target_circle_msg.axis.y;
+                time_mode_para.circular_rotation_axis(2) = target_circle_msg.axis.z;
+
+                time_mode_para.center_of_circle(0) = target_circle_msg.center.x;
+                time_mode_para.center_of_circle(1) = target_circle_msg.center.y;
+                time_mode_para.center_of_circle(2) = target_circle_msg.center.z;
+
+                time_mode_para.circular_angle = target_circle_msg.rotate_angle;
+                time_mode_para.no_need_to_calculate_circle_parameters_with_three_point =
+                    true;
+            }
+
+            return time_mode_para;
+        }
+        else
+        {
+            // 速度模式
+            planning::TrajectoryParameter speed_mode_para(
+                target_circle_msg.max_linear_velocity,
+                target_circle_msg.max_linear_acceleration,
+                target_circle_msg.max_linear_jerk,
+                target_circle_msg.max_angular_velocity,
+                target_circle_msg.max_angular_acceleration,
+                target_circle_msg.max_angular_jerk, true);
+
+            if (!target_circle_msg.use_three_point_method)
+            {
+                // 直接输入参数
+                speed_mode_para.circular_rotation_axis(0) = target_circle_msg.axis.x;
+                speed_mode_para.circular_rotation_axis(1) = target_circle_msg.axis.y;
+                speed_mode_para.circular_rotation_axis(2) = target_circle_msg.axis.z;
+
+                speed_mode_para.center_of_circle(0) = target_circle_msg.center.x;
+                speed_mode_para.center_of_circle(1) = target_circle_msg.center.y;
+                speed_mode_para.center_of_circle(2) = target_circle_msg.center.z;
+
+                speed_mode_para.circular_angle = target_circle_msg.rotate_angle;
+                speed_mode_para.no_need_to_calculate_circle_parameters_with_three_point =
+                    true;
+            }
+            return speed_mode_para;
+        }
     }
 } // namespace arms_controller_common

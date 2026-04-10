@@ -121,12 +121,15 @@ namespace ocs2::mobile_manipulator
             };
             ctrl_comp_ = std::make_shared<CtrlComponent>(get_node(), ctrl_interfaces_, auto_declare_func);
             std::shared_ptr<arms_controller_common::GravityCompensation> gravity_compensation = nullptr;
-
+            // 新增：从参数读取末端执行器名称
+            std::string left_ee_name_ = auto_declare<std::string>("left_ee_name", "left_tcp");
+            std::string right_ee_name_ = auto_declare<std::string>("right_ee_name", "right_tcp");
             if (ctrl_comp_->interface_)
             {
                 const auto& pinocchio_model = ctrl_comp_->interface_->getPinocchioInterface().getModel();
                 gravity_compensation = std::make_shared<arms_controller_common::GravityCompensation>(pinocchio_model);
                 kinematics_=std::make_shared<arms_controller_common::ArmKinematics>(pinocchio_model);
+                kinematics_->initializeFromParameters(joint_names_,left_ee_name_,right_ee_name_);
                 RCLCPP_INFO(get_node()->get_logger(),
                             "Gravity compensation initialized from OCS2 Pinocchio model");
             }
@@ -233,6 +236,7 @@ namespace ocs2::mobile_manipulator
         state_list_.movej->setupTrajectorySubscription();
         state_list_.movej->setupJointTrajectoryService("joint_trajectory_with_para");
         state_list_.movej->setupLinearTrajectoryService("execute_linear");
+        state_list_.movej->setupCircleTrajectoryService("execute_circle_use_ik");
 
         kinematics_service_ = get_node()->create_service<arms_ros2_control_msgs::srv::KinematicsService>(
             "kinematics_service",
