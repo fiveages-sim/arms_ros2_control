@@ -480,20 +480,12 @@ namespace arms_ros2_control::command
         if (marker_type == "left_arm" && left_arm_marker_ && shouldShowLeftArmMarker())
         {
             left_arm_marker_->publishTargetPose(true, true);
-            if (body_marker_ && shouldShowBodyMarker())
-            {
-                body_marker_->publishTargetPose(true);
-            }
             return;
         }
 
         if (marker_type == "right_arm" && right_arm_marker_ && shouldShowRightArmMarker())
         {
             right_arm_marker_->publishTargetPose(true, true);
-            if (body_marker_ && shouldShowBodyMarker())
-            {
-                body_marker_->publishTargetPose(true);
-            }
             return;
         }
     }
