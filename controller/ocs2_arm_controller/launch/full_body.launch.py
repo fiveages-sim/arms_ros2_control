@@ -66,6 +66,17 @@ def launch_setup(context, *args, **kwargs):
         except KeyError:
             pass
 
+    wbc_available = False
+    if config is not None:
+        try:
+            controller_manager_params = config.get('controller_manager', {}).get('ros__parameters', {})
+            wbc_controller_cfg = controller_manager_params.get('ocs2_wbc_controller', {})
+            wbc_controller_type = wbc_controller_cfg.get('type', "")
+            wbc_available = (wbc_controller_type == 'ocs2_wbc_controller/Ocs2WbcController')
+            print(f"[INFO] ocs2_wbc_controller.type = {wbc_controller_type}, wbc_available = {wbc_available}")
+        except Exception as e:
+            print(f"[WARN] Failed to parse ocs2_wbc_controller.type from config: {e}")
+
     # Planning URDF path is now handled by Visualizer in ocs2_arm_controller
     # The Visualizer will publish /ocs2_robot_description after loading the interface
 
@@ -110,15 +121,8 @@ def launch_setup(context, *args, **kwargs):
         hand_controllers = detect_controllers(robot_name, robot_type, ['hand', 'gripper'], robot_description=robot_description)
         hand_controller_spawners = create_controller_spawners(hand_controllers, use_sim_time)
 
-    # Detect body controllers using robot_common_launch (body, head)
-    enable_head = context.launch_configurations.get('enable_head', 'true').lower() == 'true'
     body_controller_spawners = []
     joint_controller_names = ['ocs2_wbc_controller']
-
-    if enable_head:
-        head_controllers = detect_controllers(robot_name, robot_type, ['head'])
-        body_controller_spawners = create_controller_spawners(head_controllers, use_sim_time)
-        joint_controller_names.extend([c['name'] for c in head_controllers])
 
 
     # Get info file name from ocs2_wbc_controller configuration
@@ -160,7 +164,8 @@ def launch_setup(context, *args, **kwargs):
     arms_target_manager_parameters = prepare_arms_target_manager_parameters(
         task_file_path=task_file_path,
         config_file_path=None,  # Will auto-detect from task file directory
-        hand_controllers=hand_controller_names_for_target_manager if hand_controller_names_for_target_manager else None
+        hand_controllers=hand_controller_names_for_target_manager if hand_controller_names_for_target_manager else None,
+        marker_fixed_frame='world',  # full_body mode always uses world frame for markers
     )
 
     # Create ArmsTargetManager node directly
@@ -214,6 +219,8 @@ def launch_setup(context, *args, **kwargs):
 
         # Add joint_controllers parameter for JointControlPanel
         rviz_parameters.append({'joint_controllers': joint_controller_names})
+
+        rviz_parameters.append({'wbc_available': wbc_available})
 
         rviz_node = Node(
             package="rviz2",
@@ -293,7 +300,6 @@ def generate_launch_description():
         default_value='true',
         description='Enable gripper controllers and gripper control panel'
     )
-
 
     # Get launch mode arguments from common utilities
     launch_mode_args = create_launch_mode_arguments()
