@@ -421,4 +421,10 @@ jobs:
               --notes "Automated release for Debian packages."
           fi
 
-          gh release upload "$TAG" "$DEB_PATH" --clobber
+          for _i in 1 2 3 4 5; do
+            if gh release upload "$TAG" "$DEB_PATH" --clobber; then
+              break
+            fi
+            echo "Upload attempt ${_i}/5 failed, retrying in 10s..." >&2
+            sleep 10
+          done
