@@ -78,6 +78,7 @@ namespace ocs2::mobile_manipulator
             current_state_->exit();
             current_state_ = next_state_;
             current_state_->enter();
+            publishCurrentFsmState();
             mode_ = FSMMode::NORMAL;
             ctrl_interfaces_.fsm_command_ = 0;
         }
@@ -247,6 +248,9 @@ namespace ocs2::mobile_manipulator
     controller_interface::CallbackReturn Ocs2ArmController::on_configure(
         const rclcpp_lifecycle::State& /*previous_state*/)
     {
+        fsm_state_publisher_ = get_node()->create_publisher<std_msgs::msg::String>(
+            "/fsm_state", rclcpp::QoS(1).transient_local());
+
         // Subscribe to FSM command (dedicated topic for state transitions)
         fsm_command_subscription_ = get_node()->create_subscription<std_msgs::msg::Int32>(
             "/fsm_command", 10, [this](const std_msgs::msg::Int32::SharedPtr msg)
@@ -396,6 +400,7 @@ namespace ocs2::mobile_manipulator
         next_state_ = current_state_;
         next_state_name_ = current_state_->state_name;
         mode_ = FSMMode::NORMAL;
+        publishCurrentFsmState();
 
         return CallbackReturn::SUCCESS;
     }
@@ -442,6 +447,18 @@ namespace ocs2::mobile_manipulator
         default:
             return state_list_.invalid;
         }
+    }
+
+    void Ocs2ArmController::publishCurrentFsmState() const
+    {
+        if (!fsm_state_publisher_ || !current_state_)
+        {
+            return;
+        }
+
+        std_msgs::msg::String msg;
+        msg.data = current_state_->state_name_string;
+        fsm_state_publisher_->publish(msg);
     }
 } // namespace ocs2::mobile_manipulator
 

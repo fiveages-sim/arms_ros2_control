@@ -67,6 +67,7 @@ namespace ocs2::mobile_manipulator
 
     private:
         std::shared_ptr<FSMState> getNextState(FSMStateName stateName) const;
+        void publishCurrentFsmState() const;
 
         // Hardware parameters
         std::string controller_name_;
@@ -111,6 +112,7 @@ namespace ocs2::mobile_manipulator
 
         // ROS subscriptions
         rclcpp::Subscription<std_msgs::msg::Int32>::SharedPtr fsm_command_subscription_;
+        rclcpp::Publisher<std_msgs::msg::String>::SharedPtr fsm_state_publisher_;
         rclcpp::Subscription<std_msgs::msg::String>::SharedPtr robot_description_subscription_;
         rclcpp::Subscription<std_msgs::msg::Float64>::SharedPtr waist_lifting_subscription_;
         rclcpp::Subscription<std_msgs::msg::Float64>::SharedPtr waist_lifting_command_subscription_;
