@@ -248,7 +248,7 @@ namespace ocs2::mobile_manipulator
     controller_interface::CallbackReturn Ocs2ArmController::on_configure(
         const rclcpp_lifecycle::State& /*previous_state*/)
     {
-        fsm_state_publisher_ = get_node()->create_publisher<std_msgs::msg::String>(
+        fsm_state_publisher_ = get_node()->create_publisher<std_msgs::msg::Int32>(
             "/fsm_state", rclcpp::QoS(1).transient_local());
 
         // Subscribe to FSM command (dedicated topic for state transitions)
@@ -456,8 +456,29 @@ namespace ocs2::mobile_manipulator
             return;
         }
 
-        std_msgs::msg::String msg;
-        msg.data = current_state_->state_name_string;
+        int32_t state_code = 0;
+        switch (current_state_->state_name)
+        {
+        case FSMStateName::HOME:
+            state_code = 1;
+            break;
+        case FSMStateName::HOLD:
+            state_code = 2;
+            break;
+        case FSMStateName::OCS2:
+            state_code = 3;
+            break;
+        case FSMStateName::MOVEJ:
+            state_code = 4;
+            break;
+        case FSMStateName::INVALID:
+        default:
+            state_code = 0;
+            break;
+        }
+
+        std_msgs::msg::Int32 msg;
+        msg.data = state_code;
         fsm_state_publisher_->publish(msg);
     }
 } // namespace ocs2::mobile_manipulator

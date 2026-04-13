@@ -14,6 +14,7 @@
 #include <hardware_interface/loaned_state_interface.hpp>
 #include <std_msgs/msg/int32.hpp>
 #include <std_msgs/msg/float64.hpp>
+#include <std_msgs/msg/string.hpp>
 
 #include "ocs2_arm_controller/control/CtrlComponent.h"
 
@@ -112,7 +113,7 @@ namespace ocs2::mobile_manipulator
 
         // ROS subscriptions
         rclcpp::Subscription<std_msgs::msg::Int32>::SharedPtr fsm_command_subscription_;
-        rclcpp::Publisher<std_msgs::msg::String>::SharedPtr fsm_state_publisher_;
+        rclcpp::Publisher<std_msgs::msg::Int32>::SharedPtr fsm_state_publisher_;
         rclcpp::Subscription<std_msgs::msg::String>::SharedPtr robot_description_subscription_;
         rclcpp::Subscription<std_msgs::msg::Float64>::SharedPtr waist_lifting_subscription_;
         rclcpp::Subscription<std_msgs::msg::Float64>::SharedPtr waist_lifting_command_subscription_;
