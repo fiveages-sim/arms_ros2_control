@@ -108,6 +108,7 @@ namespace basic_joint_controller
         rclcpp::Subscription<std_msgs::msg::Int32>::SharedPtr fsm_command_subscription_;
         rclcpp::Subscription<std_msgs::msg::String>::SharedPtr robot_description_subscription_;
         rclcpp::Subscription<std_msgs::msg::Int32>::SharedPtr target_command_subscription_;
+        rclcpp::Subscription<std_msgs::msg::Float64>::SharedPtr target_percent_subscription_;
 
         // body motion
         bool waist_lifting_enabled_{false};
