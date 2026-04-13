@@ -294,6 +294,7 @@ jobs:
           rsync -a "${GITHUB_WORKSPACE}/controller/adaptive_gripper_controller/" "${source_root}/adaptive_gripper_controller/"
           rsync -a "${GITHUB_WORKSPACE}/libraries/arms_controller_common/" "${source_root}/arms_controller_common/"
           rsync -a "${GITHUB_WORKSPACE}/libraries/ocs2_controller_common/" "${source_root}/ocs2_controller_common/"
+          rsync -a "${GITHUB_WORKSPACE}/hardwares/topic_based_ros2_control/" "${source_root}/topic_based_ros2_control/"
 
       - name: Install workspace dependencies
         shell: bash
@@ -338,7 +339,8 @@ jobs:
             --base-paths "${RUNNER_TEMP}/arms-bundle-src" \
             --build-base "${build_root}/build" \
             --install-base "${install_root}" \
-            --merge-install
+            --merge-install \
+            --cmake-args -DBUILD_TESTING=OFF
 
           python3 -c "import sys; exec('''import os\ninstall_root = sys.argv[1]\nruntime_prefix = sys.argv[2]\nfor dirpath, _, filenames in os.walk(install_root):\n    for filename in filenames:\n        path = os.path.join(dirpath, filename)\n        try:\n            with open(path, 'r', encoding='utf-8') as f:\n                content = f.read()\n        except Exception:\n            continue\n        if install_root not in content:\n            continue\n        with open(path, 'w', encoding='utf-8') as f:\n            f.write(content.replace(install_root, runtime_prefix))''')" "$install_root" "$install_prefix"
 
@@ -388,11 +390,15 @@ jobs:
           Maintainer: ${GITHUB_REPOSITORY} maintainers <github-actions[bot]@users.noreply.github.com>
           Installed-Size: ${installed_size}
           Description: Prebuilt arms_ros2_control ROS workspace bundle
-           command (full), controller (excluding ocs2_wbc_controller submodule), libraries arms_controller_common and ocs2_controller_common only. Excludes private submodules, gripper_hardware_common (separate deb), and hardwares. Installed into ${INSTALL_PREFIX} without shared prefix setup files.
+           command (full), controller (excluding ocs2_wbc_controller submodule), libraries arms_controller_common and ocs2_controller_common, hardwares/topic_based_ros2_control. Excludes other hardwares, gripper_hardware_common (separate deb), private submodules. Installed into ${INSTALL_PREFIX} without shared prefix setup files.
           EOF
 
           if [[ ! -d "${install_root}/share/ocs2_arm_controller" ]]; then
             echo "ocs2_arm_controller was not installed into the package root." >&2
+            exit 1
+          fi
+          if [[ ! -d "${install_root}/share/topic_based_ros2_control" ]]; then
+            echo "topic_based_ros2_control was not installed into the package root." >&2
             exit 1
           fi
 
