@@ -198,6 +198,7 @@ namespace arms_controller_common
         rclcpp::Subscription<std_msgs::msg::Float64MultiArray>::SharedPtr target_position_left_subscription_;
         rclcpp::Subscription<std_msgs::msg::Float64MultiArray>::SharedPtr target_position_right_subscription_;
         rclcpp::Subscription<std_msgs::msg::Float64MultiArray>::SharedPtr target_position_body_subscription_;
+        rclcpp::Subscription<std_msgs::msg::Float64MultiArray>::SharedPtr target_position_head_subscription_;
 
         // Trajectory message subscription
         rclcpp::Subscription<trajectory_msgs::msg::JointTrajectory>::SharedPtr trajectory_subscription_;
