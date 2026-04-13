@@ -41,8 +41,8 @@ jobs:
       DEFAULT_ROS_DISTRO: jazzy
       PREFERRED_OCS2_RELEASE_REPO: legubiao/ocs2_ros2
       FALLBACK_OCS2_RELEASE_REPO: YangLuo-Bionics/ocs2_ros2
-      PREFERRED_COMMON_RELEASE_REPO: fiveages-sim/robot_descriptions
-      FALLBACK_COMMON_RELEASE_REPO: YangLuo-Bionics/robot_descriptions
+      PREFERRED_COMMON_RELEASE_REPO: fiveages-sim/robot-descriptions-common
+      FALLBACK_COMMON_RELEASE_REPO: YangLuo-Bionics/robot-descriptions-common
 
     steps:
       - name: Checkout repository
