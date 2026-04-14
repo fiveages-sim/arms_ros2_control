@@ -13,7 +13,7 @@
   <depend>arms_controller_common</depend>
   <depend>sensor_msgs</depend>
   <depend>std_msgs</depend>
-  <depend>qt5</depend>
+  <depend>qtbase5-dev</depend>
 
   <test_depend>ament_lint_auto</test_depend>
   <test_depend>ament_lint_common</test_depend>
