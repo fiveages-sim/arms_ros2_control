@@ -24,7 +24,6 @@ arms_ros2_control/
 │   ├── ocs2_arm_controller/      # 基于OCS2的机械臂控制器
 │   └── adaptive_gripper_controller/ # 自适应夹爪控制器
 ├── hardwares/                    # 硬件接口实现
-│   ├── gz_ros2_control/         # Gazebo硬件接口
 │   ├── topic_based_ros2_control/ # 基于话题的硬件接口
 │   └── unitree_ros2_control/    # Unitree机器人硬件接口
 ├── command/                      # 命令输入实现
@@ -204,16 +203,6 @@ colcon build --packages-up-to ocs2_arm_controller cr5_description arms_teleop ad
 - 易于理解和扩展
 
 ### 硬件接口
-
-#### Gazebo硬件接口
-
-`gz_ros2_control`包为Gazebo仿真提供硬件接口。原始版本可在[gz ros2 control](https://github.com/ros-controls/gz_ros2_control)找到。
-
-**特性：**
-
-- 实时仿真集成
-- 支持各种Gazebo插件
-- 可配置的世界文件
 
 #### 基于话题的硬件接口
 
