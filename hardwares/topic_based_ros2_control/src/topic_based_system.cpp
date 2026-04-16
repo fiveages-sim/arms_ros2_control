@@ -60,9 +60,9 @@ static constexpr std::size_t VELOCITY_INTERFACE_INDEX = 1;
 // JointState doesn't contain an acceleration field, so right now it's not used
 static constexpr std::size_t EFFORT_INTERFACE_INDEX = 3;
 
-CallbackReturn TopicBasedSystem::on_init(const hardware_interface::HardwareInfo& info)
+CallbackReturn TopicBasedSystem::on_init(const hardware_interface::HardwareComponentInterfaceParams& params)
 {
-  if (hardware_interface::SystemInterface::on_init(info) != CallbackReturn::SUCCESS)
+  if (hardware_interface::SystemInterface::on_init(params) != CallbackReturn::SUCCESS)
   {
     return CallbackReturn::ERROR;
   }
@@ -352,7 +352,7 @@ bool TopicBasedSystem::getInterface(const std::string& name, const std::string& 
   return false;
 }
 
-hardware_interface::return_type TopicBasedSystem::write(const rclcpp::Time& /*time*/,
+hardware_interface::return_type TopicBasedSystem::write(const rclcpp::Time& time,
                                                         const rclcpp::Duration& /*period*/)
 {
   // If initialize_commands_from_state is enabled, wait until we have received initial state
@@ -378,7 +378,6 @@ hardware_interface::return_type TopicBasedSystem::write(const rclcpp::Time& /*ti
   {
     // When publishing, use the stripped name (without prefix) to match topic format
     joint_state.name.push_back(stripJointPrefix(info_.joints[i].name));
-    joint_state.header.stamp = node_->now();
     // only send commands to the interfaces that are defined for this joint
     for (const auto& interface : info_.joints[i].command_interfaces)
     {
@@ -423,6 +422,9 @@ hardware_interface::return_type TopicBasedSystem::write(const rclcpp::Time& /*ti
       }
     }
   }
+
+  // 与 ros2_control 的 read/write 周期一致；勿用内部 node_->now()（该子节点默认未接 use_sim_time，会变成墙钟）。
+  joint_state.header.stamp = time;
 
   if (rclcpp::ok())
   {

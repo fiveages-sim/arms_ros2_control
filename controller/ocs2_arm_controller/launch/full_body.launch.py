@@ -176,7 +176,7 @@ def launch_setup(context, *args, **kwargs):
             executable='arms_target_manager_node',
             name='arms_target_manager',
             output='screen',
-            parameters=arms_target_manager_parameters,
+            parameters=arms_target_manager_parameters + [{'use_sim_time': use_sim_time}],
         )
 
     # Launch mode: 'full' (default), 'control_only', or 'rviz_only'
