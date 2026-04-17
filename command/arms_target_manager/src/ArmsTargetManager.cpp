@@ -17,6 +17,52 @@
 
 namespace arms_ros2_control::command
 {
+    namespace
+    {
+        Eigen::Isometry3d poseToIsometry(const geometry_msgs::msg::Pose& pose)
+        {
+            Eigen::Isometry3d tf = Eigen::Isometry3d::Identity();
+            tf.translation() = Eigen::Vector3d(pose.position.x, pose.position.y, pose.position.z);
+            Eigen::Quaterniond q(pose.orientation.w, pose.orientation.x, pose.orientation.y, pose.orientation.z);
+            if (q.norm() < 1e-9)
+            {
+                q = Eigen::Quaterniond::Identity();
+            }
+            else
+            {
+                q.normalize();
+            }
+            tf.linear() = q.toRotationMatrix();
+            return tf;
+        }
+
+        geometry_msgs::msg::Pose isometryToPose(const Eigen::Isometry3d& tf)
+        {
+            geometry_msgs::msg::Pose pose;
+            pose.position.x = tf.translation().x();
+            pose.position.y = tf.translation().y();
+            pose.position.z = tf.translation().z();
+            const Eigen::Quaterniond q(tf.linear());
+            pose.orientation.w = q.w();
+            pose.orientation.x = q.x();
+            pose.orientation.y = q.y();
+            pose.orientation.z = q.z();
+            return pose;
+        }
+
+        geometry_msgs::msg::Pose applyRelativePose(
+            const geometry_msgs::msg::Pose& old_anchor_pose,
+            const geometry_msgs::msg::Pose& old_follower_pose,
+            const geometry_msgs::msg::Pose& new_anchor_pose)
+        {
+            const Eigen::Isometry3d old_anchor = poseToIsometry(old_anchor_pose);
+            const Eigen::Isometry3d old_follower = poseToIsometry(old_follower_pose);
+            const Eigen::Isometry3d new_anchor = poseToIsometry(new_anchor_pose);
+            const Eigen::Isometry3d relative = old_anchor.inverse() * old_follower;
+            return isometryToPose(new_anchor * relative);
+        }
+    } // namespace
+
     ArmsTargetManager::ArmsTargetManager(
         rclcpp::Node::SharedPtr node,
         const bool dualArmMode,
@@ -373,8 +419,33 @@ namespace arms_ros2_control::command
                 return;
             }
 
+            const geometry_msgs::msg::Pose old_left_pose = left_arm_marker_->getPose();
+            geometry_msgs::msg::Pose old_right_pose;
+            const bool can_follow_right =
+                (dual_arm_mode_ &&
+                 right_arm_marker_ &&
+                 shouldShowRightArmMarker() &&
+                 bimanual_state_ == arms_ros2_control_msgs::msg::WbcCurrentState::BIMANUAL_COUPLED);
+            if (can_follow_right)
+            {
+                old_right_pose = right_arm_marker_->getPose();
+            }
+
             geometry_msgs::msg::Pose new_pose = left_arm_marker_->handleFeedback(feedback, source_frame_id);
             left_arm_marker_->setPose(new_pose);
+
+            // 单次发布 + 双臂耦合：仅做本地marker联动，不自动下发控制命令
+            if (current_mode_ == MarkerState::SINGLE_SHOT && can_follow_right)
+            {
+                const geometry_msgs::msg::Pose new_right_pose =
+                    applyRelativePose(old_left_pose, old_right_pose, new_pose);
+                right_arm_marker_->setPose(new_right_pose);
+                if (server_ && isStateDisabled(current_controller_state_))
+                {
+                    server_->setPose(right_arm_marker_->getMarkerName(), new_right_pose);
+                    markPendingChanges();
+                }
+            }
 
             if (current_mode_ == MarkerState::CONTINUOUS)
             {
@@ -392,8 +463,32 @@ namespace arms_ros2_control::command
                 return;
             }
 
+            const geometry_msgs::msg::Pose old_right_pose = right_arm_marker_->getPose();
+            geometry_msgs::msg::Pose old_left_pose;
+            const bool can_follow_left =
+                (left_arm_marker_ &&
+                 shouldShowLeftArmMarker() &&
+                 bimanual_state_ == arms_ros2_control_msgs::msg::WbcCurrentState::BIMANUAL_COUPLED);
+            if (can_follow_left)
+            {
+                old_left_pose = left_arm_marker_->getPose();
+            }
+
             geometry_msgs::msg::Pose new_pose = right_arm_marker_->handleFeedback(feedback, source_frame_id);
             right_arm_marker_->setPose(new_pose);
+
+            // 单次发布 + 双臂耦合：仅做本地marker联动，不自动下发控制命令
+            if (current_mode_ == MarkerState::SINGLE_SHOT && can_follow_left)
+            {
+                const geometry_msgs::msg::Pose new_left_pose =
+                    applyRelativePose(old_right_pose, old_left_pose, new_pose);
+                left_arm_marker_->setPose(new_left_pose);
+                if (server_ && isStateDisabled(current_controller_state_))
+                {
+                    server_->setPose(left_arm_marker_->getMarkerName(), new_left_pose);
+                    markPendingChanges();
+                }
+            }
 
             if (current_mode_ == MarkerState::CONTINUOUS)
             {
@@ -480,6 +575,12 @@ namespace arms_ros2_control::command
 
     void ArmsTargetManager::sendTargetPose(const std::string& marker_type)
     {
+        const bool is_bimanual_coupled =
+            dual_arm_mode_ &&
+            (bimanual_state_ == arms_ros2_control_msgs::msg::WbcCurrentState::BIMANUAL_COUPLED) &&
+            shouldShowLeftArmMarker() &&
+            shouldShowRightArmMarker();
+
         if (marker_type == "head")
         {
             if (head_marker_ && head_marker_->isEnabled())
@@ -492,6 +593,15 @@ namespace arms_ros2_control::command
         if (marker_type == "body")
         {
             sendBodyTargetPose();
+            return;
+        }
+
+        // 双臂耦合下，任一侧“发送目标”都应统一发送双臂，
+        // 避免只更新单臂current_target导致后续模式切换时另一侧marker回跳。
+        if (is_bimanual_coupled &&
+            (marker_type == "left_arm" || marker_type == "right_arm"))
+        {
+            sendDualArmTargetPose();
             return;
         }
 
