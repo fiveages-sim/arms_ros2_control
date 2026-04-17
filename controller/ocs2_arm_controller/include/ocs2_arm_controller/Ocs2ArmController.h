@@ -14,7 +14,6 @@
 #include <hardware_interface/loaned_state_interface.hpp>
 #include <std_msgs/msg/int32.hpp>
 #include <std_msgs/msg/float64.hpp>
-#include <std_msgs/msg/string.hpp>
 
 #include "ocs2_arm_controller/control/CtrlComponent.h"
 

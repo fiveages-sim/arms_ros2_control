@@ -95,11 +95,20 @@ namespace arms_ros2_control::command
 
         const int prev_left_arm_state = left_arm_state_;
         const int prev_right_arm_state = right_arm_state_;
+        const int prev_bimanual_state = bimanual_state_;
         const int prev_body_state = body_state_;
 
         left_arm_state_ = msg->left_arm_state;
         right_arm_state_ = msg->right_arm_state;
+        bimanual_state_ = msg->bimanual_state;
         body_state_ = msg->body_state;
+
+        const bool bimanual_state_changed = (prev_bimanual_state != bimanual_state_);
+
+        if (bimanual_state_changed)
+        {
+            refreshArmMarkersFromLatestCurrentTargets();
+        }
 
         if (prev_left_arm_state != left_arm_state_ ||
             prev_right_arm_state != right_arm_state_ ||
@@ -440,6 +449,8 @@ namespace arms_ros2_control::command
 
     void ArmsTargetManager::togglePublishMode()
     {
+        const MarkerState previous_mode = current_mode_;
+
         if (current_mode_ == MarkerState::SINGLE_SHOT)
         {
             current_mode_ = MarkerState::CONTINUOUS;
@@ -452,6 +463,13 @@ namespace arms_ros2_control::command
         updateMarkerShape();
         updateMenuVisibility();
         updateBodyMarkerVisibility();
+
+        if (previous_mode == MarkerState::SINGLE_SHOT &&
+            current_mode_ == MarkerState::CONTINUOUS)
+        {
+            refreshArmMarkersFromLatestCurrentTargets();
+        }
+
         markPendingChanges();
     }
 
@@ -821,6 +839,39 @@ namespace arms_ros2_control::command
                 "/ocs2_wbc_controller/current_state",
                 10,
                 std::bind(&ArmsTargetManager::wbcStateCallback, this, std::placeholders::_1));
+    }
+
+    void ArmsTargetManager::refreshArmMarkersFromLatestCurrentTargets()
+    {
+        if (!server_)
+        {
+            return;
+        }
+
+        bool refreshed_any = false;
+
+        if (left_arm_marker_ && shouldShowLeftArmMarker())
+        {
+            if (left_arm_marker_->refreshFromLatestCurrentTarget())
+            {
+                server_->setPose(left_arm_marker_->getMarkerName(), left_arm_marker_->getPose());
+                refreshed_any = true;
+            }
+        }
+
+        if (dual_arm_mode_ && right_arm_marker_ && shouldShowRightArmMarker())
+        {
+            if (right_arm_marker_->refreshFromLatestCurrentTarget())
+            {
+                server_->setPose(right_arm_marker_->getMarkerName(), right_arm_marker_->getPose());
+                refreshed_any = true;
+            }
+        }
+
+        if (refreshed_any)
+        {
+            markPendingChanges();
+        }
     }
 
     void ArmsTargetManager::fsmCommandCallback(std_msgs::msg::Int32::ConstSharedPtr msg)

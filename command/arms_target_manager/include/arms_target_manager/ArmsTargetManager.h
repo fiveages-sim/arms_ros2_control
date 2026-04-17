@@ -129,6 +129,7 @@ namespace arms_ros2_control::command
             const sensor_msgs::msg::JointState::ConstSharedPtr& joint_msg);
 
         void updateBodyMarkerVisibility();
+        void refreshArmMarkersFromLatestCurrentTargets();
 
         geometry_msgs::msg::Pose transformPose(
             const geometry_msgs::msg::Pose& pose,
@@ -180,6 +181,7 @@ namespace arms_ros2_control::command
 
         int left_arm_state_{1};
         int right_arm_state_{1};
+        int bimanual_state_{0};
         int body_state_{0};
 
         rclcpp::Time last_marker_update_time_;

@@ -1225,7 +1225,8 @@ namespace ocs2::controller_common
     }
 
     void PoseBasedReferenceManager::setCurrentEndEffectorPoses(
-        const vector_t& left_ee_pose, const vector_t& right_ee_pose)
+        const vector_t& left_ee_pose, const vector_t& right_ee_pose,
+        bool update_target_trajectory)
     {
         // 设置左臂pose到缓存
         left_target_state_ = left_ee_pose;
@@ -1235,13 +1236,14 @@ namespace ocs2::controller_common
         {
             right_target_state_ = right_ee_pose;
             // 仅轮式人形 21 维布局需要在此处把缓存推入 ReferenceManager；固定臂控仍保持 7/14 维原行为
-            if (effectiveTargetStateDim() == Ocs2ReferenceTargetContext::kWheelHumanoidTargetStateDim)
+            if (update_target_trajectory &&
+                effectiveTargetStateDim() == Ocs2ReferenceTargetContext::kWheelHumanoidTargetStateDim)
             {
                 updateTargetTrajectory();
             }
         }
 
-        // 发布当前目标
+        // 始终发布当前目标（保证 marker 同步刷新）
         publishCurrentTargets();
     }
 

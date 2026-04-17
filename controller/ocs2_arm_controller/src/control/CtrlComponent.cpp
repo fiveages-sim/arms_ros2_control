@@ -223,7 +223,7 @@ namespace ocs2::mobile_manipulator
             if (pose_reference_manager_)
             {
                 pose_reference_manager_->setCurrentObservation(observation_);
-                pose_reference_manager_->setCurrentEndEffectorPoses(left_initial_ee_state, right_initial_ee_state);
+                pose_reference_manager_->setCurrentEndEffectorPoses(left_initial_ee_state, right_initial_ee_state, false);
             }
 
             // Dual arm mode: create target trajectory containing two end effectors
@@ -255,7 +255,7 @@ namespace ocs2::mobile_manipulator
             {
                 pose_reference_manager_->setCurrentObservation(observation_);
                 vector_t zero_pose = vector_t::Zero(7);
-                pose_reference_manager_->setCurrentEndEffectorPoses(initial_ee_state, zero_pose);
+                pose_reference_manager_->setCurrentEndEffectorPoses(initial_ee_state, zero_pose, false);
             }
 
             // Initialize TargetTrajectories - use end effector position and orientation
