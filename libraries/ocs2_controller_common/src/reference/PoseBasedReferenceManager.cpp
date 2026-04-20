@@ -281,6 +281,27 @@ namespace ocs2::controller_common
         }
     }
 
+    void PoseBasedReferenceManager::setBodyPoseTargetOnly(const vector_t& body_pose_xyzw_7, bool update_target_trajectory)
+    {
+        if (body_pose_xyzw_7.size() < 7)
+        {
+            return;
+        }
+
+        const vector_t previous_body_target_state = body_pose_7_xyzw_;
+        body_pose_7_xyzw_ = body_pose_xyzw_7.head<7>();
+
+        if (update_target_trajectory)
+        {
+            updateBodyTrajectory(previous_body_target_state);
+        }
+    }
+
+    void PoseBasedReferenceManager::publishCurrentTargetsFromCache()
+    {
+        publishCurrentTargets();
+    }
+
     void PoseBasedReferenceManager::setCurrentObservation(
         const SystemObservation& observation)
     {

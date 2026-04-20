@@ -50,6 +50,10 @@ public:
 
     /** Body pose (7: x,y,z, qx,qy,qz,qw) for indices [14:21] when using wheel-humanoid 21-dim layout. */
     void setBodyPoseReference(const vector_t& body_pose_xyzw_7);
+    /** Update only body target (keep arm targets unchanged), optionally pushing trajectory to MPC. */
+    void setBodyPoseTargetOnly(const vector_t& body_pose_xyzw_7, bool update_target_trajectory = true);
+    /** Publish cached current targets for visualization/marker refresh, without modifying MPC targets. */
+    void publishCurrentTargetsFromCache();
 
     /** Build full reference state for SwitchedHumanoidReferenceManager (dual arms + body). */
     static vector_t assembleWheelHumanoidTargetState(const vector_t& left_pose7_xyzw, const vector_t& right_pose7_xyzw,

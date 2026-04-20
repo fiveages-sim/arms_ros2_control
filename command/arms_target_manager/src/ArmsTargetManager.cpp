@@ -252,6 +252,10 @@ namespace arms_ros2_control::command
             node_, marker_factory_, tf_buffer_, marker_fixed_frame_, publish_rate_);
         head_marker_->initialize();
 
+        body_target_publisher_ =
+            node_->create_publisher<geometry_msgs::msg::Pose>(
+                "body_target", 10);
+
         body_target_stamped_publisher_ =
             node_->create_publisher<geometry_msgs::msg::PoseStamped>(
                 "body_target/stamped", 10);
@@ -262,6 +266,7 @@ namespace arms_ros2_control::command
             tf_buffer_,
             marker_fixed_frame_,
             control_base_frame_,
+            body_target_publisher_,
             body_target_stamped_publisher_,
             "body_current_pose",
             publish_rate_,

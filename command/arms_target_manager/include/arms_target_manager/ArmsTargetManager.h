@@ -146,6 +146,7 @@ namespace arms_ros2_control::command
         rclcpp::Subscription<arms_ros2_control_msgs::msg::WbcCurrentState>::SharedPtr wbc_state_subscriber_;
 
         rclcpp::Publisher<nav_msgs::msg::Path>::SharedPtr dual_target_stamped_publisher_;
+        rclcpp::Publisher<geometry_msgs::msg::Pose>::SharedPtr body_target_publisher_;
         rclcpp::Publisher<geometry_msgs::msg::PoseStamped>::SharedPtr body_target_stamped_publisher_;
 
         std::shared_ptr<interactive_markers::MenuHandler> left_menu_handler_;
