@@ -1,4 +1,5 @@
 import os
+import tempfile
 
 from ament_index_python.packages import get_package_share_directory
 from launch import LaunchDescription
@@ -67,6 +68,7 @@ def launch_setup(context, *args, **kwargs):
             pass
 
     wbc_available = False
+    wbc_controller_type = ""
     if config is not None:
         try:
             controller_manager_params = config.get('controller_manager', {}).get('ros__parameters', {})
@@ -124,6 +126,18 @@ def launch_setup(context, *args, **kwargs):
     body_controller_spawners = []
     joint_controller_names = ['ocs2_wbc_controller']
 
+    # In full_body launch, when ocs2_wbc_controller is actually backed by ARM controller type,
+    # spawn head controller additionally for head joint control.
+    is_arm_controller_type = (wbc_controller_type == 'ocs2_arm_controller/Ocs2ArmController')
+    if is_arm_controller_type:
+        head_controllers = detect_controllers(robot_name, robot_type, ['head'])
+        if head_controllers:
+            body_controller_spawners.extend(create_controller_spawners(head_controllers, use_sim_time))
+            joint_controller_names.extend([c['name'] for c in head_controllers])
+            print(f"[INFO] ARM type detected in full_body: spawning head controllers {[c['name'] for c in head_controllers]}")
+        else:
+            print("[WARN] ARM type detected in full_body but no head controller found to spawn")
+
 
     # Get info file name from ocs2_wbc_controller configuration
     # Use the config already loaded above
@@ -159,13 +173,19 @@ def launch_setup(context, *args, **kwargs):
     if enable_gripper and hand_controllers:
         hand_controller_names_for_target_manager = [c['name'] for c in hand_controllers]
 
+    # Choose marker fixed frame based on actual controller type from YAML:
+    # - WBC controller: use world frame
+    # - ARM controller (running in full_body launch): use base_footprint frame
+    marker_fixed_frame = 'world' if wbc_available else 'base_footprint'
+    print(f"[INFO] marker_fixed_frame selected by controller type: {marker_fixed_frame} (wbc_available={wbc_available})")
+
     # Prepare parameters using robot_common_launch utility function
     # enable_head_control is now configured via YAML config file, not via launch argument
     arms_target_manager_parameters = prepare_arms_target_manager_parameters(
         task_file_path=task_file_path,
         config_file_path=None,  # Will auto-detect from task file directory
         hand_controllers=hand_controller_names_for_target_manager if hand_controller_names_for_target_manager else None,
-        marker_fixed_frame='world',  # full_body mode always uses world frame for markers
+        marker_fixed_frame=marker_fixed_frame,
     )
 
     # Create ArmsTargetManager node directly
@@ -204,6 +224,21 @@ def launch_setup(context, *args, **kwargs):
             )
             rviz_config_path = os.path.join(rviz_base, "demo.rviz")
             print(f"[INFO] Using default rviz config: {rviz_config_path}")
+
+        # For ARM-controller type in full_body launch, force RViz Fixed Frame to base_footprint.
+        if is_arm_controller_type:
+            try:
+                with open(rviz_config_path, "r", encoding="utf-8") as f:
+                    rviz_content = f.read()
+                patched_content = rviz_content.replace("Fixed Frame: world", "Fixed Frame: base_footprint")
+                tmp_name = f"full_body_{robot_name}_{robot_type or 'default'}_arm_fixedframe.rviz"
+                tmp_rviz_config_path = os.path.join(tempfile.gettempdir(), tmp_name)
+                with open(tmp_rviz_config_path, "w", encoding="utf-8") as f:
+                    f.write(patched_content)
+                rviz_config_path = tmp_rviz_config_path
+                print(f"[INFO] ARM type detected: using RViz config with Fixed Frame=base_footprint: {rviz_config_path}")
+            except Exception as e:
+                print(f"[WARN] Failed to patch RViz Fixed Frame for ARM type: {e}")
 
         # Extract hand controller names for GripperControlPanel
         hand_controller_names = []
