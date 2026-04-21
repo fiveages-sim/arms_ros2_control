@@ -466,19 +466,46 @@ namespace arms_rviz_control_plugin
         }
 
         // Check for left arm joints
-        if (joint_name_lower.find("left") != std::string::npos ||
-            joint_name_lower.find("l_") != std::string::npos ||
-            (joint_name_lower.length() > 0 && joint_name_lower[0] == 'l' &&
-                (joint_name_lower[1] == '_' || std::isdigit(joint_name_lower[1]))))
+        // if (joint_name_lower.find("left") != std::string::npos ||
+        //     joint_name_lower.find("l_") != std::string::npos ||
+        //     (joint_name_lower.length() > 0 && joint_name_lower[0] == 'l' &&
+        //         (joint_name_lower[1] == '_' || std::isdigit(joint_name_lower[1]))))
+        // {
+        //     return "left";
+        // }
+        //
+        // // Check for right arm joints
+        // if (joint_name_lower.find("right") != std::string::npos ||
+        //     joint_name_lower.find("r_") != std::string::npos ||
+        //     (joint_name_lower.length() > 0 && joint_name_lower[0] == 'r' &&
+        //         (joint_name_lower[1] == '_' || std::isdigit(joint_name_lower[1]))))
+        // {
+        //     return "right";
+        // }
+
+        // 3. 左臂 - 严格匹配
+        // 只匹配以 "left" 或 "l_" 开头，或以 'l' + 数字开头的关节
+        bool is_left = (joint_name_lower.find("left") == 0) ||
+                       (joint_name_lower.find("l_") == 0) ||
+                       (joint_name_lower.length() >= 2 &&
+                        joint_name_lower[0] == 'l' &&
+                        joint_name_lower[1] >= '0' &&
+                        joint_name_lower[1] <= '9');
+
+        if (is_left)
         {
             return "left";
         }
 
-        // Check for right arm joints
-        if (joint_name_lower.find("right") != std::string::npos ||
-            joint_name_lower.find("r_") != std::string::npos ||
-            (joint_name_lower.length() > 0 && joint_name_lower[0] == 'r' &&
-                (joint_name_lower[1] == '_' || std::isdigit(joint_name_lower[1]))))
+        // 4. 右臂 - 严格匹配
+        bool is_right = (joint_name_lower.find("right") == 0) ||
+                        (joint_name_lower.find("r_") == 0) ||
+                        (joint_name_lower.length() >= 2 &&
+                         joint_name_lower[0] == 'r' &&
+                         joint_name_lower[1] >= '0' &&
+                         joint_name_lower[1] <= '9');
+
+        if (is_right)
         {
             return "right";
         }

@@ -62,6 +62,9 @@ namespace arms_controller_common
             const arms_ros2_control_msgs::msg::LinearMessage& target_point_msg);
         planning::TrajectoryParameter setCartesianParameter(
             const arms_ros2_control_msgs::msg::CircleMessage& target_circle_msg);
+        bool save_data_ = false;
+        void savedata(const std::string &filepath, const planning::TrajectPoint &point,
+                      const Eigen::VectorXd &joint_angle);
         double min_val = 1.0e-6;
         rclcpp::Logger logger_;
     };

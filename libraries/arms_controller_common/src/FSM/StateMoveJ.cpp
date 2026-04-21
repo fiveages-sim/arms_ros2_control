@@ -234,7 +234,7 @@ namespace arms_controller_common
             return;
         }
 
-        // ===== 新增：处理 MoveL 直线运动 =====
+        // ===== 新增：处理 MoveL 直线运动 或者 MoveC圆弧运动=====
         if (motion_mode_ == MotionMode::MOVECARTESIAN && move_cartesian_active_)
         {
             std::vector<double> next_joint_pos;
@@ -263,11 +263,11 @@ namespace arms_controller_common
                     // 发布当前目标位置（用于监控）
                     publishCurrentTargetJoint(full_joint_pos);
 
-                    // 检查 MoveL 是否完成
+                    // 检查 MoveL或者Movec 是否完成
                     if (cartesian_manager_.isCompleted())
                     {
                         RCLCPP_INFO(node_->get_logger(),
-                                    "MoveL trajectory completed successfully");
+                                    "Cartesian trajectory completed successfully");
                         move_cartesian_active_ = false;
                         motion_mode_ = MotionMode::MOVEJ;
                         // 更新保持位置
@@ -289,7 +289,7 @@ namespace arms_controller_common
                 move_cartesian_active_ = false;
                 motion_mode_ = MotionMode::MOVEJ;
                 RCLCPP_WARN(node_->get_logger(),
-                            "Failed to get next joint position from MoveL planner");
+                            "Failed to get next joint position from cartesian planner");
             }
 
             return; // MoveL 优先级高于 MOVEJ

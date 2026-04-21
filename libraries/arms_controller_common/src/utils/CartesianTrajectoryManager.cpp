@@ -8,6 +8,7 @@ namespace arms_controller_common
     CartesianTrajectoryManager::CartesianTrajectoryManager()
         : logger_(rclcpp::get_logger("cartesian_trajectory_manager"))
     {
+        save_data_ = true;
     }
 
     CartesianTrajectoryManager::~CartesianTrajectoryManager() = default;
@@ -146,7 +147,7 @@ namespace arms_controller_common
                 return false;
             }
         }
-        movec_planner_->setRealStartTime(0.0);
+        movec_planner_->setRealStartTime(-period);
         planningTime_ = movec_planner_->getTotalTime();
         path_type_ = PathType::CIRCLE;
         return true;
@@ -154,11 +155,7 @@ namespace arms_controller_common
 
     bool CartesianTrajectoryManager::getNextJointPos(std::vector<double>& res)
     {
-        if (movel_planner_&& path_type_
-
-        ==
-        PathType::LINE
-        )
+        if (movel_planner_&& path_type_==PathType::LINE)
         {
             planning::TrajectPoint movel_point = movel_planner_->run();
             if (movel_planner_->isMotionOver())
@@ -180,8 +177,26 @@ namespace arms_controller_common
                              "current Cartesian point.");
                 return false;
             }
+            //增加安全检查，为了避免求出的逆解不是一个合适的构型，距离当前解的构型较远，这里增加检查，如果求出的逆解距离当前解很远就返回false
+            // Eigen::VectorXd delta_joint = solution - current_joint_pos_;
+
+            // for (int i = 0; i < delta_joint.size(); ++i)
+            // {
+            //     if (fabs(delta_joint(i)) > 0.05)
+            //     {
+            //         std::cerr << "The inverse solution position is too far from the current point" << std::endl;
+            //         return false;
+            //     }
+            // }
             // 更新当前关节角度
             current_joint_pos_ = solution;
+            //存储一下数据
+            if (save_data_)
+            {
+                std::string file_name = "/home/lina/lina/data/movel_data.csv";
+                savedata(file_name, movel_point, solution);
+            }
+
             res.clear();
             for (size_t i = 0; i < static_cast<size_t>(solution.size()); i++)
             {
@@ -191,8 +206,6 @@ namespace arms_controller_common
         }
         else
         if (movec_planner_&& path_type_
-
-
         ==
         PathType::CIRCLE
         )
@@ -211,7 +224,7 @@ namespace arms_controller_common
             pose.setQuaternion(q);
             Eigen::VectorXd solution;
             if (!arm_kinematics_->solveSingleArmIK(pose, current_joint_pos_, solution,
-                                                   arm_type_, 50,1e-4))
+                                                   arm_type_, 50, 1e-4))
             {
                 RCLCPP_ERROR(logger_, "Failed to calculate the inverse solution for the "
                              "current Cartesian point: position:[%f,%f,%f],quaternion:[%f,%f,%f,%f]", pose.position[0],
@@ -219,6 +232,24 @@ namespace arms_controller_common
                              pose.quaternion.z(), pose.quaternion.w());
                 return false;
             }
+            //增加安全检查，为了避免求出的逆解不是一个合适的构型，距离当前解的构型较远，这里增加检查，如果求出的逆解距离当前解很远就返回false
+            // Eigen::VectorXd delta_joint = solution - current_joint_pos_;
+
+            // for (int i = 0; i < delta_joint.size(); ++i)
+            // {
+            //     if (fabs(delta_joint(i)) > 0.05)
+            //     {
+            //         std::cerr << "The inverse solution position is too far from the current point" << std::endl;
+            //         return false;
+            //     }
+            // }
+            if (save_data_)
+            {
+                std::string file_name = "/home/lina/lina/data/movec_data.csv";
+                savedata(file_name, movec_point, solution);
+            }
+
+
             // 更新当前关节角度
             current_joint_pos_ = solution;
             res.clear();
@@ -488,11 +519,11 @@ namespace arms_controller_common
                 time_mode_para.center_of_circle(1) = target_circle_msg.center.y;
                 time_mode_para.center_of_circle(2) = target_circle_msg.center.z;
 
-                time_mode_para.circular_angle = target_circle_msg.rotate_angle;
+
                 time_mode_para.no_need_to_calculate_circle_parameters_with_three_point =
                     true;
             }
-
+            time_mode_para.circular_angle = target_circle_msg.rotate_angle;
             return time_mode_para;
         }
         else
@@ -517,11 +548,51 @@ namespace arms_controller_common
                 speed_mode_para.center_of_circle(1) = target_circle_msg.center.y;
                 speed_mode_para.center_of_circle(2) = target_circle_msg.center.z;
 
-                speed_mode_para.circular_angle = target_circle_msg.rotate_angle;
+
                 speed_mode_para.no_need_to_calculate_circle_parameters_with_three_point =
                     true;
             }
+            speed_mode_para.circular_angle = target_circle_msg.rotate_angle;
             return speed_mode_para;
         }
+    }
+
+    void CartesianTrajectoryManager::savedata(const std::string& filepath, const planning::TrajectPoint& point,
+                                              const Eigen::VectorXd& joint_angle)
+    {
+        // 检查文件是否存在
+        bool file_exists = false;
+        std::ifstream infile(filepath);
+        if (infile.good())
+        {
+            file_exists = true;
+        }
+        infile.close();
+
+        // 以追加模式打开文件（如果文件不存在会自动创建）
+        std::ofstream outfile;
+        outfile.open(filepath, std::ios::out | std::ios::app);
+
+        if (!outfile.is_open())
+        {
+            std::cerr << "错误：无法打开文件 " << filepath << std::endl;
+            return;
+        }
+
+        // 如果文件不存在（刚创建的空文件），则写入表头
+        if (!file_exists)
+        {
+            // 假设关节数量固定为7个（人形机械臂常见自由度）
+            // 您可以根据实际关节数量修改这里的表头
+            outfile << "time" << "," << "x" << "," << "y" << "," << "z" << "," << "qw" << "," << "qx" << "," << "qy" <<
+                "," << "qz" << "," << "joint0" << "," << "joint1" << "," << "joint2" << "," << "joint3" << "," <<
+                "joint4" << "," << "joint5" << "," << "joint6" << std::endl;
+        }
+        outfile << point.time << "," << point.cart_pos(0) << "," << point.cart_pos(1) << "," << point.cart_pos(2) << ","
+            << point.quaternion_point.q.w << "," << point.quaternion_point.q.x << "," << point.quaternion_point.q.y <<
+            "," << point.quaternion_point.q.z << "," << joint_angle(0) << "," << joint_angle(1) << "," << joint_angle(2)
+            << "," << joint_angle(3) << "," <<
+            joint_angle(4) << "," << joint_angle(5) << "," << joint_angle(6) << std::endl;
+        outfile.close();
     }
 } // namespace arms_controller_common

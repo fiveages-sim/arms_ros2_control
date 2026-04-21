@@ -7,6 +7,7 @@
 #include <pinocchio/multibody/data.hpp>
 #include <pinocchio/multibody/model.hpp>
 #include <pinocchio/parsers/urdf.hpp>
+#include <random>
 #include <string>
 #include <vector>
 #include <chrono>
@@ -37,7 +38,6 @@ namespace arms_controller_common
         }
 
         // 从四元数设置旋转矩阵
-
         void setQuaternion(const Eigen::Quaterniond& q)
         {
             quaternion = q;
@@ -73,7 +73,8 @@ namespace arms_controller_common
         // 设置所有关节
         void setAllJoints(const Eigen::VectorXd& joints)
         {
-            if (joints.size() == static_cast<Eigen::Index>(leftArmJointCount + rightArmJointCount))
+            if (joints.size() ==
+                static_cast<Eigen::Index>(leftArmJointCount + rightArmJointCount))
             {
                 leftArmJoints = joints.head(leftArmJointCount);
                 rightArmJoints = joints.tail(rightArmJointCount);
@@ -92,8 +93,9 @@ namespace arms_controller_common
         // ==================== 正运动学 ====================
 
         /**
-         * @brief 计算单臂末端执行器(left_tcp或者right_tcp)的位姿
+         * @brief 计算单臂末端执行器的位姿
          * @param state 机器人状态
+         * @param arm_type 手臂类型 ("left" 或 "right")
          * @return 末端位姿（在基坐标系中）
          */
         EndEffectorPose computeSingleEndEffectorPose(const RobotState& state,
@@ -112,7 +114,7 @@ namespace arms_controller_common
         /**
          * @brief 计算任意框架的位姿
          * @param state 机器人状态
-         * @param frameName 框架名称（如"left_link3"）
+         * @param frameName 框架名称
          * @return 框架位姿
          */
         EndEffectorPose computeFramePose(const RobotState& state,
@@ -120,10 +122,33 @@ namespace arms_controller_common
 
         // ==================== 逆运动学 ====================
 
+        struct SolverParams
+        {
+            int maxIterations = 1500;
+            double maxTime = 10.0; // 秒
+            double gradientTolerance = 1e-7;
+            double solutionTolerance = 1e-6;
+            double armijoBeta = 0.4;
+            double armijoSigma = 1e-5;
+            double stepTolerance = 1e-14;
+            bool constraintsOn = true;
+            bool randomRestart = true;
+            int maxRestarts = 10;
+        };
+
+        struct SolutionInfo
+        {
+            int iterations = 0;
+            int numRandomRestarts = 0;
+            double poseErrorNorm = 0.0;
+            int exitFlag = 0;
+            std::string status;
+        };
+
         /**
-         * @brief 单臂数值逆运动学
+         * @brief 单臂数值逆运动学（BFGS梯度投影法）
          * @param targetPose 目标末端位姿
-         * @param initialGuess 初始关节角度猜测（7维）
+         * @param initialGuess 初始关节角度猜测
          * @param solution 输出的关节角度
          * @param arm_type 手臂类型（"left"或"right"）
          * @param maxIterations 最大迭代次数
@@ -133,23 +158,22 @@ namespace arms_controller_common
         bool solveSingleArmIK(const EndEffectorPose& targetPose,
                               const Eigen::VectorXd& initialGuess,
                               Eigen::VectorXd& solution, std::string arm_type,
-                              int maxIterations = 100, double tolerance = 1e-6,double damping=0.01);
+                              int maxIterations = 1500, double tolerance = 1e-6);
+
+        void setWeight(const Eigen::VectorXd& weight) { weight_ = weight; }
+
+        void setSolverParams(const SolverParams& params) { params_ = params; }
+        SolverParams getSolverParams() const { return params_; }
 
         /**
-         * @brief 双臂协同逆运动学（同时求解双臂）
-         * @param leftTargetPose 左臂目标位姿
-         * @param rightTargetPose 右臂目标位姿
-         * @param initialGuess 初始状态猜测（14维）
-         * @param solution 输出的关节角度（14维）
-         * @param maxIterations 最大迭代次数
-         * @param tolerance 容差
-         * @return 是否成功求解
+         * @brief 双臂协同逆运动学
          */
         bool solveBothArmsIK(const EndEffectorPose& leftTargetPose,
                              const EndEffectorPose& rightTargetPose,
                              const Eigen::VectorXd& initialGuess,
-                             Eigen::VectorXd& solution, int maxIterations = 100,
-                             double tolerance = 1e-6,double damping=0.01);
+                             Eigen::VectorXd& solution, int maxIterations = 1500,
+                             double tolerance = 1e-6);
+
         // ==================== 雅可比矩阵计算 ====================
         /**
          * @brief 计算雅可比矩阵
@@ -186,11 +210,15 @@ namespace arms_controller_common
         size_t getLeftArmJointCount() const { return leftArmJointCount_; }
         size_t getRightArmJointCount() const { return rightArmJointCount_; }
 
-        std::vector<std::string> getLeftArmJointNames() const { return leftArmJointNames_; }
-        std::vector<std::string> getRightArmJointNames() const { return rightArmJointNames_; }
+        std::vector<std::string> getLeftArmJointNames() const
+        {
+            return leftArmJointNames_;
+        }
 
-
-        // 添加服务
+        std::vector<std::string> getRightArmJointNames() const
+        {
+            return rightArmJointNames_;
+        }
 
         /**
          * @brief 处理运动学服务请求
@@ -220,7 +248,6 @@ namespace arms_controller_common
             std::vector<double>& result_joint_angles,
             int max_iterations,
             double tolerance,
-            double damping,
             std::string& error_msg);
 
         /**
@@ -238,27 +265,16 @@ namespace arms_controller_common
             const std::string& left_ee_name = "left_tcp",
             const std::string& right_ee_name = "right_tcp");
 
-        // 新增：设置末端执行器名称
-        void setEndEffectorNames(const std::string& left_name, const std::string& right_name)
+        void setEndEffectorNames(const std::string& left_name,
+                                 const std::string& right_name)
         {
             leftEndEffectorName_ = left_name;
             rightEndEffectorName_ = right_name;
         }
 
-        // 新增：设置关节名称
-        void setJointNames(const std::vector<std::string>& joint_names)
-        {
-            // 分离左右臂关节（假设前7个是左臂，后7个是右臂）
-            size_t half = joint_names.size() / 2;
-            leftArmJointNames_.assign(joint_names.begin(), joint_names.begin() + half);
-            rightArmJointNames_.assign(joint_names.begin() + half, joint_names.end());
+        void setJointNames(const std::vector<std::string>& joint_names);
 
-            leftArmJointCount_ = leftArmJointNames_.size();
-            rightArmJointCount_ = rightArmJointNames_.size();
-            extractJointLimits();
-        }
-
-
+        Eigen::MatrixXd getJacobian(std::string armType);
 
     private:
         // Pinocchio模型和数据
@@ -287,39 +303,99 @@ namespace arms_controller_common
         Eigen::VectorXd leftUpperLimits_;
         Eigen::VectorXd rightLowerLimits_;
         Eigen::VectorXd rightUpperLimits_;
+
+        // 求解器参数
+        SolverParams params_;
+        Eigen::VectorXd weight_;
+
         // 内部辅助函数
         void buildMappings();
-        // void get_joint_names_from_model();
         void extractJointLimits();
         void updateKinematics(const Eigen::VectorXd& jointPositions);
 
-        // 这些函数需要声明为私有成员函数
         int getFrameId(const std::string& frameName) const;
         int getJointId(const std::string& jointName) const;
-        Eigen::MatrixXd getJacbian(std::string armType);
 
-        // 将机器人状态转换为Pinocchio关节向量
         Eigen::VectorXd stateToJointVector(const RobotState& state) const;
+        RobotState jointVectorToState(const Eigen::VectorXd& joint, std::string name);
 
-        // 计算6D误差
+        // 计算6D误差（角度轴表示）
         Eigen::Matrix<double, 6, 1>
         compute6DError(const EndEffectorPose& current,
                        const EndEffectorPose& target) const;
 
-        // 阻尼最小二乘求解器
-        Eigen::VectorXd dampedLeastSquares(const Eigen::MatrixXd& J,
-                                           const Eigen::VectorXd& error,
-                                           double damping = 0.01) const;
+        // 代价函数和梯度计算
+        void computeCostAndGrad(const Eigen::VectorXd& error,
+                                const Eigen::MatrixXd& J,
+                                const Eigen::VectorXd& weight,
+                                Eigen::VectorXd& grad,
+                                double* cost);
 
-        // 缓存上次求解结果用于热启动
-        mutable Eigen::VectorXd lastLeftSolution_;
-        mutable Eigen::VectorXd lastRightSolution_;
-        mutable std::string lastArmType_;
+        // 矩阵正定性检查
+        bool isPositiveDefinite(const Eigen::MatrixXd& matrix);
 
-        // 新增：自适应阻尼计算
-        double computeAdaptiveDamping(const Eigen::MatrixXd& J, double baseDamping) const;
+        // 随机配置生成
+        Eigen::VectorXd randomConfig(const Eigen::VectorXd& lower,
+                                     const Eigen::VectorXd& upper);
 
-        // 新增：限制步长
-        void limitStepSize(Eigen::VectorXd& deltaQ, double maxStep = 0.3);
+        // 约束边界clamp
+        Eigen::VectorXd clampToLimits(const Eigen::VectorXd& q,
+                                      const Eigen::VectorXd& lower,
+                                      const Eigen::VectorXd& upper);
+
+        // BFGS Hessian更新
+        void updateHessian(Eigen::MatrixXd& H, const Eigen::VectorXd& s,
+                           const Eigen::VectorXd& y);
+
+        // Hessian投影到激活约束
+        void projectHessianToConstraints(Eigen::MatrixXd& H,
+                                         const Eigen::MatrixXd& activeConstraints);
+
+        // 构建约束矩阵 A*x <= b
+        void buildConstraintMatrix(Eigen::MatrixXd& A, Eigen::VectorXd& b,
+                                   const Eigen::VectorXd& lower,
+                                   const Eigen::VectorXd& upper);
+
+        // 识别激活约束
+        void identifyActiveConstraints(const Eigen::VectorXd& x,
+                                       const Eigen::MatrixXd& A,
+                                       const Eigen::VectorXd& b,
+                                       Eigen::VectorXi& activeSet,
+                                       Eigen::MatrixXd& activeConstraints);
+
+        // 检查是否达到局部极小
+        bool isLocalMinimum(const Eigen::VectorXd& Hg, const Eigen::VectorXd& grad,
+                            const Eigen::MatrixXd& activeConstraints,
+                            const Eigen::VectorXd& x, const Eigen::MatrixXd& A,
+                            const Eigen::VectorXd& b);
+
+        // 管理约束（放弃不再需要的约束）
+        void manageConstraints(Eigen::MatrixXd& H, const Eigen::VectorXd& grad,
+                               Eigen::MatrixXd& activeConstraints,
+                               Eigen::VectorXi& activeSet, const Eigen::MatrixXd& A,
+                               const Eigen::VectorXd& b, const Eigen::VectorXd& x);
+
+        // 计算步长上限
+        double computeStepBound(const Eigen::VectorXd& x, const Eigen::VectorXd& s,
+                                const Eigen::MatrixXd& A, const Eigen::VectorXd& b,
+                                const Eigen::VectorXi& activeSet);
+
+        // 带步长限制的线搜索
+        double lineSearchWithBound(const Eigen::VectorXd& x, const Eigen::VectorXd& s,
+                                   double cost, const Eigen::VectorXd& grad,
+                                   double maxGamma, std::string arm_type,
+                                   const EndEffectorPose& target);
+
+        // 内部求解器
+        std::pair<Eigen::VectorXd, SolutionInfo>
+        solveInternal(const Eigen::VectorXd& seed, const Eigen::VectorXd& lower,
+                      const Eigen::VectorXd& upper, std::string arm_type,
+                      const EndEffectorPose& target);
+
+        // 主求解入口（带随机重启）
+        std::pair<Eigen::VectorXd, SolutionInfo>
+        solve(const Eigen::VectorXd& initialGuess,
+              const Eigen::VectorXd& lower, const Eigen::VectorXd& upper,
+              std::string arm_type, const EndEffectorPose& target);
     };
 } // namespace arms_controller_common
