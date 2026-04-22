@@ -9,6 +9,7 @@ BodyMarker::BodyMarker(
     std::shared_ptr<tf2_ros::Buffer> tf_buffer,
     const std::string& frame_id,
     const std::string& control_base_frame,
+    rclcpp::Publisher<geometry_msgs::msg::Pose>::SharedPtr target_publisher,
     rclcpp::Publisher<geometry_msgs::msg::PoseStamped>::SharedPtr target_stamped_publisher,
     const std::string& current_pose_topic,
     double publish_rate,
@@ -18,6 +19,7 @@ BodyMarker::BodyMarker(
     , tf_buffer_(std::move(tf_buffer))
     , frame_id_(frame_id)
     , control_base_frame_(control_base_frame)
+    , target_publisher_(std::move(target_publisher))
     , target_stamped_publisher_(std::move(target_stamped_publisher))
     , publish_rate_(publish_rate)
     , last_publish_time_(node_->now())
@@ -99,21 +101,33 @@ void BodyMarker::updateFromTopic(
 
 bool BodyMarker::publishTargetPose(bool force)
 {
-    if (!target_stamped_publisher_) {
+    // 单次发送（force=true）走 stamped（插值）；连续发送走 pose（不插值），与双臂逻辑保持一致。
+    if (force)
+    {
+        if (!target_stamped_publisher_) {
+            return false;
+        }
+
+        geometry_msgs::msg::PoseStamped msg;
+        msg.header.stamp = node_->get_clock()->now();
+        msg.header.frame_id = control_base_frame_;
+        msg.pose = transformPose(pose_, frame_id_, control_base_frame_);
+        target_stamped_publisher_->publish(msg);
+        last_publish_time_ = node_->now();
+        return true;
+    }
+
+    if (!target_publisher_) {
         return false;
     }
 
     const double interval = (publish_rate_ > 1e-6) ? (1.0 / publish_rate_) : 0.0;
-    if (!force && interval > 0.0 && !shouldThrottle(interval)) {
+    if (interval > 0.0 && !shouldThrottle(interval)) {
         return false;
     }
 
-    geometry_msgs::msg::PoseStamped msg;
-    msg.header.stamp = node_->get_clock()->now();
-    msg.header.frame_id = control_base_frame_;
-    msg.pose = transformPose(pose_, frame_id_, control_base_frame_);
-
-    target_stamped_publisher_->publish(msg);
+    geometry_msgs::msg::Pose msg = transformPose(pose_, frame_id_, control_base_frame_);
+    target_publisher_->publish(msg);
     return true;
 }
 

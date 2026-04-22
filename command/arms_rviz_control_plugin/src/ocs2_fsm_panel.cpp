@@ -704,21 +704,39 @@ namespace arms_rviz_control_plugin
     {
         if (!wbc_container_ || !wbc_container_->isVisible() || !wbc_available_) return;
 
+        const bool left_enabled = isLeftArmEnabled();
+        const bool right_enabled = isRightArmEnabled();
+        const bool bimanual_coupled = isBimanualCoupled();
+        const bool any_arm_disabled = (!left_enabled || !right_enabled);
+
         updateSwitchVisualState(base_switch_.get(),
                                 capability_state_.has_mobile_base,
                                 !isBaseLocked());
 
-        updateSwitchVisualState(bimanual_switch_.get(),
-                                capability_state_.has_bimanual_coupling,
-                                isBimanualCoupled());
+        // 限制1：任意一侧手臂禁用时，不允许开启双臂耦合，并显示灰色OFF
+        if (!capability_state_.has_bimanual_coupling || any_arm_disabled)
+        {
+            bimanual_switch_->setVisualState(SwitchButton::VisualState::InvalidOffGray);
+            bimanual_switch_->setClickable(false);
+        }
+        else
+        {
+            updateSwitchVisualState(bimanual_switch_.get(), true, bimanual_coupled);
+        }
 
-        updateSwitchVisualState(left_arm_switch_.get(),
-                                true,
-                                isLeftArmEnabled());
-
-        updateSwitchVisualState(right_arm_switch_.get(),
-                                true,
-                                isRightArmEnabled());
+        // 限制2：双臂耦合启用时，不允许调整左右臂禁用，并显示为ON
+        if (bimanual_coupled)
+        {
+            left_arm_switch_->setVisualState(SwitchButton::VisualState::EnabledOnGreen);
+            left_arm_switch_->setClickable(false);
+            right_arm_switch_->setVisualState(SwitchButton::VisualState::EnabledOnGreen);
+            right_arm_switch_->setClickable(false);
+        }
+        else
+        {
+            updateSwitchVisualState(left_arm_switch_.get(), true, left_enabled);
+            updateSwitchVisualState(right_arm_switch_.get(), true, right_enabled);
+        }
 
         updateBodyComboBox();
     }
@@ -742,16 +760,37 @@ namespace arms_rviz_control_plugin
     void OCS2FSMPanel::onBimanualToggled()
     {
         if (!capability_state_.has_bimanual_coupling) return;
+        // 任意一侧手臂禁用时，禁止开启双臂耦合
+        if (!isLeftArmEnabled() || !isRightArmEnabled())
+        {
+            RCLCPP_INFO(node_->get_logger(), "Bimanual coupling blocked: one arm is disabled");
+            refreshWbcUi();
+            return;
+        }
         publishModeCommand(isBimanualCoupled() ? "ARMS_INDEPENDENT" : "ARMS_COUPLED");
     }
 
     void OCS2FSMPanel::onLeftArmToggled()
     {
+        // 双臂耦合启用时，禁止调整左右臂禁用状态
+        if (isBimanualCoupled())
+        {
+            RCLCPP_INFO(node_->get_logger(), "Left arm toggle blocked: bimanual coupling is enabled");
+            refreshWbcUi();
+            return;
+        }
         publishModeCommand(isLeftArmEnabled() ? "LEFT_ARM_DISABLE" : "LEFT_ARM_ENABLE");
     }
 
     void OCS2FSMPanel::onRightArmToggled()
     {
+        // 双臂耦合启用时，禁止调整左右臂禁用状态
+        if (isBimanualCoupled())
+        {
+            RCLCPP_INFO(node_->get_logger(), "Right arm toggle blocked: bimanual coupling is enabled");
+            refreshWbcUi();
+            return;
+        }
         publishModeCommand(isRightArmEnabled() ? "RIGHT_ARM_DISABLE" : "RIGHT_ARM_ENABLE");
     }
 

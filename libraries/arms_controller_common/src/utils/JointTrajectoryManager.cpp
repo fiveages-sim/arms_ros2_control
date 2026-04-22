@@ -285,7 +285,7 @@ namespace arms_controller_common
         return true;
     }
 
-    std::vector<double> JointTrajectoryManager::getNextPoint()
+    std::vector<double> JointTrajectoryManager::getNextPoint(double step_seconds)
     {
         if (!initialized_)
         {
@@ -322,13 +322,17 @@ namespace arms_controller_common
         switch (mode_)
         {
         case TrajectoryMode::SINGLE_NODE:
-            result = computeSingleNodePoint();
+            result = computeSingleNodePoint(step_seconds);
             break;
         case TrajectoryMode::MULTI_NODE_BASIC:
-            result = computeMultiNodeBasic();
+            result = computeMultiNodeBasic(step_seconds);
             break;
 #ifdef HAS_LINA_PLANNING
         case TrajectoryMode::MULTI_NODE_ADVANCED:
+            if (step_seconds > 0.0)
+            {
+                period_ = step_seconds;
+            }
             result = computeMultiNodeAdvanced();
             break;
 #endif
@@ -410,7 +414,7 @@ namespace arms_controller_common
         common_joint_blend_ratios = std::clamp(blend_ratios, 0.0, 1.0);
     }
 
-    std::vector<double> JointTrajectoryManager::computeSingleNodePoint()
+    std::vector<double> JointTrajectoryManager::computeSingleNodePoint(double step_seconds)
     {
         std::vector<double> result;
         result.reserve(start_pos_.size());
@@ -456,7 +460,7 @@ namespace arms_controller_common
         else
         {
             // Basic interpolation (TANH, LINEAR, NONE)
-            updateProgress();
+            updateProgress(step_seconds);
             double phase = calculatePhase(interpolation_type_, percent_);
 
             for (size_t i = 0; i < start_pos_.size() && i < target_pos_.size(); ++i)
@@ -469,7 +473,7 @@ namespace arms_controller_common
         return result;
     }
 
-    std::vector<double> JointTrajectoryManager::computeMultiNodeBasic()
+    std::vector<double> JointTrajectoryManager::computeMultiNodeBasic(double step_seconds)
     {
         // Check if we need to move to next segment
         if (current_segment_ < segment_progress_.size())
@@ -477,9 +481,10 @@ namespace arms_controller_common
             double segment_duration = segment_durations_[current_segment_];
 
             // Update progress for current segment
-            if (segment_duration > 0.0 && controller_frequency_ > 0.0)
+            double runtime_step = step_seconds > 0.0 ? step_seconds : period_;
+            if (segment_duration > 0.0 && runtime_step > 0.0)
             {
-                segment_progress_[current_segment_] += period_;
+                segment_progress_[current_segment_] += runtime_step;
                 segment_progress_[current_segment_] = std::min(
                     segment_progress_[current_segment_], segment_duration);
             }
@@ -646,9 +651,10 @@ namespace arms_controller_common
         return std::clamp(phase, 0.0, 1.0);
     }
 
-    void JointTrajectoryManager::updateProgress()
+    void JointTrajectoryManager::updateProgress(double step_seconds)
     {
-        if (duration_ <= 0.0 || controller_frequency_ <= 0.0)
+        double runtime_step = step_seconds > 0.0 ? step_seconds : period_;
+        if (duration_ <= 0.0 || runtime_step <= 0.0)
         {
             percent_ = 1.0; // Already normalized
             completed_ = true;
@@ -657,7 +663,7 @@ namespace arms_controller_common
         {
             // percent_ stores normalized progress [0, 1]
             // Increment by the fraction of duration that one period represents
-            double increment = period_ / duration_;
+            double increment = runtime_step / duration_;
             percent_ += increment;
             percent_ = std::min(percent_, 1.0);
 

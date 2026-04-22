@@ -42,6 +42,12 @@ add_library(${PROJECT_NAME} SHARED
         src/utils/WaistLiftingPlaner.cpp
 )
 
+# Pinocchio headers (ROS Jazzy) can trigger -Wreorder in template instantiation paths.
+# Suppress it only for this target to keep workspace-wide warnings strict.
+if(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
+    target_compile_options(${PROJECT_NAME} PRIVATE -Wno-reorder)
+endif()
+
 target_include_directories(${PROJECT_NAME}
         PUBLIC
         "$<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>"

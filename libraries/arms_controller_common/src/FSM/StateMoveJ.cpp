@@ -122,7 +122,7 @@ namespace arms_controller_common
         }
     }
 
-    void StateMoveJ::run(const rclcpp::Time& /*time*/, const rclcpp::Duration& /*period*/)
+    void StateMoveJ::run(const rclcpp::Time& /*time*/, const rclcpp::Duration& period)
     {
         std::lock_guard lock(target_mutex_);
         // 优先处理腰部升降（与转向互斥）
@@ -277,7 +277,8 @@ namespace arms_controller_common
         }
 
         // Get next trajectory point from unified manager (works for both single and multi-node)
-        std::vector<double> next_positions = trajectory_manager_.getNextPoint();
+        double runtime_step = period.seconds();
+        std::vector<double> next_positions = trajectory_manager_.getNextPoint(runtime_step);
 
         if (next_positions.empty())
         {

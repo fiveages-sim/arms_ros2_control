@@ -38,6 +38,7 @@ public:
         std::shared_ptr<tf2_ros::Buffer> tf_buffer,
         const std::string& frame_id,
         const std::string& control_base_frame,
+        rclcpp::Publisher<geometry_msgs::msg::Pose>::SharedPtr target_publisher,
         rclcpp::Publisher<geometry_msgs::msg::PoseStamped>::SharedPtr target_stamped_publisher,
         const std::string& current_pose_topic,
         double publish_rate = 20.0,
@@ -88,6 +89,7 @@ private:
 
     geometry_msgs::msg::Pose pose_;
 
+    rclcpp::Publisher<geometry_msgs::msg::Pose>::SharedPtr target_publisher_;
     rclcpp::Publisher<geometry_msgs::msg::PoseStamped>::SharedPtr target_stamped_publisher_;
     rclcpp::Subscription<geometry_msgs::msg::PoseStamped>::SharedPtr current_pose_subscription_;
 

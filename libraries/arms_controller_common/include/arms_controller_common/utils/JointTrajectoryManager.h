@@ -97,7 +97,7 @@ namespace arms_controller_common
          * @return Vector of joint positions for the next time step
          *         Returns empty vector if trajectory is not initialized or completed
          */
-        std::vector<double> getNextPoint();
+        std::vector<double> getNextPoint(double step_seconds = -1.0);
 
         /**
          * @brief Check if trajectory is completed
@@ -176,10 +176,10 @@ namespace arms_controller_common
         };
 
         // Single-node trajectory computation
-        std::vector<double> computeSingleNodePoint();
+        std::vector<double> computeSingleNodePoint(double step_seconds);
 
         // Multi-node trajectory computation - basic mode (segment-based)
-        std::vector<double> computeMultiNodeBasic();
+        std::vector<double> computeMultiNodeBasic(double step_seconds);
 
 #ifdef HAS_LINA_PLANNING
         // Multi-node trajectory computation - advanced mode (lina_planning)
@@ -190,7 +190,7 @@ namespace arms_controller_common
         double calculatePhase(InterpolationType type, double percent) const;
 
         // Update interpolation progress for single-node or basic multi-node
-        void updateProgress();
+        void updateProgress(double step_seconds);
 
         // Check if advanced mode should be used
         bool useAdvancedMode(InterpolationType type) const;
