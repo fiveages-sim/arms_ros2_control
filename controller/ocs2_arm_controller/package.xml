@@ -14,8 +14,6 @@
 	<depend>arms_teleop</depend>
 	<depend>robot_common_launch</depend>
 	<depend>std_msgs</depend>
-	<depend>ocs2_mobile_manipulator_ros</depend>
-	<depend>ocs2_ros_interfaces</depend>
 	<depend>arms_target_manager</depend>
 	<depend>adaptive_gripper_controller</depend>
 	<depend>arms_controller_common</depend>

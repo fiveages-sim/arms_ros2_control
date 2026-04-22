@@ -2,7 +2,7 @@
 <?xml-model href="http://download.ros.org/schema/package_format3.xsd" schematypens="http://www.w3.org/2001/XMLSchema"?>
 <package format="3">
   <name>ocs2_controller_common</name>
-  <version>1.0.0</version>
+  <version>1.1.0</version>
   <description>Shared OCS2 + ros2_control building blocks (reference targets, Pinocchio visualization, MPC timing helpers).</description>
   <maintainer email="biao876990970@hotmail.com">Huang Zhenbiao</maintainer>
   <license>Apache-2.0</license>
@@ -18,16 +18,10 @@
   <depend>tf2_ros</depend>
   <depend>tf2_geometry_msgs</depend>
   <depend>arms_ros2_control_msgs</depend>
-  <depend>ocs2_core</depend>
-  <depend>ocs2_oc</depend>
-  <depend>ocs2_mpc</depend>
-  <depend>ocs2_pinocchio_interface</depend>
-  <depend>ocs2_self_collision</depend>
-  <depend>ocs2_self_collision_visualization</depend>
+  <depend>ocs2_mobile_manipulator_ros</depend>
   <depend>ocs2_ros_interfaces</depend>
-  <depend>ocs2_wheel_humanoid</depend>
-  <depend>pinocchio</depend>
   <depend>lina_planning</depend>
+  <depend>ocs2_wheel_humanoid</depend>
 
   <test_depend>ament_lint_auto</test_depend>
   <test_depend>ament_lint_common</test_depend>
