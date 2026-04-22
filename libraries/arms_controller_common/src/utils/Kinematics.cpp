@@ -134,10 +134,23 @@ namespace arms_controller_common
     bool ArmKinematics::solveSingleArmIK(const EndEffectorPose& targetPose,
                                          const Eigen::VectorXd& initialGuess,
                                          Eigen::VectorXd& solution,
-                                         std::string arm_type, int maxIterations,
+                                         std::string arm_type,
+                                         int maxIterations,
                                          double tolerance)
     {
-        // 参数验证
+        SolutionInfo info;
+        return solveSingleArmIKWithInfo(targetPose, initialGuess, solution, info,
+                                        arm_type, maxIterations, tolerance);
+    }
+
+    bool ArmKinematics::solveSingleArmIKWithInfo(const EndEffectorPose& targetPose,
+                                                 const Eigen::VectorXd& initialGuess,
+                                                 Eigen::VectorXd& solution,
+                                                 SolutionInfo& info,
+                                                 std::string arm_type,
+                                                 int maxIterations,
+                                                 double tolerance)
+    {
         int jointCount = (arm_type == "left") ? leftArmJointCount_ : rightArmJointCount_;
         if (initialGuess.size() != static_cast<Eigen::Index>(jointCount))
         {
@@ -146,29 +159,192 @@ namespace arms_controller_common
             return false;
         }
 
-        // 更新参数
         params_.maxIterations = maxIterations;
         params_.solutionTolerance = tolerance;
 
         Eigen::VectorXd lower, upper;
         getJointLimits(arm_type, lower, upper);
 
-        // 调用求解器
-        auto [res, info] = solve(initialGuess, lower, upper, arm_type, targetPose);
+        std::pair<Eigen::VectorXd, SolutionInfo> result;
 
-        solution = res;
+        switch (params_.solverType)
+        {
+        case SolverType::DLS:
+            result = solveDLS(initialGuess, lower, upper, arm_type, targetPose);
+            result.second.usedSolver = SolverType::DLS;
+            break;
+
+        case SolverType::BFGS:
+            result = solveBFGS(initialGuess, lower, upper, arm_type, targetPose);
+            result.second.usedSolver = SolverType::BFGS;
+            break;
+
+        case SolverType::AUTO:
+        default:
+            // 先尝试 DLS（快速）
+            result = solveDLS(initialGuess, lower, upper, arm_type, targetPose);
+            result.second.usedSolver = SolverType::DLS;
+
+            // 如果 DLS 失败，尝试 BFGS
+            if (result.second.status != "success")
+            {
+                std::cout << "DLS failed, trying BFGS..." << std::endl;
+                result = solveBFGS(initialGuess, lower, upper, arm_type, targetPose);
+                result.second.usedSolver = SolverType::BFGS;
+            }
+            break;
+        }
+
+        solution = result.first;
+        info = result.second;
 
         if (info.status == "success")
         {
-            std::cout << "IK succeeded: " << info.iterations << " iterations, "
-                << info.numRandomRestarts << " restarts, error="
+            std::cout << "IK succeeded (" << (info.usedSolver == SolverType::DLS ? "DLS" : "BFGS")
+                << "): " << info.iterations << " iterations, error="
                 << info.poseErrorNorm << std::endl;
+
+            // 缓存成功解
+            if (arm_type == "left")
+                lastLeftSolution_ = solution;
+            else
+                lastRightSolution_ = solution;
+            lastArmType_ = arm_type;
+
             return true;
         }
 
-        std::cerr << "IK failed: " << info.status
-            << ", final error: " << info.poseErrorNorm << std::endl;
+        std::cerr << "IK failed (" << (info.usedSolver == SolverType::DLS ? "DLS" : "BFGS")
+            << "): " << info.status << ", final error: " << info.poseErrorNorm << std::endl;
         return false;
+    }
+
+
+    std::pair<Eigen::VectorXd, ArmKinematics::SolutionInfo>
+    ArmKinematics::solveDLS(const Eigen::VectorXd& seed,
+                            const Eigen::VectorXd& lower,
+                            const Eigen::VectorXd& upper,
+                            std::string arm_type,
+                            const EndEffectorPose& target)
+    {
+        SolutionInfo info;
+
+        // 热启动
+        Eigen::VectorXd q = seed;
+        // if (lastArmType_ == arm_type)
+        // {
+        //     if (arm_type == "left" && lastLeftSolution_.size() == seed.size())
+        //         q = lastLeftSolution_;
+        //     else if (arm_type == "right" && lastRightSolution_.size() == seed.size())
+        //         q = lastRightSolution_;
+        // }
+        q = clampToLimits(q, lower, upper);
+
+        RobotState state(leftArmJointCount_, rightArmJointCount_);
+        int frameId = (arm_type == "left")
+                          ? getFrameId(leftEndEffectorName_)
+                          : getFrameId(rightEndEffectorName_);
+        if (frameId < 0)
+        {
+            info.status = "invalid frame";
+            info.poseErrorNorm = std::numeric_limits<double>::max();
+            return {q, info};
+        }
+
+        double previousError = std::numeric_limits<double>::max();
+        int stagnationCount = 0;
+
+        for (int iter = 0; iter < params_.maxIterations; ++iter)
+        {
+            if (arm_type == "left")
+                state.leftArmJoints = q;
+            else
+                state.rightArmJoints = q;
+            Eigen::VectorXd joints = stateToJointVector(state);
+            updateKinematics(joints);
+
+            const auto& placement = data_.oMf[frameId];
+            EndEffectorPose currentPose;
+            currentPose.position = placement.translation();
+            currentPose.setRotation(placement.rotation());
+
+            Eigen::Matrix < double, 6, 1 > error = compute6DError(currentPose, target);
+            double currentError = error.norm();
+
+            if (currentError < params_.solutionTolerance)
+            {
+                info.iterations = iter;
+                info.poseErrorNorm = currentError;
+                info.status = "success";
+                return {q, info};
+            }
+
+            // 停滞检测
+            if (currentError >= previousError * 0.99)
+            {
+                stagnationCount++;
+                if (stagnationCount > params_.dlsStagnationLimit)
+                {
+                    info.iterations = iter;
+                    info.poseErrorNorm = currentError;
+                    info.status = "stagnation";
+                    return {q, info};
+                }
+            }
+            else
+            {
+                stagnationCount = 0;
+            }
+            previousError = currentError;
+
+            // 计算雅可比和更新
+            Eigen::MatrixXd J = getJacobian(arm_type);
+            double damping = computeAdaptiveDamping(J, params_.dlsDamping);
+            Eigen::VectorXd dq = dampedLeastSquares(J, error, damping);
+            limitStepSize(dq, params_.dlsStepLimit);
+
+            q = q + dq;
+            q = clampToLimits(q, lower, upper);
+        }
+
+        info.iterations = params_.maxIterations;
+        info.poseErrorNorm = previousError;
+        info.status = "max iterations";
+        return {q, info};
+    }
+
+    Eigen::VectorXd
+    ArmKinematics::dampedLeastSquares(const Eigen::MatrixXd& J,
+                                      const Eigen::VectorXd& error,
+                                      double damping) const
+    {
+        Eigen::MatrixXd JTJ = J.transpose() * J;
+        JTJ.diagonal().array() += damping;
+
+        return JTJ.ldlt().solve(J.transpose() * error);
+    }
+
+    // 自适应阻尼计算
+    double ArmKinematics::computeAdaptiveDamping(const Eigen::MatrixXd& J, double baseDamping) const
+    {
+        // 基于雅可比条件数调整阻尼
+        Eigen::JacobiSVD<Eigen::MatrixXd> svd(J);
+        double cond = svd.singularValues()(0) / svd.singularValues()(svd.singularValues().size() - 1);
+
+        // 条件数越大（接近奇异），阻尼越大
+        double condDamping = baseDamping * (1.0 + std::min(10.0, cond / 100.0));
+
+        return std::min(0.1, condDamping); // 限制最大阻尼
+    }
+
+    // 限制步长
+    void ArmKinematics::limitStepSize(Eigen::VectorXd& deltaQ, double maxStep)
+    {
+        double norm = deltaQ.norm();
+        if (norm > maxStep)
+        {
+            deltaQ *= (maxStep / norm);
+        }
     }
 
     bool ArmKinematics::solveBothArmsIK(const EndEffectorPose& leftTargetPose,
@@ -467,6 +643,32 @@ namespace arms_controller_common
         grad = -J.transpose() * W * error;
     }
 
+    // ==================== 新增：带正则化的代价函数 ====================
+    void ArmKinematics::computeCostAndGradWithReg(const Eigen::VectorXd& error,
+                                                  const Eigen::MatrixXd& J,
+                                                  const Eigen::VectorXd& weight,
+                                                  Eigen::VectorXd& grad,
+                                                  double* cost,
+                                                  const Eigen::VectorXd& q_ref,
+                                                  const Eigen::VectorXd& q,
+                                                  double lambda_reg)
+    {
+        Eigen::MatrixXd W = weight.asDiagonal();
+
+        // 原始任务代价和梯度
+        double task_cost = 0.5 * error.transpose() * W * error;
+        Eigen::VectorXd task_grad = -J.transpose() * W * error;
+
+        // 正则化项：惩罚偏离参考关节位置
+        Eigen::VectorXd q_diff = q - q_ref;
+        double reg_cost = 0.5 * lambda_reg * q_diff.squaredNorm();
+        Eigen::VectorXd reg_grad = lambda_reg * q_diff;
+
+        // 合并
+        *cost = task_cost + reg_cost;
+        grad = task_grad + reg_grad;
+    }
+
     bool ArmKinematics::isPositiveDefinite(const Eigen::MatrixXd& matrix)
     {
         Eigen::LLT<Eigen::MatrixXd> llt(matrix);
@@ -745,7 +947,8 @@ namespace arms_controller_common
                                               const Eigen::VectorXd& grad,
                                               double maxGamma,
                                               std::string arm_type,
-                                              const EndEffectorPose& target)
+                                              const EndEffectorPose& target,
+                                              const Eigen::VectorXd& q_ref)
     {
         double gamma = std::min(1.0, maxGamma);
 
@@ -762,8 +965,16 @@ namespace arms_controller_common
 
             double cost_new;
             Eigen::VectorXd grad_new;
-            computeCostAndGrad(error, jacobian, weight_, grad_new, &cost_new);
-
+            // 根据是否启用正则化选择代价函数
+            if (params_.useRegularization)
+            {
+                computeCostAndGradWithReg(error, jacobian, weight_, grad_new, &cost_new,
+                                          q_ref, x_new, params_.lambdaRegularization);
+            }
+            else
+            {
+                computeCostAndGrad(error, jacobian, weight_, grad_new, &cost_new);
+            }
             // Armijo条件
             double expectedDecrease = -params_.armijoSigma * grad.dot(gamma * s);
             double actualDecrease = cost - cost_new;
@@ -782,23 +993,27 @@ namespace arms_controller_common
     // ==================== 内部求解器 ====================
 
     std::pair<Eigen::VectorXd, ArmKinematics::SolutionInfo>
-    ArmKinematics::solveInternal(const Eigen::VectorXd& seed,
-                                 const Eigen::VectorXd& lower,
-                                 const Eigen::VectorXd& upper,
-                                 std::string arm_type,
-                                 const EndEffectorPose& target)
+    ArmKinematics::solveBFGSInternal(const Eigen::VectorXd& seed,
+                                     const Eigen::VectorXd& lower,
+                                     const Eigen::VectorXd& upper,
+                                     std::string arm_type,
+                                     const EndEffectorPose& target)
     {
         SolutionInfo info;
 
         // 初始点只clamp一次
         Eigen::VectorXd x = clampToLimits(seed, lower, upper);
         int n = x.size();
+
+        // 保存参考关节位置（使用初始猜测 seed，而不是 clamp 后的 x）
+        Eigen::VectorXd q_ref = seed;
+
         // 计算初始误差
         RobotState state = jointVectorToState(x, arm_type);
         EndEffectorPose current_pose = computeSingleEndEffectorPose(state, arm_type);
         Eigen::Matrix < double, 6, 1 > error = compute6DError(current_pose, target);
 
-        // ========== 新增：如果初始误差已经很小，直接返回 ==========
+        // 如果初始误差已经很小，直接返回
         if (error.norm() <= params_.solutionTolerance)
         {
             info.poseErrorNorm = error.norm();
@@ -807,7 +1022,6 @@ namespace arms_controller_common
             info.status = "success";
             return {x, info};
         }
-        // ======================================================
 
         // 计算初始代价和梯度
         Eigen::VectorXd grad;
@@ -816,7 +1030,17 @@ namespace arms_controller_common
         current_pose = computeSingleEndEffectorPose(state, arm_type);
         Eigen::MatrixXd jacobian = getJacobian(arm_type);
         error = compute6DError(current_pose, target);
-        computeCostAndGrad(error, jacobian, weight_, grad, &cost);
+
+        // 根据是否启用正则化选择代价函数
+        if (params_.useRegularization)
+        {
+            computeCostAndGradWithReg(error, jacobian, weight_, grad, &cost,
+                                      q_ref, x, params_.lambdaRegularization);
+        }
+        else
+        {
+            computeCostAndGrad(error, jacobian, weight_, grad, &cost);
+        }
 
         // 初始化Hessian近似
         Eigen::MatrixXd H = Eigen::MatrixXd::Identity(n, n);
@@ -871,8 +1095,8 @@ namespace arms_controller_common
                 maxGamma = computeStepBound(x, s, A, b, activeSet);
             }
 
-            // 线搜索
-            double gamma = lineSearchWithBound(x, s, cost, grad, maxGamma, arm_type, target);
+            // 线搜索（传入 q_ref）
+            double gamma = lineSearchWithBound(x, s, cost, grad, maxGamma, arm_type, target, q_ref);
 
             if (gamma < params_.stepTolerance)
             {
@@ -893,7 +1117,6 @@ namespace arms_controller_common
                     double violation = A.row(i).dot(x_new) - b(i);
                     if (violation > 1e-6)
                     {
-                        // std::cerr << "Warning: Constraint " << i << " violated: " << violation << std::endl;
                         violated = true;
                     }
                 }
@@ -910,9 +1133,19 @@ namespace arms_controller_common
             current_pose = computeSingleEndEffectorPose(state, arm_type);
             jacobian = getJacobian(arm_type);
             error = compute6DError(current_pose, target);
-            computeCostAndGrad(error, jacobian, weight_, grad_new, &cost_new);
 
-            // 检查收敛
+            // 根据是否启用正则化选择代价函数
+            if (params_.useRegularization)
+            {
+                computeCostAndGradWithReg(error, jacobian, weight_, grad_new, &cost_new,
+                                          q_ref, x_new, params_.lambdaRegularization);
+            }
+            else
+            {
+                computeCostAndGrad(error, jacobian, weight_, grad_new, &cost_new);
+            }
+
+            // 检查收敛（只检查任务误差）
             if (error.norm() < params_.solutionTolerance)
             {
                 info.exitFlag = 0;
@@ -954,16 +1187,17 @@ namespace arms_controller_common
     }
 
     std::pair<Eigen::VectorXd, ArmKinematics::SolutionInfo>
-    ArmKinematics::solve(const Eigen::VectorXd& initialGuess,
-                         const Eigen::VectorXd& lower,
-                         const Eigen::VectorXd& upper,
-                         std::string arm_type,
-                         const EndEffectorPose& target)
+    ArmKinematics::solveBFGS(const Eigen::VectorXd& initialGuess,
+                             const Eigen::VectorXd& lower,
+                             const Eigen::VectorXd& upper,
+                             std::string arm_type,
+                             const EndEffectorPose& target)
     {
         SolutionInfo bestInfo;
         Eigen::VectorXd bestSolution = initialGuess;
         double bestError = std::numeric_limits<double>::max();
-        // ========== 新增：先检查初始猜测是否已经满足精度 ==========
+
+        // 检查初始猜测
         RobotState initState = jointVectorToState(initialGuess, arm_type);
         EndEffectorPose initPose = computeSingleEndEffectorPose(initState, arm_type);
         Eigen::Matrix < double, 6, 1 > initError = compute6DError(initPose, target);
@@ -971,30 +1205,27 @@ namespace arms_controller_common
 
         if (initErrorNorm <= params_.solutionTolerance)
         {
-            // 初始猜测已经足够好，直接返回
             bestInfo.poseErrorNorm = initErrorNorm;
             bestInfo.iterations = 0;
-            bestInfo.numRandomRestarts = 0;
             bestInfo.status = "success";
-            bestInfo.exitFlag = 0;
-            std::cout << "IK: Initial guess already satisfies tolerance, returning it." << std::endl;
             return {initialGuess, bestInfo};
         }
+
         int restartCount = 0;
-        while (restartCount <= params_.maxRestarts)
+        int maxRestarts = params_.randomRestart ? params_.maxRestarts : 0;
+
+        while (restartCount <= maxRestarts)
         {
             Eigen::VectorXd q;
             if (restartCount == 0)
-            {
                 q = initialGuess;
-            }
             else
             {
                 q = randomConfig(lower, upper);
                 bestInfo.numRandomRestarts++;
             }
 
-            auto [solution, localInfo] = solveInternal(q, lower, upper, arm_type, target);
+            auto [solution, localInfo] = solveBFGSInternal(q, lower, upper, arm_type, target);
 
             if (localInfo.poseErrorNorm < bestError)
             {
@@ -1011,22 +1242,17 @@ namespace arms_controller_common
 
             restartCount++;
 
-            if (!params_.randomRestart ||
-                localInfo.exitFlag == 1 ||
-                localInfo.exitFlag == 2)
-            {
+            if (!params_.randomRestart || localInfo.exitFlag == 1 || localInfo.exitFlag == 2)
                 break;
-            }
         }
 
         bestInfo.poseErrorNorm = bestError;
         if (bestInfo.status.empty())
-        {
             bestInfo.status = "best available";
-        }
 
         return {bestSolution, bestInfo};
     }
+
 
     //服务相关的代码
     geometry_msgs::msg::Pose ArmKinematics::endEffectorPoseToROSPose(const EndEffectorPose& pose)

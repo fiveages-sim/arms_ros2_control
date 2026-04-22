@@ -147,6 +147,19 @@ namespace arms_controller_common
                 return false;
             }
         }
+        ArmKinematics::SolverType ik_tp;
+        if (target_circle_msg.ik_type=="BFGS")
+        {
+            ik_tp = ArmKinematics::SolverType::BFGS;
+        }else if (target_circle_msg.ik_type=="DLS")
+        {
+            ik_tp = ArmKinematics::SolverType::DLS;
+        }else
+        {
+            ik_tp = ArmKinematics::SolverType::AUTO;
+        }
+
+        arm_kinematics_->setSolverType(ik_tp);
         movec_planner_->setRealStartTime(-period);
         planningTime_ = movec_planner_->getTotalTime();
         path_type_ = PathType::CIRCLE;
