@@ -7,7 +7,6 @@ if (CMAKE_COMPILER_IS_GNUCXX OR CMAKE_CXX_COMPILER_ID MATCHES "Clang")
 endif ()
 
 set(CMAKE_BUILD_TYPE Release)
-set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 
 set(dependencies
         hardware_interface
@@ -23,14 +22,21 @@ set(dependencies
 )
 
 find_package(ament_cmake REQUIRED)
-# lina_planning is optional - DOUBLES interpolation requires it
 find_package(lina_planning QUIET)
-# Find Eigen3 (required by Pinocchio)
 find_package(Eigen3 REQUIRED)
 
 foreach (Dependency IN ITEMS ${dependencies})
     find_package(${Dependency} REQUIRED)
 endforeach ()
+
+# 获取 SDK 路径
+get_filename_component(MARVIN_DIR
+        "${CMAKE_CURRENT_SOURCE_DIR}/../../hardwares/marvin_ros2_control"
+        ABSOLUTE)
+set(TJ_SDK_BASE_DIR "${MARVIN_DIR}/external/TJ_FX_ROBOT_CONTRL_SDK")
+set(KINE_SDK_DIR "${TJ_SDK_BASE_DIR}/kinematicsSDK")
+
+message(STATUS "KINE_SDK_DIR: ${KINE_SDK_DIR}")
 
 add_library(${PROJECT_NAME} SHARED
         src/FSM/StateHome.cpp
@@ -49,24 +55,41 @@ target_include_directories(${PROJECT_NAME}
         "$<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>"
         "$<INSTALL_INTERFACE:include/${PROJECT_NAME}>"
         PRIVATE
-        src)
+        src
+)
 
-# Conditionally link lina_planning if available
+# 添加 SDK 头文件路径
+target_include_directories(${PROJECT_NAME} PRIVATE
+        ${KINE_SDK_DIR}
+)
+
+# 添加 SDK 库的链接目录
+target_link_directories(${PROJECT_NAME} PRIVATE
+        ${KINE_SDK_DIR}
+)
+
 if(lina_planning_FOUND)
     target_compile_definitions(${PROJECT_NAME} PUBLIC HAS_LINA_PLANNING)
     target_link_libraries(${PROJECT_NAME} PUBLIC lina_planning::lina_planning)
     message(STATUS "lina_planning found - DOUBLES interpolation enabled")
 else()
-    message(STATUS "lina_planning not found - DOUBLES interpolation disabled (basic interpolation still available)")
+    message(STATUS "lina_planning not found - DOUBLES interpolation disabled")
 endif()
 
-ament_target_dependencies(
-        ${PROJECT_NAME} PUBLIC
-        ${dependencies}
+ament_target_dependencies(${PROJECT_NAME} PUBLIC ${dependencies})
+
+# 只链接 libKine.so（运动学库）
+target_link_libraries(${PROJECT_NAME} PUBLIC
+        ${KINE_SDK_DIR}/libKine.so
+        pthread
+        rt
 )
 
-# Link Eigen3
-target_include_directories(${PROJECT_NAME} PUBLIC ${EIGEN3_INCLUDE_DIR})
+# 设置 RPATH
+set_target_properties(${PROJECT_NAME} PROPERTIES
+        BUILD_RPATH "${KINE_SDK_DIR}"
+        INSTALL_RPATH "$ORIGIN/../lib;$ORIGIN/../../../hardwares/marvin_ros2_control/external/TJ_FX_ROBOT_CONTRL_SDK/kinematicsSDK"
+)
 
 install(
         DIRECTORY include/
@@ -80,9 +103,15 @@ install(
         LIBRARY DESTINATION lib
         RUNTIME DESTINATION bin
 )
-
+# 安装 SDK 头文件到 arms_controller_common 的 include 目录
+install(FILES
+        ${KINE_SDK_DIR}/FxRobot.h
+        ${KINE_SDK_DIR}/FXMatrix.h
+        ${KINE_SDK_DIR}/FXSpln.h
+        ${KINE_SDK_DIR}/LoadIdenPub.h
+        DESTINATION include/${PROJECT_NAME}
+)
 ament_export_dependencies(${dependencies})
-# Conditionally export lina_planning dependency
 if(lina_planning_FOUND)
     ament_export_dependencies(lina_planning)
 endif()

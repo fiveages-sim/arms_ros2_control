@@ -3,6 +3,8 @@
 #include <arms_ros2_control_msgs/msg/linear_message.hpp>
 #include <iostream>
 
+#include "../../include/arms_controller_common/utils/Kinematics.h"
+
 namespace arms_controller_common
 {
     CartesianTrajectoryManager::CartesianTrajectoryManager()
@@ -71,6 +73,22 @@ namespace arms_controller_common
             std::cout << "Failed to initialize moveL planner" << std::endl;
             return false;
         }
+        ArmKinematics::SolverType ik_tp;
+        if (target_point_msg.ik_type=="BFGS")
+        {
+            ik_tp = ArmKinematics::SolverType::BFGS;
+        }else if (target_point_msg.ik_type=="DLS")
+        {
+            ik_tp = ArmKinematics::SolverType::DLS;
+        }else if (target_point_msg.ik_type=="SDK")
+        {
+            ik_tp=ArmKinematics::SolverType::SDK;
+        }
+        else
+        {
+            ik_tp = ArmKinematics::SolverType::AUTO;
+        }
+        arm_kinematics_->setSolverType(ik_tp);
         movel_planner_->setRealStartTime(0.0);
         planningTime_ = movel_planner_->getTotalTime();
         path_type_ = PathType::LINE;
@@ -154,13 +172,17 @@ namespace arms_controller_common
         }else if (target_circle_msg.ik_type=="DLS")
         {
             ik_tp = ArmKinematics::SolverType::DLS;
-        }else
+        }else if (target_circle_msg.ik_type=="SDK")
+        {
+            ik_tp=ArmKinematics::SolverType::SDK;
+        }
+        else
         {
             ik_tp = ArmKinematics::SolverType::AUTO;
         }
 
         arm_kinematics_->setSolverType(ik_tp);
-        movec_planner_->setRealStartTime(-period);
+        movec_planner_->setRealStartTime(period);
         planningTime_ = movec_planner_->getTotalTime();
         path_type_ = PathType::CIRCLE;
         return true;

@@ -8,6 +8,13 @@ string operation_type
 # 手臂类型: "left", "right", "both"
 string arm_type
 
+# 求解器类型: "sdk", "dls", "bfgs", "auto"
+# sdk: 使用天机官方SDK（快速、精确）
+# dls: 阻尼最小二乘法
+# bfgs: BFGS优化法
+# auto: 自动选择（推荐SDK auto，失败后回退）
+string solver_type  # 默认 "auto"
+
 # 关节角度 (用于FK，或作为IK的初始猜测)
 # 对于单臂: 7个关节
 # 对于双臂: 14个关节 (左臂7个 + 右臂7个)
@@ -21,6 +28,13 @@ geometry_msgs/Pose[] target_poses
 # IK参数
 int32 max_iterations      # 最大迭代次数 (默认: 100)
 float64 tolerance         # 容差 (默认: 1e-6)
+float64 dls_damping       # DLS阻尼系数 (默认: 0.01)
+bool enable_random_restart # 是否启用随机重启 (默认: false)
+
+# SDK特定参数
+float64 dgr1              # SDK奇异鲁棒参数1 (默认: 0.05)
+float64 dgr2              # SDK奇异鲁棒参数2 (默认: 0.05)
+float64 dgr3              # SDK奇异鲁棒参数3 (默认: 0.0)
 
 ---
 # ====== 响应部分 ======
@@ -33,5 +47,12 @@ string message
 geometry_msgs/Pose[] result_poses
 float64[] result_joint_angles
 
-# 计算耗时 (毫秒)
-float64 computation_time_ms
+# 求解器信息
+string used_solver        # 实际使用的求解器
+int32 iterations          # 迭代次数
+float64 final_error       # 最终误差
+float64 computation_time_ms # 计算耗时 (毫秒)
+bool is_out_of_range      # 是否超出工作空间
+bool[] is_degenerate      # 各关节是否奇异（仅SDK）
+bool is_joint_exceeded    # 是否超出限位（仅SDK）
+string additional_info    # 附加信息（如SDK返回的详细信息）

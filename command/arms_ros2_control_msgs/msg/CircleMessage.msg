@@ -32,4 +32,4 @@ bool use_slerp_for_orientation     # true:球面插值; false:线性插值
 bool time_mode                     # true 时间模式；false：参数约束
 string frame_id                    # 坐标系id
 string arm_name                    #'left'左臂，'right'右臂
-string ik_type                     #'BFGS','DLS','AUTO'
+string ik_type                     #'BFGS','DLS','AUTO','SDK'

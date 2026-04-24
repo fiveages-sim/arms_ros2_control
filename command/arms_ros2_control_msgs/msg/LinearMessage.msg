@@ -21,3 +21,4 @@ float64 duration                   # 时间模式定义运动时间
 bool time_mode                     # true 时间模式；false：参数约束
 string frame_id                    # 坐标系id
 string arm_name                    #要发哪个手，"left"或者"right"
+string ik_type                     #'BFGS','DLS','AUTO','SDK'
