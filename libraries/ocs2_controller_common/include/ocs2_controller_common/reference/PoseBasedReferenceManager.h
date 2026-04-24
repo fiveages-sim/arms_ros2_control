@@ -9,6 +9,7 @@
 #include <chrono>
 #include <functional>
 #include <mutex>
+#include <limits>
 #include <geometry_msgs/msg/pose.hpp>
 #include <geometry_msgs/msg/pose_stamped.hpp>
 #ifdef HAS_LINA_PLANNING
@@ -81,6 +82,11 @@ private:
     void updateTrajectoryWithBody(const vector_t& previous_left_target_state, const vector_t& previous_right_target_state,
                                   const vector_t& previous_body_target_state);
     void updateBodyTrajectory(const vector_t& previous_body_target_state);
+    void appendStampedExtrapolatedHoldSamples(scalar_array_t& time_trajectory, vector_array_t& state_trajectory,
+                                              double sample_interval_sec) const;
+    vector_t applyTeleopStreamingFilter(const vector_t& current_state, const vector_t& target_state, double dt,
+                                        Eigen::Vector3d& prev_linear_velocity, Eigen::Vector3d& prev_angular_velocity) const;
+    double computeStreamingDt(double& last_update_time_sec) const;
 
     [[nodiscard]] int effectiveTargetStateDim() const;
     [[nodiscard]] vector_t identityBodyPose7() const;
@@ -132,6 +138,25 @@ private:
 
     double trajectory_duration_{2.0};
     double moveL_duration_{2.0};
+    double target_stamped_extrapolation_duration_{0.0};
+    bool teleop_streaming_mode_{false};
+    double teleop_streaming_nominal_dt_{0.01};
+    double teleop_streaming_max_linear_speed_{0.5};
+    double teleop_streaming_max_angular_speed_{1.5};
+    double teleop_streaming_max_linear_acceleration_{2.0};
+    double teleop_streaming_max_angular_acceleration_{6.0};
+    double teleop_streaming_lowpass_alpha_{1.0};
+    double teleop_streaming_position_deadband_{0.0};
+    double teleop_streaming_orientation_deadband_{0.0};
+    double left_stream_last_time_sec_{std::numeric_limits<double>::quiet_NaN()};
+    double right_stream_last_time_sec_{std::numeric_limits<double>::quiet_NaN()};
+    double body_stream_last_time_sec_{std::numeric_limits<double>::quiet_NaN()};
+    Eigen::Vector3d left_stream_linear_velocity_{Eigen::Vector3d::Zero()};
+    Eigen::Vector3d left_stream_angular_velocity_{Eigen::Vector3d::Zero()};
+    Eigen::Vector3d right_stream_linear_velocity_{Eigen::Vector3d::Zero()};
+    Eigen::Vector3d right_stream_angular_velocity_{Eigen::Vector3d::Zero()};
+    Eigen::Vector3d body_stream_linear_velocity_{Eigen::Vector3d::Zero()};
+    Eigen::Vector3d body_stream_angular_velocity_{Eigen::Vector3d::Zero()};
 
 #ifdef HAS_LINA_PLANNING
     std::shared_ptr<planning::CircularCurver> left_circle_curve_;

@@ -21,6 +21,19 @@
 
 namespace ocs2::controller_common
 {
+    namespace
+    {
+        inline double quinticTimeScaling(double r)
+        {
+            const double rc = std::clamp(r, 0.0, 1.0);
+            const double r2 = rc * rc;
+            const double r3 = r2 * rc;
+            const double r4 = r3 * rc;
+            const double r5 = r4 * rc;
+            return 10.0 * r3 - 15.0 * r4 + 6.0 * r5;
+        }
+    } // namespace
+
     PoseBasedReferenceManager::PoseBasedReferenceManager(
         std::string topicPrefix,
         std::shared_ptr<ReferenceManagerInterface> referenceManagerPtr,
@@ -71,6 +84,46 @@ namespace ocs2::controller_common
         clock_ = node->get_clock();
 
         // 初始化参数（从参数服务器获取）
+        if (!node_->has_parameter("target_stamped_extrapolation_duration"))
+        {
+            node_->declare_parameter<double>("target_stamped_extrapolation_duration", 0.0);
+        }
+        if (!node_->has_parameter("teleop_streaming_mode"))
+        {
+            node_->declare_parameter<bool>("teleop_streaming_mode", false);
+        }
+        if (!node_->has_parameter("teleop_streaming_nominal_dt"))
+        {
+            node_->declare_parameter<double>("teleop_streaming_nominal_dt", 0.01);
+        }
+        if (!node_->has_parameter("teleop_streaming_max_linear_speed"))
+        {
+            node_->declare_parameter<double>("teleop_streaming_max_linear_speed", 0.5);
+        }
+        if (!node_->has_parameter("teleop_streaming_max_angular_speed"))
+        {
+            node_->declare_parameter<double>("teleop_streaming_max_angular_speed", 1.5);
+        }
+        if (!node_->has_parameter("teleop_streaming_max_linear_acceleration"))
+        {
+            node_->declare_parameter<double>("teleop_streaming_max_linear_acceleration", 2.0);
+        }
+        if (!node_->has_parameter("teleop_streaming_max_angular_acceleration"))
+        {
+            node_->declare_parameter<double>("teleop_streaming_max_angular_acceleration", 6.0);
+        }
+        if (!node_->has_parameter("teleop_streaming_lowpass_alpha"))
+        {
+            node_->declare_parameter<double>("teleop_streaming_lowpass_alpha", 1.0);
+        }
+        if (!node_->has_parameter("teleop_streaming_position_deadband"))
+        {
+            node_->declare_parameter<double>("teleop_streaming_position_deadband", 0.0);
+        }
+        if (!node_->has_parameter("teleop_streaming_orientation_deadband"))
+        {
+            node_->declare_parameter<double>("teleop_streaming_orientation_deadband", 0.0);
+        }
         updateParam();
 
         // 初始化TF2 buffer和listener
@@ -327,7 +380,7 @@ namespace ocs2::controller_common
         scalar_array_t time_trajectory = {target_time};
         vector_array_t state_trajectory = {combined_target_state};
         vector_array_t input_trajectory(
-            1, vector_t::Zero(target_context_.input_dim));
+            time_trajectory.size(), vector_t::Zero(target_context_.input_dim));
 
         TargetTrajectories target_trajectories(time_trajectory, state_trajectory,
                                                input_trajectory);
@@ -424,9 +477,9 @@ namespace ocs2::controller_common
         for (size_t i = 0; i < kNumSamples; ++i)
         {
             const double t = t0 + static_cast<double>(i) * dt;
-            const double alpha = std::clamp(static_cast<double>(i) /
-                                            static_cast<double>(kNumSamples - 1),
-                                            0.0, 1.0);
+            // Quintic time-scaling for smoother start/stop at both ends.
+            const double alpha = quinticTimeScaling(
+                static_cast<double>(i) / static_cast<double>(kNumSamples - 1));
 
             vector_t xt;
             if (dual_arm_mode_)
@@ -446,8 +499,10 @@ namespace ocs2::controller_common
             state_trajectory.push_back(std::move(xt));
         }
 
+        appendStampedExtrapolatedHoldSamples(time_trajectory, state_trajectory, kSampleInterval);
+
         vector_array_t input_trajectory(
-            kNumSamples,
+            time_trajectory.size(),
             vector_t::Zero(target_context_.input_dim));
         TargetTrajectories target_trajectories(time_trajectory, state_trajectory,
                                                input_trajectory);
@@ -515,8 +570,9 @@ namespace ocs2::controller_common
         for (size_t i = 0; i < kNumSamples; ++i)
         {
             const double t = t0 + static_cast<double>(i) * dt;
-            const double alpha = std::clamp(
-                static_cast<double>(i) / static_cast<double>(kNumSamples - 1), 0.0, 1.0);
+            // Quintic time-scaling for smoother start/stop at both ends.
+            const double alpha = quinticTimeScaling(
+                static_cast<double>(i) / static_cast<double>(kNumSamples - 1));
 
             const vector_t left_i = interpolatePose7(start_left, goal_left, alpha);
             const vector_t right_i = interpolatePose7(start_right, goal_right, alpha);
@@ -527,8 +583,10 @@ namespace ocs2::controller_common
             state_trajectory.push_back(xt);
         }
 
+        appendStampedExtrapolatedHoldSamples(time_trajectory, state_trajectory, kSampleInterval);
+
         vector_array_t input_trajectory(
-            kNumSamples, vector_t::Zero(target_context_.input_dim));
+            time_trajectory.size(), vector_t::Zero(target_context_.input_dim));
         TargetTrajectories target_trajectories(time_trajectory, state_trajectory, input_trajectory);
         referenceManagerPtr_->setTargetTrajectories(std::move(target_trajectories));
     }
@@ -593,8 +651,9 @@ namespace ocs2::controller_common
         for (size_t i = 0; i < kNumSamples; ++i)
         {
             const double t = t0 + static_cast<double>(i) * dt;
-            const double alpha = std::clamp(
-                static_cast<double>(i) / static_cast<double>(kNumSamples - 1), 0.0, 1.0);
+            // Quintic time-scaling for smoother start/stop at both ends.
+            const double alpha = quinticTimeScaling(
+                static_cast<double>(i) / static_cast<double>(kNumSamples - 1));
 
             const vector_t body_i = interpolatePose7(start_body, goal_body, alpha);
             const vector_t xt = assembleWheelHumanoidTargetState(fixed_left, fixed_right, body_i);
@@ -603,8 +662,10 @@ namespace ocs2::controller_common
             state_trajectory.push_back(xt);
         }
 
+        appendStampedExtrapolatedHoldSamples(time_trajectory, state_trajectory, kSampleInterval);
+
         vector_array_t input_trajectory(
-            kNumSamples, vector_t::Zero(target_context_.input_dim));
+            time_trajectory.size(), vector_t::Zero(target_context_.input_dim));
         TargetTrajectories target_trajectories(time_trajectory, state_trajectory, input_trajectory);
         referenceManagerPtr_->setTargetTrajectories(std::move(target_trajectories));
     }
@@ -614,6 +675,249 @@ namespace ocs2::controller_common
         trajectory_duration_ =
             node_->get_parameter("movel_trajectory_duration").as_double();
         moveL_duration_ = node_->get_parameter("movel_duration").as_double();
+        target_stamped_extrapolation_duration_ =
+            node_->get_parameter("target_stamped_extrapolation_duration").as_double();
+        teleop_streaming_mode_ =
+            node_->get_parameter("teleop_streaming_mode").as_bool();
+        teleop_streaming_nominal_dt_ = std::max(
+            node_->get_parameter("teleop_streaming_nominal_dt").as_double(), 1e-4);
+        teleop_streaming_max_linear_speed_ = std::max(
+            node_->get_parameter("teleop_streaming_max_linear_speed").as_double(), 0.0);
+        teleop_streaming_max_angular_speed_ = std::max(
+            node_->get_parameter("teleop_streaming_max_angular_speed").as_double(), 0.0);
+        teleop_streaming_max_linear_acceleration_ = std::max(
+            node_->get_parameter("teleop_streaming_max_linear_acceleration").as_double(), 0.0);
+        teleop_streaming_max_angular_acceleration_ = std::max(
+            node_->get_parameter("teleop_streaming_max_angular_acceleration").as_double(), 0.0);
+        teleop_streaming_lowpass_alpha_ = std::clamp(
+            node_->get_parameter("teleop_streaming_lowpass_alpha").as_double(), 0.0, 1.0);
+        teleop_streaming_position_deadband_ = std::max(
+            node_->get_parameter("teleop_streaming_position_deadband").as_double(), 0.0);
+        teleop_streaming_orientation_deadband_ = std::max(
+            node_->get_parameter("teleop_streaming_orientation_deadband").as_double(), 0.0);
+    }
+
+    void PoseBasedReferenceManager::appendStampedExtrapolatedHoldSamples(
+        scalar_array_t& time_trajectory, vector_array_t& state_trajectory, double sample_interval_sec) const
+    {
+        if (target_stamped_extrapolation_duration_ <= 0.0 || time_trajectory.empty() || state_trajectory.empty())
+        {
+            return;
+        }
+
+        constexpr double kEps = 1e-9;
+        const double dt = std::max(sample_interval_sec, kEps);
+        const double total = target_stamped_extrapolation_duration_;
+        const double base_time = time_trajectory.back();
+        const vector_t hold_state = state_trajectory.back();
+
+        const size_t num_full_steps = static_cast<size_t>(std::floor((total + kEps) / dt));
+        for (size_t i = 1; i <= num_full_steps; ++i)
+        {
+            time_trajectory.push_back(base_time + static_cast<double>(i) * dt);
+            state_trajectory.push_back(hold_state);
+        }
+
+        const double generated = static_cast<double>(num_full_steps) * dt;
+        if (total - generated > kEps)
+        {
+            time_trajectory.push_back(base_time + total);
+            state_trajectory.push_back(hold_state);
+        }
+    }
+
+    double PoseBasedReferenceManager::computeStreamingDt(double& last_update_time_sec) const
+    {
+        const double now = current_observation_.time;
+
+        // Use controller observation time as the primary teleop streaming clock.
+        // If time is invalid or not advancing for this callback, fall back to nominal dt
+        // instead of producing near-zero dt (which can freeze motion under accel limits).
+        if (!std::isfinite(now))
+        {
+            if (std::isfinite(last_update_time_sec))
+            {
+                last_update_time_sec += teleop_streaming_nominal_dt_;
+            }
+            else
+            {
+                last_update_time_sec = 0.0;
+            }
+            return teleop_streaming_nominal_dt_;
+        }
+
+        double dt = teleop_streaming_nominal_dt_;
+        if (std::isfinite(last_update_time_sec) && now > last_update_time_sec)
+        {
+            dt = std::max(now - last_update_time_sec, 1e-4);
+        }
+
+        last_update_time_sec = now;
+        return dt;
+    }
+
+    vector_t PoseBasedReferenceManager::applyTeleopStreamingFilter(
+        const vector_t& current_state, const vector_t& target_state, const double dt,
+        Eigen::Vector3d& prev_linear_velocity, Eigen::Vector3d& prev_angular_velocity) const
+    {
+        if (current_state.size() < 7 || target_state.size() < 7)
+        {
+            return target_state;
+        }
+
+        vector_t out = current_state;
+        // Hybrid streaming integration:
+        // - use real callback dt (with a relaxed upper bound) to avoid sparse-update stalling
+        // - keep acceleration integration bounded to avoid oversized jumps after long gaps
+        const double callback_dt = std::clamp(dt, 1e-4, 0.5);
+        const double nominal_dt = std::clamp(teleop_streaming_nominal_dt_, 1e-4, 0.05);
+        const double accel_dt = std::clamp(callback_dt, nominal_dt, 0.2);
+        const double step_dt = std::clamp(callback_dt, nominal_dt, 0.2);
+        const double step_ang_max = teleop_streaming_max_angular_speed_ * step_dt;
+        const double max_dv_linear = teleop_streaming_max_linear_acceleration_ * accel_dt;
+        const double max_dv_angular = teleop_streaming_max_angular_acceleration_ * accel_dt;
+
+        const Eigen::Vector3d pos_curr = current_state.head<3>();
+        const Eigen::Vector3d pos_tgt = target_state.head<3>();
+        const Eigen::Vector3d delta_pos = pos_tgt - pos_curr;
+        const double dist = delta_pos.norm();
+        Eigen::Vector3d v_cmd = Eigen::Vector3d::Zero();
+        Eigen::Vector3d pos_dir = Eigen::Vector3d::Zero();
+        if (dist > teleop_streaming_position_deadband_)
+        {
+            pos_dir = delta_pos / dist;
+            const double v_prev_along = std::max(0.0, prev_linear_velocity.dot(pos_dir));
+            const double v_des_speed = std::min(teleop_streaming_max_linear_speed_, dist / step_dt);
+            const double v_cmd_speed = std::clamp(v_des_speed, v_prev_along - max_dv_linear, v_prev_along + max_dv_linear);
+            const double v_cmd_speed_limited = std::clamp(v_cmd_speed, 0.0, teleop_streaming_max_linear_speed_);
+            v_cmd = pos_dir * v_cmd_speed_limited;
+        }
+        Eigen::Vector3d pos_step = v_cmd * step_dt;
+        if (dist > std::max(teleop_streaming_position_deadband_, 1e-6))
+        {
+            const double soft_min_step =
+                std::min(dist, std::max(1e-5, 0.02 * teleop_streaming_max_linear_speed_ * step_dt));
+            if (pos_step.norm() < soft_min_step && dist > soft_min_step)
+            {
+                pos_step = pos_dir * soft_min_step;
+            }
+        }
+        if (dist > 1e-12 && pos_step.norm() > dist)
+        {
+            pos_step = (dist / pos_step.norm()) * pos_step;
+        }
+        // Anti-stall: keep a tiny forward progress when there is clear position error.
+        if (dist > std::max(teleop_streaming_position_deadband_, 1e-6) && pos_step.norm() < 1e-9)
+        {
+            const double min_step = std::min(dist, 1e-4);
+            pos_step = (min_step / dist) * delta_pos;
+        }
+        const Eigen::Vector3d pos_limited = pos_curr + pos_step;
+        prev_linear_velocity = pos_step / step_dt;
+
+        Eigen::Quaterniond q_curr(current_state(6), current_state(3), current_state(4), current_state(5));
+        Eigen::Quaterniond q_tgt(target_state(6), target_state(3), target_state(4), target_state(5));
+        if (q_curr.norm() < 1e-9) q_curr = Eigen::Quaterniond::Identity();
+        else q_curr.normalize();
+        if (q_tgt.norm() < 1e-9) q_tgt = q_curr;
+        else q_tgt.normalize();
+        if (q_curr.dot(q_tgt) < 0.0) q_tgt.coeffs() *= -1.0;
+
+        const double quat_dot = std::clamp(std::abs(q_curr.dot(q_tgt)), 0.0, 1.0);
+        const double angle = 2.0 * std::acos(quat_dot);
+        Eigen::Vector3d axis = Eigen::Vector3d::UnitX();
+        if (angle > 1e-9)
+        {
+            const Eigen::Quaterniond q_err = q_curr.conjugate() * q_tgt;
+            Eigen::Vector3d v(q_err.x(), q_err.y(), q_err.z());
+            const double vn = v.norm();
+            if (vn > 1e-12)
+            {
+                axis = v / vn;
+            }
+        }
+        Eigen::Quaterniond q_limited = q_curr;
+        Eigen::Vector3d w_cmd = Eigen::Vector3d::Zero();
+        if (angle > teleop_streaming_orientation_deadband_)
+        {
+            const double w_prev_along = std::max(0.0, prev_angular_velocity.dot(axis));
+            const double w_des_speed = std::min(teleop_streaming_max_angular_speed_, angle / step_dt);
+            const double w_cmd_speed = std::clamp(w_des_speed, w_prev_along - max_dv_angular, w_prev_along + max_dv_angular);
+            const double w_cmd_speed_limited = std::clamp(w_cmd_speed, 0.0, teleop_streaming_max_angular_speed_);
+            w_cmd = axis * w_cmd_speed_limited;
+        }
+        const double angle_step = std::min(step_ang_max, w_cmd.norm() * step_dt);
+        double angle_step_limited = angle_step;
+        if (angle > std::max(teleop_streaming_orientation_deadband_, 1e-6))
+        {
+            const double soft_min_angle =
+                std::min(angle, std::max(1e-5, 0.02 * teleop_streaming_max_angular_speed_ * step_dt));
+            if (angle_step_limited < soft_min_angle && angle > soft_min_angle)
+            {
+                angle_step_limited = soft_min_angle;
+            }
+        }
+        if (angle > 1e-9 && angle_step_limited > 0.0)
+        {
+            const double ratio = std::clamp(angle_step_limited / angle, 0.0, 1.0);
+            q_limited = q_curr.slerp(ratio, q_tgt);
+            q_limited.normalize();
+        }
+        else if (angle > std::max(teleop_streaming_orientation_deadband_, 1e-6))
+        {
+            // Anti-stall: keep a tiny rotational progress when there is clear orientation error.
+            const double min_angle = std::min(angle, 1e-3);
+            const double ratio = std::clamp(min_angle / angle, 0.0, 1.0);
+            q_limited = q_curr.slerp(ratio, q_tgt);
+            q_limited.normalize();
+        }
+
+        const double a = teleop_streaming_lowpass_alpha_;
+        const Eigen::Vector3d pos_blend = (1.0 - a) * pos_curr + a * pos_limited;
+        Eigen::Quaterniond q_blend = q_curr.slerp(a, q_limited);
+        q_blend.normalize();
+
+        prev_linear_velocity = (pos_blend - pos_curr) / step_dt;
+        // Use commanded angular velocity as history to avoid quaternion sign ambiguity spikes.
+        prev_angular_velocity = a * w_cmd;
+
+        out.head<3>() = pos_blend;
+        out(3) = q_blend.x();
+        out(4) = q_blend.y();
+        out(5) = q_blend.z();
+        out(6) = q_blend.w();
+
+        // Safety fallback: if filter generates almost no progress while target error is obvious,
+        // pass the command through to avoid "frozen target" in teleop streaming mode.
+        const double pos_err_after = (target_state.head<3>() - out.head<3>()).norm();
+        if (pos_err_after > std::max(teleop_streaming_position_deadband_, 1e-4) &&
+            (out.head<3>() - current_state.head<3>()).norm() < 1e-8)
+        {
+            out.head<3>() = target_state.head<3>();
+            prev_linear_velocity = (out.head<3>() - current_state.head<3>()) / step_dt;
+        }
+
+        Eigen::Quaterniond q_out(out(6), out(3), out(4), out(5));
+        if (q_out.norm() < 1e-9)
+        {
+            q_out = Eigen::Quaterniond::Identity();
+        }
+        else
+        {
+            q_out.normalize();
+        }
+        const double ori_dot_after = std::clamp(std::abs(q_out.dot(q_tgt)), 0.0, 1.0);
+        const double ori_err_after = 2.0 * std::acos(ori_dot_after);
+        if (ori_err_after > std::max(teleop_streaming_orientation_deadband_, 1e-4) &&
+            q_out.angularDistance(q_curr) < 1e-8)
+        {
+            out(3) = target_state(3);
+            out(4) = target_state(4);
+            out(5) = target_state(5);
+            out(6) = target_state(6);
+            prev_angular_velocity = w_cmd;
+        }
+        return out;
     }
 
     void PoseBasedReferenceManager::syncWheelHumanoidCoupledOppositeArmIfNeeded(bool left_target_was_updated)
@@ -677,6 +981,8 @@ namespace ocs2::controller_common
     void PoseBasedReferenceManager::leftPoseCallback(
         const geometry_msgs::msg::Pose::SharedPtr msg)
     {
+        updateParam();
+
         // 转换pose到状态向量（单臂和双臂模式都使用前7维）
         vector_t target_state = vector_t::Zero(7);
         target_state(0) = msg->position.x;
@@ -687,8 +993,19 @@ namespace ocs2::controller_common
         target_state(5) = msg->orientation.z;
         target_state(6) = msg->orientation.w;
 
-        // 更新左臂target state缓存
-        left_target_state_ = target_state;
+        // 更新左臂target state缓存（可选：高频遥操作流式平滑）
+        if (teleop_streaming_mode_)
+        {
+            left_target_state_ = applyTeleopStreamingFilter(
+                left_target_state_, target_state, computeStreamingDt(left_stream_last_time_sec_),
+                left_stream_linear_velocity_, left_stream_angular_velocity_);
+        }
+        else
+        {
+            left_target_state_ = target_state;
+            left_stream_linear_velocity_.setZero();
+            left_stream_angular_velocity_.setZero();
+        }
 
         syncWheelHumanoidCoupledOppositeArmIfNeeded(true);
 
@@ -702,6 +1019,8 @@ namespace ocs2::controller_common
     void PoseBasedReferenceManager::rightPoseCallback(
         const geometry_msgs::msg::Pose::SharedPtr msg)
     {
+        updateParam();
+
         // 转换pose到状态向量（右臂状态为7维）
         vector_t target_state = vector_t::Zero(7);
         target_state(0) = msg->position.x;
@@ -712,8 +1031,19 @@ namespace ocs2::controller_common
         target_state(5) = msg->orientation.z;
         target_state(6) = msg->orientation.w;
 
-        // 更新右臂target state缓存
-        right_target_state_ = target_state;
+        // 更新右臂target state缓存（可选：高频遥操作流式平滑）
+        if (teleop_streaming_mode_)
+        {
+            right_target_state_ = applyTeleopStreamingFilter(
+                right_target_state_, target_state, computeStreamingDt(right_stream_last_time_sec_),
+                right_stream_linear_velocity_, right_stream_angular_velocity_);
+        }
+        else
+        {
+            right_target_state_ = target_state;
+            right_stream_linear_velocity_.setZero();
+            right_stream_angular_velocity_.setZero();
+        }
 
         syncWheelHumanoidCoupledOppositeArmIfNeeded(false);
 
@@ -727,14 +1057,29 @@ namespace ocs2::controller_common
     void PoseBasedReferenceManager::bodyPoseCallback(
         const geometry_msgs::msg::Pose::SharedPtr msg)
     {
-        // body_target: 直接更新，不插值
-        body_pose_7_xyzw_(0) = msg->position.x;
-        body_pose_7_xyzw_(1) = msg->position.y;
-        body_pose_7_xyzw_(2) = msg->position.z;
-        body_pose_7_xyzw_(3) = msg->orientation.x;
-        body_pose_7_xyzw_(4) = msg->orientation.y;
-        body_pose_7_xyzw_(5) = msg->orientation.z;
-        body_pose_7_xyzw_(6) = msg->orientation.w;
+        updateParam();
+
+        // body_target: 直接更新（可选：高频遥操作流式平滑）
+        vector_t target_state = vector_t::Zero(7);
+        target_state(0) = msg->position.x;
+        target_state(1) = msg->position.y;
+        target_state(2) = msg->position.z;
+        target_state(3) = msg->orientation.x;
+        target_state(4) = msg->orientation.y;
+        target_state(5) = msg->orientation.z;
+        target_state(6) = msg->orientation.w;
+        if (teleop_streaming_mode_)
+        {
+            body_pose_7_xyzw_ = applyTeleopStreamingFilter(
+                body_pose_7_xyzw_, target_state, computeStreamingDt(body_stream_last_time_sec_),
+                body_stream_linear_velocity_, body_stream_angular_velocity_);
+        }
+        else
+        {
+            body_pose_7_xyzw_ = target_state;
+            body_stream_linear_velocity_.setZero();
+            body_stream_angular_velocity_.setZero();
+        }
 
         updateTargetTrajectory();
     }
