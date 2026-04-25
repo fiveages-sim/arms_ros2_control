@@ -1,0 +1,11 @@
+<?xml version="1.0"?>
+<library path="aubo_ros2_control">
+  <class
+    name="aubo_ros2_control/AuboHardware"
+    type="aubo_ros2_control::AuboHardware"
+    base_class_type="hardware_interface::SystemInterface">
+    <description>
+      AUBO ROS 2 Control hardware interface with AUBO SDK robot access and optional external FT topic input.
+    </description>
+  </class>
+</library>

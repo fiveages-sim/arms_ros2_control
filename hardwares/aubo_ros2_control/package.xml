@@ -1,0 +1,24 @@
+<?xml version="1.0"?>
+<package format="2">
+  <name>aubo_ros2_control</name>
+  <version>0.1.0</version>
+  <description>ROS 2 Control hardware interface for AUBO manipulators with optional external FT sensor input.</description>
+
+  <maintainer email="todo@example.com">TODO</maintainer>
+  <license>Apache-2.0</license>
+
+  <buildtool_depend>ament_cmake</buildtool_depend>
+
+  <depend>geometry_msgs</depend>
+  <depend>hardware_interface</depend>
+  <depend>pluginlib</depend>
+  <depend>rclcpp</depend>
+  <depend>rclcpp_lifecycle</depend>
+
+  <test_depend>ament_lint_auto</test_depend>
+  <test_depend>ament_lint_common</test_depend>
+
+  <export>
+    <build_type>ament_cmake</build_type>
+  </export>
+</package>

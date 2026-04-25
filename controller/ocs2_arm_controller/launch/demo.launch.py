@@ -27,6 +27,8 @@ def launch_setup(context, *args, **kwargs):
     robot_name = context.launch_configurations['robot']
     robot_type = context.launch_configurations.get('type', '')
     hardware = context.launch_configurations.get('hardware', 'mock_components')
+    robot_ip = context.launch_configurations.get('robot_ip', '')
+    ft_topic = context.launch_configurations.get('ft_topic', '')
     world = context.launch_configurations.get('world', 'dart')
 
     # 基本参数
@@ -48,6 +50,8 @@ def launch_setup(context, *args, **kwargs):
             ('use_sim_time', str(use_sim_time)),
             ('world', world),
             ('hardware', hardware),  # 传递硬件类型，controller_manager 会根据此参数自动判断是否使用 Gazebo
+            ('robot_ip', robot_ip),
+            ('ft_topic', ft_topic),
         ],
     )
 
@@ -70,7 +74,18 @@ def launch_setup(context, *args, **kwargs):
     if enable_gripper:
         # Get ros2_control robot_description to verify joints exist in xacro
         # This uses the same logic as controller_manager.launch.py
-        robot_description = get_ros2_control_robot_description(robot_name, robot_type, hardware)
+        extra_mappings = {}
+        if robot_ip and robot_ip.strip():
+            extra_mappings['robot_ip'] = robot_ip
+        if ft_topic and ft_topic.strip():
+            extra_mappings['ft_topic'] = ft_topic
+
+        robot_description = get_ros2_control_robot_description(
+            robot_name,
+            robot_type,
+            hardware,
+            extra_mappings=extra_mappings,
+        )
         
         # Detect controllers matching hand/gripper patterns
         # Pass robot_description to verify joints exist in xacro
@@ -224,6 +239,18 @@ def generate_launch_description():
         description="Hardware type: 'gz' for Gazebo simulation, 'isaac' for Isaac simulation, 'mock_components' for mock components"
     )
 
+    robot_ip_arg = DeclareLaunchArgument(
+        "robot_ip",
+        default_value="",
+        description="Optional robot IP passed through to ros2_control xacro"
+    )
+
+    ft_topic_arg = DeclareLaunchArgument(
+        "ft_topic",
+        default_value="",
+        description="Optional force-torque topic passed through to ros2_control xacro"
+    )
+
     world_arg = DeclareLaunchArgument(
         'world', default_value='dart', description='Gz sim World (only used when hardware=gz)'
     )
@@ -247,6 +274,8 @@ def generate_launch_description():
         robot_name_arg,
         robot_type_arg,
         hardware_arg,
+        robot_ip_arg,
+        ft_topic_arg,
         world_arg,
         enable_arms_target_manager_arg,
         enable_gripper_arg,
