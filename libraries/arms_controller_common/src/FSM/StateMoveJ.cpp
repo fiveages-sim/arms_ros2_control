@@ -272,6 +272,8 @@ namespace arms_controller_common
                         motion_mode_ = MotionMode::MOVEJ;
                         // 更新保持位置
                         refreshHoldPositions();
+                        cartesian_manager_.clearPlanner();
+
                     }
                 }
                 else
