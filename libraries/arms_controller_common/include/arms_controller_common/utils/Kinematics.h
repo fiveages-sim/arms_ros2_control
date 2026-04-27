@@ -311,6 +311,20 @@ namespace arms_controller_common
             rightEndEffectorName_ = right_name;
         }
 
+        // 仅 robot_name == "m6_ccs" 时允许 SDK solver，其他机器人调用此方法禁用
+        void disableSdk() { sdkInitialized_ = false; }
+
+        static std::string solverTypeName(SolverType t)
+        {
+            switch (t) {
+                case SolverType::DLS:  return "DLS";
+                case SolverType::BFGS: return "BFGS";
+                case SolverType::SDK:  return "SDK";
+                case SolverType::AUTO: return "AUTO";
+                default:               return "unknown";
+            }
+        }
+
         void setJointNames(const std::vector<std::string>& joint_names);
 
         Eigen::MatrixXd getJacobian(std::string armType);
@@ -322,6 +336,7 @@ namespace arms_controller_common
 
         // TJ_FX_ROBOT_CONTROL_SDK 相关
         int robotSerial_; // SDK机器人序列号
+        bool sdkInitialized_ = false; // SDK是否成功初始化，由initializeSdkKinematics()结果决定
 
         // 框架名称
         std::string baseFrameName_;

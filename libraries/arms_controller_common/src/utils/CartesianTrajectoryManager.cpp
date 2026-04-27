@@ -222,7 +222,7 @@ namespace arms_controller_common
                 std::ostringstream oss;
                 oss << "IK failed while calculating MoveL joint position for " << arm_type_
                     << " arm: solver="
-                    << (info.usedSolver == ArmKinematics::SolverType::DLS ? "DLS" : "BFGS")
+                    << ArmKinematics::solverTypeName(info.usedSolver)
                     << ", status=" << info.status
                     << ", final_error=" << info.poseErrorNorm
                     << ", target_position=[" << pose.position[0] << ", "
@@ -287,7 +287,7 @@ namespace arms_controller_common
                 std::ostringstream oss;
                 oss << "IK failed while calculating MoveC joint position for " << arm_type_
                     << " arm: solver="
-                    << (info.usedSolver == ArmKinematics::SolverType::DLS ? "DLS" : "BFGS")
+                    << ArmKinematics::solverTypeName(info.usedSolver)
                     << ", status=" << info.status
                     << ", final_error=" << info.poseErrorNorm
                     << ", target_position=[" << pose.position[0] << ", "

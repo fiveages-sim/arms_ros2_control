@@ -134,6 +134,14 @@ namespace ocs2::mobile_manipulator
                 gravity_compensation = std::make_shared<arms_controller_common::GravityCompensation>(pinocchio_model);
                 kinematics_=std::make_shared<arms_controller_common::ArmKinematics>(pinocchio_model);
                 kinematics_->initializeFromParameters(joint_names_,left_ee_name_,right_ee_name_);
+                const std::string robot_name = get_node()->get_parameter("robot_name").as_string();
+                if (robot_name != "m6_ccs")
+                {
+                    kinematics_->disableSdk();
+                    RCLCPP_INFO(get_node()->get_logger(),
+                                "SDK IK solver disabled for robot '%s' (only supported for m6_ccs)",
+                                robot_name.c_str());
+                }
                 RCLCPP_INFO(get_node()->get_logger(),
                             "Gravity compensation initialized from OCS2 Pinocchio model");
             }

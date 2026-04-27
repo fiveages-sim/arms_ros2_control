@@ -39,7 +39,7 @@ namespace arms_controller_common
             return config_path;
         }
 
-        void initializeSdkKinematics()
+        bool initializeSdkKinematics()
         {
             // 初始化TJ_FX_ROBOT_CONTROL_SDK - 从ccs_m6.MvKDCfg加载M6CCS参数
             FX_INT32L TYPE[2];
@@ -59,8 +59,9 @@ namespace arms_controller_common
             }
             else
             {
-                std::cerr << "Failed to load M6CCS config from " << configPath << std::endl;
-                throw std::runtime_error("Failed to load M6CCS kinematics config");
+                std::cerr << "SDK not available: failed to load M6CCS config from " << configPath
+                          << ". SDK solver will be disabled." << std::endl;
+                return false;
             }
 
             // 初始化左右臂（serial 0: left, serial 1: right）
@@ -79,6 +80,7 @@ namespace arms_controller_common
                     std::cerr << "Failed to init limits for serial " << serial << std::endl;
                 }
             }
+            return true;
         }
     }
 
@@ -95,7 +97,7 @@ namespace arms_controller_common
         // 初始化权重为单位权重
         weight_ = Eigen::VectorXd::Ones(6);
 
-        initializeSdkKinematics();
+        sdkInitialized_ = initializeSdkKinematics();
     }
 
     ArmKinematics::ArmKinematics(const pinocchio::Model& model) : model_(model)
@@ -104,7 +106,7 @@ namespace arms_controller_common
         buildMappings();
         weight_ = Eigen::VectorXd::Ones(6);
 
-        initializeSdkKinematics();
+        sdkInitialized_ = initializeSdkKinematics();
     }
 
     ArmKinematics::~ArmKinematics() = default;
@@ -256,6 +258,29 @@ namespace arms_controller_common
 
         switch (params_.solverType)
         {
+        case SolverType::SDK:
+            result.second.usedSolver = SolverType::SDK;
+            if (!sdkInitialized_)
+            {
+                std::cerr << "SDK solver requested for IK but SDK is not initialized "
+                          << "(not supported on this robot)." << std::endl;
+                result.second.status = "error: SDK solver not supported on this robot";
+            }
+            else
+            {
+                Eigen::VectorXd sdkSolution;
+                if (solveSingleArmIKWithSDK(targetPose, initialGuess, sdkSolution, arm_type))
+                {
+                    result.first = sdkSolution;
+                    result.second.status = "success";
+                }
+                else
+                {
+                    result.second.status = "best available";
+                }
+            }
+            break;
+
         case SolverType::DLS:
             result = solveDLS(initialGuess, lower, upper, arm_type, targetPose);
             result.second.usedSolver = SolverType::DLS;
@@ -294,7 +319,7 @@ namespace arms_controller_common
             return true;
         }
 
-        std::cerr << "IK failed (" << (info.usedSolver == SolverType::DLS ? "DLS" : "BFGS")
+        std::cerr << "IK failed (" << solverTypeName(info.usedSolver)
             << "): " << info.status << ", final error: " << info.poseErrorNorm << std::endl;
         return false;
     }
