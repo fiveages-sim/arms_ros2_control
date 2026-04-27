@@ -8,6 +8,7 @@
 #include <geometry_msgs/msg/pose.hpp>
 #include <memory>
 #include <rclcpp/rclcpp.hpp>
+#include <string>
 #include <vector>
 
 namespace arms_controller_common
@@ -35,6 +36,7 @@ namespace arms_controller_common
         // 在 public 部分添加
         double getPlanningTime() const { return planningTime_; }
         bool isCompleted() const { return completed_; }
+        std::string getLastError() const { return last_error_; }
         std::vector<std::string> getMovelJointNames(std::string arm_name);
         void clearPlanner();
 
@@ -51,6 +53,7 @@ namespace arms_controller_common
         Eigen::VectorXd current_joint_pos_;
         std::string arm_type_;
         bool completed_ = false;
+        std::string last_error_;
         double planningTime_ = 0.0;
 
         //辅助函数

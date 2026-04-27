@@ -2,6 +2,7 @@
 #include <Eigen/Geometry>
 #include <arms_ros2_control_msgs/msg/linear_message.hpp>
 #include <iostream>
+#include <sstream>
 
 #include "../../include/arms_controller_common/utils/Kinematics.h"
 
@@ -10,7 +11,7 @@ namespace arms_controller_common
     CartesianTrajectoryManager::CartesianTrajectoryManager()
         : logger_(rclcpp::get_logger("cartesian_trajectory_manager"))
     {
-        save_data_ = true;
+        save_data_ = false;
     }
 
     CartesianTrajectoryManager::~CartesianTrajectoryManager() = default;
@@ -26,9 +27,11 @@ namespace arms_controller_common
         const arms_ros2_control_msgs::msg::LinearMessage& target_point_msg,
         const double period)
     {
+        last_error_.clear();
         if (!arm_kinematics_)
         {
-            std::cout << "kinematics is not set" << std::endl;
+            last_error_ = "kinematics is not set";
+            std::cout << last_error_ << std::endl;
             return false;
         }
         arm_type_ = target_point_msg.arm_name;
@@ -46,7 +49,8 @@ namespace arms_controller_common
         }
         else
         {
-            std::cout << "invalid arm type: " << arm_type_ << std::endl;
+            last_error_ = "invalid arm type: " + arm_type_;
+            std::cout << last_error_ << std::endl;
             return false;
         }
         if (!movel_planner_)
@@ -70,7 +74,8 @@ namespace arms_controller_common
         planning::TrajectoryInitParameters init_para(ps, pe, para, period);
         if (!movel_planner_->init(init_para))
         {
-            std::cout << "Failed to initialize moveL planner" << std::endl;
+            last_error_ = "Failed to initialize moveL planner";
+            std::cout << last_error_ << std::endl;
             return false;
         }
         ArmKinematics::SolverType ik_tp;
@@ -190,6 +195,7 @@ namespace arms_controller_common
 
     bool CartesianTrajectoryManager::getNextJointPos(std::vector<double>& res)
     {
+        last_error_.clear();
         if (movel_planner_&& path_type_==PathType::LINE)
         {
             planning::TrajectPoint movel_point = movel_planner_->run();
@@ -205,11 +211,23 @@ namespace arms_controller_common
                 movel_point.quaternion_point.q.y, movel_point.quaternion_point.q.z);
             pose.setQuaternion(q);
             Eigen::VectorXd solution;
-            if (!arm_kinematics_->solveSingleArmIK(pose, current_joint_pos_, solution,
-                                                   arm_type_, 50))
+            ArmKinematics::SolutionInfo info;
+            if (!arm_kinematics_->solveSingleArmIKWithInfo(
+                    pose, current_joint_pos_, solution, info, arm_type_, 50))
             {
-                RCLCPP_ERROR(logger_, "Failed to calculate the inverse solution for the "
-                             "current Cartesian point.");
+                std::ostringstream oss;
+                oss << "IK failed while calculating MoveL joint position for " << arm_type_
+                    << " arm: solver="
+                    << (info.usedSolver == ArmKinematics::SolverType::DLS ? "DLS" : "BFGS")
+                    << ", status=" << info.status
+                    << ", final_error=" << info.poseErrorNorm
+                    << ", target_position=[" << pose.position[0] << ", "
+                    << pose.position[1] << ", " << pose.position[2] << "]"
+                    << ", target_quaternion=[" << pose.quaternion.x() << ", "
+                    << pose.quaternion.y() << ", " << pose.quaternion.z() << ", "
+                    << pose.quaternion.w() << "]";
+                last_error_ = oss.str();
+                RCLCPP_ERROR(logger_, "%s", last_error_.c_str());
                 return false;
             }
             //增加安全检查，为了避免求出的逆解不是一个合适的构型，距离当前解的构型较远，这里增加检查，如果求出的逆解距离当前解很远就返回false
@@ -258,13 +276,23 @@ namespace arms_controller_common
                 movec_point.quaternion_point.q.y, movec_point.quaternion_point.q.z);
             pose.setQuaternion(q);
             Eigen::VectorXd solution;
-            if (!arm_kinematics_->solveSingleArmIK(pose, current_joint_pos_, solution,
-                                                   arm_type_, 50, 1e-4))
+            ArmKinematics::SolutionInfo info;
+            if (!arm_kinematics_->solveSingleArmIKWithInfo(
+                    pose, current_joint_pos_, solution, info, arm_type_, 50, 1e-4))
             {
-                RCLCPP_ERROR(logger_, "Failed to calculate the inverse solution for the "
-                             "current Cartesian point: position:[%f,%f,%f],quaternion:[%f,%f,%f,%f]", pose.position[0],
-                             pose.position[1], pose.position[2], pose.quaternion.x(), pose.quaternion.y(),
-                             pose.quaternion.z(), pose.quaternion.w());
+                std::ostringstream oss;
+                oss << "IK failed while calculating MoveC joint position for " << arm_type_
+                    << " arm: solver="
+                    << (info.usedSolver == ArmKinematics::SolverType::DLS ? "DLS" : "BFGS")
+                    << ", status=" << info.status
+                    << ", final_error=" << info.poseErrorNorm
+                    << ", target_position=[" << pose.position[0] << ", "
+                    << pose.position[1] << ", " << pose.position[2] << "]"
+                    << ", target_quaternion=[" << pose.quaternion.x() << ", "
+                    << pose.quaternion.y() << ", " << pose.quaternion.z() << ", "
+                    << pose.quaternion.w() << "]";
+                last_error_ = oss.str();
+                RCLCPP_ERROR(logger_, "%s", last_error_.c_str());
                 return false;
             }
             //增加安全检查，为了避免求出的逆解不是一个合适的构型，距离当前解的构型较远，这里增加检查，如果求出的逆解距离当前解很远就返回false
@@ -330,6 +358,7 @@ namespace arms_controller_common
         movel_planner_.reset();
         movec_planner_.reset();
         completed_ = false;
+        last_error_.clear();
     }
 
     bool CartesianTrajectoryManager::validateCircleMsg(

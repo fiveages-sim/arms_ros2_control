@@ -237,6 +237,18 @@ namespace arms_controller_common
         // ===== 新增：处理 MoveL 直线运动 或者 MoveC圆弧运动=====
         if (motion_mode_ == MotionMode::MOVECARTESIAN && move_cartesian_active_)
         {
+            if ((active_linear_goal_ && active_linear_goal_->is_canceling()) ||
+                (active_circle_goal_ && active_circle_goal_->is_canceling()))
+            {
+                refreshHoldPositions();
+                move_cartesian_active_ = false;
+                motion_mode_ = MotionMode::MOVEJ;
+                cartesian_manager_.clearPlanner();
+                finishLinearAction(false, true, "MoveL trajectory canceled");
+                finishCircleAction(false, true, "MoveC trajectory canceled");
+                return;
+            }
+
             std::vector<double> next_joint_pos;
 
             // 获取下一个关节位置
@@ -262,6 +274,8 @@ namespace arms_controller_common
 
                     // 发布当前目标位置（用于监控）
                     publishCurrentTargetJoint(full_joint_pos);
+                    publishLinearFeedback();
+                    publishCircleFeedback();
 
                     // 检查 MoveL或者Movec 是否完成
                     if (cartesian_manager_.isCompleted())
@@ -273,6 +287,8 @@ namespace arms_controller_common
                         // 更新保持位置
                         refreshHoldPositions();
                         cartesian_manager_.clearPlanner();
+                        finishLinearAction(true, false, "MoveL trajectory completed successfully");
+                        finishCircleAction(true, false, "MoveC trajectory completed successfully");
 
                     }
                 }
@@ -283,15 +299,23 @@ namespace arms_controller_common
                                  expected_size, next_joint_pos.size());
                     move_cartesian_active_ = false;
                     motion_mode_ = MotionMode::MOVEJ;
+                    finishLinearAction(false, false, "MoveL joint position size mismatch");
+                    finishCircleAction(false, false, "MoveC joint position size mismatch");
                 }
             }
             else
             {
+                std::string error_msg = cartesian_manager_.getLastError();
+                if (error_msg.empty())
+                {
+                    error_msg = "Failed to get next joint position from cartesian planner";
+                }
                 refreshHoldPositions();
                 move_cartesian_active_ = false;
                 motion_mode_ = MotionMode::MOVEJ;
-                RCLCPP_WARN(node_->get_logger(),
-                            "Failed to get next joint position from cartesian planner");
+                RCLCPP_WARN(node_->get_logger(), "%s", error_msg.c_str());
+                finishLinearAction(false, false, error_msg);
+                finishCircleAction(false, false, error_msg);
             }
 
             return; // MoveL 优先级高于 MOVEJ
@@ -495,6 +519,8 @@ namespace arms_controller_common
 
         move_cartesian_active_ = false;
         cartesian_manager_.clearPlanner();
+        finishLinearAction(false, false, "StateMoveJ exited before MoveL trajectory completed");
+        finishCircleAction(false, false, "StateMoveJ exited before MoveC trajectory completed");
 
         last_waist_factor_ = 0.0;
         last_waist_turning_factor_ = 0.0;
@@ -1915,6 +1941,77 @@ namespace arms_controller_common
                     full_service_name.c_str());
     }
 
+    void StateMoveJ::setupLinearTrajectoryAction(const std::string& action_name)
+    {
+        std::string full_action_name = node_->get_name() + std::string("/") + action_name;
+
+        linear_trajectory_action_server_ = rclcpp_action::create_server<ExecuteLinearAction>(
+            node_,
+            full_action_name,
+            std::bind(&StateMoveJ::handleLinearGoal, this, std::placeholders::_1, std::placeholders::_2),
+            std::bind(&StateMoveJ::handleLinearCancel, this, std::placeholders::_1),
+            std::bind(&StateMoveJ::handleLinearAccepted, this, std::placeholders::_1));
+
+        RCLCPP_INFO(node_->get_logger(), "Created linear trajectory action at %s",
+                    full_action_name.c_str());
+    }
+
+    rclcpp_action::GoalResponse StateMoveJ::handleLinearGoal(
+        const rclcpp_action::GoalUUID& uuid,
+        std::shared_ptr<const ExecuteLinearAction::Goal> goal)
+    {
+        (void)uuid;
+        (void)goal;
+
+        std::lock_guard lock(target_mutex_);
+        if (!state_active_)
+        {
+            RCLCPP_WARN(node_->get_logger(), "Rejecting MoveL action goal: StateMoveJ is not active");
+            return rclcpp_action::GoalResponse::REJECT;
+        }
+        if (linear_action_active_ || circle_action_active_ || move_cartesian_active_)
+        {
+            RCLCPP_WARN(node_->get_logger(), "Rejecting MoveL action goal: another cartesian trajectory is active");
+            return rclcpp_action::GoalResponse::REJECT;
+        }
+        return rclcpp_action::GoalResponse::ACCEPT_AND_EXECUTE;
+    }
+
+    rclcpp_action::CancelResponse StateMoveJ::handleLinearCancel(
+        const std::shared_ptr<ExecuteLinearGoalHandle> goal_handle)
+    {
+        (void)goal_handle;
+        return rclcpp_action::CancelResponse::ACCEPT;
+    }
+
+    void StateMoveJ::handleLinearAccepted(
+        const std::shared_ptr<ExecuteLinearGoalHandle> goal_handle)
+    {
+        std::string message;
+        double estimated_duration = 0.0;
+        {
+            std::lock_guard lock(target_mutex_);
+            if (!startLinearTrajectory(goal_handle->get_goal()->linear_params, message, estimated_duration))
+            {
+                auto result = std::make_shared<ExecuteLinearAction::Result>();
+                result->success = false;
+                result->message = message;
+                result->estimated_duration = 0.0;
+                result->actual_duration = 0.0;
+                goal_handle->abort(result);
+                return;
+            }
+
+            active_linear_goal_ = goal_handle;
+            linear_action_start_time_ = node_->now();
+            linear_action_estimated_duration_ = estimated_duration;
+            linear_action_active_ = true;
+        }
+
+        publishLinearFeedback();
+        RCLCPP_INFO(node_->get_logger(), "MoveL action accepted: duration=%.3f", estimated_duration);
+    }
+
     void StateMoveJ::handleLinearTrajectory(
         const std::shared_ptr<rmw_request_id_t> request_header,
         const std::shared_ptr<arms_ros2_control_msgs::srv::ExecuteLinear::Request> request,
@@ -1922,56 +2019,76 @@ namespace arms_controller_common
     {
         (void)request_header;
 
+        std::lock_guard lock(target_mutex_);
+        std::string message;
+        double estimated_duration = 0.0;
+        if (!startLinearTrajectory(request->linear_params, message, estimated_duration))
+        {
+            response->success = false;
+            response->message = message;
+            response->estimated_duration = 0.0;
+            return;
+        }
+
+        response->success = true;
+        response->message = message;
+        response->estimated_duration = estimated_duration;
+    }
+
+    bool StateMoveJ::startLinearTrajectory(
+        const arms_ros2_control_msgs::msg::LinearMessage& linear_params,
+        std::string& message,
+        double& estimated_duration)
+    {
         // 1. 检查状态
         if (!state_active_)
         {
-            response->success = false;
-            response->message = "StateMoveJ is not active";
-            response->estimated_duration = 0.0;
-            return;
+            message = "StateMoveJ is not active";
+            estimated_duration = 0.0;
+            return false;
         }
 
         updateParam();
 
         // 2. 验证请求参数
         std::string error_msg;
-        if (!validateLinearRequest(request->linear_params, error_msg))
+        if (!validateLinearRequest(linear_params, error_msg))
         {
-            response->success = false;
-            response->message = error_msg;
-            response->estimated_duration = 0.0;
-            return;
+            message = error_msg;
+            estimated_duration = 0.0;
+            return false;
         }
 
         if (move_cartesian_joint_names_.empty())
         {
-            response->success = false;
-            response->message = "MoveL joint names not initialized";
-            response->estimated_duration = 0.0;
-            return;
+            message = "MoveL joint names not initialized";
+            estimated_duration = 0.0;
+            return false;
         }
 
         // 3. 获取当前关节位置
         std::vector<double> current_joint_positions = getCurrentJointPositions(move_cartesian_joint_names_);
         if (current_joint_positions.empty())
         {
-            response->success = false;
-            response->message = "Failed to get current joint positions for " + request->linear_params.arm_name + " arm";
-            response->estimated_duration = 0.0;
-            return;
+            message = "Failed to get current joint positions for " + linear_params.arm_name + " arm";
+            estimated_duration = 0.0;
+            return false;
         }
 
         // 4. 规划 MoveL 轨迹
         double period = 1.0 / ctrl_interfaces_.frequency_;
 
         if (!cartesian_manager_.planSingleArmMoveL(current_joint_positions,
-                                                   request->linear_params,
+                                                   linear_params,
                                                    period))
         {
-            response->success = false;
-            response->message = "Failed to plan MoveL trajectory";
-            response->estimated_duration = 0.0;
-            return;
+            message = cartesian_manager_.getLastError();
+            if (message.empty())
+            {
+                message = "Failed to plan MoveL trajectory";
+            }
+            estimated_duration = 0.0;
+            return false;
         }
 
         // 5. 设置成功响应
@@ -1982,13 +2099,66 @@ namespace arms_controller_common
         motion_mode_ = MotionMode::MOVECARTESIAN;
         move_cartesian_active_ = true;
 
-        response->success = true;
-        response->message = "MoveL trajectory planned successfully";
-        response->estimated_duration = cartesian_manager_.getPlanningTime();
+        message = "MoveL trajectory accepted";
+        estimated_duration = cartesian_manager_.getPlanningTime();
         RCLCPP_INFO(node_->get_logger(),
                     "Linear trajectory service: planned MoveL for arm '%s', duration=%.3f",
-                    request->linear_params.arm_name.c_str(),
-                    response->estimated_duration);
+                    linear_params.arm_name.c_str(),
+                    estimated_duration);
+        return true;
+    }
+
+    void StateMoveJ::publishLinearFeedback()
+    {
+        if (!active_linear_goal_ || !linear_action_active_)
+        {
+            return;
+        }
+
+        const double elapsed = std::max(0.0, (node_->now() - linear_action_start_time_).seconds());
+        const double remaining = std::max(0.0, linear_action_estimated_duration_ - elapsed);
+        double progress = 0.0;
+        if (linear_action_estimated_duration_ > 1.0e-9)
+        {
+            progress = std::clamp(elapsed / linear_action_estimated_duration_, 0.0, 1.0);
+        }
+
+        auto feedback = std::make_shared<ExecuteLinearAction::Feedback>();
+        feedback->progress = progress;
+        feedback->elapsed_time = elapsed;
+        feedback->remaining_time = remaining;
+        active_linear_goal_->publish_feedback(feedback);
+    }
+
+    void StateMoveJ::finishLinearAction(bool success, bool canceled, const std::string& message)
+    {
+        if (!active_linear_goal_ || !linear_action_active_)
+        {
+            return;
+        }
+
+        auto result = std::make_shared<ExecuteLinearAction::Result>();
+        result->success = success;
+        result->message = message;
+        result->estimated_duration = linear_action_estimated_duration_;
+        result->actual_duration = std::max(0.0, (node_->now() - linear_action_start_time_).seconds());
+
+        if (canceled)
+        {
+            active_linear_goal_->canceled(result);
+        }
+        else if (success)
+        {
+            active_linear_goal_->succeed(result);
+        }
+        else
+        {
+            active_linear_goal_->abort(result);
+        }
+
+        active_linear_goal_.reset();
+        linear_action_active_ = false;
+        linear_action_estimated_duration_ = 0.0;
     }
 
     bool StateMoveJ::validateLinearRequest(
@@ -2110,6 +2280,77 @@ namespace arms_controller_common
                     full_service_name.c_str());
     }
 
+    void StateMoveJ::setupCircleTrajectoryAction(const std::string& action_name)
+    {
+        std::string full_action_name = node_->get_name() + std::string("/") + action_name;
+
+        circle_trajectory_action_server_ = rclcpp_action::create_server<MovecUseIKAction>(
+            node_,
+            full_action_name,
+            std::bind(&StateMoveJ::handleCircleGoal, this, std::placeholders::_1, std::placeholders::_2),
+            std::bind(&StateMoveJ::handleCircleCancel, this, std::placeholders::_1),
+            std::bind(&StateMoveJ::handleCircleAccepted, this, std::placeholders::_1));
+
+        RCLCPP_INFO(node_->get_logger(), "Created circle trajectory action at %s",
+                    full_action_name.c_str());
+    }
+
+    rclcpp_action::GoalResponse StateMoveJ::handleCircleGoal(
+        const rclcpp_action::GoalUUID& uuid,
+        std::shared_ptr<const MovecUseIKAction::Goal> goal)
+    {
+        (void)uuid;
+        (void)goal;
+
+        std::lock_guard lock(target_mutex_);
+        if (!state_active_)
+        {
+            RCLCPP_WARN(node_->get_logger(), "Rejecting MoveC action goal: StateMoveJ is not active");
+            return rclcpp_action::GoalResponse::REJECT;
+        }
+        if (linear_action_active_ || circle_action_active_ || move_cartesian_active_)
+        {
+            RCLCPP_WARN(node_->get_logger(), "Rejecting MoveC action goal: another cartesian trajectory is active");
+            return rclcpp_action::GoalResponse::REJECT;
+        }
+        return rclcpp_action::GoalResponse::ACCEPT_AND_EXECUTE;
+    }
+
+    rclcpp_action::CancelResponse StateMoveJ::handleCircleCancel(
+        const std::shared_ptr<MovecUseIKGoalHandle> goal_handle)
+    {
+        (void)goal_handle;
+        return rclcpp_action::CancelResponse::ACCEPT;
+    }
+
+    void StateMoveJ::handleCircleAccepted(
+        const std::shared_ptr<MovecUseIKGoalHandle> goal_handle)
+    {
+        std::string message;
+        double estimated_duration = 0.0;
+        {
+            std::lock_guard lock(target_mutex_);
+            if (!startCircleTrajectory(goal_handle->get_goal()->circle_params, message, estimated_duration))
+            {
+                auto result = std::make_shared<MovecUseIKAction::Result>();
+                result->success = false;
+                result->message = message;
+                result->estimated_duration = 0.0;
+                result->actual_duration = 0.0;
+                goal_handle->abort(result);
+                return;
+            }
+
+            active_circle_goal_ = goal_handle;
+            circle_action_start_time_ = node_->now();
+            circle_action_estimated_duration_ = estimated_duration;
+            circle_action_active_ = true;
+        }
+
+        publishCircleFeedback();
+        RCLCPP_INFO(node_->get_logger(), "MoveC action accepted: duration=%.3f", estimated_duration);
+    }
+
     // Service handler for Movec
     void StateMoveJ::handleCircleTrajectory(
         const std::shared_ptr<rmw_request_id_t> request_header,
@@ -2118,56 +2359,72 @@ namespace arms_controller_common
     {
         (void)request_header;
 
+        std::lock_guard lock(target_mutex_);
+        std::string message;
+        double estimated_duration = 0.0;
+        if (!startCircleTrajectory(request->circle_params, message, estimated_duration))
+        {
+            response->success = false;
+            response->message = message;
+            response->estimated_duration = 0.0;
+            return;
+        }
+
+        response->success = true;
+        response->message = message;
+        response->estimated_duration = estimated_duration;
+    }
+
+    bool StateMoveJ::startCircleTrajectory(
+        const arms_ros2_control_msgs::msg::CircleMessage& circle_params,
+        std::string& message,
+        double& estimated_duration)
+    {
         // 1. 检查状态
         if (!state_active_)
         {
-            response->success = false;
-            response->message = "StateMoveJ is not active";
-            response->estimated_duration = 0.0;
-            return;
+            message = "StateMoveJ is not active";
+            estimated_duration = 0.0;
+            return false;
         }
 
         updateParam();
 
         // 2. 验证请求参数
         std::string error_msg;
-        if (!validateCircleRequest(request->circle_params, error_msg))
+        if (!validateCircleRequest(circle_params, error_msg))
         {
-            response->success = false;
-            response->message = error_msg;
-            response->estimated_duration = 0.0;
-            return;
+            message = error_msg;
+            estimated_duration = 0.0;
+            return false;
         }
 
         if (move_cartesian_joint_names_.empty())
         {
-            response->success = false;
-            response->message = "Move cartesian joint names not initialized";
-            response->estimated_duration = 0.0;
-            return;
+            message = "Move cartesian joint names not initialized";
+            estimated_duration = 0.0;
+            return false;
         }
 
         // 3. 获取当前关节位置
         std::vector<double> current_joint_positions = getCurrentJointPositions(move_cartesian_joint_names_);
         if (current_joint_positions.empty())
         {
-            response->success = false;
-            response->message = "Failed to get current joint positions for " + request->circle_params.arm_name + " arm";
-            response->estimated_duration = 0.0;
-            return;
+            message = "Failed to get current joint positions for " + circle_params.arm_name + " arm";
+            estimated_duration = 0.0;
+            return false;
         }
 
         // 4. 规划 MoveC 轨迹
         double period = 1.0 / ctrl_interfaces_.frequency_;
 
         if (!cartesian_manager_.planSingleArmMoveC(current_joint_positions,
-                                                   request->circle_params,
+                                                   circle_params,
                                                    period))
         {
-            response->success = false;
-            response->message = "Failed to plan MoveC trajectory";
-            response->estimated_duration = 0.0;
-            return;
+            message = "Failed to plan MoveC trajectory";
+            estimated_duration = 0.0;
+            return false;
         }
 
         // 5. 设置成功响应
@@ -2178,13 +2435,66 @@ namespace arms_controller_common
         motion_mode_ = MotionMode::MOVECARTESIAN;
         move_cartesian_active_ = true;
 
-        response->success = true;
-        response->message = "MoveC trajectory planned successfully";
-        response->estimated_duration = cartesian_manager_.getPlanningTime();
+        message = "MoveC trajectory accepted";
+        estimated_duration = cartesian_manager_.getPlanningTime();
         RCLCPP_INFO(node_->get_logger(),
                     "Circle trajectory service: planned MoveC for arm '%s', duration=%.3f",
-                    request->circle_params.arm_name.c_str(),
-                    response->estimated_duration);
+                    circle_params.arm_name.c_str(),
+                    estimated_duration);
+        return true;
+    }
+
+    void StateMoveJ::publishCircleFeedback()
+    {
+        if (!active_circle_goal_ || !circle_action_active_)
+        {
+            return;
+        }
+
+        const double elapsed = std::max(0.0, (node_->now() - circle_action_start_time_).seconds());
+        const double remaining = std::max(0.0, circle_action_estimated_duration_ - elapsed);
+        double progress = 0.0;
+        if (circle_action_estimated_duration_ > 1.0e-9)
+        {
+            progress = std::clamp(elapsed / circle_action_estimated_duration_, 0.0, 1.0);
+        }
+
+        auto feedback = std::make_shared<MovecUseIKAction::Feedback>();
+        feedback->progress = progress;
+        feedback->elapsed_time = elapsed;
+        feedback->remaining_time = remaining;
+        active_circle_goal_->publish_feedback(feedback);
+    }
+
+    void StateMoveJ::finishCircleAction(bool success, bool canceled, const std::string& message)
+    {
+        if (!active_circle_goal_ || !circle_action_active_)
+        {
+            return;
+        }
+
+        auto result = std::make_shared<MovecUseIKAction::Result>();
+        result->success = success;
+        result->message = message;
+        result->estimated_duration = circle_action_estimated_duration_;
+        result->actual_duration = std::max(0.0, (node_->now() - circle_action_start_time_).seconds());
+
+        if (canceled)
+        {
+            active_circle_goal_->canceled(result);
+        }
+        else if (success)
+        {
+            active_circle_goal_->succeed(result);
+        }
+        else
+        {
+            active_circle_goal_->abort(result);
+        }
+
+        active_circle_goal_.reset();
+        circle_action_active_ = false;
+        circle_action_estimated_duration_ = 0.0;
     }
 
     // 添加 MoveL 相关的辅助方法

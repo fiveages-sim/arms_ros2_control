@@ -11,6 +11,7 @@ set(CMAKE_BUILD_TYPE Release)
 set(dependencies
         hardware_interface
         rclcpp
+        rclcpp_action
         pinocchio
         urdf
         ament_index_cpp

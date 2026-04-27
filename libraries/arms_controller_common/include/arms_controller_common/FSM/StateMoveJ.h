@@ -15,6 +15,7 @@
 #include <functional>
 #include <utility>
 #include <rclcpp/rclcpp.hpp>
+#include <rclcpp_action/rclcpp_action.hpp>
 #include <rclcpp_lifecycle/lifecycle_node.hpp>
 #include <std_msgs/msg/float64_multi_array.hpp>
 #include <trajectory_msgs/msg/joint_trajectory.hpp>
@@ -24,6 +25,8 @@
 #include "arms_ros2_control_msgs/srv/joint_trajectory.hpp"
 #include "arms_controller_common/utils/Kinematics.h"
 #include "arms_controller_common/utils/CartesianTrajectoryManager.h"
+#include "arms_ros2_control_msgs/action/execute_linear.hpp"
+#include "arms_ros2_control_msgs/action/movec_use_ik.hpp"
 #include "arms_ros2_control_msgs/srv/execute_linear.hpp"
 #include "arms_ros2_control_msgs/srv/movec_use_ik.hpp"
 
@@ -182,10 +185,22 @@ namespace arms_controller_common
         void setupLinearTrajectoryService(const std::string& service_name = "execute_linear");
 
         /**
+        * @brief Setup linear trajectory action for MoveL planning and execution
+        * @param action_name Action name (default: "execute_linear")
+        */
+        void setupLinearTrajectoryAction(const std::string& action_name = "execute_linear");
+
+        /**
         * @brief Setup linear trajectory service for MoveL planning
         * @param service_name Service name (default: "execute_linear")
         */
         void setupCircleTrajectoryService(const std::string& service_name = "execute_circle_use_ik");
+
+        /**
+        * @brief Setup circle trajectory action for MoveC planning and execution
+        * @param action_name Action name (default: "execute_circle_use_ik")
+        */
+        void setupCircleTrajectoryAction(const std::string& action_name = "execute_circle_use_ik");
 
     private:
         void updateParam();
@@ -342,14 +357,40 @@ namespace arms_controller_common
         //增加movel相关的代码
         CartesianTrajectoryManager cartesian_manager_;
 
+        using ExecuteLinearAction = arms_ros2_control_msgs::action::ExecuteLinear;
+        using ExecuteLinearGoalHandle = rclcpp_action::ServerGoalHandle<ExecuteLinearAction>;
+        using MovecUseIKAction = arms_ros2_control_msgs::action::MovecUseIK;
+        using MovecUseIKGoalHandle = rclcpp_action::ServerGoalHandle<MovecUseIKAction>;
+
         // Service server for MoveL
         rclcpp::Service<arms_ros2_control_msgs::srv::ExecuteLinear>::SharedPtr linear_trajectory_service_;
+
+        // Action server for MoveL
+        rclcpp_action::Server<ExecuteLinearAction>::SharedPtr linear_trajectory_action_server_;
+        std::shared_ptr<ExecuteLinearGoalHandle> active_linear_goal_;
+        rclcpp::Time linear_action_start_time_;
+        double linear_action_estimated_duration_{0.0};
+        bool linear_action_active_{false};
 
         // Service handler for MoveL
         void handleLinearTrajectory(
             const std::shared_ptr<rmw_request_id_t> request_header,
             const std::shared_ptr<arms_ros2_control_msgs::srv::ExecuteLinear::Request> request,
             const std::shared_ptr<arms_ros2_control_msgs::srv::ExecuteLinear::Response> response);
+
+        rclcpp_action::GoalResponse handleLinearGoal(
+            const rclcpp_action::GoalUUID& uuid,
+            std::shared_ptr<const ExecuteLinearAction::Goal> goal);
+        rclcpp_action::CancelResponse handleLinearCancel(
+            const std::shared_ptr<ExecuteLinearGoalHandle> goal_handle);
+        void handleLinearAccepted(
+            const std::shared_ptr<ExecuteLinearGoalHandle> goal_handle);
+        bool startLinearTrajectory(
+            const arms_ros2_control_msgs::msg::LinearMessage& linear_params,
+            std::string& message,
+            double& estimated_duration);
+        void publishLinearFeedback();
+        void finishLinearAction(bool success, bool canceled, const std::string& message);
 
         // 添加 MoveL 相关的辅助方法
         bool validateLinearRequest(const arms_ros2_control_msgs::msg::LinearMessage& linear_params,
@@ -360,11 +401,32 @@ namespace arms_controller_common
         //Service for movec
         rclcpp::Service<arms_ros2_control_msgs::srv::MovecUseIK>::SharedPtr circle_trajectory_service_;
 
+        // Action server for MoveC
+        rclcpp_action::Server<MovecUseIKAction>::SharedPtr circle_trajectory_action_server_;
+        std::shared_ptr<MovecUseIKGoalHandle> active_circle_goal_;
+        rclcpp::Time circle_action_start_time_;
+        double circle_action_estimated_duration_{0.0};
+        bool circle_action_active_{false};
+
         // Service handler for Movec
         void handleCircleTrajectory(
             const std::shared_ptr<rmw_request_id_t> request_header,
             const std::shared_ptr<arms_ros2_control_msgs::srv::MovecUseIK::Request> request,
             const std::shared_ptr<arms_ros2_control_msgs::srv::MovecUseIK::Response> response);
+
+        rclcpp_action::GoalResponse handleCircleGoal(
+            const rclcpp_action::GoalUUID& uuid,
+            std::shared_ptr<const MovecUseIKAction::Goal> goal);
+        rclcpp_action::CancelResponse handleCircleCancel(
+            const std::shared_ptr<MovecUseIKGoalHandle> goal_handle);
+        void handleCircleAccepted(
+            const std::shared_ptr<MovecUseIKGoalHandle> goal_handle);
+        bool startCircleTrajectory(
+            const arms_ros2_control_msgs::msg::CircleMessage& circle_params,
+            std::string& message,
+            double& estimated_duration);
+        void publishCircleFeedback();
+        void finishCircleAction(bool success, bool canceled, const std::string& message);
 
         // 添加 MoveL 相关的辅助方法
         bool validateCircleRequest(const arms_ros2_control_msgs::msg::CircleMessage& circle_params,
