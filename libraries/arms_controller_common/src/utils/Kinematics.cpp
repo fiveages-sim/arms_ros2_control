@@ -218,9 +218,16 @@ namespace arms_controller_common
                                          int maxIterations,
                                          double tolerance)
     {
-        SolutionInfo info;
-        return solveSingleArmIKWithInfo(targetPose, initialGuess, solution, info,
-                                        arm_type, maxIterations, tolerance);
+        if (params_.solverType == SolverType::SDK)
+        {
+            return solveSingleArmIKWithSDK(targetPose, initialGuess, solution, arm_type);
+        }
+        else
+        {
+            SolutionInfo info;
+            return solveSingleArmIKWithInfo(targetPose, initialGuess, solution, info,
+                                            arm_type, maxIterations, tolerance);
+        }
     }
 
     bool ArmKinematics::solveSingleArmIKWithInfo(const EndEffectorPose& targetPose,
@@ -280,16 +287,9 @@ namespace arms_controller_common
 
         if (info.status == "success")
         {
-            std::cout << "IK succeeded (" << (info.usedSolver == SolverType::DLS ? "DLS" : "BFGS")
-                << "): " << info.iterations << " iterations, error="
-                << info.poseErrorNorm << std::endl;
-
-            // 缓存成功解
-            if (arm_type == "left")
-                lastLeftSolution_ = solution;
-            else
-                lastRightSolution_ = solution;
-            lastArmType_ = arm_type;
+            // std::cout << "IK succeeded (" << (info.usedSolver == SolverType::DLS ? "DLS" : "BFGS")
+            //     << "): " << info.iterations << " iterations, error="
+            //     << info.poseErrorNorm << std::endl;
 
             return true;
         }
@@ -1674,15 +1674,8 @@ namespace arms_controller_common
 
             Eigen::VectorXd solution;
             bool success;
-            if (params_.solverType == SolverType::SDK)
-            {
-                success = solveSingleArmIKWithSDK(target_poses[0], initial_eigen, solution, "left");
-            }
-            else
-            {
                 success = solveSingleArmIK(target_poses[0], initial_eigen, solution,
                                            "left", max_iterations, tolerance);
-            }
 
 
             if (success)
@@ -1722,15 +1715,8 @@ namespace arms_controller_common
 
             Eigen::VectorXd solution;
             bool success;
-            if (params_.solverType == SolverType::SDK)
-            {
-                success = solveSingleArmIKWithSDK(target_poses[0], initial_eigen, solution, "right");
-            }
-            else
-            {
                 success = solveSingleArmIK(target_poses[0], initial_eigen, solution,
                                            "right", max_iterations, tolerance);
-            }
 
             if (success)
             {
