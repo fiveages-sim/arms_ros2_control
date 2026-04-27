@@ -77,6 +77,7 @@ namespace ocs2::mobile_manipulator
             current_state_->exit();
             current_state_ = next_state_;
             current_state_->enter();
+            publishCurrentFsmState();
             mode_ = FSMMode::NORMAL;
             ctrl_interfaces_.fsm_command_ = 0;
         }
@@ -88,6 +89,9 @@ namespace ocs2::mobile_manipulator
     {
         try
         {
+            // Get controller name
+            controller_name_ = get_node()->get_name();
+
             // Get update frequency
             get_node()->get_parameter("update_rate", ctrl_interfaces_.frequency_);
             RCLCPP_INFO(get_node()->get_logger(), "Controller Manager Update Rate: %d Hz", ctrl_interfaces_.frequency_);
@@ -184,6 +188,27 @@ namespace ocs2::mobile_manipulator
                 ctrl_interfaces_, get_node(), joint_names_, gravity_compensation);
             state_list_.movej->setKinematicsSolver(kinematics_);
 
+            // ===== Waist lifting parameters copied from BasicJointController =====
+            waist_lifting_enabled_ = auto_declare<bool>("waist_lifting_enabled", false);
+
+            if (waist_lifting_enabled_)
+            {
+                auto_declare<double>("waist_lifting_duration", 3.0);
+                auto_declare<std::vector<double>>("waist_default_parameter", {0.25, 1.0, 5.0});
+                std::string waist_lifting_type = auto_declare<std::string>("waist_lifting_type", "three_joint");
+                if (waist_lifting_type == "three_joint")
+                {
+                    auto_declare<double>("waist_l1", 0.322);
+                    auto_declare<double>("waist_l2", 0.355);
+                    auto_declare<std::vector<double>>("waist_rotation_direction", {1.0, 1.0, 1.0});
+                    auto_declare<std::vector<double>>("waist_angle_offset", {0.0, 0.0, 0.0});
+                }
+
+                RCLCPP_INFO(get_node()->get_logger(),
+                            "Waist lifting enabled for controller %s",
+                            controller_name_.c_str());
+            }
+
             // Set joint limit checker from Pinocchio model
             if (ctrl_comp_->interface_)
             {
@@ -225,6 +250,9 @@ namespace ocs2::mobile_manipulator
     controller_interface::CallbackReturn Ocs2ArmController::on_configure(
         const rclcpp_lifecycle::State& /*previous_state*/)
     {
+        fsm_state_publisher_ = get_node()->create_publisher<std_msgs::msg::Int32>(
+            "/fsm_state", rclcpp::QoS(1).transient_local());
+
         // Subscribe to FSM command (dedicated topic for state transitions)
         fsm_command_subscription_ = get_node()->create_subscription<std_msgs::msg::Int32>(
             "/fsm_command", 10, [this](const std_msgs::msg::Int32::SharedPtr msg)
@@ -234,6 +262,12 @@ namespace ocs2::mobile_manipulator
 
         state_list_.movej->setupSubscriptions("target_joint_position", true);
         state_list_.movej->setupTrajectorySubscription();
+        robot_description_subscription_ = get_node()->create_subscription<std_msgs::msg::String>(
+            "/robot_description", rclcpp::QoS(rclcpp::KeepLast(1)).transient_local(),
+            [this](const std_msgs::msg::String::SharedPtr msg)
+            {
+                state_list_.movej->updateJointLimitsFromURDF(msg->data);
+            });
         state_list_.movej->setupJointTrajectoryService("joint_trajectory_with_para");
         state_list_.movej->setupLinearTrajectoryService("execute_linear");
         state_list_.movej->setupCircleTrajectoryService("execute_circle_use_ik");
@@ -242,6 +276,86 @@ namespace ocs2::mobile_manipulator
             "kinematics_service",
             std::bind(&Ocs2ArmController::handleKinematicsService, this,
                       std::placeholders::_1, std::placeholders::_2));
+        // ===== Waist-related subscriptions copied from BasicJointController =====
+        if (waist_lifting_enabled_)
+        {
+            // 1) absolute lifting distance command
+            std::string waist_lifting_topic = "/" + controller_name_ + "/waist_lifting";
+            waist_lifting_subscription_ = get_node()->create_subscription<std_msgs::msg::Float64>(
+                waist_lifting_topic, 10,
+                [this](const std_msgs::msg::Float64::SharedPtr msg)
+                {
+                    // Only process in MOVEJ state
+                    if (!current_state_ || current_state_->state_name != FSMStateName::MOVEJ)
+                    {
+                        return;
+                    }
+
+                    if (state_list_.movej)
+                    {
+                        bool success = state_list_.movej->moveWaistLifting(msg->data);
+
+                        if (success)
+                        {
+                            RCLCPP_INFO(get_node()->get_logger(),
+                                        "Waist lifting command received: distance=%.3f",
+                                        msg->data);
+                        }
+                        else
+                        {
+                            RCLCPP_WARN(get_node()->get_logger(),
+                                        "waist lifting command failed");
+                        }
+                    }
+                });
+
+            // 2) speedj-like lifting factor command
+            std::string waist_lifting_command_topic = "/" + controller_name_ + "/waist_lifting_command";
+            waist_lifting_command_subscription_ = get_node()->create_subscription<std_msgs::msg::Float64>(
+                waist_lifting_command_topic, 10,
+                [this](const std_msgs::msg::Float64::SharedPtr msg)
+                {
+                    // Only process in MOVEJ state
+                    if (!current_state_ || current_state_->state_name != FSMStateName::MOVEJ)
+                    {
+                        return;
+                    }
+
+                    if (state_list_.movej)
+                    {
+                        bool success = state_list_.movej->setWaistLiftingFactor(msg->data);
+
+                        if (!success)
+                        {
+                            RCLCPP_WARN(get_node()->get_logger(),
+                                        "waist lifting command failed");
+                        }
+                    }
+                });
+
+            // 3) waist turning factor command
+            std::string waist_turning_command_topic = "/" + controller_name_ + "/waist_turning_command";
+            waist_turning_command_subscription_ = get_node()->create_subscription<std_msgs::msg::Float64>(
+                waist_turning_command_topic, 10,
+                [this](const std_msgs::msg::Float64::SharedPtr msg)
+                {
+                    if (!current_state_ || current_state_->state_name != FSMStateName::MOVEJ)
+                    {
+                        return;
+                    }
+
+                    if (state_list_.movej)
+                    {
+                        bool success = state_list_.movej->setWaistTurningFactor(msg->data);
+                        if (!success)
+                        {
+                            RCLCPP_WARN(get_node()->get_logger(),
+                                        "waist turning command failed");
+                        }
+                    }
+                });
+        }
+
         return CallbackReturn::SUCCESS;
     }
 
@@ -293,6 +407,7 @@ namespace ocs2::mobile_manipulator
         next_state_ = current_state_;
         next_state_name_ = current_state_->state_name;
         mode_ = FSMMode::NORMAL;
+        publishCurrentFsmState();
 
         return CallbackReturn::SUCCESS;
     }
@@ -310,7 +425,8 @@ namespace ocs2::mobile_manipulator
         return CallbackReturn::SUCCESS;
     }
 
-    controller_interface::CallbackReturn Ocs2ArmController::on_error(const rclcpp_lifecycle::State& /*previous_state*/)
+    controller_interface::CallbackReturn Ocs2ArmController::on_error(
+        const rclcpp_lifecycle::State& /*previous_state*/)
     {
         return CallbackReturn::SUCCESS;
     }
@@ -353,7 +469,38 @@ namespace ocs2::mobile_manipulator
             response->message = "Kinematics not initialized";
         }
     }
+    void Ocs2ArmController::publishCurrentFsmState() const
+    {
+        if (!fsm_state_publisher_ || !current_state_)
+        {
+            return;
+        }
 
+        int32_t state_code = 0;
+        switch (current_state_->state_name)
+        {
+        case FSMStateName::HOME:
+            state_code = 1;
+            break;
+        case FSMStateName::HOLD:
+            state_code = 2;
+            break;
+        case FSMStateName::OCS2:
+            state_code = 3;
+            break;
+        case FSMStateName::MOVEJ:
+            state_code = 4;
+            break;
+        case FSMStateName::INVALID:
+        default:
+            state_code = 0;
+            break;
+        }
+
+        std_msgs::msg::Int32 msg;
+        msg.data = state_code;
+        fsm_state_publisher_->publish(msg);
+    }
 } // namespace mobile_manipulator
 
 #include "pluginlib/class_list_macros.hpp"

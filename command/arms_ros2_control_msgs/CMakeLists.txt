@@ -16,6 +16,8 @@ rosidl_generate_interfaces(${PROJECT_NAME}
         "srv/ExecuteLinear.srv"
         "srv/KinematicsService.srv"
         "srv/MovecUseIK.srv"
+        "msg/WbcCapability.msg"
+        "msg/WbcCurrentState.msg"
         DEPENDENCIES std_msgs geometry_msgs nav_msgs
 )
 # 添加export依赖

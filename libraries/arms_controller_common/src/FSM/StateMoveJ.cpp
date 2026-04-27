@@ -122,7 +122,7 @@ namespace arms_controller_common
         }
     }
 
-    void StateMoveJ::run(const rclcpp::Time& /*time*/, const rclcpp::Duration& /*period*/)
+    void StateMoveJ::run(const rclcpp::Time& /*time*/, const rclcpp::Duration& period)
     {
         std::lock_guard lock(target_mutex_);
         // 优先处理腰部升降（与转向互斥）
@@ -339,7 +339,8 @@ namespace arms_controller_common
         }
 
         // Get next trajectory point from unified manager (works for both single and multi-node)
-        std::vector<double> next_positions = trajectory_manager_.getNextPoint();
+        double runtime_step = period.seconds();
+        std::vector<double> next_positions = trajectory_manager_.getNextPoint(runtime_step);
 
         if (next_positions.empty())
         {
@@ -761,6 +762,7 @@ namespace arms_controller_common
         bool has_left = false;
         bool has_right = false;
         bool has_body = false;
+        bool has_head = false;
 
         for (const auto& joint_name : joint_names_)
         {
@@ -776,6 +778,10 @@ namespace arms_controller_common
             if (joint_name.find("body") == 0)
             {
                 has_body = true;
+            }
+            if (joint_name.find("head") == 0)
+            {
+                has_head = true;
             }
         }
 
@@ -839,9 +845,28 @@ namespace arms_controller_common
             RCLCPP_INFO(node_->get_logger(), "Subscribed to %s/body for body-prefixed joints", base_topic.c_str());
         }
 
+        // Subscribe to head prefix topic if head joints exist
+        if (has_head)
+        {
+            target_position_head_subscription_ = node_->create_subscription<std_msgs::msg::Float64MultiArray>(
+                base_topic + "/head", 10,
+                [this](const std_msgs::msg::Float64MultiArray::SharedPtr msg)
+                {
+                    std::vector<double> target_pos;
+                    for (const auto& val : msg->data)
+                    {
+                        target_pos.push_back(val);
+                    }
+                    if (!target_pos.empty())
+                    {
+                        setTargetPosition("head", target_pos);
+                    }
+                });
+            RCLCPP_INFO(node_->get_logger(), "Subscribed to %s/head for head-prefixed joints", base_topic.c_str());
+        }
 
         // Log summary
-        if (!has_left && !has_right && !has_body)
+        if (!has_left && !has_right && !has_body && !has_head)
         {
             RCLCPP_DEBUG(node_->get_logger(),
                          "No left/right/body prefixed joints found, only using default target_joint_position topic");

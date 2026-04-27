@@ -217,8 +217,11 @@ namespace arms_rviz_control_plugin
             });
 
         // Declare parameter with empty default
-        node_->declare_parameter("joint_controllers", std::vector<std::string>());
-
+        // node_->declare_parameter("joint_controllers", std::vector<std::string>());
+        if (!node_->has_parameter("joint_controllers")) {
+            node_->declare_parameter<std::vector<std::string>>(
+                "joint_controllers", std::vector<std::string>{});
+        }
         // Get joint controllers from parameters
         available_controllers_ = node_->get_parameter("joint_controllers").as_string_array();
 
@@ -226,7 +229,7 @@ namespace arms_rviz_control_plugin
         available_categories_.clear();
         category_to_controller_.clear();
 
-        std::string wbc_controller; // ocs2_wbc_controller (handles left, right, body)
+        std::string wbc_controller; // ocs2_wbc_controller (handles left, right, body, head)
         std::string arm_controller; // ocs2_arm_controller (handles left, right only)
 
         for (const auto& controller : available_controllers_)
@@ -260,11 +263,12 @@ namespace arms_rviz_control_plugin
             }
             else if (controller_lower.find("ocs2_wbc_controller") != std::string::npos)
             {
-                // ocs2_wbc_controller handles left, right, and body
+                // ocs2_wbc_controller handles left, right, body, and head
                 wbc_controller = controller;
                 available_categories_.insert("left");
                 available_categories_.insert("right");
                 available_categories_.insert("body");
+                available_categories_.insert("head");
             }
             else if (controller_lower.find("ocs2_arm_controller") != std::string::npos)
             {
@@ -275,7 +279,7 @@ namespace arms_rviz_control_plugin
             }
         }
 
-        // Map left and right to WBC controller if found
+        // Map left, right, body, head to WBC controller if found
         if (!wbc_controller.empty())
         {
             category_to_controller_["left"] = wbc_controller;
@@ -284,6 +288,11 @@ namespace arms_rviz_control_plugin
             if (category_to_controller_.find("body") == category_to_controller_.end())
             {
                 category_to_controller_["body"] = wbc_controller;
+            }
+            // Only map head to WBC controller if not already mapped to a dedicated head controller
+            if (category_to_controller_.find("head") == category_to_controller_.end())
+            {
+                category_to_controller_["head"] = wbc_controller;
             }
         }
 
@@ -317,10 +326,6 @@ namespace arms_rviz_control_plugin
         right_current_target_subscriber_ = node_->create_subscription<geometry_msgs::msg::PoseStamped>(
             "right_current_target", 10,
             std::bind(&JointControlPanel::onRightCurrentTargetReceived, this, std::placeholders::_1));
-        
-        body_current_target_subscriber_ = node_->create_subscription<std_msgs::msg::Float64MultiArray>(
-            "/body_joint_controller/current_target_joint", 10,
-            std::bind(&JointControlPanel::onBodyCurrentTargetReceived, this, std::placeholders::_1));
 
         // Initialize publisher (will be updated when category changes)
         updatePublisher();
@@ -522,22 +527,30 @@ namespace arms_rviz_control_plugin
             waist_enabled_checked_ = true;
             if (is_waist_enabled_)
             {
+                const std::string waist_controller = getWaistControllerName();
+
                 waist_lifting_publisher_ = node_->create_publisher<std_msgs::msg::Float64>(
-                    "/body_joint_controller/waist_lifting_command", 10);
+                    "/" + waist_controller + "/waist_lifting_command", 10);
 
                 waist_turning_publisher_ = node_->create_publisher<std_msgs::msg::Float64>(
-                    "/body_joint_controller/waist_turning_command", 10);
+                    "/" + waist_controller + "/waist_turning_command", 10);
+
+                body_current_target_subscriber_ = node_->create_subscription<std_msgs::msg::Float64MultiArray>(
+                    "/" + waist_controller + "/current_target_joint", 10,
+                    std::bind(&JointControlPanel::onBodyCurrentTargetReceived, this, std::placeholders::_1));
 
                 RCLCPP_INFO(node_->get_logger(),
-                            "Waist control publishers created because waist_lifting_enabled is true");
+                            "Waist control interfaces created on controller: %s",
+                            waist_controller.c_str());
             }
             else
             {
                 waist_lifting_publisher_.reset();
                 waist_turning_publisher_.reset();
+                body_current_target_subscriber_.reset();
 
                 RCLCPP_INFO(node_->get_logger(),
-                            "Waist control publishers not created because waist_lifting_enabled is false or unavailable");
+                            "Waist control interfaces not created because waist_lifting_enabled is false or unavailable");
             }
         }
 
@@ -833,8 +846,8 @@ namespace arms_rviz_control_plugin
             std::transform(controller_lower.begin(), controller_lower.end(),
                            controller_lower.begin(), ::tolower);
 
-            // For ocs2_wbc_controller with left/right/body, use sub-topics
-            if ((category == "left" || category == "right" || category == "body") &&
+            // For ocs2_wbc_controller with left/right/body/head, use sub-topics
+            if ((category == "left" || category == "right" || category == "body" || category == "head") &&
                 controller_lower.find("ocs2_wbc_controller") != std::string::npos)
             {
                 return "/" + controller + "/target_joint_position/" + category;
@@ -1123,7 +1136,7 @@ namespace arms_rviz_control_plugin
         }
 
         // Waist controls only visible in body category
-        updateWaistControlsVisibility(current_category_ == "body" && is_waist_enabled_);
+        updateWaistControlsVisibility(shouldShowWaistControls());
     }
 
     void JointControlPanel::onSendButtonClicked()
@@ -1486,17 +1499,20 @@ namespace arms_rviz_control_plugin
     {
         is_waist_enabled_ = false;
 
+        const std::string waist_controller = getWaistControllerName();
+        const std::string remote_node = "/" + waist_controller;
+
         try
         {
-            // Use a temporary standalone node to avoid executor conflict with rviz2 node
             auto temp_node = std::make_shared<rclcpp::Node>("waist_param_checker");
             auto param_client = std::make_shared<rclcpp::SyncParametersClient>(
-                temp_node, "/body_joint_controller");
+                temp_node, remote_node);
 
             if (!param_client->wait_for_service(std::chrono::milliseconds(1000)))
             {
                 RCLCPP_WARN(node_->get_logger(),
-                            "Parameter service of /body_joint_controller is not available");
+                            "Parameter service of %s is not available",
+                            remote_node.c_str());
                 updateWaistControlsVisibility(false);
                 return;
             }
@@ -1504,7 +1520,8 @@ namespace arms_rviz_control_plugin
             if (!param_client->has_parameter("waist_lifting_enabled"))
             {
                 RCLCPP_INFO(node_->get_logger(),
-                            "Parameter /body_joint_controller/waist_lifting_enabled does not exist");
+                            "Parameter %s/waist_lifting_enabled does not exist",
+                            remote_node.c_str());
                 updateWaistControlsVisibility(false);
                 return;
             }
@@ -1512,18 +1529,19 @@ namespace arms_rviz_control_plugin
             is_waist_enabled_ = param_client->get_parameter<bool>("waist_lifting_enabled");
 
             RCLCPP_INFO(node_->get_logger(),
-                        "waist_lifting_enabled = %s",
+                        "%s/waist_lifting_enabled = %s",
+                        remote_node.c_str(),
                         is_waist_enabled_ ? "true" : "false");
         }
         catch (const std::exception& e)
         {
             RCLCPP_WARN(node_->get_logger(),
-                        "Failed to query /body_joint_controller/waist_lifting_enabled: %s",
-                        e.what());
+                        "Failed to query %s/waist_lifting_enabled: %s",
+                        remote_node.c_str(), e.what());
             is_waist_enabled_ = false;
         }
 
-        updateWaistControlsVisibility(current_category_ == "body" && is_waist_enabled_);
+        updateWaistControlsVisibility(shouldShowWaistControls());
     }
 
     void JointControlPanel::updateSpinboxRanges()
@@ -1878,6 +1896,45 @@ namespace arms_rviz_control_plugin
     {
         // Save configuration data
         Panel::save(config);
+    }
+
+    std::string JointControlPanel::getWaistControllerName() const
+    {
+        auto it = category_to_controller_.find("body");
+        if (it != category_to_controller_.end() && !it->second.empty())
+        {
+            return it->second;
+        }
+
+        return "body_joint_controller";
+    }
+
+    bool JointControlPanel::shouldShowWaistControls() const
+    {
+        if (!is_waist_enabled_ || current_category_ != "body")
+        {
+            return false;
+        }
+
+        std::string waist_controller = getWaistControllerName();
+        std::string waist_controller_lower = waist_controller;
+        std::transform(waist_controller_lower.begin(), waist_controller_lower.end(),
+                       waist_controller_lower.begin(), ::tolower);
+
+        // Dedicated body controller: show in both OCS2(3) and MOVEJ(4)
+        if (waist_controller_lower.find("body_joint_controller") != std::string::npos)
+        {
+            return (current_command_ == 3 || current_command_ == 4);
+        }
+
+        // WBC controller: show only in MOVEJ(4)
+        if (waist_controller_lower.find("ocs2_wbc_controller") != std::string::npos)
+        {
+            return (current_command_ == 4);
+        }
+
+        // Fallback: keep conservative behavior
+        return (current_command_ == 4);
     }
 } // namespace arms_rviz_control_plugin
 

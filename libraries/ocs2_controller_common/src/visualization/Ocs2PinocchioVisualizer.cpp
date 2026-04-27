@@ -46,6 +46,9 @@ namespace ocs2::controller_common
             right_end_effector_pose_publisher_ = node_->create_publisher<geometry_msgs::msg::PoseStamped>(
                 "right_current_pose", 1);
         }
+
+        body_frame_pose_publisher_ = node_->create_publisher<geometry_msgs::msg::PoseStamped>(
+        "body_current_pose", 1);
         
         // Create robot description publisher and publish URDF
         if (!urdf_file_.empty())
@@ -273,16 +276,35 @@ namespace ocs2::controller_common
         return false;
     }
 
-    void Ocs2PinocchioVisualizer::publishEndEffectorPose(const rclcpp::Time& time, const vector_t& state) const
+    void Ocs2PinocchioVisualizer::publishEndEffectorPose(
+        const rclcpp::Time& time,
+        const vector_t& state) const
     {
+        // 先发布双臂（原有逻辑）
         if (dual_arm_mode_) {
-            // Dual arm mode: publish left and right arm end effector poses
             publishLeftEndEffectorPose(time, state);
             publishRightEndEffectorPose(time, state);
         } else {
-            // Single arm mode: use left arm publisher
             publishLeftEndEffectorPose(time, state);
         }
+
+        // 新增：发布 body current pose
+        const auto body_pose = computeBodyFramePose(state);
+
+        geometry_msgs::msg::PoseStamped body_msg;
+        body_msg.header.stamp = time;
+        body_msg.header.frame_id = base_frame_;
+
+        body_msg.pose.position.x = body_pose(0);
+        body_msg.pose.position.y = body_pose(1);
+        body_msg.pose.position.z = body_pose(2);
+
+        body_msg.pose.orientation.x = body_pose(3);
+        body_msg.pose.orientation.y = body_pose(4);
+        body_msg.pose.orientation.z = body_pose(5);
+        body_msg.pose.orientation.w = body_pose(6);
+
+        body_frame_pose_publisher_->publish(body_msg);
     }
 
     vector_t Ocs2PinocchioVisualizer::computeEndEffectorPose(const vector_t& state) const

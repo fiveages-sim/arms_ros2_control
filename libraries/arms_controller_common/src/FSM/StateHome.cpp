@@ -150,7 +150,7 @@ namespace arms_controller_common
                     toString(interpolation_type_));
     }
 
-    void StateHome::run(const rclcpp::Time& /*time*/, const rclcpp::Duration& /*period*/)
+    void StateHome::run(const rclcpp::Time& /*time*/, const rclcpp::Duration& period)
     {
         int32_t current_command = ctrl_interfaces_.fsm_command_;
         bool command_changed = (current_command != last_command_);
@@ -177,7 +177,8 @@ namespace arms_controller_common
         last_command_ = current_command;
 
         // Get next trajectory point from unified manager
-        std::vector<double> next_positions = trajectory_manager_.getNextPoint();
+        double runtime_step = period.seconds();
+        std::vector<double> next_positions = trajectory_manager_.getNextPoint(runtime_step);
 
         if (!next_positions.empty() &&
             next_positions.size() == ctrl_interfaces_.joint_position_command_interface_.size())

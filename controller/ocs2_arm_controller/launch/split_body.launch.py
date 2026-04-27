@@ -184,7 +184,7 @@ def launch_setup(context, *args, **kwargs):
             executable='arms_target_manager_node',
             name='arms_target_manager',
             output='screen',
-            parameters=arms_target_manager_parameters,
+            parameters=arms_target_manager_parameters + [{'use_sim_time': use_sim_time}],
         )
 
     # Launch mode: 'full' (default), 'control_only', or 'rviz_only'
@@ -227,6 +227,8 @@ def launch_setup(context, *args, **kwargs):
 
         # Add joint_controllers parameter for JointControlPanel
         rviz_parameters.append({'joint_controllers': joint_controller_names})
+
+        rviz_parameters.append({'wbc_available': False})
 
         rviz_node = Node(
             package="rviz2",

@@ -26,7 +26,6 @@ arms_ros2_control/
 │   ├── ocs2_arm_controller/      # OCS2-based arm controller
 │   └── adaptive_gripper_controller/ # Adaptive gripper controller
 ├── hardwares/                    # Hardware interface implementations
-│   ├── gz_ros2_control/         # Gazebo hardware interface
 │   ├── topic_based_ros2_control/ # Topic-based hardware interface
 │   └── unitree_ros2_control/    # Unitree robot hardware interface
 ├── command/                      # Command input implementations
@@ -205,16 +204,6 @@ The `adaptive_gripper_controller` provides basic gripper control functionality w
 - Easy to understand and extend
 
 ### Hardware Interfaces
-
-#### Gazebo Hardware Interface
-
-The `gz_ros2_control` package provides hardware interface for Gazebo simulation. Origin version could be found at [gz ros2 control](https://github.com/ros-controls/gz_ros2_control).
-
-**Features:**
-
-- Real-time simulation integration
-- Support for various Gazebo plugins
-- Configurable world files
 
 #### Topic-based Hardware Interface
 

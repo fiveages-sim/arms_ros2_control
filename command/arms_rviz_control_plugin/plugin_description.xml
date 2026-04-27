@@ -17,4 +17,16 @@
     base_class_type="rviz_common::Panel">
     <description>Joint Control Panel for adjusting joint positions when command is 3 or 4</description>
   </class>
+  <class
+    name="arms_rviz_control_plugin/WbcCapabilityPanel"
+    type="arms_rviz_control_plugin::WbcCapabilityPanel"
+    base_class_type="rviz_common::Panel">
+    <description>WBC capability status panel</description>
+  </class>
+  <class
+    name="arms_rviz_control_plugin/WbcCurrentStatePanel"
+    type="arms_rviz_control_plugin::WbcCurrentStatePanel"
+    base_class_type="rviz_common::Panel">
+    <description>WBC current state display panel</description>
+  </class>
 </library>

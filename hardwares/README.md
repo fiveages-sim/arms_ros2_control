@@ -1,11 +1,5 @@
 # ROS2 Control Hardware
 
-## 1. Gz ROS2 Control
-```bash
-cd ~/ros2_ws
-colcon build --packages-up-to gz_ros2_control --symlink-install
-```
-
 ## 2. Topic Based ROS2 Control
 ```bash
 cd ~/ros2_ws

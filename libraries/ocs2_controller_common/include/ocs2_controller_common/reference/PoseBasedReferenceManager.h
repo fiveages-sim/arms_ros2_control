@@ -45,10 +45,15 @@ public:
 
     void resetTargetStateCache();
 
-    void setCurrentEndEffectorPoses(const vector_t& left_ee_pose, const vector_t& right_ee_pose);
+    void setCurrentEndEffectorPoses(const vector_t& left_ee_pose, const vector_t& right_ee_pose,
+                                    bool update_target_trajectory = true);
 
     /** Body pose (7: x,y,z, qx,qy,qz,qw) for indices [14:21] when using wheel-humanoid 21-dim layout. */
     void setBodyPoseReference(const vector_t& body_pose_xyzw_7);
+    /** Update only body target (keep arm targets unchanged), optionally pushing trajectory to MPC. */
+    void setBodyPoseTargetOnly(const vector_t& body_pose_xyzw_7, bool update_target_trajectory = true);
+    /** Publish cached current targets for visualization/marker refresh, without modifying MPC targets. */
+    void publishCurrentTargetsFromCache();
 
     /** Build full reference state for SwitchedHumanoidReferenceManager (dual arms + body). */
     static vector_t assembleWheelHumanoidTargetState(const vector_t& left_pose7_xyzw, const vector_t& right_pose7_xyzw,
@@ -58,9 +63,11 @@ private:
     void updateParam();
     void leftPoseCallback(geometry_msgs::msg::Pose::SharedPtr msg);
     void rightPoseCallback(geometry_msgs::msg::Pose::SharedPtr msg);
+    void bodyPoseCallback(geometry_msgs::msg::Pose::SharedPtr msg);
     void leftPoseStampedCallback(geometry_msgs::msg::PoseStamped::SharedPtr msg);
     void rightPoseStampedCallback(geometry_msgs::msg::PoseStamped::SharedPtr msg);
     void dualTargetStampedCallback(nav_msgs::msg::Path::SharedPtr msg);
+    void bodyPoseStampedCallback(geometry_msgs::msg::PoseStamped::SharedPtr msg);
     void pathCallback(nav_msgs::msg::Path::SharedPtr msg);
     void runInterpolatedPathTrajectory(
         const std::vector<vector_t>& left_arm_waypoints,
@@ -71,6 +78,9 @@ private:
         std::shared_ptr<arms_ros2_control_msgs::srv::ExecutePath::Response> response);
     void updateTargetTrajectory();
     void updateTrajectory(const vector_t& previous_left_target_state, const vector_t& previous_right_target_state);
+    void updateTrajectoryWithBody(const vector_t& previous_left_target_state, const vector_t& previous_right_target_state,
+                                  const vector_t& previous_body_target_state);
+    void updateBodyTrajectory(const vector_t& previous_body_target_state);
 
     [[nodiscard]] int effectiveTargetStateDim() const;
     [[nodiscard]] vector_t identityBodyPose7() const;
@@ -79,6 +89,7 @@ private:
 
     void leftPoseStampedPoseCallback(geometry_msgs::msg::Pose::SharedPtr msg);
     void rightPoseStampedPoseCallback(geometry_msgs::msg::Pose::SharedPtr msg);
+    void bodyPoseStampedPoseCallback(geometry_msgs::msg::Pose::SharedPtr msg);
 
     void processPoseStamped(const geometry_msgs::msg::PoseStamped::SharedPtr& msg,
                             std::function<void(geometry_msgs::msg::Pose::SharedPtr)> callback);
@@ -94,9 +105,11 @@ private:
 
     rclcpp::Subscription<geometry_msgs::msg::Pose>::SharedPtr left_pose_subscriber_;
     rclcpp::Subscription<geometry_msgs::msg::Pose>::SharedPtr right_pose_subscriber_;
+    rclcpp::Subscription<geometry_msgs::msg::Pose>::SharedPtr body_pose_subscriber_;
     rclcpp::Subscription<geometry_msgs::msg::PoseStamped>::SharedPtr left_pose_stamped_subscriber_;
     rclcpp::Subscription<geometry_msgs::msg::PoseStamped>::SharedPtr right_pose_stamped_subscriber_;
     rclcpp::Subscription<nav_msgs::msg::Path>::SharedPtr dual_target_stamped_subscriber_;
+    rclcpp::Subscription<geometry_msgs::msg::PoseStamped>::SharedPtr body_pose_stamped_subscriber_;
     rclcpp::Subscription<nav_msgs::msg::Path>::SharedPtr path_subscriber_;
 
     rclcpp::Service<arms_ros2_control_msgs::srv::ExecutePath>::SharedPtr execute_path_service_;

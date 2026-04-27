@@ -10,9 +10,11 @@
 #include <vector>
 
 #include <controller_interface/controller_interface.hpp>
-#include <std_msgs/msg/int32.hpp>
 #include <hardware_interface/loaned_command_interface.hpp>
 #include <hardware_interface/loaned_state_interface.hpp>
+#include <std_msgs/msg/int32.hpp>
+#include <std_msgs/msg/float64.hpp>
+
 #include "ocs2_arm_controller/control/CtrlComponent.h"
 
 // Use common FSM types from arms_controller_common
@@ -41,8 +43,8 @@ namespace ocs2::mobile_manipulator
     {
         std::shared_ptr<FSMState> invalid;
         std::shared_ptr<StateHome> home;
-        std::shared_ptr<StateOCS2> ocs2; // OCS2 state
-        std::shared_ptr<StateHold> hold; // Hold position state
+        std::shared_ptr<StateOCS2> ocs2;   // OCS2 state
+        std::shared_ptr<StateHold> hold;   // Hold position state
         std::shared_ptr<StateMoveJ> movej; // MoveJ state
     };
 
@@ -59,15 +61,17 @@ namespace ocs2::mobile_manipulator
         controller_interface::CallbackReturn on_cleanup(const rclcpp_lifecycle::State& previous_state) override;
         controller_interface::CallbackReturn on_error(const rclcpp_lifecycle::State& previous_state) override;
         controller_interface::CallbackReturn on_shutdown(const rclcpp_lifecycle::State& previous_state) override;
-        
+
         controller_interface::InterfaceConfiguration command_interface_configuration() const override;
         controller_interface::InterfaceConfiguration state_interface_configuration() const override;
         controller_interface::return_type update(const rclcpp::Time& time, const rclcpp::Duration& period) override;
 
     private:
         std::shared_ptr<FSMState> getNextState(FSMStateName stateName) const;
+        void publishCurrentFsmState() const;
 
         // Hardware parameters
+        std::string controller_name_;
         std::string command_prefix_;
         std::vector<std::string> joint_names_;
         std::vector<std::string> command_interface_types_;
@@ -86,6 +90,9 @@ namespace ocs2::mobile_manipulator
         // State machine parameters
         std::vector<double> home_pos_;
         std::vector<double> rest_pos_;  // Rest pose configuration
+
+        // Waist lifting parameters
+        bool waist_lifting_enabled_{false};
 
         // Interface mapping
         std::unordered_map<std::string, std::vector<std::reference_wrapper<hardware_interface::LoanedCommandInterface>>*>
@@ -106,7 +113,12 @@ namespace ocs2::mobile_manipulator
 
         // ROS subscriptions
         rclcpp::Subscription<std_msgs::msg::Int32>::SharedPtr fsm_command_subscription_;
-        
+        rclcpp::Publisher<std_msgs::msg::Int32>::SharedPtr fsm_state_publisher_;
+        rclcpp::Subscription<std_msgs::msg::String>::SharedPtr robot_description_subscription_;
+        rclcpp::Subscription<std_msgs::msg::Float64>::SharedPtr waist_lifting_subscription_;
+        rclcpp::Subscription<std_msgs::msg::Float64>::SharedPtr waist_lifting_command_subscription_;
+        rclcpp::Subscription<std_msgs::msg::Float64>::SharedPtr waist_turning_command_subscription_;
+
         // CtrlComponent for OCS2 interface access
         std::shared_ptr<CtrlComponent> ctrl_comp_;
 
