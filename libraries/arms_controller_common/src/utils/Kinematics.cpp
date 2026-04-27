@@ -1546,19 +1546,19 @@ namespace arms_controller_common
                 state.leftArmJoints(i) = joint_angles[i];
             }
             EndEffectorPose pose;
-            if (params_.solverType == SolverType::SDK)
-            {
-                bool success = computeForwardKinematicsWithSDK(state.leftArmJoints, "left", pose);
-                if (!success)
-                {
-                    error_msg = "SDK forward kinematics failed for left arm";
-                    return false;
-                }
-            }
-            else
-            {
+            // if (params_.solverType == SolverType::SDK)
+            // {
+            //     bool success = computeForwardKinematicsWithSDK(state.leftArmJoints, "left", pose);
+            //     if (!success)
+            //     {
+            //         error_msg = "SDK forward kinematics failed for left arm";
+            //         return false;
+            //     }
+            // }
+            // else
+            // {
                 pose = computeSingleEndEffectorPose(state, "left");
-            }
+            // }
 
 
             result_poses.push_back(pose);
@@ -1577,19 +1577,19 @@ namespace arms_controller_common
                 state.rightArmJoints(i) = joint_angles[i];
             }
             EndEffectorPose pose;
-            if (params_.solverType == SolverType::SDK)
-            {
-                bool success = computeForwardKinematicsWithSDK(state.rightArmJoints, "right", pose);
-                if (!success)
-                {
-                    error_msg = "SDK forward kinematics failed for right arm";
-                    return false;
-                }
-            }
-            else
-            {
+            // if (params_.solverType == SolverType::SDK)
+            // {
+            //     bool success = computeForwardKinematicsWithSDK(state.rightArmJoints, "right", pose);
+            //     if (!success)
+            //     {
+            //         error_msg = "SDK forward kinematics failed for right arm";
+            //         return false;
+            //     }
+            // }
+            // else
+            // {
                 pose = computeSingleEndEffectorPose(state, "right");
-            }
+            // }
 
             result_poses.push_back(pose);
         }
@@ -1612,20 +1612,20 @@ namespace arms_controller_common
             }
 
             EndEffectorPose left_pose, right_pose;
-            if (params_.solverType == SolverType::SDK)
-            {
-                bool success_left = computeForwardKinematicsWithSDK(state.leftArmJoints, "left", left_pose);
-                bool success_right = computeForwardKinematicsWithSDK(state.rightArmJoints, "right", right_pose);
-                if (!success_left || !success_right)
-                {
-                    error_msg = "SDK forward kinematics failed for one or both arms";
-                    return false;
-                }
-            }
-            else
-            {
+            // if (params_.solverType == SolverType::SDK)
+            // {
+            //     bool success_left = computeForwardKinematicsWithSDK(state.leftArmJoints, "left", left_pose);
+            //     bool success_right = computeForwardKinematicsWithSDK(state.rightArmJoints, "right", right_pose);
+            //     if (!success_left || !success_right)
+            //     {
+            //         error_msg = "SDK forward kinematics failed for one or both arms";
+            //         return false;
+            //     }
+            // }
+            // else
+            // {
                 computeBothEndEffectorPose(state, left_pose, right_pose);
-            }
+            // }
 
 
             result_poses.push_back(left_pose);
