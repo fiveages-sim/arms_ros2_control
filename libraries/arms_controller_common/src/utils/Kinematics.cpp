@@ -218,9 +218,16 @@ namespace arms_controller_common
                                          int maxIterations,
                                          double tolerance)
     {
-        SolutionInfo info;
-        return solveSingleArmIKWithInfo(targetPose, initialGuess, solution, info,
-                                        arm_type, maxIterations, tolerance);
+        if (params_.solverType == SolverType::SDK)
+        {
+            return solveSingleArmIKWithSDK(targetPose, initialGuess, solution, arm_type);
+        }
+        else
+        {
+            SolutionInfo info;
+            return solveSingleArmIKWithInfo(targetPose, initialGuess, solution, info,
+                                            arm_type, maxIterations, tolerance);
+        }
     }
 
     bool ArmKinematics::solveSingleArmIKWithInfo(const EndEffectorPose& targetPose,
@@ -280,16 +287,9 @@ namespace arms_controller_common
 
         if (info.status == "success")
         {
-            std::cout << "IK succeeded (" << (info.usedSolver == SolverType::DLS ? "DLS" : "BFGS")
-                << "): " << info.iterations << " iterations, error="
-                << info.poseErrorNorm << std::endl;
-
-            // 缓存成功解
-            if (arm_type == "left")
-                lastLeftSolution_ = solution;
-            else
-                lastRightSolution_ = solution;
-            lastArmType_ = arm_type;
+            // std::cout << "IK succeeded (" << (info.usedSolver == SolverType::DLS ? "DLS" : "BFGS")
+            //     << "): " << info.iterations << " iterations, error="
+            //     << info.poseErrorNorm << std::endl;
 
             return true;
         }
@@ -1546,19 +1546,19 @@ namespace arms_controller_common
                 state.leftArmJoints(i) = joint_angles[i];
             }
             EndEffectorPose pose;
-            if (params_.solverType == SolverType::SDK)
-            {
-                bool success = computeForwardKinematicsWithSDK(state.leftArmJoints, "left", pose);
-                if (!success)
-                {
-                    error_msg = "SDK forward kinematics failed for left arm";
-                    return false;
-                }
-            }
-            else
-            {
+            // if (params_.solverType == SolverType::SDK)
+            // {
+            //     bool success = computeForwardKinematicsWithSDK(state.leftArmJoints, "left", pose);
+            //     if (!success)
+            //     {
+            //         error_msg = "SDK forward kinematics failed for left arm";
+            //         return false;
+            //     }
+            // }
+            // else
+            // {
                 pose = computeSingleEndEffectorPose(state, "left");
-            }
+            // }
 
 
             result_poses.push_back(pose);
@@ -1577,19 +1577,19 @@ namespace arms_controller_common
                 state.rightArmJoints(i) = joint_angles[i];
             }
             EndEffectorPose pose;
-            if (params_.solverType == SolverType::SDK)
-            {
-                bool success = computeForwardKinematicsWithSDK(state.rightArmJoints, "right", pose);
-                if (!success)
-                {
-                    error_msg = "SDK forward kinematics failed for right arm";
-                    return false;
-                }
-            }
-            else
-            {
+            // if (params_.solverType == SolverType::SDK)
+            // {
+            //     bool success = computeForwardKinematicsWithSDK(state.rightArmJoints, "right", pose);
+            //     if (!success)
+            //     {
+            //         error_msg = "SDK forward kinematics failed for right arm";
+            //         return false;
+            //     }
+            // }
+            // else
+            // {
                 pose = computeSingleEndEffectorPose(state, "right");
-            }
+            // }
 
             result_poses.push_back(pose);
         }
@@ -1612,20 +1612,20 @@ namespace arms_controller_common
             }
 
             EndEffectorPose left_pose, right_pose;
-            if (params_.solverType == SolverType::SDK)
-            {
-                bool success_left = computeForwardKinematicsWithSDK(state.leftArmJoints, "left", left_pose);
-                bool success_right = computeForwardKinematicsWithSDK(state.rightArmJoints, "right", right_pose);
-                if (!success_left || !success_right)
-                {
-                    error_msg = "SDK forward kinematics failed for one or both arms";
-                    return false;
-                }
-            }
-            else
-            {
+            // if (params_.solverType == SolverType::SDK)
+            // {
+            //     bool success_left = computeForwardKinematicsWithSDK(state.leftArmJoints, "left", left_pose);
+            //     bool success_right = computeForwardKinematicsWithSDK(state.rightArmJoints, "right", right_pose);
+            //     if (!success_left || !success_right)
+            //     {
+            //         error_msg = "SDK forward kinematics failed for one or both arms";
+            //         return false;
+            //     }
+            // }
+            // else
+            // {
                 computeBothEndEffectorPose(state, left_pose, right_pose);
-            }
+            // }
 
 
             result_poses.push_back(left_pose);
@@ -1674,15 +1674,8 @@ namespace arms_controller_common
 
             Eigen::VectorXd solution;
             bool success;
-            if (params_.solverType == SolverType::SDK)
-            {
-                success = solveSingleArmIKWithSDK(target_poses[0], initial_eigen, solution, "left");
-            }
-            else
-            {
                 success = solveSingleArmIK(target_poses[0], initial_eigen, solution,
                                            "left", max_iterations, tolerance);
-            }
 
 
             if (success)
@@ -1722,15 +1715,8 @@ namespace arms_controller_common
 
             Eigen::VectorXd solution;
             bool success;
-            if (params_.solverType == SolverType::SDK)
-            {
-                success = solveSingleArmIKWithSDK(target_poses[0], initial_eigen, solution, "right");
-            }
-            else
-            {
                 success = solveSingleArmIK(target_poses[0], initial_eigen, solution,
                                            "right", max_iterations, tolerance);
-            }
 
             if (success)
             {

@@ -82,16 +82,20 @@ namespace arms_controller_common
         if (target_point_msg.ik_type=="BFGS")
         {
             ik_tp = ArmKinematics::SolverType::BFGS;
+            std::cout << "BFGS is set" << std::endl;
         }else if (target_point_msg.ik_type=="DLS")
         {
             ik_tp = ArmKinematics::SolverType::DLS;
+            std::cout << "DLS is set" << std::endl;
         }else if (target_point_msg.ik_type=="SDK")
         {
             ik_tp=ArmKinematics::SolverType::SDK;
+            std::cout << "SDK is set" << std::endl;
         }
         else
         {
             ik_tp = ArmKinematics::SolverType::AUTO;
+            std::cout << "Auto is set" << std::endl;
         }
         arm_kinematics_->setSolverType(ik_tp);
         movel_planner_->setRealStartTime(0.0);

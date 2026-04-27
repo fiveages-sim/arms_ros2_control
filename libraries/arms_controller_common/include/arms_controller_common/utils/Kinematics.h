@@ -210,7 +210,8 @@ namespace arms_controller_common
         void setWeight(const Eigen::VectorXd& weight) { weight_ = weight; }
         void setSolverParams(const SolverParams& params) { params_ = params; }
         SolverParams getSolverParams() const { return params_; }
-        void setSolverType(SolverType type) { params_.solverType = type; }
+        void setSolverType(SolverType type) { params_.solverType = type;}
+        SolverType getSolverType() const { return params_.solverType; }
 
         bool solveBothArmsIK(const EndEffectorPose& leftTargetPose,
                              const EndEffectorPose& rightTargetPose,
@@ -367,9 +368,9 @@ namespace arms_controller_common
         // DLS 求解器
 
         // 缓存
-        mutable Eigen::VectorXd lastLeftSolution_;
-        mutable Eigen::VectorXd lastRightSolution_;
-        mutable std::string lastArmType_;
+        // mutable Eigen::VectorXd lastLeftSolution_;
+        // mutable Eigen::VectorXd lastRightSolution_;
+        // mutable std::string lastArmType_;
         std::pair<Eigen::VectorXd, SolutionInfo>
         solveDLS(const Eigen::VectorXd& seed,
                  const Eigen::VectorXd& lower,
