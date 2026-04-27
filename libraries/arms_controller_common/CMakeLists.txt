@@ -85,7 +85,7 @@ endif()
 ament_target_dependencies(${PROJECT_NAME} PUBLIC ${dependencies})
 
 # 只链接 libKine.so（运动学库）
-target_link_libraries(${PROJECT_NAME} PUBLIC
+target_link_libraries(${PROJECT_NAME} PRIVATE
         ${KINE_SDK_DIR}/libKine.so
         pthread
         rt
@@ -94,7 +94,7 @@ target_link_libraries(${PROJECT_NAME} PUBLIC
 # 设置 RPATH
 set_target_properties(${PROJECT_NAME} PROPERTIES
         BUILD_RPATH "${KINE_SDK_DIR}"
-        INSTALL_RPATH "$ORIGIN/../lib;$ORIGIN/../../../hardwares/marvin_ros2_control/external/TJ_FX_ROBOT_CONTRL_SDK/kinematicsSDK"
+        INSTALL_RPATH "$ORIGIN"
 )
 
 install(
@@ -108,6 +108,14 @@ install(
         ARCHIVE DESTINATION lib
         LIBRARY DESTINATION lib
         RUNTIME DESTINATION bin
+)
+install(FILES
+        ${KINE_SDK_DIR}/libKine.so
+        DESTINATION lib
+)
+install(FILES
+        ${TJ_SDK_BASE_DIR}/ccs_m6.MvKDCfg
+        DESTINATION share/${PROJECT_NAME}/config
 )
 # 安装 SDK 头文件到 arms_controller_common 的 include 目录
 install(FILES

@@ -7,9 +7,81 @@
 // #include <ament_index_cpp/get_package_share_directory.hpp>
 #include <stdexcept>  // for std::runtime_error
 #include <fstream>
+#include <cstdlib>
 
 namespace arms_controller_common
 {
+    namespace
+    {
+        std::string resolveKinematicsConfigPath()
+        {
+            if (const char* env_path = std::getenv("ARMS_KINEMATICS_CONFIG_PATH"))
+            {
+                std::ifstream env_file(env_path);
+                if (env_file.good())
+                {
+                    return env_path;
+                }
+                std::cerr << "ARMS_KINEMATICS_CONFIG_PATH is set but file is not readable: "
+                    << env_path << std::endl;
+            }
+
+            const auto package_share =
+                ament_index_cpp::get_package_share_directory("arms_controller_common");
+            const auto config_path = package_share + "/config/ccs_m6.MvKDCfg";
+
+            std::ifstream config_file(config_path);
+            if (!config_file.good())
+            {
+                throw std::runtime_error("Kinematics config file not found: " + config_path);
+            }
+
+            return config_path;
+        }
+
+        void initializeSdkKinematics()
+        {
+            // 初始化TJ_FX_ROBOT_CONTROL_SDK - 从ccs_m6.MvKDCfg加载M6CCS参数
+            FX_INT32L TYPE[2];
+            FX_DOUBLE GRV[2][3];
+            FX_DOUBLE DH[2][8][4];
+            FX_DOUBLE PNVA[2][7][4];
+            FX_DOUBLE BD[2][4][3];
+            FX_DOUBLE Mass[2][7];
+            FX_DOUBLE MCP[2][7][3];
+            FX_DOUBLE I[2][7][6];
+
+            const auto configPath = resolveKinematicsConfigPath();
+
+            if (LOADMvCfg((char*)configPath.c_str(), TYPE, GRV, DH, PNVA, BD, Mass, MCP, I) == FX_TRUE)
+            {
+                std::cout << "Loaded M6CCS config successfully from " << configPath << std::endl;
+            }
+            else
+            {
+                std::cerr << "Failed to load M6CCS config from " << configPath << std::endl;
+                throw std::runtime_error("Failed to load M6CCS kinematics config");
+            }
+
+            // 初始化左右臂（serial 0: left, serial 1: right）
+            for (int serial = 0; serial < 2; serial++)
+            {
+                if (FX_Robot_Init_Type(serial, TYPE[serial]) == FX_FALSE)
+                {
+                    std::cerr << "Failed to init robot type for serial " << serial << std::endl;
+                }
+                if (FX_Robot_Init_Kine(serial, DH[serial]) == FX_FALSE)
+                {
+                    std::cerr << "Failed to init kinematics for serial " << serial << std::endl;
+                }
+                if (FX_Robot_Init_Lmt(serial, PNVA[serial], BD[serial]) == FX_FALSE)
+                {
+                    std::cerr << "Failed to init limits for serial " << serial << std::endl;
+                }
+            }
+        }
+    }
+
     // ==================== 构造函数 ====================
 
     ArmKinematics::ArmKinematics(const std::string& urdf_path,
@@ -23,46 +95,7 @@ namespace arms_controller_common
         // 初始化权重为单位权重
         weight_ = Eigen::VectorXd::Ones(6);
 
-        // 初始化TJ_FX_ROBOT_CONTROL_SDK - 方案A：从ccs_m6.MvKDCfg加载M6CCS参数
-        FX_INT32L TYPE[2];
-        FX_DOUBLE GRV[2][3];
-        FX_DOUBLE DH[2][8][4];
-        FX_DOUBLE PNVA[2][7][4];
-        FX_DOUBLE BD[2][4][3];
-        FX_DOUBLE Mass[2][7];
-        FX_DOUBLE MCP[2][7][3];
-        FX_DOUBLE I[2][7][6];
-
-        // 直接使用绝对路径，不使用任何异常处理
-        std::string configPath =
-            "/home/lina/ros2_ws/src/arms_ros2_control/hardwares/marvin_ros2_control/external/TJ_FX_ROBOT_CONTRL_SDK/ccs_m6.MvKDCfg";
-
-        if (LOADMvCfg((char*)configPath.c_str(), TYPE, GRV, DH, PNVA, BD, Mass, MCP, I) == FX_TRUE)
-        {
-            std::cout << "Loaded M6CCS config successfully from " << configPath << std::endl;
-        }
-        else
-        {
-            std::cerr << "Failed to load M6CCS config from " << configPath << std::endl;
-            throw std::runtime_error("Failed to load M6CCS kinematics config");
-        }
-
-        // 初始化左右臂（serial 0: left, serial 1: right）
-        for (int serial = 0; serial < 2; serial++)
-        {
-            if (FX_Robot_Init_Type(serial, TYPE[serial]) == FX_FALSE)
-            {
-                std::cerr << "Failed to init robot type for serial " << serial << std::endl;
-            }
-            if (FX_Robot_Init_Kine(serial, DH[serial]) == FX_FALSE)
-            {
-                std::cerr << "Failed to init kinematics for serial " << serial << std::endl;
-            }
-            if (FX_Robot_Init_Lmt(serial, PNVA[serial], BD[serial]) == FX_FALSE)
-            {
-                std::cerr << "Failed to init limits for serial " << serial << std::endl;
-            }
-        }
+        initializeSdkKinematics();
     }
 
     ArmKinematics::ArmKinematics(const pinocchio::Model& model) : model_(model)
@@ -71,46 +104,7 @@ namespace arms_controller_common
         buildMappings();
         weight_ = Eigen::VectorXd::Ones(6);
 
-        // 初始化TJ_FX_ROBOT_CONTROL_SDK - 方案A：从ccs_m6.MvKDCfg加载M6CCS参数
-        FX_INT32L TYPE[2];
-        FX_DOUBLE GRV[2][3];
-        FX_DOUBLE DH[2][8][4];
-        FX_DOUBLE PNVA[2][7][4];
-        FX_DOUBLE BD[2][4][3];
-        FX_DOUBLE Mass[2][7];
-        FX_DOUBLE MCP[2][7][3];
-        FX_DOUBLE I[2][7][6];
-
-        // 直接使用绝对路径，不使用任何异常处理
-        std::string configPath =
-            "/home/lina/ros2_ws/src/arms_ros2_control/hardwares/marvin_ros2_control/external/TJ_FX_ROBOT_CONTRL_SDK/ccs_m6.MvKDCfg";
-
-        if (LOADMvCfg((char*)configPath.c_str(), TYPE, GRV, DH, PNVA, BD, Mass, MCP, I) == FX_TRUE)
-        {
-            std::cout << "Loaded M6CCS config successfully from " << configPath << std::endl;
-        }
-        else
-        {
-            std::cerr << "Failed to load M6CCS config from " << configPath << std::endl;
-            throw std::runtime_error("Failed to load M6CCS kinematics config");
-        }
-
-        // 初始化左右臂（serial 0: left, serial 1: right）
-        for (int serial = 0; serial < 2; serial++)
-        {
-            if (FX_Robot_Init_Type(serial, TYPE[serial]) == FX_FALSE)
-            {
-                std::cerr << "Failed to init robot type for serial " << serial << std::endl;
-            }
-            if (FX_Robot_Init_Kine(serial, DH[serial]) == FX_FALSE)
-            {
-                std::cerr << "Failed to init kinematics for serial " << serial << std::endl;
-            }
-            if (FX_Robot_Init_Lmt(serial, PNVA[serial], BD[serial]) == FX_FALSE)
-            {
-                std::cerr << "Failed to init limits for serial " << serial << std::endl;
-            }
-        }
+        initializeSdkKinematics();
     }
 
     ArmKinematics::~ArmKinematics() = default;
