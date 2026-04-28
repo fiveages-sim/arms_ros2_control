@@ -13,6 +13,7 @@ rosidl_generate_interfaces(${PROJECT_NAME}
         "srv/JointTrajectory.srv"
         "srv/ExecutePath.srv"
         "msg/LinearMessage.msg"
+        "action/JointTrajectory.action"
         "action/ExecuteLinear.action"
         "srv/ExecuteLinear.srv"
         "action/MovecUseIK.action"

@@ -21,6 +21,7 @@
 #include <trajectory_msgs/msg/joint_trajectory.hpp>
 #include <eigen3/Eigen/Dense>
 #include "arms_controller_common/utils/WaistLiftingPlaner.h"
+#include "arms_ros2_control_msgs/action/joint_trajectory.hpp"
 #include "arms_ros2_control_msgs/msg/joint_waypoint.hpp"
 #include "arms_ros2_control_msgs/srv/joint_trajectory.hpp"
 #include "arms_controller_common/utils/Kinematics.h"
@@ -175,6 +176,7 @@ namespace arms_controller_common
          * @param service_name Service name (default: "joint_trajectory")
          */
         void setupJointTrajectoryService(const std::string& service_name = "joint_trajectory");
+        void setupJointTrajectoryAction(const std::string& action_name = "joint_trajectory");
 
         void setKinematicsSolver(const std::shared_ptr<ArmKinematics>& kinematics = nullptr);
         // 在 StateMoveJ.h 的 public 部分添加
@@ -341,11 +343,33 @@ namespace arms_controller_common
         // Service server
         rclcpp::Service<arms_ros2_control_msgs::srv::JointTrajectory>::SharedPtr joint_trajectory_service_;
 
+        using JointTrajectoryAction = arms_ros2_control_msgs::action::JointTrajectory;
+        using JointTrajectoryGoalHandle = rclcpp_action::ServerGoalHandle<JointTrajectoryAction>;
+        rclcpp_action::Server<JointTrajectoryAction>::SharedPtr joint_trajectory_action_server_;
+        std::shared_ptr<JointTrajectoryGoalHandle> active_joint_trajectory_goal_;
+        rclcpp::Time joint_trajectory_action_start_time_;
+        double joint_trajectory_planned_duration_{0.0};
+        bool joint_trajectory_action_active_{false};
+
         // Service handler
         void handleJointTrajectory(
             const std::shared_ptr<rmw_request_id_t> request_header,
             const std::shared_ptr<arms_ros2_control_msgs::srv::JointTrajectory::Request> request,
             const std::shared_ptr<arms_ros2_control_msgs::srv::JointTrajectory::Response> response);
+        rclcpp_action::GoalResponse handleJointTrajectoryGoal(
+            const rclcpp_action::GoalUUID& uuid,
+            std::shared_ptr<const JointTrajectoryAction::Goal> goal);
+        rclcpp_action::CancelResponse handleJointTrajectoryCancel(
+            const std::shared_ptr<JointTrajectoryGoalHandle> goal_handle);
+        void handleJointTrajectoryAccepted(
+            const std::shared_ptr<JointTrajectoryGoalHandle> goal_handle);
+        bool startJointTrajectoryRequest(
+            const std::vector<std::string>& joint_names,
+            const std::vector<arms_ros2_control_msgs::msg::JointWaypoint>& waypoints,
+            std::string& message,
+            double& planned_duration);
+        void publishJointTrajectoryFeedback();
+        void finishJointTrajectoryAction(bool success, bool canceled, const std::string& message);
 
         // 辅助函数
         bool validateJointNames(const std::vector<std::string>& request_joint_names, std::string& error_msg);

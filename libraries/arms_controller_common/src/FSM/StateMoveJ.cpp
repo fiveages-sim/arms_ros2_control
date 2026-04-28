@@ -322,6 +322,23 @@ namespace arms_controller_common
         }
 
 
+        if (joint_trajectory_action_active_ && active_joint_trajectory_goal_ &&
+            active_joint_trajectory_goal_->is_canceling())
+        {
+            refreshHoldPositions();
+            trajectory_manager_.reset();
+            interpolation_active_ = false;
+            has_target_ = false;
+            finishJointTrajectoryAction(false, true, "Joint trajectory canceled");
+
+            for (size_t i = 0; i < ctrl_interfaces_.joint_position_command_interface_.size() &&
+                 i < hold_positions_.size(); ++i)
+            {
+                ctrl_interfaces_.setJointPositionCommand(i, hold_positions_[i]);
+            }
+            return;
+        }
+
         if (trajectory_manager_.isInitialized())
         {
             // Check if multi-node trajectory is initialized (from setTrajectory)
@@ -393,6 +410,12 @@ namespace arms_controller_common
                 {
                     ctrl_interfaces_.setJointPositionCommand(i, hold_positions_[i]);
                 }
+
+                if (joint_trajectory_action_active_)
+                {
+                    finishJointTrajectoryAction(
+                        false, false, "Joint trajectory returned empty positions during execution");
+                }
             }
             else
             {
@@ -422,6 +445,11 @@ namespace arms_controller_common
                  i < start_pos_.size(); ++i)
             {
                 ctrl_interfaces_.setJointPositionCommand(i, start_pos_[i]);
+            }
+
+            if (joint_trajectory_action_active_)
+            {
+                finishJointTrajectoryAction(false, false, "Joint trajectory position size mismatch");
             }
             return;
         }
@@ -469,6 +497,20 @@ namespace arms_controller_common
             }
 
             ctrl_interfaces_.setJointPositionCommand(i, position_to_set);
+        }
+
+        if (joint_trajectory_action_active_)
+        {
+            publishJointTrajectoryFeedback();
+
+            if (trajectory_manager_.isCompleted())
+            {
+                refreshHoldPositions();
+                trajectory_manager_.reset();
+                interpolation_active_ = false;
+                has_target_ = false;
+                finishJointTrajectoryAction(true, false, "Joint trajectory completed successfully");
+            }
         }
 
         // In force control mode, calculate static torques
@@ -521,6 +563,7 @@ namespace arms_controller_common
         cartesian_manager_.clearPlanner();
         finishLinearAction(false, false, "StateMoveJ exited before MoveL trajectory completed");
         finishCircleAction(false, false, "StateMoveJ exited before MoveC trajectory completed");
+        finishJointTrajectoryAction(false, false, "StateMoveJ exited before joint trajectory completed");
 
         last_waist_factor_ = 0.0;
         last_waist_turning_factor_ = 0.0;
@@ -1707,6 +1750,81 @@ namespace arms_controller_common
                     full_service_name.c_str());
     }
 
+    void StateMoveJ::setupJointTrajectoryAction(const std::string& action_name)
+    {
+        std::string full_action_name = node_->get_name() + std::string("/") + action_name;
+
+        joint_trajectory_action_server_ = rclcpp_action::create_server<JointTrajectoryAction>(
+            node_,
+            full_action_name,
+            std::bind(&StateMoveJ::handleJointTrajectoryGoal, this, std::placeholders::_1, std::placeholders::_2),
+            std::bind(&StateMoveJ::handleJointTrajectoryCancel, this, std::placeholders::_1),
+            std::bind(&StateMoveJ::handleJointTrajectoryAccepted, this, std::placeholders::_1));
+
+        RCLCPP_INFO(node_->get_logger(), "Created joint trajectory action at %s",
+                    full_action_name.c_str());
+    }
+
+    rclcpp_action::GoalResponse StateMoveJ::handleJointTrajectoryGoal(
+        const rclcpp_action::GoalUUID& uuid,
+        std::shared_ptr<const JointTrajectoryAction::Goal> goal)
+    {
+        (void)uuid;
+        (void)goal;
+
+        std::lock_guard lock(target_mutex_);
+        if (!state_active_)
+        {
+            RCLCPP_WARN(node_->get_logger(), "Rejecting joint trajectory action goal: StateMoveJ is not active");
+            return rclcpp_action::GoalResponse::REJECT;
+        }
+        if (joint_trajectory_action_active_ || move_cartesian_active_ ||
+            linear_action_active_ || circle_action_active_)
+        {
+            RCLCPP_WARN(node_->get_logger(), "Rejecting joint trajectory action goal: another motion is active");
+            return rclcpp_action::GoalResponse::REJECT;
+        }
+        return rclcpp_action::GoalResponse::ACCEPT_AND_EXECUTE;
+    }
+
+    rclcpp_action::CancelResponse StateMoveJ::handleJointTrajectoryCancel(
+        const std::shared_ptr<JointTrajectoryGoalHandle> goal_handle)
+    {
+        (void)goal_handle;
+        return rclcpp_action::CancelResponse::ACCEPT;
+    }
+
+    void StateMoveJ::handleJointTrajectoryAccepted(
+        const std::shared_ptr<JointTrajectoryGoalHandle> goal_handle)
+    {
+        std::string message;
+        double planned_duration = 0.0;
+        {
+            std::lock_guard lock(target_mutex_);
+            if (!startJointTrajectoryRequest(goal_handle->get_goal()->joint_names,
+                                             goal_handle->get_goal()->waypoints,
+                                             message,
+                                             planned_duration))
+            {
+                auto result = std::make_shared<JointTrajectoryAction::Result>();
+                result->success = false;
+                result->message = message;
+                result->planned_duration = 0.0;
+                result->actual_duration = 0.0;
+                goal_handle->abort(result);
+                return;
+            }
+
+            active_joint_trajectory_goal_ = goal_handle;
+            joint_trajectory_action_start_time_ = node_->now();
+            joint_trajectory_planned_duration_ = planned_duration;
+            joint_trajectory_action_active_ = true;
+        }
+
+        publishJointTrajectoryFeedback();
+        RCLCPP_INFO(node_->get_logger(), "Joint trajectory action accepted: duration=%.3f", planned_duration);
+    }
+
     bool StateMoveJ::validateJointNames(
         const std::vector<std::string>& request_joint_names,
         std::string& error_msg)
@@ -1800,62 +1918,83 @@ namespace arms_controller_common
     {
         (void)request_header;
 
+        std::lock_guard lock(target_mutex_);
+        std::string message;
+        double planned_duration = 0.0;
+        if (!startJointTrajectoryRequest(request->joint_names, request->waypoints, message, planned_duration))
+        {
+            response->success = false;
+            response->message = message;
+            response->planned_duration = 0.0;
+            return;
+        }
+
+        response->success = true;
+        response->message = message;
+        response->planned_duration = planned_duration;
+    }
+
+    bool StateMoveJ::startJointTrajectoryRequest(
+        const std::vector<std::string>& request_joint_names,
+        const std::vector<arms_ros2_control_msgs::msg::JointWaypoint>& request_waypoints,
+        std::string& message,
+        double& planned_duration)
+    {
         // 1. 检查状态
         if (!state_active_)
         {
-            response->success = false;
-            response->message = "StateMoveJ is not active";
-            return;
+            message = "StateMoveJ is not active";
+            planned_duration = 0.0;
+            return false;
         }
 
         updateParam();
 
         // 2. 验证关节名称
         std::string error_msg;
-        if (!validateJointNames(request->joint_names, error_msg))
+        if (!validateJointNames(request_joint_names, error_msg))
         {
-            response->success = false;
-            response->message = error_msg;
-            return;
+            message = error_msg;
+            planned_duration = 0.0;
+            return false;
         }
 
         // 3. 检查waypoints
-        if (request->waypoints.empty())
+        if (request_waypoints.empty())
         {
-            response->success = false;
-            response->message = "No waypoints provided";
-            return;
+            message = "No waypoints provided";
+            planned_duration = 0.0;
+            return false;
         }
 
-        size_t num_joints = request->joint_names.size();
-        size_t num_waypoints = request->waypoints.size();
+        size_t num_joints = request_joint_names.size();
+        size_t num_waypoints = request_waypoints.size();
 
         // 4. 验证每个waypoint
         for (size_t i = 0; i < num_waypoints; i++)
         {
-            const auto& wp = request->waypoints[i];
+            const auto& wp = request_waypoints[i];
 
             if (wp.position.size() != num_joints)
             {
-                response->success = false;
-                response->message = "Waypoint " + std::to_string(i) +
+                message = "Waypoint " + std::to_string(i) +
                     " position size mismatch: expected " +
                     std::to_string(num_joints) + ", got " +
                     std::to_string(wp.position.size());
-                return;
+                planned_duration = 0.0;
+                return false;
             }
 
             if (!wp.velocity.empty() && wp.velocity.size() != num_joints)
             {
-                response->success = false;
-                response->message = "Waypoint " + std::to_string(i) +
-                    " velocity size mismatch";
-                return;
+                message = "Waypoint " + std::to_string(i) + " velocity size mismatch";
+                planned_duration = 0.0;
+                return false;
             }
         }
 
         // 5. 获取当前关节位置
-        std::vector<double> current_positions = getCurrentJointPositions(request->joint_names);
+        std::vector<double> current_positions = getCurrentJointPositions(request_joint_names);
 
         // 6. 根据waypoints数量处理
         if (num_waypoints == 1)
@@ -1863,19 +2002,18 @@ namespace arms_controller_common
             // ========== 单点目标运动 ==========
             if (trajectory_manager_.isDoublesAvailable() && interpolation_type_ == InterpolationType::DOUBLES)
             {
-                trajectory_manager_.planSingleTarget(current_positions, request->waypoints[0]);
+                trajectory_manager_.planSingleTarget(current_positions, request_waypoints[0]);
             }
             else
             {
-                setTargetPosition(request->waypoints[0].position);
+                setTargetPosition(request_waypoints[0].position);
             }
 
-            response->success = true;
-            response->message = "Single target motion accepted";
-            response->planned_duration = trajectory_manager_.getPlanningTime();
+            message = "Single target motion accepted";
+            planned_duration = trajectory_manager_.getPlanningTime();
             RCLCPP_INFO(node_->get_logger(),
                         "Joint trajectory service (single): %zu joints to target, duration=%.3f",
-                        num_joints, response->planned_duration);
+                        num_joints, planned_duration);
         }
         else if (num_waypoints >= 2)
         {
@@ -1884,7 +2022,7 @@ namespace arms_controller_common
             wps.reserve(num_waypoints);
             for (size_t i = 0; i < num_waypoints; i++)
             {
-                wps.push_back(request->waypoints[i]);
+                wps.push_back(request_waypoints[i]);
             }
             if (trajectory_manager_.isDoublesAvailable() && interpolation_type_ == InterpolationType::DOUBLES)
             {
@@ -1895,10 +2033,10 @@ namespace arms_controller_common
                 //如果没有linaplanning就用普通的
                 // 创建JointTrajectory消息（ROS2标准消息）
                 trajectory_msgs::msg::JointTrajectory trajectory_msg;
-                trajectory_msg.joint_names = request->joint_names;
+                trajectory_msg.joint_names = request_joint_names;
 
                 // 转换路点到标准消息格式
-                for (const auto& wp : request->waypoints)
+                for (const auto& wp : request_waypoints)
                 {
                     trajectory_msgs::msg::JointTrajectoryPoint point;
                     // 设置位置
@@ -1909,18 +2047,67 @@ namespace arms_controller_common
                 // 调用现有的setTrajectory方法
                 setTrajectory(trajectory_msg);
             }
-            response->success = true;
-            response->message = "Multi-point trajectory accepted";
-            response->planned_duration = trajectory_manager_.getPlanningTime();
+            message = "Multi-point trajectory accepted";
+            planned_duration = trajectory_manager_.getPlanningTime();
 
 
             RCLCPP_INFO(node_->get_logger(),
                         "Joint trajectory service (multi): %zu waypoints, %zu joints, total_time=%.3f",
-                        num_waypoints, num_joints, response->planned_duration);
+                        num_waypoints, num_joints, planned_duration);
 
             // 打印轨迹信息（调试用）
             RCLCPP_DEBUG(node_->get_logger(), "Trajectory with %zu waypoints", num_waypoints);
         }
+        return true;
+    }
+
+    void StateMoveJ::publishJointTrajectoryFeedback()
+    {
+        if (!active_joint_trajectory_goal_ || !joint_trajectory_action_active_)
+        {
+            return;
+        }
+
+        const double elapsed = std::max(0.0, (node_->now() - joint_trajectory_action_start_time_).seconds());
+        const double remaining = std::max(0.0, joint_trajectory_planned_duration_ - elapsed);
+        double progress = std::clamp(trajectory_manager_.getProgress(), 0.0, 1.0);
+
+        auto feedback = std::make_shared<JointTrajectoryAction::Feedback>();
+        feedback->progress = progress;
+        feedback->elapsed_time = elapsed;
+        feedback->remaining_time = remaining;
+        active_joint_trajectory_goal_->publish_feedback(feedback);
+    }
+
+    void StateMoveJ::finishJointTrajectoryAction(bool success, bool canceled, const std::string& message)
+    {
+        if (!active_joint_trajectory_goal_ || !joint_trajectory_action_active_)
+        {
+            return;
+        }
+
+        auto result = std::make_shared<JointTrajectoryAction::Result>();
+        result->success = success;
+        result->message = message;
+        result->planned_duration = joint_trajectory_planned_duration_;
+        result->actual_duration = std::max(0.0, (node_->now() - joint_trajectory_action_start_time_).seconds());
+
+        if (canceled)
+        {
+            active_joint_trajectory_goal_->canceled(result);
+        }
+        else if (success)
+        {
+            active_joint_trajectory_goal_->succeed(result);
+        }
+        else
+        {
+            active_joint_trajectory_goal_->abort(result);
+        }
+
+        active_joint_trajectory_goal_.reset();
+        joint_trajectory_action_active_ = false;
+        joint_trajectory_planned_duration_ = 0.0;
     }
 
     void StateMoveJ::setKinematicsSolver(const std::shared_ptr<ArmKinematics>& kinematics)

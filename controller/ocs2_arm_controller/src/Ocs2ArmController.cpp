@@ -276,7 +276,7 @@ namespace ocs2::mobile_manipulator
             {
                 state_list_.movej->updateJointLimitsFromURDF(msg->data);
             });
-        state_list_.movej->setupJointTrajectoryService("joint_trajectory_with_para");
+        state_list_.movej->setupJointTrajectoryAction("joint_trajectory_with_para");
         state_list_.movej->setupLinearTrajectoryAction("execute_linear");
         state_list_.movej->setupCircleTrajectoryAction("execute_circle_use_ik");
 
