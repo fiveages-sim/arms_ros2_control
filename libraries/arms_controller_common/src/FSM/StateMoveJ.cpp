@@ -54,6 +54,7 @@ namespace arms_controller_common
         last_waist_turning_factor_ = 0.0;
         if (node_)
         {
+            declareCartesianDefaultParameters();
             current_target_joint_publisher_ =
                 arms_controller_common::utils::getOrCreateCurrentTargetJointPublisher(node_);
         }
@@ -69,6 +70,131 @@ namespace arms_controller_common
         trajectory_manager_.setTrajectoryDuration(node_->get_parameter("movej_trajectory_duration").as_double());
         trajectory_manager_.setCommonJointBlendRatios(node_->get_parameter("movej_trajectory_blend_ratio").as_double());
         trajectory_manager_.setControllerFrequency(ctrl_interfaces_.frequency_);
+        updateCartesianDefaults();
+    }
+
+    void StateMoveJ::declareCartesianDefaultParameters()
+    {
+        auto declare_string = [this](const std::string& name, const std::string& default_value)
+        {
+            if (!node_->has_parameter(name))
+            {
+                node_->declare_parameter<std::string>(name, default_value);
+            }
+        };
+
+        auto declare_double = [this](const std::string& name, double default_value)
+        {
+            if (!node_->has_parameter(name))
+            {
+                node_->declare_parameter<double>(name, default_value);
+            }
+        };
+
+        declare_string("cartesian_defaults.frame_id", cartesian_defaults_.frame_id);
+        declare_string("cartesian_defaults.ik_type", cartesian_defaults_.ik_type);
+        declare_double("cartesian_defaults.max_linear_velocity", cartesian_defaults_.max_linear_velocity);
+        declare_double("cartesian_defaults.max_linear_acceleration", cartesian_defaults_.max_linear_acceleration);
+        declare_double("cartesian_defaults.max_linear_jerk", cartesian_defaults_.max_linear_jerk);
+        declare_double("cartesian_defaults.max_angular_velocity", cartesian_defaults_.max_angular_velocity);
+        declare_double("cartesian_defaults.max_angular_acceleration", cartesian_defaults_.max_angular_acceleration);
+        declare_double("cartesian_defaults.max_angular_jerk", cartesian_defaults_.max_angular_jerk);
+    }
+
+    void StateMoveJ::updateCartesianDefaults()
+    {
+        cartesian_defaults_.frame_id = node_->get_parameter("cartesian_defaults.frame_id").as_string();
+        cartesian_defaults_.ik_type = node_->get_parameter("cartesian_defaults.ik_type").as_string();
+        cartesian_defaults_.max_linear_velocity =
+            node_->get_parameter("cartesian_defaults.max_linear_velocity").as_double();
+        cartesian_defaults_.max_linear_acceleration =
+            node_->get_parameter("cartesian_defaults.max_linear_acceleration").as_double();
+        cartesian_defaults_.max_linear_jerk =
+            node_->get_parameter("cartesian_defaults.max_linear_jerk").as_double();
+        cartesian_defaults_.max_angular_velocity =
+            node_->get_parameter("cartesian_defaults.max_angular_velocity").as_double();
+        cartesian_defaults_.max_angular_acceleration =
+            node_->get_parameter("cartesian_defaults.max_angular_acceleration").as_double();
+        cartesian_defaults_.max_angular_jerk =
+            node_->get_parameter("cartesian_defaults.max_angular_jerk").as_double();
+    }
+
+    arms_ros2_control_msgs::msg::LinearMessage StateMoveJ::applyCartesianDefaults(
+        const arms_ros2_control_msgs::msg::LinearMessage& linear_params) const
+    {
+        auto params = linear_params;
+        if (params.frame_id.empty())
+        {
+            params.frame_id = cartesian_defaults_.frame_id;
+        }
+        if (params.ik_type.empty())
+        {
+            params.ik_type = cartesian_defaults_.ik_type;
+        }
+        if (params.max_linear_velocity <= 0.0)
+        {
+            params.max_linear_velocity = cartesian_defaults_.max_linear_velocity;
+        }
+        if (params.max_linear_acceleration <= 0.0)
+        {
+            params.max_linear_acceleration = cartesian_defaults_.max_linear_acceleration;
+        }
+        if (params.max_linear_jerk <= 0.0)
+        {
+            params.max_linear_jerk = cartesian_defaults_.max_linear_jerk;
+        }
+        if (params.max_angular_velocity <= 0.0)
+        {
+            params.max_angular_velocity = cartesian_defaults_.max_angular_velocity;
+        }
+        if (params.max_angular_acceleration <= 0.0)
+        {
+            params.max_angular_acceleration = cartesian_defaults_.max_angular_acceleration;
+        }
+        if (params.max_angular_jerk <= 0.0)
+        {
+            params.max_angular_jerk = cartesian_defaults_.max_angular_jerk;
+        }
+        return params;
+    }
+
+    arms_ros2_control_msgs::msg::CircleMessage StateMoveJ::applyCartesianDefaults(
+        const arms_ros2_control_msgs::msg::CircleMessage& circle_params) const
+    {
+        auto params = circle_params;
+        if (params.frame_id.empty())
+        {
+            params.frame_id = cartesian_defaults_.frame_id;
+        }
+        if (params.ik_type.empty())
+        {
+            params.ik_type = cartesian_defaults_.ik_type;
+        }
+        if (params.max_linear_velocity <= 0.0)
+        {
+            params.max_linear_velocity = cartesian_defaults_.max_linear_velocity;
+        }
+        if (params.max_linear_acceleration <= 0.0)
+        {
+            params.max_linear_acceleration = cartesian_defaults_.max_linear_acceleration;
+        }
+        if (params.max_linear_jerk <= 0.0)
+        {
+            params.max_linear_jerk = cartesian_defaults_.max_linear_jerk;
+        }
+        if (params.max_angular_velocity <= 0.0)
+        {
+            params.max_angular_velocity = cartesian_defaults_.max_angular_velocity;
+        }
+        if (params.max_angular_acceleration <= 0.0)
+        {
+            params.max_angular_acceleration = cartesian_defaults_.max_angular_acceleration;
+        }
+        if (params.max_angular_jerk <= 0.0)
+        {
+            params.max_angular_jerk = cartesian_defaults_.max_angular_jerk;
+        }
+        return params;
     }
 
     void StateMoveJ::enter()
@@ -2293,10 +2419,11 @@ namespace arms_controller_common
         }
 
         updateParam();
+        const auto resolved_linear_params = applyCartesianDefaults(linear_params);
 
         // 2. 验证请求参数
         std::string error_msg;
-        if (!validateLinearRequest(linear_params, error_msg))
+        if (!validateLinearRequest(resolved_linear_params, error_msg))
         {
             message = error_msg;
             estimated_duration = 0.0;
@@ -2314,7 +2441,7 @@ namespace arms_controller_common
         std::vector<double> current_joint_positions = getCurrentJointPositions(move_cartesian_joint_names_);
         if (current_joint_positions.empty())
         {
-            message = "Failed to get current joint positions for " + linear_params.arm_name + " arm";
+            message = "Failed to get current joint positions for " + resolved_linear_params.arm_name + " arm";
             estimated_duration = 0.0;
             return false;
         }
@@ -2322,10 +2449,10 @@ namespace arms_controller_common
         // 4. 规划 MoveL 轨迹
         double period = 1.0 / ctrl_interfaces_.frequency_;
 
-        const bool dual_arm = (linear_params.arm_name == "both");
+        const bool dual_arm = (resolved_linear_params.arm_name == "both");
         const bool plan_success = dual_arm ?
-            cartesian_manager_.planDualArmMoveL(current_joint_positions, linear_params, period) :
-            cartesian_manager_.planSingleArmMoveL(current_joint_positions, linear_params, period);
+            cartesian_manager_.planDualArmMoveL(current_joint_positions, resolved_linear_params, period) :
+            cartesian_manager_.planSingleArmMoveL(current_joint_positions, resolved_linear_params, period);
         if (!plan_success)
         {
             message = cartesian_manager_.getLastError();
@@ -2349,7 +2476,7 @@ namespace arms_controller_common
         estimated_duration = cartesian_manager_.getPlanningTime();
         RCLCPP_INFO(node_->get_logger(),
                     "Linear trajectory service: planned MoveL for arm '%s', duration=%.3f",
-                    linear_params.arm_name.c_str(),
+                    resolved_linear_params.arm_name.c_str(),
                     estimated_duration);
         return true;
     }
@@ -2458,6 +2585,12 @@ namespace arms_controller_common
                 return false;
             }
 
+            if (linear_params.max_linear_jerk <= 0.0)
+            {
+                error_msg = "max_linear_jerk must be > 0 in constraint mode";
+                return false;
+            }
+
             if (linear_params.max_angular_velocity <= 0.0)
             {
                 error_msg = "max_angular_velocity must be > 0 in constraint mode";
@@ -2467,6 +2600,12 @@ namespace arms_controller_common
             if (linear_params.max_angular_acceleration <= 0.0)
             {
                 error_msg = "max_angular_acceleration must be > 0 in constraint mode";
+                return false;
+            }
+
+            if (linear_params.max_angular_jerk <= 0.0)
+            {
+                error_msg = "max_angular_jerk must be > 0 in constraint mode";
                 return false;
             }
         }
@@ -2665,10 +2804,11 @@ namespace arms_controller_common
         }
 
         updateParam();
+        const auto resolved_circle_params = applyCartesianDefaults(circle_params);
 
         // 2. 验证请求参数
         std::string error_msg;
-        if (!validateCircleRequest(circle_params, error_msg))
+        if (!validateCircleRequest(resolved_circle_params, error_msg))
         {
             message = error_msg;
             estimated_duration = 0.0;
@@ -2686,7 +2826,7 @@ namespace arms_controller_common
         std::vector<double> current_joint_positions = getCurrentJointPositions(move_cartesian_joint_names_);
         if (current_joint_positions.empty())
         {
-            message = "Failed to get current joint positions for " + circle_params.arm_name + " arm";
+            message = "Failed to get current joint positions for " + resolved_circle_params.arm_name + " arm";
             estimated_duration = 0.0;
             return false;
         }
@@ -2694,10 +2834,10 @@ namespace arms_controller_common
         // 4. 规划 MoveC 轨迹
         double period = 1.0 / ctrl_interfaces_.frequency_;
 
-        const bool dual_arm = (circle_params.arm_name == "both");
+        const bool dual_arm = (resolved_circle_params.arm_name == "both");
         const bool plan_success = dual_arm ?
-            cartesian_manager_.planDualArmMoveC(current_joint_positions, circle_params, period) :
-            cartesian_manager_.planSingleArmMoveC(current_joint_positions, circle_params, period);
+            cartesian_manager_.planDualArmMoveC(current_joint_positions, resolved_circle_params, period) :
+            cartesian_manager_.planSingleArmMoveC(current_joint_positions, resolved_circle_params, period);
         if (!plan_success)
         {
             message = cartesian_manager_.getLastError();
@@ -2721,7 +2861,7 @@ namespace arms_controller_common
         estimated_duration = cartesian_manager_.getPlanningTime();
         RCLCPP_INFO(node_->get_logger(),
                     "Circle trajectory service: planned MoveC for arm '%s', duration=%.3f",
-                    circle_params.arm_name.c_str(),
+                    resolved_circle_params.arm_name.c_str(),
                     estimated_duration);
         return true;
     }
@@ -2830,6 +2970,12 @@ namespace arms_controller_common
                 return false;
             }
 
+            if (circle_params.max_linear_jerk <= 0.0)
+            {
+                error_msg = "max_linear_jerk must be > 0 in constraint mode";
+                return false;
+            }
+
             if (circle_params.max_angular_velocity <= 0.0)
             {
                 error_msg = "max_angular_velocity must be > 0 in constraint mode";
@@ -2839,6 +2985,12 @@ namespace arms_controller_common
             if (circle_params.max_angular_acceleration <= 0.0)
             {
                 error_msg = "max_angular_acceleration must be > 0 in constraint mode";
+                return false;
+            }
+
+            if (circle_params.max_angular_jerk <= 0.0)
+            {
+                error_msg = "max_angular_jerk must be > 0 in constraint mode";
                 return false;
             }
         }
