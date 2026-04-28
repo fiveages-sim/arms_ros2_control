@@ -90,9 +90,6 @@ namespace arms_controller_common
                            std::unique_ptr<planning::CircularCurver>& planner,
                            Eigen::VectorXd& current_joint_pos,
                            std::vector<double>& result);
-        bool save_data_ = false;
-        void savedata(const std::string &filepath, const planning::TrajectPoint &point,
-                      const Eigen::VectorXd &joint_angle);
         double min_val = 1.0e-6;
         rclcpp::Logger logger_;
     };

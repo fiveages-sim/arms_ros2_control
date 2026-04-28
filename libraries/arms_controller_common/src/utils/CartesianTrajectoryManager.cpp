@@ -11,7 +11,6 @@ namespace arms_controller_common
     CartesianTrajectoryManager::CartesianTrajectoryManager()
         : logger_(rclcpp::get_logger("cartesian_trajectory_manager"))
     {
-        save_data_ = false;
     }
 
     CartesianTrajectoryManager::~CartesianTrajectoryManager() = default;
@@ -880,42 +879,4 @@ namespace arms_controller_common
         }
     }
 
-    void CartesianTrajectoryManager::savedata(const std::string& filepath, const planning::TrajectPoint& point,
-                                              const Eigen::VectorXd& joint_angle)
-    {
-        // 检查文件是否存在
-        bool file_exists = false;
-        std::ifstream infile(filepath);
-        if (infile.good())
-        {
-            file_exists = true;
-        }
-        infile.close();
-
-        // 以追加模式打开文件（如果文件不存在会自动创建）
-        std::ofstream outfile;
-        outfile.open(filepath, std::ios::out | std::ios::app);
-
-        if (!outfile.is_open())
-        {
-            std::cerr << "错误：无法打开文件 " << filepath << std::endl;
-            return;
-        }
-
-        // 如果文件不存在（刚创建的空文件），则写入表头
-        if (!file_exists)
-        {
-            // 假设关节数量固定为7个（人形机械臂常见自由度）
-            // 您可以根据实际关节数量修改这里的表头
-            outfile << "time" << "," << "x" << "," << "y" << "," << "z" << "," << "qw" << "," << "qx" << "," << "qy" <<
-                "," << "qz" << "," << "joint0" << "," << "joint1" << "," << "joint2" << "," << "joint3" << "," <<
-                "joint4" << "," << "joint5" << "," << "joint6" << std::endl;
-        }
-        outfile << point.time << "," << point.cart_pos(0) << "," << point.cart_pos(1) << "," << point.cart_pos(2) << ","
-            << point.quaternion_point.q.w << "," << point.quaternion_point.q.x << "," << point.quaternion_point.q.y <<
-            "," << point.quaternion_point.q.z << "," << joint_angle(0) << "," << joint_angle(1) << "," << joint_angle(2)
-            << "," << joint_angle(3) << "," <<
-            joint_angle(4) << "," << joint_angle(5) << "," << joint_angle(6) << std::endl;
-        outfile.close();
-    }
 } // namespace arms_controller_common
