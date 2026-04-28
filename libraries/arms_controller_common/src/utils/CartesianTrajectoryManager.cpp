@@ -28,6 +28,10 @@ namespace arms_controller_common
         const double period)
     {
         last_error_.clear();
+        completed_ = false;
+        dual_arm_mode_ = false;
+        left_arm_active_ = false;
+        right_arm_active_ = false;
         if (!arm_kinematics_)
         {
             last_error_ = "kinematics is not set";
@@ -53,26 +57,20 @@ namespace arms_controller_common
             std::cout << last_error_ << std::endl;
             return false;
         }
-        if (!movel_planner_)
-        {
-            movel_planner_ = std::make_unique<planning::moveL>();
-        }
-
-        current_joint_pos_ = Eigen::Map<const Eigen::VectorXd>(
+        Eigen::VectorXd current_joint_pos = Eigen::Map<const Eigen::VectorXd>(
             start_joint_pos.data(), start_joint_pos.size());
 
         EndEffectorPose start_pose =
             arm_kinematics_->computeSingleEndEffectorPose(js, arm_type_);
 
-        // 初始化movel_planner_
-        movel_planner_ = std::make_unique<planning::moveL>();
+        std::unique_ptr<planning::moveL> planner = std::make_unique<planning::moveL>();
         planning::TrajectPoint ps = setCartesianPoint(start_pose);
 
         planning::TrajectPoint pe = setCartesianPoint(target_point_msg.endpoint);
 
         planning::TrajectoryParameter para = setCartesianParameter(target_point_msg);
         planning::TrajectoryInitParameters init_para(ps, pe, para, period);
-        if (!movel_planner_->init(init_para))
+        if (!planner->init(init_para))
         {
             last_error_ = "Failed to initialize moveL planner";
             std::cout << last_error_ << std::endl;
@@ -98,9 +96,27 @@ namespace arms_controller_common
             std::cout << "Auto is set" << std::endl;
         }
         arm_kinematics_->setSolverType(ik_tp);
-        movel_planner_->setRealStartTime(0.0);
-        planningTime_ = movel_planner_->getTotalTime();
+        planner->setRealStartTime(0.0);
+        planningTime_ = planner->getTotalTime();
         path_type_ = PathType::LINE;
+        if (arm_type_ == "left")
+        {
+            left_movel_planner_ = std::move(planner);
+            left_current_joint_pos_ = current_joint_pos;
+            right_movel_planner_.reset();
+            right_current_joint_pos_.resize(0);
+            left_arm_active_ = true;
+            right_arm_active_ = false;
+        }
+        else
+        {
+            right_movel_planner_ = std::move(planner);
+            right_current_joint_pos_ = current_joint_pos;
+            left_movel_planner_.reset();
+            left_current_joint_pos_.resize(0);
+            left_arm_active_ = false;
+            right_arm_active_ = true;
+        }
         return true;
     }
 
@@ -109,21 +125,23 @@ namespace arms_controller_common
         const arms_ros2_control_msgs::msg::CircleMessage& target_circle_msg,
         const double period)
     {
+        last_error_.clear();
+        completed_ = false;
+        dual_arm_mode_ = false;
+        left_arm_active_ = false;
+        right_arm_active_ = false;
         if (!arm_kinematics_)
         {
-            std::cout << "kinematics is not set" << std::endl;
+            last_error_ = "kinematics is not set";
+            std::cout << last_error_ << std::endl;
             return false;
         }
         std::string error_msg;
         if (!validateCircleMsg(target_circle_msg, error_msg))
         {
-            std::cout << error_msg << std::endl;
+            last_error_ = error_msg;
+            std::cout << last_error_ << std::endl;
             return false;
-        }
-
-        if (!movec_planner_)
-        {
-            movec_planner_ = std::make_unique<planning::CircularCurver>();
         }
 
         arm_type_ = target_circle_msg.arm_name;
@@ -141,10 +159,11 @@ namespace arms_controller_common
         }
         else
         {
-            std::cout << "invalid arm type: " << arm_type_ << std::endl;
+            last_error_ = "invalid arm type: " + arm_type_;
+            std::cout << last_error_ << std::endl;
             return false;
         }
-        current_joint_pos_ = Eigen::Map<const Eigen::VectorXd>(
+        Eigen::VectorXd current_joint_pos = Eigen::Map<const Eigen::VectorXd>(
             start_joint_pos.data(), start_joint_pos.size());
 
         EndEffectorPose start_pose =
@@ -157,11 +176,14 @@ namespace arms_controller_common
 
         planning::TrajectoryParameter para = setCartesianParameter(target_circle_msg);
 
+        std::unique_ptr<planning::CircularCurver> planner = std::make_unique<planning::CircularCurver>();
+
         if (!target_circle_msg.use_three_point_method)
         {
             planning::TrajectoryInitParameters init_para(ps, pe, para, period);
-            if (!movec_planner_->init(init_para))
+            if (!planner->init(init_para))
             {
+                last_error_ = "Failed to initialize MoveC planner";
                 return false;
             }
         }
@@ -169,8 +191,9 @@ namespace arms_controller_common
         {
             planning::TrajectPoint pm = setCartesianPoint(target_circle_msg.midpoint);
             planning::TrajectoryInitParameters init_para(ps, pm, pe, para, period);
-            if (!movec_planner_->init(init_para))
+            if (!planner->init(init_para))
             {
+                last_error_ = "Failed to initialize MoveC planner";
                 return false;
             }
         }
@@ -191,143 +214,238 @@ namespace arms_controller_common
         }
 
         arm_kinematics_->setSolverType(ik_tp);
-        movec_planner_->setRealStartTime(period);
-        planningTime_ = movec_planner_->getTotalTime();
+        planner->setRealStartTime(period);
+        planningTime_ = planner->getTotalTime();
         path_type_ = PathType::CIRCLE;
+        if (arm_type_ == "left")
+        {
+            left_movec_planner_ = std::move(planner);
+            left_current_joint_pos_ = current_joint_pos;
+            right_movec_planner_.reset();
+            right_current_joint_pos_.resize(0);
+            left_arm_active_ = true;
+            right_arm_active_ = false;
+        }
+        else
+        {
+            right_movec_planner_ = std::move(planner);
+            right_current_joint_pos_ = current_joint_pos;
+            left_movec_planner_.reset();
+            left_current_joint_pos_.resize(0);
+            left_arm_active_ = false;
+            right_arm_active_ = true;
+        }
+        return true;
+    }
+
+    bool CartesianTrajectoryManager::planDualArmMoveL(
+        const std::vector<double>& start_joint_pos,
+        const arms_ros2_control_msgs::msg::LinearMessage& target_point_msg,
+        const double period)
+    {
+        last_error_.clear();
+        completed_ = false;
+        dual_arm_mode_ = true;
+        left_arm_active_ = true;
+        right_arm_active_ = true;
+
+        if (!arm_kinematics_)
+        {
+            last_error_ = "kinematics is not set";
+            return false;
+        }
+
+        const size_t left_count = arm_kinematics_->getLeftArmJointCount();
+        const size_t right_count = arm_kinematics_->getRightArmJointCount();
+        if (start_joint_pos.size() != left_count + right_count)
+        {
+            last_error_ = "Dual-arm MoveL requires " + std::to_string(left_count + right_count) +
+                          " start joints, got " + std::to_string(start_joint_pos.size());
+            return false;
+        }
+
+        arms_ros2_control_msgs::msg::LinearMessage left_msg = target_point_msg;
+        left_msg.arm_name = "left";
+        arms_ros2_control_msgs::msg::LinearMessage right_msg = target_point_msg;
+        right_msg.arm_name = "right";
+        right_msg.endpoint = target_point_msg.right_endpoint;
+
+        std::vector<double> left_start(start_joint_pos.begin(), start_joint_pos.begin() + left_count);
+        std::vector<double> right_start(start_joint_pos.begin() + left_count, start_joint_pos.end());
+
+        if (!planSingleArmMoveL(left_start, left_msg, period))
+        {
+            dual_arm_mode_ = false;
+            return false;
+        }
+
+        const double left_time = planningTime_;
+        auto left_planner = std::move(left_movel_planner_);
+        auto left_joint_pos = left_current_joint_pos_;
+
+        if (!planSingleArmMoveL(right_start, right_msg, period))
+        {
+            dual_arm_mode_ = false;
+            left_movel_planner_.reset();
+            left_current_joint_pos_.resize(0);
+            return false;
+        }
+
+        const double right_time = planningTime_;
+        auto right_planner = std::move(right_movel_planner_);
+        auto right_joint_pos = right_current_joint_pos_;
+
+        left_movel_planner_ = std::move(left_planner);
+        left_current_joint_pos_ = left_joint_pos;
+        right_movel_planner_ = std::move(right_planner);
+        right_current_joint_pos_ = right_joint_pos;
+        path_type_ = PathType::LINE;
+        planningTime_ = std::max(left_time, right_time);
+        arm_type_ = "both";
+        dual_arm_mode_ = true;
+        left_arm_active_ = true;
+        right_arm_active_ = true;
+        completed_ = false;
+        return true;
+    }
+
+    bool CartesianTrajectoryManager::planDualArmMoveC(
+        const std::vector<double>& start_joint_pos,
+        const arms_ros2_control_msgs::msg::CircleMessage& target_circle_msg,
+        const double period)
+    {
+        last_error_.clear();
+        completed_ = false;
+        dual_arm_mode_ = true;
+        left_arm_active_ = true;
+        right_arm_active_ = true;
+
+        if (!arm_kinematics_)
+        {
+            last_error_ = "kinematics is not set";
+            return false;
+        }
+
+        const size_t left_count = arm_kinematics_->getLeftArmJointCount();
+        const size_t right_count = arm_kinematics_->getRightArmJointCount();
+        if (start_joint_pos.size() != left_count + right_count)
+        {
+            last_error_ = "Dual-arm MoveC requires " + std::to_string(left_count + right_count) +
+                          " start joints, got " + std::to_string(start_joint_pos.size());
+            return false;
+        }
+
+        arms_ros2_control_msgs::msg::CircleMessage left_msg = target_circle_msg;
+        left_msg.arm_name = "left";
+        arms_ros2_control_msgs::msg::CircleMessage right_msg = target_circle_msg;
+        right_msg.arm_name = "right";
+        right_msg.midpoint = target_circle_msg.right_midpoint;
+        right_msg.endpoint = target_circle_msg.right_endpoint;
+        right_msg.center = target_circle_msg.right_center;
+        right_msg.axis = target_circle_msg.right_axis;
+        right_msg.rotate_angle = target_circle_msg.right_rotate_angle;
+
+        std::vector<double> left_start(start_joint_pos.begin(), start_joint_pos.begin() + left_count);
+        std::vector<double> right_start(start_joint_pos.begin() + left_count, start_joint_pos.end());
+
+        if (!planSingleArmMoveC(left_start, left_msg, period))
+        {
+            dual_arm_mode_ = false;
+            return false;
+        }
+
+        const double left_time = planningTime_;
+        auto left_planner = std::move(left_movec_planner_);
+        auto left_joint_pos = left_current_joint_pos_;
+
+        if (!planSingleArmMoveC(right_start, right_msg, period))
+        {
+            dual_arm_mode_ = false;
+            left_movec_planner_.reset();
+            left_current_joint_pos_.resize(0);
+            return false;
+        }
+
+        const double right_time = planningTime_;
+        auto right_planner = std::move(right_movec_planner_);
+        auto right_joint_pos = right_current_joint_pos_;
+
+        left_movec_planner_ = std::move(left_planner);
+        left_current_joint_pos_ = left_joint_pos;
+        right_movec_planner_ = std::move(right_planner);
+        right_current_joint_pos_ = right_joint_pos;
+        path_type_ = PathType::CIRCLE;
+        planningTime_ = std::max(left_time, right_time);
+        arm_type_ = "both";
+        dual_arm_mode_ = true;
+        left_arm_active_ = true;
+        right_arm_active_ = true;
+        completed_ = false;
         return true;
     }
 
     bool CartesianTrajectoryManager::getNextJointPos(std::vector<double>& res)
     {
         last_error_.clear();
-        if (movel_planner_&& path_type_==PathType::LINE)
+        if (dual_arm_mode_ && path_type_ == PathType::LINE)
         {
-            planning::TrajectPoint movel_point = movel_planner_->run();
-            if (movel_planner_->isMotionOver())
+            std::vector<double> left_res;
+            std::vector<double> right_res;
+            if (left_arm_active_ && !stepLineArm("left", left_movel_planner_, left_current_joint_pos_, left_res))
             {
-                completed_ = true;
-            }
-
-            EndEffectorPose pose;
-            pose.position = movel_point.cart_pos;
-            Eigen::Quaterniond q(
-                movel_point.quaternion_point.q.w, movel_point.quaternion_point.q.x,
-                movel_point.quaternion_point.q.y, movel_point.quaternion_point.q.z);
-            pose.setQuaternion(q);
-            Eigen::VectorXd solution;
-            ArmKinematics::SolutionInfo info;
-            if (!arm_kinematics_->solveSingleArmIKWithInfo(
-                    pose, current_joint_pos_, solution, info, arm_type_, 50))
-            {
-                std::ostringstream oss;
-                oss << "IK failed while calculating MoveL joint position for " << arm_type_
-                    << " arm: solver="
-                    << ArmKinematics::solverTypeName(info.usedSolver)
-                    << ", status=" << info.status
-                    << ", final_error=" << info.poseErrorNorm
-                    << ", target_position=[" << pose.position[0] << ", "
-                    << pose.position[1] << ", " << pose.position[2] << "]"
-                    << ", target_quaternion=[" << pose.quaternion.x() << ", "
-                    << pose.quaternion.y() << ", " << pose.quaternion.z() << ", "
-                    << pose.quaternion.w() << "]";
-                last_error_ = oss.str();
-                RCLCPP_ERROR(logger_, "%s", last_error_.c_str());
                 return false;
             }
-            //增加安全检查，为了避免求出的逆解不是一个合适的构型，距离当前解的构型较远，这里增加检查，如果求出的逆解距离当前解很远就返回false
-            // Eigen::VectorXd delta_joint = solution - current_joint_pos_;
-
-            // for (int i = 0; i < delta_joint.size(); ++i)
-            // {
-            //     if (fabs(delta_joint(i)) > 0.05)
-            //     {
-            //         std::cerr << "The inverse solution position is too far from the current point" << std::endl;
-            //         return false;
-            //     }
-            // }
-            // 更新当前关节角度
-            current_joint_pos_ = solution;
-            //存储一下数据
-            if (save_data_)
+            if (right_arm_active_ && !stepLineArm("right", right_movel_planner_, right_current_joint_pos_, right_res))
             {
-                std::string file_name = "/home/lina/lina/data/movel_data.csv";
-                savedata(file_name, movel_point, solution);
+                return false;
             }
-
             res.clear();
-            for (size_t i = 0; i < static_cast<size_t>(solution.size()); i++)
-            {
-                res.push_back(current_joint_pos_(i));
-            }
+            res.insert(res.end(), left_res.begin(), left_res.end());
+            res.insert(res.end(), right_res.begin(), right_res.end());
+            const bool left_done = !left_arm_active_ || !left_movel_planner_ || left_movel_planner_->isMotionOver();
+            const bool right_done = !right_arm_active_ || !right_movel_planner_ || right_movel_planner_->isMotionOver();
+            completed_ = left_done && right_done;
             return true;
         }
-        else
-        if (movec_planner_&& path_type_
-        ==
-        PathType::CIRCLE
-        )
+        else if (dual_arm_mode_ && path_type_ == PathType::CIRCLE)
         {
-            planning::TrajectPoint movec_point = movec_planner_->run();
-            if (movec_planner_->isMotionOver())
+            std::vector<double> left_res;
+            std::vector<double> right_res;
+            if (left_arm_active_ && !stepCircleArm("left", left_movec_planner_, left_current_joint_pos_, left_res))
             {
-                completed_ = true;
-            }
-
-            EndEffectorPose pose;
-            pose.position = movec_point.cart_pos;
-            Eigen::Quaterniond q(
-                movec_point.quaternion_point.q.w, movec_point.quaternion_point.q.x,
-                movec_point.quaternion_point.q.y, movec_point.quaternion_point.q.z);
-            pose.setQuaternion(q);
-            Eigen::VectorXd solution;
-            ArmKinematics::SolutionInfo info;
-            if (!arm_kinematics_->solveSingleArmIKWithInfo(
-                    pose, current_joint_pos_, solution, info, arm_type_, 50, 1e-4))
-            {
-                std::ostringstream oss;
-                oss << "IK failed while calculating MoveC joint position for " << arm_type_
-                    << " arm: solver="
-                    << ArmKinematics::solverTypeName(info.usedSolver)
-                    << ", status=" << info.status
-                    << ", final_error=" << info.poseErrorNorm
-                    << ", target_position=[" << pose.position[0] << ", "
-                    << pose.position[1] << ", " << pose.position[2] << "]"
-                    << ", target_quaternion=[" << pose.quaternion.x() << ", "
-                    << pose.quaternion.y() << ", " << pose.quaternion.z() << ", "
-                    << pose.quaternion.w() << "]";
-                last_error_ = oss.str();
-                RCLCPP_ERROR(logger_, "%s", last_error_.c_str());
                 return false;
             }
-            //增加安全检查，为了避免求出的逆解不是一个合适的构型，距离当前解的构型较远，这里增加检查，如果求出的逆解距离当前解很远就返回false
-            // Eigen::VectorXd delta_joint = solution - current_joint_pos_;
-
-            // for (int i = 0; i < delta_joint.size(); ++i)
-            // {
-            //     if (fabs(delta_joint(i)) > 0.05)
-            //     {
-            //         std::cerr << "The inverse solution position is too far from the current point" << std::endl;
-            //         return false;
-            //     }
-            // }
-            if (save_data_)
+            if (right_arm_active_ && !stepCircleArm("right", right_movec_planner_, right_current_joint_pos_, right_res))
             {
-                std::string file_name = "/home/lina/lina/data/movec_data.csv";
-                savedata(file_name, movec_point, solution);
+                return false;
             }
-
-
-            // 更新当前关节角度
-            current_joint_pos_ = solution;
             res.clear();
-            for (size_t i = 0; i < static_cast<size_t>(solution.size()); i++)
-            {
-                res.push_back(current_joint_pos_(i));
-            }
+            res.insert(res.end(), left_res.begin(), left_res.end());
+            res.insert(res.end(), right_res.begin(), right_res.end());
+            const bool left_done = !left_arm_active_ || !left_movec_planner_ || left_movec_planner_->isMotionOver();
+            const bool right_done = !right_arm_active_ || !right_movec_planner_ || right_movec_planner_->isMotionOver();
+            completed_ = left_done && right_done;
             return true;
+        }
+        else if (left_movel_planner_ && path_type_ == PathType::LINE && left_arm_active_)
+        {
+            return stepLineArm("left", left_movel_planner_, left_current_joint_pos_, res);
+        }
+        else if (right_movel_planner_ && path_type_ == PathType::LINE && right_arm_active_)
+        {
+            return stepLineArm("right", right_movel_planner_, right_current_joint_pos_, res);
+        }
+        else if (left_movec_planner_ && path_type_ == PathType::CIRCLE && left_arm_active_)
+        {
+            return stepCircleArm("left", left_movec_planner_, left_current_joint_pos_, res);
+        }
+        else if (right_movec_planner_ && path_type_ == PathType::CIRCLE && right_arm_active_)
+        {
+            return stepCircleArm("right", right_movec_planner_, right_current_joint_pos_, res);
         }
         else
         {
+            last_error_ = "moveL planner or moveC planner not initialized for DOUBLES interpolation";
             RCLCPP_ERROR(logger_, "moveL planner or moveC planner not initialized for "
                          "DOUBLES interpolation");
             return false;
@@ -350,6 +468,13 @@ namespace arms_controller_common
         {
             return arm_kinematics_->getRightArmJointNames();
         }
+        else if (arm_name == "both")
+        {
+            auto left_names = arm_kinematics_->getLeftArmJointNames();
+            auto right_names = arm_kinematics_->getRightArmJointNames();
+            left_names.insert(left_names.end(), right_names.begin(), right_names.end());
+            return left_names;
+        }
         else
         {
             std::cout << "invalid arm name: " << arm_name << std::endl;
@@ -359,10 +484,140 @@ namespace arms_controller_common
 
     void CartesianTrajectoryManager::clearPlanner()
     {
-        movel_planner_.reset();
-        movec_planner_.reset();
+        left_movel_planner_.reset();
+        right_movel_planner_.reset();
+        left_movec_planner_.reset();
+        right_movec_planner_.reset();
+        left_current_joint_pos_.resize(0);
+        right_current_joint_pos_.resize(0);
+        dual_arm_mode_ = false;
+        left_arm_active_ = false;
+        right_arm_active_ = false;
         completed_ = false;
         last_error_.clear();
+    }
+
+    bool CartesianTrajectoryManager::validatePose(
+        const geometry_msgs::msg::Pose& pose,
+        const std::string& pose_name,
+        std::string& error_message) const
+    {
+        if (std::isnan(pose.position.x) || std::isnan(pose.position.y) || std::isnan(pose.position.z))
+        {
+            error_message = pose_name + " position contains NaN values";
+            return false;
+        }
+
+        const double qx = pose.orientation.x;
+        const double qy = pose.orientation.y;
+        const double qz = pose.orientation.z;
+        const double qw = pose.orientation.w;
+        if (std::isnan(qx) || std::isnan(qy) || std::isnan(qz) || std::isnan(qw))
+        {
+            error_message = pose_name + " orientation contains NaN values";
+            return false;
+        }
+        return true;
+    }
+
+    bool CartesianTrajectoryManager::stepLineArm(
+        const std::string& arm_name,
+        std::unique_ptr<planning::moveL>& planner,
+        Eigen::VectorXd& current_joint_pos,
+        std::vector<double>& result)
+    {
+        if (!planner)
+        {
+            last_error_ = "MoveL planner is not initialized for " + arm_name + " arm";
+            return false;
+        }
+
+        if (planner->isMotionOver())
+        {
+            result.assign(current_joint_pos.data(), current_joint_pos.data() + current_joint_pos.size());
+            return true;
+        }
+
+        planning::TrajectPoint movel_point = planner->run();
+        EndEffectorPose pose;
+        pose.position = movel_point.cart_pos;
+        Eigen::Quaterniond q(
+            movel_point.quaternion_point.q.w, movel_point.quaternion_point.q.x,
+            movel_point.quaternion_point.q.y, movel_point.quaternion_point.q.z);
+        pose.setQuaternion(q);
+
+        Eigen::VectorXd solution;
+        ArmKinematics::SolutionInfo info;
+        if (!arm_kinematics_->solveSingleArmIKWithInfo(
+                pose, current_joint_pos, solution, info, arm_name, 50))
+        {
+            std::ostringstream oss;
+            oss << "IK failed while calculating MoveL joint position for " << arm_name
+                << " arm: solver=" << ArmKinematics::solverTypeName(info.usedSolver)
+                << ", status=" << info.status
+                << ", final_error=" << info.poseErrorNorm;
+            last_error_ = oss.str();
+            RCLCPP_ERROR(logger_, "%s", last_error_.c_str());
+            return false;
+        }
+
+        current_joint_pos = solution;
+        result.assign(solution.data(), solution.data() + solution.size());
+        if (planner->isMotionOver())
+        {
+            completed_ = !dual_arm_mode_;
+        }
+        return true;
+    }
+
+    bool CartesianTrajectoryManager::stepCircleArm(
+        const std::string& arm_name,
+        std::unique_ptr<planning::CircularCurver>& planner,
+        Eigen::VectorXd& current_joint_pos,
+        std::vector<double>& result)
+    {
+        if (!planner)
+        {
+            last_error_ = "MoveC planner is not initialized for " + arm_name + " arm";
+            return false;
+        }
+
+        if (planner->isMotionOver())
+        {
+            result.assign(current_joint_pos.data(), current_joint_pos.data() + current_joint_pos.size());
+            return true;
+        }
+
+        planning::TrajectPoint movec_point = planner->run();
+        EndEffectorPose pose;
+        pose.position = movec_point.cart_pos;
+        Eigen::Quaterniond q(
+            movec_point.quaternion_point.q.w, movec_point.quaternion_point.q.x,
+            movec_point.quaternion_point.q.y, movec_point.quaternion_point.q.z);
+        pose.setQuaternion(q);
+
+        Eigen::VectorXd solution;
+        ArmKinematics::SolutionInfo info;
+        if (!arm_kinematics_->solveSingleArmIKWithInfo(
+                pose, current_joint_pos, solution, info, arm_name, 50, 1e-4))
+        {
+            std::ostringstream oss;
+            oss << "IK failed while calculating MoveC joint position for " << arm_name
+                << " arm: solver=" << ArmKinematics::solverTypeName(info.usedSolver)
+                << ", status=" << info.status
+                << ", final_error=" << info.poseErrorNorm;
+            last_error_ = oss.str();
+            RCLCPP_ERROR(logger_, "%s", last_error_.c_str());
+            return false;
+        }
+
+        current_joint_pos = solution;
+        result.assign(solution.data(), solution.data() + solution.size());
+        if (planner->isMotionOver())
+        {
+            completed_ = !dual_arm_mode_;
+        }
+        return true;
     }
 
     bool CartesianTrajectoryManager::validateCircleMsg(

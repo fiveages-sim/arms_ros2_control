@@ -2078,9 +2078,11 @@ namespace arms_controller_common
         // 4. 规划 MoveL 轨迹
         double period = 1.0 / ctrl_interfaces_.frequency_;
 
-        if (!cartesian_manager_.planSingleArmMoveL(current_joint_positions,
-                                                   linear_params,
-                                                   period))
+        const bool dual_arm = (linear_params.arm_name == "both");
+        const bool plan_success = dual_arm ?
+            cartesian_manager_.planDualArmMoveL(current_joint_positions, linear_params, period) :
+            cartesian_manager_.planSingleArmMoveL(current_joint_positions, linear_params, period);
+        if (!plan_success)
         {
             message = cartesian_manager_.getLastError();
             if (message.empty())
@@ -2172,9 +2174,11 @@ namespace arms_controller_common
             return false;
         }
 
-        if (linear_params.arm_name != "left" && linear_params.arm_name != "right")
+        if (linear_params.arm_name != "left" &&
+            linear_params.arm_name != "right" &&
+            linear_params.arm_name != "both")
         {
-            error_msg = "arm_name must be 'left' or 'right', got: " + linear_params.arm_name;
+            error_msg = "arm_name must be 'left', 'right' or 'both', got: " + linear_params.arm_name;
             return false;
         }
 
@@ -2251,6 +2255,34 @@ namespace arms_controller_common
             RCLCPP_WARN(node_->get_logger(),
                         "Quaternion norm is %.3f (should be 1.0), auto-normalizing", norm);
             // 可以选择自动归一化，这里只是警告
+        }
+
+        if (linear_params.arm_name == "both")
+        {
+            if (std::isnan(linear_params.right_endpoint.position.x) ||
+                std::isnan(linear_params.right_endpoint.position.y) ||
+                std::isnan(linear_params.right_endpoint.position.z))
+            {
+                error_msg = "Right endpoint position contains NaN values";
+                return false;
+            }
+
+            qx = linear_params.right_endpoint.orientation.x;
+            qy = linear_params.right_endpoint.orientation.y;
+            qz = linear_params.right_endpoint.orientation.z;
+            qw = linear_params.right_endpoint.orientation.w;
+            if (std::isnan(qx) || std::isnan(qy) || std::isnan(qz) || std::isnan(qw))
+            {
+                error_msg = "Right endpoint orientation contains NaN values";
+                return false;
+            }
+
+            norm = std::sqrt(qx * qx + qy * qy + qz * qz + qw * qw);
+            if (std::abs(norm - 1.0) > 0.01)
+            {
+                RCLCPP_WARN(node_->get_logger(),
+                            "Right quaternion norm is %.3f (should be 1.0), auto-normalizing", norm);
+            }
         }
 
         // 添加 kinematics 检查cartesian_manager_
@@ -2418,11 +2450,17 @@ namespace arms_controller_common
         // 4. 规划 MoveC 轨迹
         double period = 1.0 / ctrl_interfaces_.frequency_;
 
-        if (!cartesian_manager_.planSingleArmMoveC(current_joint_positions,
-                                                   circle_params,
-                                                   period))
+        const bool dual_arm = (circle_params.arm_name == "both");
+        const bool plan_success = dual_arm ?
+            cartesian_manager_.planDualArmMoveC(current_joint_positions, circle_params, period) :
+            cartesian_manager_.planSingleArmMoveC(current_joint_positions, circle_params, period);
+        if (!plan_success)
         {
-            message = "Failed to plan MoveC trajectory";
+            message = cartesian_manager_.getLastError();
+            if (message.empty())
+            {
+                message = "Failed to plan MoveC trajectory";
+            }
             estimated_duration = 0.0;
             return false;
         }
@@ -2508,9 +2546,11 @@ namespace arms_controller_common
             return false;
         }
 
-        if (circle_params.arm_name != "left" && circle_params.arm_name != "right")
+        if (circle_params.arm_name != "left" &&
+            circle_params.arm_name != "right" &&
+            circle_params.arm_name != "both")
         {
-            error_msg = "arm_name must be 'left' or 'right', got: " + circle_params.arm_name;
+            error_msg = "arm_name must be 'left', 'right' or 'both', got: " + circle_params.arm_name;
             return false;
         }
 
@@ -2587,6 +2627,45 @@ namespace arms_controller_common
             RCLCPP_WARN(node_->get_logger(),
                         "Quaternion norm is %.3f (should be 1.0), auto-normalizing", norm);
             // 可以选择自动归一化，这里只是警告
+        }
+
+        if (circle_params.arm_name == "both")
+        {
+            if (std::isnan(circle_params.right_endpoint.position.x) ||
+                std::isnan(circle_params.right_endpoint.position.y) ||
+                std::isnan(circle_params.right_endpoint.position.z))
+            {
+                error_msg = "Right endpoint position contains NaN values";
+                return false;
+            }
+
+            qx = circle_params.right_endpoint.orientation.x;
+            qy = circle_params.right_endpoint.orientation.y;
+            qz = circle_params.right_endpoint.orientation.z;
+            qw = circle_params.right_endpoint.orientation.w;
+            if (std::isnan(qx) || std::isnan(qy) || std::isnan(qz) || std::isnan(qw))
+            {
+                error_msg = "Right endpoint orientation contains NaN values";
+                return false;
+            }
+
+            norm = std::sqrt(qx * qx + qy * qy + qz * qz + qw * qw);
+            if (std::abs(norm - 1.0) > 0.01)
+            {
+                RCLCPP_WARN(node_->get_logger(),
+                            "Right quaternion norm is %.3f (should be 1.0), auto-normalizing", norm);
+            }
+
+            if (circle_params.use_three_point_method)
+            {
+                if (std::isnan(circle_params.right_midpoint.position.x) ||
+                    std::isnan(circle_params.right_midpoint.position.y) ||
+                    std::isnan(circle_params.right_midpoint.position.z))
+                {
+                    error_msg = "Right midpoint position contains NaN values";
+                    return false;
+                }
+            }
         }
 
         // 添加 kinematics 检查
