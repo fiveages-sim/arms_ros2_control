@@ -409,6 +409,21 @@ namespace arms_controller_common
         return trajectory_duration_;
     }
 
+    void JointTrajectoryManager::setControllerFrequency(double controller_frequency)
+    {
+        if (controller_frequency > 0.0)
+        {
+            controller_frequency_ = controller_frequency;
+            period_ = 1.0 / controller_frequency_;
+        }
+        else
+        {
+            RCLCPP_WARN(logger_,
+                        "Invalid controller frequency: %.3f, keeping current value %.3f",
+                        controller_frequency, controller_frequency_);
+        }
+    }
+
     void JointTrajectoryManager::setCommonJointBlendRatios(double blend_ratios)
     {
         common_joint_blend_ratios = std::clamp(blend_ratios, 0.0, 1.0);

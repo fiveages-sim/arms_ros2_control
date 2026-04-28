@@ -214,7 +214,7 @@ namespace arms_controller_common
         }
 
         arm_kinematics_->setSolverType(ik_tp);
-        planner->setRealStartTime(period);
+        planner->setRealStartTime(0.0);
         planningTime_ = planner->getTotalTime();
         path_type_ = PathType::CIRCLE;
         if (arm_type_ == "left")

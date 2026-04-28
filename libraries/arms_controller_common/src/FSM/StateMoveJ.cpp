@@ -68,6 +68,7 @@ namespace arms_controller_common
 
         trajectory_manager_.setTrajectoryDuration(node_->get_parameter("movej_trajectory_duration").as_double());
         trajectory_manager_.setCommonJointBlendRatios(node_->get_parameter("movej_trajectory_blend_ratio").as_double());
+        trajectory_manager_.setControllerFrequency(ctrl_interfaces_.frequency_);
     }
 
     void StateMoveJ::enter()
@@ -2002,11 +2003,67 @@ namespace arms_controller_common
             // ========== 单点目标运动 ==========
             if (trajectory_manager_.isDoublesAvailable() && interpolation_type_ == InterpolationType::DOUBLES)
             {
-                trajectory_manager_.planSingleTarget(current_positions, request_waypoints[0]);
+                if (!trajectory_manager_.planSingleTarget(current_positions, request_waypoints[0]))
+                {
+                    message = "Failed to plan single target trajectory";
+                    planned_duration = 0.0;
+                    return false;
+                }
             }
             else
             {
-                setTargetPosition(request_waypoints[0].position);
+                std::vector<size_t> joint_indices = mapJointNames(request_joint_names);
+                if (joint_indices.empty())
+                {
+                    message = "Cannot map joint names to controller joints";
+                    planned_duration = 0.0;
+                    return false;
+                }
+
+                use_prefix_filter_ = true;
+                joint_mask_.assign(joint_names_.size(), false);
+                refreshHoldPositions();
+                for (size_t idx : joint_indices)
+                {
+                    if (idx < joint_mask_.size())
+                    {
+                        joint_mask_[idx] = true;
+                    }
+                }
+
+                start_pos_.clear();
+                start_pos_.reserve(ctrl_interfaces_.joint_position_state_interface_.size());
+                for (auto i : ctrl_interfaces_.joint_position_state_interface_)
+                {
+                    auto value = i.get().get_optional();
+                    start_pos_.push_back(value.value_or(0.0));
+                }
+
+                target_pos_ = mapToFullJointPositions(request_joint_names, request_waypoints[0].position);
+                target_pos_ = applyJointLimits(target_pos_, "joint trajectory single target");
+                has_target_ = true;
+                publishCurrentTargetJoint(target_pos_);
+
+                double requested_duration = duration_;
+                if (request_waypoints[0].time_mode && request_waypoints[0].total_time > 1.0e-6)
+                {
+                    requested_duration = request_waypoints[0].total_time;
+                }
+
+                if (!trajectory_manager_.initSingleNode(
+                    start_pos_,
+                    target_pos_,
+                    requested_duration,
+                    interpolation_type_,
+                    ctrl_interfaces_.frequency_,
+                    tanh_scale_))
+                {
+                    message = "Failed to initialize single target trajectory";
+                    planned_duration = 0.0;
+                    return false;
+                }
+
+                interpolation_active_ = true;
             }
 
             message = "Single target motion accepted";
