@@ -857,7 +857,8 @@ namespace arms_controller_common
                 target_circle_msg.max_linear_jerk,
                 target_circle_msg.max_angular_velocity,
                 target_circle_msg.max_angular_acceleration,
-                target_circle_msg.max_angular_jerk, true);
+                target_circle_msg.max_angular_jerk,
+                target_circle_msg.use_slerp_for_orientation);
 
             if (!target_circle_msg.use_three_point_method)
             {
