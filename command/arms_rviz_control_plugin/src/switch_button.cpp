@@ -1,13 +1,35 @@
 #include "arms_rviz_control_plugin/switch_button.hpp"
 
 #include <algorithm>
+#include <cmath>
 #include <QEvent>
+#include <QGuiApplication>
 #include <QPainter>
 #include <QMouseEvent>
+#include <QScreen>
 #include <QSizePolicy>
 
 namespace arms_rviz_control_plugin
 {
+namespace
+{
+qreal uiScale()
+{
+    qreal scale = 1.0;
+    const QScreen* screen = QGuiApplication::primaryScreen();
+    if (screen)
+    {
+        scale = std::max(scale, screen->availableGeometry().width() / 1920.0);
+        scale = std::max(scale, screen->logicalDotsPerInchX() / 96.0);
+    }
+    return std::min(scale, 1.35);
+}
+
+int scaled(int value)
+{
+    return std::max(1, static_cast<int>(std::round(value * uiScale())));
+}
+}  // namespace
 
 SwitchButton::SwitchButton(QWidget* parent)
     : QWidget(parent)
@@ -19,7 +41,7 @@ SwitchButton::SwitchButton(QWidget* parent)
 
 QSize SwitchButton::sizeHint() const
 {
-    return QSize(72, 32);
+    return QSize(scaled(72), scaled(32));
 }
 
 QSize SwitchButton::minimumSizeHint() const

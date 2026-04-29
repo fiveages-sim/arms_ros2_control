@@ -6,32 +6,85 @@
 #include <QHBoxLayout>
 #include <QVBoxLayout>
 #include <QGridLayout>
+#include <QGuiApplication>
+#include <QScreen>
 #include <QSizePolicy>
+#include <algorithm>
+#include <cmath>
 #include <memory>
 #include <functional>
 #include <arms_controller_common/utils/FSMStateTransitionValidator.h>
 
 namespace arms_rviz_control_plugin
 {
+    namespace
+    {
+        qreal uiScale()
+        {
+            qreal scale = 1.0;
+            const QScreen* screen = QGuiApplication::primaryScreen();
+            if (screen)
+            {
+                scale = std::max(scale, screen->availableGeometry().width() / 1920.0);
+                scale = std::max(scale, screen->logicalDotsPerInchX() / 96.0);
+            }
+            return std::min(scale, 1.35);
+        }
+
+        int scaled(int value)
+        {
+            return std::max(1, static_cast<int>(std::round(value * uiScale())));
+        }
+
+        QString buttonStyle(const QString& background)
+        {
+            return QString("QPushButton { background-color: %1; color: white; font-weight: bold; font-size: %2px; }")
+                .arg(background)
+                .arg(scaled(13));
+        }
+    }  // namespace
+
     OCS2FSMPanel::OCS2FSMPanel(QWidget* parent)
         : Panel(parent)
     {
+        const int panel_width = scaled(350);
+        const int panel_min_height = scaled(180);
+        const int title_font_size = scaled(14);
+        const int badge_font_size = scaled(9);
+        const int label_font_size = scaled(13);
+        const int label_min_width = scaled(74);
+        const int switch_width = scaled(72);
+        const int switch_height = scaled(32);
+        const int switch_cell_width = label_min_width + scaled(4) + switch_width;
+        const int switch_cell_height = switch_height;
+        const int combo_height = scaled(28);
+        const int hold_button_height = scaled(28);
+        const int grid_h_spacing = scaled(12);
+        const int grid_v_spacing = scaled(4);
+        const int combo_padding_left = scaled(4);
+        const int combo_padding_right = scaled(12);
+        const int combo_dropdown_width = scaled(10);
+
         // Create main layout
         auto* main_layout = new QVBoxLayout(this);
-        setMinimumSize(350, 180);
+        setMinimumSize(panel_width, panel_min_height);
         setSizePolicy(QSizePolicy::Preferred, QSizePolicy::Preferred);
 
         // Title with status indicator - centered
         auto* title_layout = new QHBoxLayout();
         auto* title_label = new QLabel("Current FSM", this);
-        title_label->setStyleSheet("QLabel { font-weight: bold; font-size: 14px; }");
+        title_label->setStyleSheet(QString("QLabel { font-weight: bold; font-size: %1px; }").arg(title_font_size));
 
         // Small status indicator
         current_state_label_ = std::make_unique<QLabel>("HOLD", this);
-        current_state_label_->setStyleSheet(
-            "QLabel { padding: 1px 4px; background-color: #e3f2fd; border: 1px solid #2196F3; "
-            "font-weight: bold; font-size: 9px; border-radius: 2px; margin: 0px; }");
-        current_state_label_->setFixedSize(44, 16);
+        current_state_label_->setStyleSheet(QString(
+            "QLabel { padding: %1px %2px; background-color: #e3f2fd; border: 1px solid #2196F3; "
+            "font-weight: bold; font-size: %3px; border-radius: %4px; margin: 0px; }")
+            .arg(scaled(1))
+            .arg(scaled(4))
+            .arg(badge_font_size)
+            .arg(scaled(2)));
+        current_state_label_->setFixedSize(scaled(44), scaled(16));
         current_state_label_->setAlignment(Qt::AlignCenter);
 
         title_layout->addStretch();
@@ -48,22 +101,22 @@ namespace arms_rviz_control_plugin
 
         // HOME → HOLD (command = 2)
         home_to_hold_btn_ = std::make_unique<QPushButton>("HOLD", this);
-        home_to_hold_btn_->setStyleSheet("QPushButton { background-color: #FF9800; color: white; font-weight: bold; font-size: 13px; }");
+        home_to_hold_btn_->setStyleSheet(buttonStyle("#FF9800"));
         button_layout->addWidget(home_to_hold_btn_.get());
 
         // Switch pose button (command = 4) - 只在HOME状态显示
         switch_pose_btn_ = std::make_unique<QPushButton>("切换姿态 (Home ↔ Rest)", this);
-        switch_pose_btn_->setStyleSheet("QPushButton { background-color: #FF5722; color: white; font-weight: bold; font-size: 13px; }");
+        switch_pose_btn_->setStyleSheet(buttonStyle("#FF5722"));
         button_layout->addWidget(switch_pose_btn_.get());
 
         // HOLD → OCS2 和 HOLD → MOVEJ 同一行
         auto* hold_to_row = new QHBoxLayout();
         hold_to_row->setSpacing(2);
         hold_to_ocs2_btn_ = std::make_unique<QPushButton>("OCS2", this);
-        hold_to_ocs2_btn_->setStyleSheet("QPushButton { background-color: #2196F3; color: white; font-weight: bold; font-size: 13px; }");
+        hold_to_ocs2_btn_->setStyleSheet(buttonStyle("#2196F3"));
         hold_to_row->addWidget(hold_to_ocs2_btn_.get());
         hold_to_movej_btn_ = std::make_unique<QPushButton>("MOVEJ", this);
-        hold_to_movej_btn_->setStyleSheet("QPushButton { background-color: #009688; color: white; font-weight: bold; font-size: 13px; }");
+        hold_to_movej_btn_->setStyleSheet(buttonStyle("#009688"));
         hold_to_row->addWidget(hold_to_movej_btn_.get());
         button_layout->addLayout(hold_to_row);
 
@@ -71,16 +124,16 @@ namespace arms_rviz_control_plugin
         auto* to_hold_row = new QHBoxLayout();
         to_hold_row->setSpacing(2);
         ocs2_to_hold_btn_ = std::make_unique<QPushButton>("HOLD", this);
-        ocs2_to_hold_btn_->setStyleSheet("QPushButton { background-color: #FF9800; color: white; font-weight: bold; font-size: 13px; }");
+        ocs2_to_hold_btn_->setStyleSheet(buttonStyle("#FF9800"));
         to_hold_row->addWidget(ocs2_to_hold_btn_.get());
         movej_to_hold_btn_ = std::make_unique<QPushButton>("HOLD", this);
-        movej_to_hold_btn_->setStyleSheet("QPushButton { background-color: #FF9800; color: white; font-weight: bold; font-size: 13px; }");
+        movej_to_hold_btn_->setStyleSheet(buttonStyle("#FF9800"));
         to_hold_row->addWidget(movej_to_hold_btn_.get());
         button_layout->addLayout(to_hold_row);
 
         // HOLD → HOME (command = 1)
         hold_to_home_btn_ = std::make_unique<QPushButton>("HOME", this);
-        hold_to_home_btn_->setStyleSheet("QPushButton { background-color: #9C27B0; color: white; font-weight: bold; font-size: 13px; }");
+        hold_to_home_btn_->setStyleSheet(buttonStyle("#9C27B0"));
         button_layout->addWidget(hold_to_home_btn_.get());
 
         main_layout->addWidget(button_group_.get(), 0, Qt::AlignHCenter);
@@ -89,8 +142,8 @@ namespace arms_rviz_control_plugin
         wbc_container_ = std::make_unique<QWidget>(this);
         wbc_container_->setSizePolicy(QSizePolicy::Fixed, QSizePolicy::Fixed);
         wbc_layout_ = std::make_unique<QVBoxLayout>(wbc_container_.get());
-        wbc_layout_->setContentsMargins(0, 8, 0, 0);
-        wbc_layout_->setSpacing(4);
+        wbc_layout_->setContentsMargins(0, scaled(8), 0, 0);
+        wbc_layout_->setSpacing(scaled(4));
 
         // Add separator line
         auto* separator = new QFrame(this);
@@ -100,11 +153,10 @@ namespace arms_rviz_control_plugin
 
         // Upper button layout (grid)
         upper_button_layout_ = std::make_unique<QGridLayout>();
-        upper_button_layout_->setHorizontalSpacing(12);
-        upper_button_layout_->setVerticalSpacing(4);
+        upper_button_layout_->setHorizontalSpacing(grid_h_spacing);
+        upper_button_layout_->setVerticalSpacing(grid_v_spacing);
 
-        const int label_min_width = 74;
-        const QString label_style = "QLabel { font-size: 13px; padding: 0px; }";
+        const QString label_style = QString("QLabel { font-size: %1px; padding: 0px; }").arg(label_font_size);
 
         // Base
         base_label_ = std::make_unique<QLabel>("启用底盘:", this);
@@ -115,13 +167,13 @@ namespace arms_rviz_control_plugin
 
         auto* base_layout = new QHBoxLayout();
         base_layout->setContentsMargins(0, 0, 0, 0);
-        base_layout->setSpacing(4);
+        base_layout->setSpacing(scaled(4));
         base_layout->addWidget(base_label_.get());
         base_layout->addWidget(base_switch_.get());
         base_layout->addStretch();
 
         auto* base_widget = new QWidget(this);
-        base_widget->setFixedSize(150, 32);
+        base_widget->setFixedSize(switch_cell_width, switch_cell_height);
         base_widget->setLayout(base_layout);
         upper_button_layout_->addWidget(base_widget, 0, 0);
 
@@ -134,13 +186,13 @@ namespace arms_rviz_control_plugin
 
         auto* bimanual_layout = new QHBoxLayout();
         bimanual_layout->setContentsMargins(0, 0, 0, 0);
-        bimanual_layout->setSpacing(4);
+        bimanual_layout->setSpacing(scaled(4));
         bimanual_layout->addWidget(bimanual_label_.get());
         bimanual_layout->addWidget(bimanual_switch_.get());
         bimanual_layout->addStretch();
 
         auto* bimanual_widget = new QWidget(this);
-        bimanual_widget->setFixedSize(150, 32);
+        bimanual_widget->setFixedSize(switch_cell_width, switch_cell_height);
         bimanual_widget->setLayout(bimanual_layout);
         upper_button_layout_->addWidget(bimanual_widget, 0, 1);
 
@@ -153,13 +205,13 @@ namespace arms_rviz_control_plugin
 
         auto* left_arm_layout = new QHBoxLayout();
         left_arm_layout->setContentsMargins(0, 0, 0, 0);
-        left_arm_layout->setSpacing(4);
+        left_arm_layout->setSpacing(scaled(4));
         left_arm_layout->addWidget(left_arm_label_.get());
         left_arm_layout->addWidget(left_arm_switch_.get());
         left_arm_layout->addStretch();
 
         auto* left_arm_widget = new QWidget(this);
-        left_arm_widget->setFixedSize(150, 32);
+        left_arm_widget->setFixedSize(switch_cell_width, switch_cell_height);
         left_arm_widget->setLayout(left_arm_layout);
         upper_button_layout_->addWidget(left_arm_widget, 1, 0);
 
@@ -172,22 +224,22 @@ namespace arms_rviz_control_plugin
 
         auto* right_arm_layout = new QHBoxLayout();
         right_arm_layout->setContentsMargins(0, 0, 0, 0);
-        right_arm_layout->setSpacing(4);
+        right_arm_layout->setSpacing(scaled(4));
         right_arm_layout->addWidget(right_arm_label_.get());
         right_arm_layout->addWidget(right_arm_switch_.get());
         right_arm_layout->addStretch();
 
         auto* right_arm_widget = new QWidget(this);
-        right_arm_widget->setFixedSize(150, 32);
+        right_arm_widget->setFixedSize(switch_cell_width, switch_cell_height);
         right_arm_widget->setLayout(right_arm_layout);
         upper_button_layout_->addWidget(right_arm_widget, 1, 1);
 
         // Body mode row shares the same grid columns as the switch rows.
         auto* body_left_widget = new QWidget(this);
-        body_left_widget->setFixedSize(150, 32);
+        body_left_widget->setFixedSize(switch_cell_width, switch_cell_height);
         body_control_layout_ = std::make_unique<QHBoxLayout>(body_left_widget);
         body_control_layout_->setContentsMargins(0, 0, 0, 0);
-        body_control_layout_->setSpacing(4);
+        body_control_layout_->setSpacing(scaled(4));
 
         body_label_ = std::make_unique<QLabel>("身体模式:", this);
         body_label_->setFixedWidth(label_min_width);
@@ -195,13 +247,13 @@ namespace arms_rviz_control_plugin
         body_label_->setStyleSheet(label_style);
 
         body_combo_box_ = std::make_unique<QComboBox>(this);
-        body_combo_box_->setFixedSize(72, 28);
-        body_combo_box_->setStyleSheet(R"(
+        body_combo_box_->setFixedSize(switch_width, combo_height);
+        body_combo_box_->setStyleSheet(QString(R"(
             QComboBox {
-                font-size: 13px;
-                padding: 2px 12px 2px 4px;
+                font-size: %1px;
+                padding: %2px %3px %2px %4px;
                 border: 1px solid #bdbdbd;
-                border-radius: 6px;
+                border-radius: %5px;
                 background: white;
             }
             QComboBox:hover {
@@ -213,17 +265,23 @@ namespace arms_rviz_control_plugin
             QComboBox::drop-down {
                 subcontrol-origin: padding;
                 subcontrol-position: top right;
-                width: 10px;
+                width: %6px;
                 border: none;
             }
             QComboBox QAbstractItemView {
-                font-size: 13px;
+                font-size: %1px;
                 border: 1px solid #cfcfcf;
                 selection-background-color: #e8f5e9;
                 selection-color: black;
                 outline: none;
             }
-        )");
+        )")
+            .arg(label_font_size)
+            .arg(scaled(2))
+            .arg(combo_padding_right)
+            .arg(combo_padding_left)
+            .arg(scaled(6))
+            .arg(combo_dropdown_width));
 
         body_control_layout_->addWidget(body_label_.get());
         body_control_layout_->addWidget(body_combo_box_.get());
@@ -232,17 +290,17 @@ namespace arms_rviz_control_plugin
 
         // Add OCS2 to HOLD button on the right of body mode dropdown
         auto* body_right_widget = new QWidget(this);
-        body_right_widget->setFixedSize(150, 32);
+        body_right_widget->setFixedSize(switch_cell_width, switch_cell_height);
         auto* body_hold_layout = new QHBoxLayout(body_right_widget);
         body_hold_layout->setContentsMargins(0, 0, 0, 0);
-        body_hold_layout->setSpacing(4);
+        body_hold_layout->setSpacing(scaled(4));
 
         auto* body_hold_spacer = new QWidget(this);
         body_hold_spacer->setFixedWidth(label_min_width);
 
         auto* ocs2_to_hold_wbc_btn = new QPushButton("HOLD", this);
-        ocs2_to_hold_wbc_btn->setStyleSheet("QPushButton { background-color: #FF9800; color: white; font-weight: bold; font-size: 13px; }");
-        ocs2_to_hold_wbc_btn->setFixedSize(72, 28);
+        ocs2_to_hold_wbc_btn->setStyleSheet(buttonStyle("#FF9800"));
+        ocs2_to_hold_wbc_btn->setFixedSize(switch_width, hold_button_height);
 
         body_hold_layout->addWidget(body_hold_spacer);
         body_hold_layout->addWidget(ocs2_to_hold_wbc_btn);
@@ -250,8 +308,8 @@ namespace arms_rviz_control_plugin
         upper_button_layout_->addWidget(body_right_widget, 2, 1);
 
         wbc_layout_->addLayout(upper_button_layout_.get());
-        wbc_container_->setFixedSize(350, wbc_container_->sizeHint().height());
-        button_group_->setFixedSize(350, wbc_container_->height());
+        wbc_container_->setFixedSize(panel_width, wbc_container_->sizeHint().height());
+        button_group_->setFixedSize(panel_width, wbc_container_->height());
 
         main_layout->addWidget(wbc_container_.get(), 0, Qt::AlignHCenter);
 
