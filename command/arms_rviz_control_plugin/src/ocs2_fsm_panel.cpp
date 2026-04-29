@@ -6,6 +6,7 @@
 #include <QHBoxLayout>
 #include <QVBoxLayout>
 #include <QGridLayout>
+#include <QSizePolicy>
 #include <memory>
 #include <functional>
 #include <arms_controller_common/utils/FSMStateTransitionValidator.h>
@@ -17,7 +18,8 @@ namespace arms_rviz_control_plugin
     {
         // Create main layout
         auto* main_layout = new QVBoxLayout(this);
-        setFixedSize(350, 180);
+        setMinimumSize(350, 180);
+        setSizePolicy(QSizePolicy::Preferred, QSizePolicy::Preferred);
 
         // Title with status indicator - centered
         auto* title_layout = new QHBoxLayout();
@@ -40,6 +42,7 @@ namespace arms_rviz_control_plugin
 
         // State transition buttons group
         button_group_ = std::make_unique<QGroupBox>(this);
+        button_group_->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Minimum);
         auto* button_layout = new QVBoxLayout(button_group_.get());
         button_layout->setSpacing(2);
 
@@ -84,6 +87,7 @@ namespace arms_rviz_control_plugin
 
         // ==================== WBC Control Section (OCS2 mode only) ====================
         wbc_container_ = std::make_unique<QWidget>(this);
+        wbc_container_->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Minimum);
         wbc_layout_ = std::make_unique<QVBoxLayout>(wbc_container_.get());
         wbc_layout_->setContentsMargins(0, 8, 0, 0);
         wbc_layout_->setSpacing(4);
@@ -103,13 +107,16 @@ namespace arms_rviz_control_plugin
         upper_button_layout_ = std::make_unique<QGridLayout>();
         upper_button_layout_->setHorizontalSpacing(12);
         upper_button_layout_->setVerticalSpacing(2);
+        upper_button_layout_->setColumnStretch(0, 1);
+        upper_button_layout_->setColumnStretch(1, 1);
 
-        const int label_width = 74;
+        const int label_min_width = 74;
         const QString label_style = "QLabel { font-size: 13px; padding: 0px; }";
 
         // Base
         base_label_ = std::make_unique<QLabel>("启用底盘:", this);
-        base_label_->setFixedWidth(label_width);
+        base_label_->setMinimumWidth(label_min_width);
+        base_label_->setSizePolicy(QSizePolicy::Minimum, QSizePolicy::Preferred);
         base_label_->setStyleSheet(label_style);
         base_switch_ = std::make_unique<SwitchButton>(this);
 
@@ -121,12 +128,14 @@ namespace arms_rviz_control_plugin
         base_layout->addStretch();
 
         auto* base_widget = new QWidget(this);
+        base_widget->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Minimum);
         base_widget->setLayout(base_layout);
         upper_button_layout_->addWidget(base_widget, 0, 0);
 
         // Bimanual
         bimanual_label_ = std::make_unique<QLabel>("双臂耦合:", this);
-        bimanual_label_->setFixedWidth(label_width);
+        bimanual_label_->setMinimumWidth(label_min_width);
+        bimanual_label_->setSizePolicy(QSizePolicy::Minimum, QSizePolicy::Preferred);
         bimanual_label_->setStyleSheet(label_style);
         bimanual_switch_ = std::make_unique<SwitchButton>(this);
 
@@ -138,12 +147,14 @@ namespace arms_rviz_control_plugin
         bimanual_layout->addStretch();
 
         auto* bimanual_widget = new QWidget(this);
+        bimanual_widget->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Minimum);
         bimanual_widget->setLayout(bimanual_layout);
         upper_button_layout_->addWidget(bimanual_widget, 0, 1);
 
         // Left arm
         left_arm_label_ = std::make_unique<QLabel>("启用左臂:", this);
-        left_arm_label_->setFixedWidth(label_width);
+        left_arm_label_->setMinimumWidth(label_min_width);
+        left_arm_label_->setSizePolicy(QSizePolicy::Minimum, QSizePolicy::Preferred);
         left_arm_label_->setStyleSheet(label_style);
         left_arm_switch_ = std::make_unique<SwitchButton>(this);
 
@@ -155,12 +166,14 @@ namespace arms_rviz_control_plugin
         left_arm_layout->addStretch();
 
         auto* left_arm_widget = new QWidget(this);
+        left_arm_widget->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Minimum);
         left_arm_widget->setLayout(left_arm_layout);
         upper_button_layout_->addWidget(left_arm_widget, 1, 0);
 
         // Right arm
         right_arm_label_ = std::make_unique<QLabel>("启用右臂:", this);
-        right_arm_label_->setFixedWidth(label_width);
+        right_arm_label_->setMinimumWidth(label_min_width);
+        right_arm_label_->setSizePolicy(QSizePolicy::Minimum, QSizePolicy::Preferred);
         right_arm_label_->setStyleSheet(label_style);
         right_arm_switch_ = std::make_unique<SwitchButton>(this);
 
@@ -172,6 +185,7 @@ namespace arms_rviz_control_plugin
         right_arm_layout->addStretch();
 
         auto* right_arm_widget = new QWidget(this);
+        right_arm_widget->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Minimum);
         right_arm_widget->setLayout(right_arm_layout);
         upper_button_layout_->addWidget(right_arm_widget, 1, 1);
 
@@ -184,12 +198,14 @@ namespace arms_rviz_control_plugin
         body_control_layout_->setSpacing(8);
 
         body_label_ = std::make_unique<QLabel>("身体模式:", this);
-        body_label_->setFixedWidth(label_width);
+        body_label_->setMinimumWidth(label_min_width);
+        body_label_->setSizePolicy(QSizePolicy::Minimum, QSizePolicy::Preferred);
         body_label_->setStyleSheet(label_style);
 
         body_combo_box_ = std::make_unique<QComboBox>(this);
-        body_combo_box_->setFixedHeight(28);
+        body_combo_box_->setMinimumHeight(28);
         body_combo_box_->setMinimumWidth(92);
+        body_combo_box_->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Fixed);
         body_combo_box_->setStyleSheet(R"(
             QComboBox {
                 font-size: 13px;
@@ -221,14 +237,14 @@ namespace arms_rviz_control_plugin
 
         // Add OCS2 to HOLD button on the right of body mode dropdown
         auto* ocs2_to_hold_wbc_btn = new QPushButton("HOLD", this);
-        ocs2_to_hold_wbc_btn->setStyleSheet("QPushButton { background-color: #FF9800; color: white; font-weight: bold; min-width: 130px; }");
-        ocs2_to_hold_wbc_btn->setFixedHeight(28);
-        ocs2_to_hold_wbc_btn->setMinimumWidth(130);
+        ocs2_to_hold_wbc_btn->setStyleSheet("QPushButton { background-color: #FF9800; color: white; font-weight: bold; }");
+        ocs2_to_hold_wbc_btn->setMinimumHeight(28);
+        ocs2_to_hold_wbc_btn->setMinimumWidth(72);
+        ocs2_to_hold_wbc_btn->setSizePolicy(QSizePolicy::Minimum, QSizePolicy::Fixed);
 
         body_control_layout_->addWidget(body_label_.get());
-        body_control_layout_->addWidget(body_combo_box_.get());
+        body_control_layout_->addWidget(body_combo_box_.get(), 1);
         body_control_layout_->addWidget(ocs2_to_hold_wbc_btn);
-        body_control_layout_->addStretch();
 
         wbc_layout_->addWidget(body_row_widget);
 
@@ -502,6 +518,14 @@ namespace arms_rviz_control_plugin
                 wbc_container_->setVisible(false);
             }
         }
+
+        if (layout())
+        {
+            layout()->invalidate();
+            layout()->activate();
+        }
+        updateGeometry();
+        adjustSize();
     }
 
     void OCS2FSMPanel::setCurrentState(const std::string& state)
