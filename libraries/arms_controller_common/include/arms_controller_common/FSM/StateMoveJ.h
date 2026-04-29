@@ -160,13 +160,13 @@ namespace arms_controller_common
 
         /**
          * @brief 控制腰部升降速度系数，factor取值建议[-1, 1]
-         * 实际目标速度 = factor * default_waist_para_[0]
+         * 实际目标速度 = factor * default_waist_lifting_para_[0]
          */
         bool setWaistLiftingFactor(double factor);
 
         /**
          * @brief 控制腰部转向速度系数，factor取值建议[-1, 1]
-         * 实际目标速度 = factor * default_waist_para_[0]
+         * 实际目标速度 = factor * default_waist_turning_para_[0]
          */
         bool setWaistTurningFactor(double factor);
 
@@ -312,7 +312,8 @@ namespace arms_controller_common
         std::shared_ptr<arms_controller_common::WaistLiftingPlaner> waist_turning_planer_;
         bool waist_turning_active_{false};
         double waist_lifting_duration_{3.0};
-        Eigen::Vector3d default_waist_para_;
+        Eigen::Vector3d default_waist_lifting_para_;
+        Eigen::Vector3d default_waist_turning_para_;
         void updateWaistParam();
 
         double last_waist_factor_{0.0};

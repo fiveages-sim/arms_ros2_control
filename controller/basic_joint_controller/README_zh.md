@@ -58,7 +58,8 @@ my_controller:
     waist_lifting_enabled: false
     waist_lifting_type: "three_joint"   # "three_joint" | "single_joint"
     waist_lifting_duration: 3.0
-    waist_default_parameter: [0.25, 1.0, 5.0]  # [最大速度, 加速度, 减速度]
+    waist_lifting_default_parameter: [0.25, 1.0, 5.0]  # [最大速度, 加速度, 减速度]
+    waist_turning_default_parameter: [0.25, 1.0, 5.0]  # [最大速度, 加速度, 减速度]
     # (three_joint 模式专用)
     waist_l1: 0.322
     waist_l2: 0.355
@@ -171,7 +172,7 @@ ros2 topic pub --once /body_controller/waist_lifting std_msgs/msg/Float64 "data:
 **消息类型：** `std_msgs/Float64`（系数范围：`[-1.0, 1.0]`）  
 **前提：** `waist_lifting_enabled: true`，当前状态 MOVEJ
 
-持续速度控制。实际速度 = `factor × waist_default_parameter[0]`。发送 `0.0` 停止。
+持续速度控制。实际速度 = `factor × waist_lifting_default_parameter[0]`。发送 `0.0` 停止。
 
 ```bash
 ros2 topic pub /body_controller/waist_lifting_command std_msgs/msg/Float64 "data: 0.5"   # 上升
@@ -183,6 +184,8 @@ ros2 topic pub --once /body_controller/waist_lifting_command std_msgs/msg/Float6
 **话题：** `/{controller_name}/waist_turning_command`  
 **消息类型：** `std_msgs/Float64`（系数范围：`[-1.0, 1.0]`）  
 **前提：** `waist_lifting_enabled: true`，当前状态 MOVEJ
+
+持续速度控制。实际速度 = `factor × waist_turning_default_parameter[0]`。发送 `0.0` 停止。
 
 ```bash
 ros2 topic pub /body_controller/waist_turning_command std_msgs/msg/Float64 "data: -0.3"  # 左转

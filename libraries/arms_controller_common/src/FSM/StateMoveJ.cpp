@@ -1447,14 +1447,14 @@ namespace arms_controller_common
         }
         double clamped_factor = std::clamp(factor, -1.0, 1.0);
         double speedj_time = 100000000.0;
-        double target_speed = clamped_factor * default_waist_para_(0);
+        double target_speed = clamped_factor * default_waist_lifting_para_(0);
         if (std::fabs(clamped_factor) < waist_factor_epsilon_)
         {
             speedj_time = 0.0;
             target_speed = 0.0;
         }
-        if (!waist_lifting_planer_->initTargetLiftingSpeed(angles3d, target_speed, default_waist_para_(1),
-                                                           default_waist_para_(2), speedj_time,
+        if (!waist_lifting_planer_->initTargetLiftingSpeed(angles3d, target_speed, default_waist_lifting_para_(1),
+                                                           default_waist_lifting_para_(2), speedj_time,
                                                            1.0 / ctrl_interfaces_.frequency_))
         {
             RCLCPP_WARN(node_->get_logger(),
@@ -1532,15 +1532,15 @@ namespace arms_controller_common
 
         double clamped_factor = std::clamp(factor, -1.0, 1.0);
         double speedj_time = 100000000.0;
-        double target_speed = clamped_factor * default_waist_para_(0);
+        double target_speed = clamped_factor * default_waist_turning_para_(0);
         if (std::fabs(clamped_factor) < waist_factor_epsilon_)
         {
             speedj_time = 0.0;
             target_speed = 0.0;
         }
 
-        if (!waist_turning_planer_->initTargetLiftingSpeed(angles3d, target_speed, default_waist_para_(1),
-                                                           default_waist_para_(2), speedj_time,
+        if (!waist_turning_planer_->initTargetLiftingSpeed(angles3d, target_speed, default_waist_turning_para_(1),
+                                                           default_waist_turning_para_(2), speedj_time,
                                                            1.0 / ctrl_interfaces_.frequency_))
         {
             waist_turning_planer_->setCurrentVelToZero();
@@ -1572,9 +1572,12 @@ namespace arms_controller_common
         {
             std::string waist_lifting_type_ = node_->get_parameter("waist_lifting_type").as_string();
             waist_lifting_duration_ = node_->get_parameter("waist_lifting_duration").as_double();
-            std::vector<double> waist_para =
-                node_->get_parameter("waist_default_parameter").as_double_array();
-            default_waist_para_ << waist_para[0], waist_para[1], waist_para[2];
+            std::vector<double> waist_lifting_para =
+                node_->get_parameter("waist_lifting_default_parameter").as_double_array();
+            std::vector<double> waist_turning_para =
+                node_->get_parameter("waist_turning_default_parameter").as_double_array();
+            default_waist_lifting_para_ << waist_lifting_para[0], waist_lifting_para[1], waist_lifting_para[2];
+            default_waist_turning_para_ << waist_turning_para[0], waist_turning_para[1], waist_turning_para[2];
             RCLCPP_INFO(node_->get_logger(), "Waist lifting type: %s", waist_lifting_type_.c_str());
             if (waist_lifting_type_ == "three_joint")
             {

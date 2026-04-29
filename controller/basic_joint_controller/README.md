@@ -58,7 +58,8 @@ my_controller:
     waist_lifting_enabled: false
     waist_lifting_type: "three_joint"   # "three_joint" | "single_joint"
     waist_lifting_duration: 3.0
-    waist_default_parameter: [0.25, 1.0, 5.0]  # [max_speed, accel, decel]
+    waist_lifting_default_parameter: [0.25, 1.0, 5.0]  # [max_speed, accel, decel]
+    waist_turning_default_parameter: [0.25, 1.0, 5.0]  # [max_speed, accel, decel]
     # (three_joint only)
     waist_l1: 0.322
     waist_l2: 0.355
@@ -171,7 +172,7 @@ ros2 topic pub --once /body_controller/waist_lifting std_msgs/msg/Float64 "data:
 **Type:** `std_msgs/Float64` (factor range: `[-1.0, 1.0]`)  
 **Requires:** `waist_lifting_enabled: true`, active state: MOVEJ
 
-Continuous velocity control. Actual speed = `factor × waist_default_parameter[0]`.  
+Continuous velocity control. Actual speed = `factor × waist_lifting_default_parameter[0]`.  
 Send `0.0` to stop.
 
 ```bash
@@ -184,6 +185,9 @@ ros2 topic pub --once /body_controller/waist_lifting_command std_msgs/msg/Float6
 **Topic:** `/{controller_name}/waist_turning_command`  
 **Type:** `std_msgs/Float64` (factor range: `[-1.0, 1.0]`)  
 **Requires:** `waist_lifting_enabled: true`, active state: MOVEJ
+
+Continuous velocity control. Actual speed = `factor × waist_turning_default_parameter[0]`.  
+Send `0.0` to stop.
 
 ```bash
 ros2 topic pub /body_controller/waist_turning_command std_msgs/msg/Float64 "data: -0.3"  # turn left
