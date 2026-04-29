@@ -31,7 +31,7 @@ namespace arms_rviz_control_plugin
         current_state_label_->setStyleSheet(
             "QLabel { padding: 1px 4px; background-color: #e3f2fd; border: 1px solid #2196F3; "
             "font-weight: bold; font-size: 9px; border-radius: 2px; margin: 0px; }");
-        current_state_label_->setFixedHeight(16);
+        current_state_label_->setFixedSize(44, 16);
         current_state_label_->setAlignment(Qt::AlignCenter);
 
         title_layout->addStretch();
@@ -42,28 +42,28 @@ namespace arms_rviz_control_plugin
 
         // State transition buttons group
         button_group_ = std::make_unique<QGroupBox>(this);
-        button_group_->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Minimum);
+        button_group_->setSizePolicy(QSizePolicy::Fixed, QSizePolicy::Fixed);
         auto* button_layout = new QVBoxLayout(button_group_.get());
         button_layout->setSpacing(2);
 
         // HOME → HOLD (command = 2)
         home_to_hold_btn_ = std::make_unique<QPushButton>("HOLD", this);
-        home_to_hold_btn_->setStyleSheet("QPushButton { background-color: #FF9800; color: white; font-weight: bold; }");
+        home_to_hold_btn_->setStyleSheet("QPushButton { background-color: #FF9800; color: white; font-weight: bold; font-size: 13px; }");
         button_layout->addWidget(home_to_hold_btn_.get());
 
         // Switch pose button (command = 4) - 只在HOME状态显示
         switch_pose_btn_ = std::make_unique<QPushButton>("切换姿态 (Home ↔ Rest)", this);
-        switch_pose_btn_->setStyleSheet("QPushButton { background-color: #FF5722; color: white; font-weight: bold; }");
+        switch_pose_btn_->setStyleSheet("QPushButton { background-color: #FF5722; color: white; font-weight: bold; font-size: 13px; }");
         button_layout->addWidget(switch_pose_btn_.get());
 
         // HOLD → OCS2 和 HOLD → MOVEJ 同一行
         auto* hold_to_row = new QHBoxLayout();
         hold_to_row->setSpacing(2);
         hold_to_ocs2_btn_ = std::make_unique<QPushButton>("OCS2", this);
-        hold_to_ocs2_btn_->setStyleSheet("QPushButton { background-color: #2196F3; color: white; font-weight: bold; }");
+        hold_to_ocs2_btn_->setStyleSheet("QPushButton { background-color: #2196F3; color: white; font-weight: bold; font-size: 13px; }");
         hold_to_row->addWidget(hold_to_ocs2_btn_.get());
         hold_to_movej_btn_ = std::make_unique<QPushButton>("MOVEJ", this);
-        hold_to_movej_btn_->setStyleSheet("QPushButton { background-color: #009688; color: white; font-weight: bold; }");
+        hold_to_movej_btn_->setStyleSheet("QPushButton { background-color: #009688; color: white; font-weight: bold; font-size: 13px; }");
         hold_to_row->addWidget(hold_to_movej_btn_.get());
         button_layout->addLayout(hold_to_row);
 
@@ -71,23 +71,23 @@ namespace arms_rviz_control_plugin
         auto* to_hold_row = new QHBoxLayout();
         to_hold_row->setSpacing(2);
         ocs2_to_hold_btn_ = std::make_unique<QPushButton>("HOLD", this);
-        ocs2_to_hold_btn_->setStyleSheet("QPushButton { background-color: #FF9800; color: white; font-weight: bold; }");
+        ocs2_to_hold_btn_->setStyleSheet("QPushButton { background-color: #FF9800; color: white; font-weight: bold; font-size: 13px; }");
         to_hold_row->addWidget(ocs2_to_hold_btn_.get());
         movej_to_hold_btn_ = std::make_unique<QPushButton>("HOLD", this);
-        movej_to_hold_btn_->setStyleSheet("QPushButton { background-color: #FF9800; color: white; font-weight: bold; }");
+        movej_to_hold_btn_->setStyleSheet("QPushButton { background-color: #FF9800; color: white; font-weight: bold; font-size: 13px; }");
         to_hold_row->addWidget(movej_to_hold_btn_.get());
         button_layout->addLayout(to_hold_row);
 
         // HOLD → HOME (command = 1)
         hold_to_home_btn_ = std::make_unique<QPushButton>("HOME", this);
-        hold_to_home_btn_->setStyleSheet("QPushButton { background-color: #9C27B0; color: white; font-weight: bold; }");
+        hold_to_home_btn_->setStyleSheet("QPushButton { background-color: #9C27B0; color: white; font-weight: bold; font-size: 13px; }");
         button_layout->addWidget(hold_to_home_btn_.get());
 
-        main_layout->addWidget(button_group_.get());
+        main_layout->addWidget(button_group_.get(), 0, Qt::AlignHCenter);
 
         // ==================== WBC Control Section (OCS2 mode only) ====================
         wbc_container_ = std::make_unique<QWidget>(this);
-        wbc_container_->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Minimum);
+        wbc_container_->setSizePolicy(QSizePolicy::Fixed, QSizePolicy::Fixed);
         wbc_layout_ = std::make_unique<QVBoxLayout>(wbc_container_.get());
         wbc_layout_->setContentsMargins(0, 8, 0, 0);
         wbc_layout_->setSpacing(4);
@@ -98,17 +98,10 @@ namespace arms_rviz_control_plugin
         separator->setFrameShadow(QFrame::Sunken);
         wbc_layout_->addWidget(separator);
 
-        // WBC title
-        auto* wbc_title = new QLabel("WBC 控制器设置 (OCS2模式)", this);
-        wbc_title->setStyleSheet("QLabel { font-weight: bold; font-size: 12px; color: #2196F3; }");
-        wbc_layout_->addWidget(wbc_title);
-
         // Upper button layout (grid)
         upper_button_layout_ = std::make_unique<QGridLayout>();
         upper_button_layout_->setHorizontalSpacing(12);
-        upper_button_layout_->setVerticalSpacing(2);
-        upper_button_layout_->setColumnStretch(0, 1);
-        upper_button_layout_->setColumnStretch(1, 1);
+        upper_button_layout_->setVerticalSpacing(4);
 
         const int label_min_width = 74;
         const QString label_style = "QLabel { font-size: 13px; padding: 0px; }";
@@ -128,7 +121,7 @@ namespace arms_rviz_control_plugin
         base_layout->addStretch();
 
         auto* base_widget = new QWidget(this);
-        base_widget->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Minimum);
+        base_widget->setFixedSize(150, 32);
         base_widget->setLayout(base_layout);
         upper_button_layout_->addWidget(base_widget, 0, 0);
 
@@ -147,7 +140,7 @@ namespace arms_rviz_control_plugin
         bimanual_layout->addStretch();
 
         auto* bimanual_widget = new QWidget(this);
-        bimanual_widget->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Minimum);
+        bimanual_widget->setFixedSize(150, 32);
         bimanual_widget->setLayout(bimanual_layout);
         upper_button_layout_->addWidget(bimanual_widget, 0, 1);
 
@@ -166,7 +159,7 @@ namespace arms_rviz_control_plugin
         left_arm_layout->addStretch();
 
         auto* left_arm_widget = new QWidget(this);
-        left_arm_widget->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Minimum);
+        left_arm_widget->setFixedSize(150, 32);
         left_arm_widget->setLayout(left_arm_layout);
         upper_button_layout_->addWidget(left_arm_widget, 1, 0);
 
@@ -185,31 +178,28 @@ namespace arms_rviz_control_plugin
         right_arm_layout->addStretch();
 
         auto* right_arm_widget = new QWidget(this);
-        right_arm_widget->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Minimum);
+        right_arm_widget->setFixedSize(150, 32);
         right_arm_widget->setLayout(right_arm_layout);
         upper_button_layout_->addWidget(right_arm_widget, 1, 1);
 
-        wbc_layout_->addLayout(upper_button_layout_.get());
-
-        // Body mode row with OCS2 to HOLD button on the right
-        auto* body_row_widget = new QWidget(this);
-        body_control_layout_ = std::make_unique<QHBoxLayout>(body_row_widget);
+        // Body mode row shares the same grid columns as the switch rows.
+        auto* body_left_widget = new QWidget(this);
+        body_left_widget->setFixedSize(150, 32);
+        body_control_layout_ = std::make_unique<QHBoxLayout>(body_left_widget);
         body_control_layout_->setContentsMargins(0, 0, 0, 0);
-        body_control_layout_->setSpacing(8);
+        body_control_layout_->setSpacing(4);
 
         body_label_ = std::make_unique<QLabel>("身体模式:", this);
-        body_label_->setMinimumWidth(label_min_width);
+        body_label_->setFixedWidth(label_min_width);
         body_label_->setSizePolicy(QSizePolicy::Minimum, QSizePolicy::Preferred);
         body_label_->setStyleSheet(label_style);
 
         body_combo_box_ = std::make_unique<QComboBox>(this);
-        body_combo_box_->setMinimumHeight(28);
-        body_combo_box_->setMinimumWidth(92);
-        body_combo_box_->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Fixed);
+        body_combo_box_->setFixedSize(72, 28);
         body_combo_box_->setStyleSheet(R"(
             QComboBox {
                 font-size: 13px;
-                padding: 2px 22px 2px 8px;
+                padding: 2px 12px 2px 4px;
                 border: 1px solid #bdbdbd;
                 border-radius: 6px;
                 background: white;
@@ -223,7 +213,7 @@ namespace arms_rviz_control_plugin
             QComboBox::drop-down {
                 subcontrol-origin: padding;
                 subcontrol-position: top right;
-                width: 18px;
+                width: 10px;
                 border: none;
             }
             QComboBox QAbstractItemView {
@@ -235,20 +225,35 @@ namespace arms_rviz_control_plugin
             }
         )");
 
-        // Add OCS2 to HOLD button on the right of body mode dropdown
-        auto* ocs2_to_hold_wbc_btn = new QPushButton("HOLD", this);
-        ocs2_to_hold_wbc_btn->setStyleSheet("QPushButton { background-color: #FF9800; color: white; font-weight: bold; }");
-        ocs2_to_hold_wbc_btn->setMinimumHeight(28);
-        ocs2_to_hold_wbc_btn->setMinimumWidth(72);
-        ocs2_to_hold_wbc_btn->setSizePolicy(QSizePolicy::Minimum, QSizePolicy::Fixed);
-
         body_control_layout_->addWidget(body_label_.get());
-        body_control_layout_->addWidget(body_combo_box_.get(), 1);
-        body_control_layout_->addWidget(ocs2_to_hold_wbc_btn);
+        body_control_layout_->addWidget(body_combo_box_.get());
+        body_control_layout_->addStretch();
+        upper_button_layout_->addWidget(body_left_widget, 2, 0);
 
-        wbc_layout_->addWidget(body_row_widget);
+        // Add OCS2 to HOLD button on the right of body mode dropdown
+        auto* body_right_widget = new QWidget(this);
+        body_right_widget->setFixedSize(150, 32);
+        auto* body_hold_layout = new QHBoxLayout(body_right_widget);
+        body_hold_layout->setContentsMargins(0, 0, 0, 0);
+        body_hold_layout->setSpacing(4);
 
-        main_layout->addWidget(wbc_container_.get());
+        auto* body_hold_spacer = new QWidget(this);
+        body_hold_spacer->setFixedWidth(label_min_width);
+
+        auto* ocs2_to_hold_wbc_btn = new QPushButton("HOLD", this);
+        ocs2_to_hold_wbc_btn->setStyleSheet("QPushButton { background-color: #FF9800; color: white; font-weight: bold; font-size: 13px; }");
+        ocs2_to_hold_wbc_btn->setFixedSize(72, 28);
+
+        body_hold_layout->addWidget(body_hold_spacer);
+        body_hold_layout->addWidget(ocs2_to_hold_wbc_btn);
+        body_hold_layout->addStretch();
+        upper_button_layout_->addWidget(body_right_widget, 2, 1);
+
+        wbc_layout_->addLayout(upper_button_layout_.get());
+        wbc_container_->setFixedSize(350, wbc_container_->sizeHint().height());
+        button_group_->setFixedSize(350, wbc_container_->height());
+
+        main_layout->addWidget(wbc_container_.get(), 0, Qt::AlignHCenter);
 
         // Connect signals
         connect(home_to_hold_btn_.get(), &QPushButton::clicked, this, &OCS2FSMPanel::onHomeToHold);
@@ -524,8 +529,6 @@ namespace arms_rviz_control_plugin
             layout()->invalidate();
             layout()->activate();
         }
-        updateGeometry();
-        adjustSize();
     }
 
     void OCS2FSMPanel::setCurrentState(const std::string& state)
