@@ -382,6 +382,26 @@ namespace arms_controller_common
         //增加movel相关的代码
         CartesianTrajectoryManager cartesian_manager_;
 
+        struct CartesianCommandDefaults
+        {
+            std::string frame_id{"base_link"};
+            std::string ik_type{"AUTO"};
+            double max_linear_velocity{0.25};
+            double max_linear_acceleration{1.0};
+            double max_linear_jerk{5.0};
+            double max_angular_velocity{0.5};
+            double max_angular_acceleration{1.0};
+            double max_angular_jerk{5.0};
+        };
+
+        CartesianCommandDefaults cartesian_defaults_;
+        void declareCartesianDefaultParameters();
+        void updateCartesianDefaults();
+        arms_ros2_control_msgs::msg::LinearMessage applyCartesianDefaults(
+            const arms_ros2_control_msgs::msg::LinearMessage& linear_params) const;
+        arms_ros2_control_msgs::msg::CircleMessage applyCartesianDefaults(
+            const arms_ros2_control_msgs::msg::CircleMessage& circle_params) const;
+
         using ExecuteLinearAction = arms_ros2_control_msgs::action::ExecuteLinear;
         using ExecuteLinearGoalHandle = rclcpp_action::ServerGoalHandle<ExecuteLinearAction>;
         using MovecUseIKAction = arms_ros2_control_msgs::action::MovecUseIK;
