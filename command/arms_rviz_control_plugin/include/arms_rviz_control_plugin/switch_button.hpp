@@ -1,5 +1,6 @@
 #pragma once
 
+#include <QSize>
 #include <QWidget>
 
 namespace arms_rviz_control_plugin
@@ -25,17 +26,20 @@ namespace arms_rviz_control_plugin
         void setClickable(bool clickable);
         bool isClickable() const { return clickable_; }
 
-        QSize sizeHint() const override { return QSize(72, 32); }
-        QSize minimumSizeHint() const override { return QSize(72, 32); }
+        QSize sizeHint() const override;
+        QSize minimumSizeHint() const override;
 
         Q_SIGNALS:
             void clicked();
 
     protected:
+        void changeEvent(QEvent* event) override;
         void paintEvent(QPaintEvent* event) override;
         void mousePressEvent(QMouseEvent* event) override;
 
     private:
+        void updateFixedSize();
+
         VisualState state_ = VisualState::InvalidOffGray;
         bool clickable_ = true;
     };
