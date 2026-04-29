@@ -23,8 +23,8 @@ jobs:
   build-gripper-hardware-common-deb:
     runs-on: ubuntu-24.04
     env:
-      PACKAGE_NAME: gripper-hardware-common-jazzy
-      DEB_FILE_PREFIX: gripper-hardware-common-jazzy
+      PACKAGE_NAME: ros-jazzy-gripper-hardware-common
+      DEB_FILE_PREFIX: ros-jazzy-gripper-hardware-common
       INSTALL_PREFIX: /opt/ros/jazzy
       DEFAULT_ROS_DISTRO: jazzy
 

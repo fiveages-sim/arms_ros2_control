@@ -31,18 +31,18 @@ jobs:
   build-arms-ros2-control-deb:
     runs-on: ubuntu-24.04
     env:
-      PACKAGE_NAME: arms-ros2-control-jazzy
-      DEB_FILE_PREFIX: arms-ros2-control-jazzy
+      PACKAGE_NAME: ros-jazzy-arms-ros2-control
+      DEB_FILE_PREFIX: ros-jazzy-arms-ros2-control
       INSTALL_PREFIX: /opt/ros/jazzy
-      OCS2_PACKAGE_NAME: ocs2-ros2-jazzy-mobile-manipulator
-      OCS2_DEB_FILE_PREFIX: ocs2-ros2-jazzy-mobile-manipulator
-      COMMON_PACKAGE_NAME: robot-descriptions-jazzy-common
-      COMMON_DEB_FILE_PREFIX: robot-descriptions-jazzy-common
+      OCS2_PACKAGE_NAME: ros-jazzy-ocs2-ros2-mobile-manipulator
+      OCS2_DEB_FILE_PREFIX: ros-jazzy-ocs2-ros2-mobile-manipulator
+      COMMON_PACKAGE_NAME: ros-jazzy-robot-descriptions-common
+      COMMON_DEB_FILE_PREFIX: ros-jazzy-robot-descriptions-common
       DEFAULT_ROS_DISTRO: jazzy
       PREFERRED_OCS2_RELEASE_REPO: legubiao/ocs2_ros2
       FALLBACK_OCS2_RELEASE_REPO: YangLuo-Bionics/ocs2_ros2
-      PREFERRED_COMMON_RELEASE_REPO: fiveages-sim/robot_descriptions
-      FALLBACK_COMMON_RELEASE_REPO: YangLuo-Bionics/robot_descriptions
+      PREFERRED_COMMON_RELEASE_REPO: fiveages-sim/robot-descriptions-common
+      FALLBACK_COMMON_RELEASE_REPO: YangLuo-Bionics/robot-descriptions-common
 
     steps:
       - name: Checkout repository
@@ -421,4 +421,10 @@ jobs:
               --notes "Automated release for Debian packages."
           fi
 
-          gh release upload "$TAG" "$DEB_PATH" --clobber
+          for _i in 1 2 3 4 5; do
+            if gh release upload "$TAG" "$DEB_PATH" --clobber; then
+              break
+            fi
+            echo "Upload attempt ${_i}/5 failed, retrying in 10s..." >&2
+            sleep 10
+          done
