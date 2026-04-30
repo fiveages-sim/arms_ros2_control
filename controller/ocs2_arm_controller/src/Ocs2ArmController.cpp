@@ -10,6 +10,8 @@
 #include "ocs2_arm_controller/FSM/StateMoveJ.h"
 #include <arms_controller_common/utils/GravityCompensation.h>
 #include "arms_controller_common/utils/Kinematics.h"
+#include "arms_controller_common/utils/CollisionDetector.h"
+#include <ocs2_core/misc/LoadStdVectorOfPair.h>
 
 namespace ocs2::mobile_manipulator
 {
@@ -132,8 +134,8 @@ namespace ocs2::mobile_manipulator
             {
                 const auto& pinocchio_model = ctrl_comp_->interface_->getPinocchioInterface().getModel();
                 gravity_compensation = std::make_shared<arms_controller_common::GravityCompensation>(pinocchio_model);
-                kinematics_=std::make_shared<arms_controller_common::ArmKinematics>(pinocchio_model);
-                kinematics_->initializeFromParameters(joint_names_,left_ee_name_,right_ee_name_);
+                kinematics_ = std::make_shared<arms_controller_common::ArmKinematics>(pinocchio_model);
+                kinematics_->initializeFromParameters(joint_names_, left_ee_name_, right_ee_name_);
                 const std::string robot_name = get_node()->get_parameter("robot_name").as_string();
                 if (robot_name != "m6_ccs")
                 {
@@ -245,6 +247,37 @@ namespace ocs2::mobile_manipulator
                 RCLCPP_INFO(get_node()->get_logger(),
                             "Joint limit checker initialized from Pinocchio model (arm joints: %d)",
                             arm_state_dim);
+
+                if (ctrl_comp_->interface_->isSelfCollisionEnabled())
+                {
+                    // 获取碰撞对配置
+                    std::vector<std::pair<std::string, std::string>> collision_pairs;
+                    ocs2::loadData::loadStdVectorOfPair(
+                        ctrl_comp_->getTaskFilePath(),
+                        "selfCollision.collisionLinkPairs",
+                        collision_pairs,
+                        false);
+
+                    if (!collision_pairs.empty())
+                    {
+                        // 获取 URDF 内容
+                        std::string urdf_file = ctrl_comp_->getUrdfFilePath();
+
+                        if (!urdf_file.empty())
+                        {
+                            // const auto& pinocchio_model = ctrl_comp_->interface_->getPinocchioInterface().getModel();
+
+                            // 使用 URDF 字符串构造函数（已测试通过）
+                            auto collision_detector = std::make_shared<arms_controller_common::CollisionDetector>(
+                                pinocchio_model, urdf_file, collision_pairs);
+
+                            state_list_.movej->setCollisionDetector(collision_detector);
+                            state_list_.movej->setCollisionEnabled(true);
+                            state_list_.movej->setCollisionThreshold(
+                                ctrl_comp_->interface_->getSelfCollisionMinimumDistance());
+                        }
+                    }
+                }
             }
 
             return CallbackReturn::SUCCESS;
@@ -464,6 +497,7 @@ namespace ocs2::mobile_manipulator
             return state_list_.invalid;
         }
     }
+
     void Ocs2ArmController::handleKinematicsService(
         const std::shared_ptr<arms_ros2_control_msgs::srv::KinematicsService::Request> request,
         const std::shared_ptr<arms_ros2_control_msgs::srv::KinematicsService::Response> response)
@@ -478,6 +512,7 @@ namespace ocs2::mobile_manipulator
             response->message = "Kinematics not initialized";
         }
     }
+
     void Ocs2ArmController::publishCurrentFsmState() const
     {
         if (!fsm_state_publisher_ || !current_state_)

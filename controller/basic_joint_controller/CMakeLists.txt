@@ -45,6 +45,8 @@ ament_target_dependencies(${PROJECT_NAME}
 target_link_libraries(${PROJECT_NAME}
         Eigen3::Eigen
 )
+find_package(pinocchio REQUIRED)
+target_link_libraries(basic_joint_controller pinocchio::pinocchio)
 
 pluginlib_export_plugin_description_file(controller_interface basic_joint_controller.xml)
 

@@ -6,6 +6,7 @@
 #include <algorithm>
 #include <cmath>
 #include <string>
+#include <std_msgs/msg/int32.hpp>
 
 // // planners/kinematics required for cartesian moveL support
 // #include "lina_planning/planning/path_planner/movel.h"
@@ -57,7 +58,21 @@ namespace arms_controller_common
             declareCartesianDefaultParameters();
             current_target_joint_publisher_ =
                 arms_controller_common::utils::getOrCreateCurrentTargetJointPublisher(node_);
+            fsm_command_publisher_ = node_->create_publisher<std_msgs::msg::Int32>(
+                "/fsm_command", 1);
         }
+    }
+
+    void StateMoveJ::publishFsmCommand(int32_t command)
+    {
+        if (!fsm_command_publisher_)
+        {
+            return;
+        }
+
+        std_msgs::msg::Int32 msg;
+        msg.data = command;
+        fsm_command_publisher_->publish(msg);
     }
 
     void StateMoveJ::updateParam()
@@ -252,6 +267,10 @@ namespace arms_controller_common
     void StateMoveJ::run(const rclcpp::Time& /*time*/, const rclcpp::Duration& period)
     {
         std::lock_guard lock(target_mutex_);
+        if (checkAndHandleCollision())
+        {
+            return;
+        }
         // 优先处理腰部升降（与转向互斥）
         if (waist_lifting_active_ && waist_lifting_planer_)
         {
@@ -3078,5 +3097,71 @@ namespace arms_controller_common
         move_cartesian_joint_names_ = cartesian_manager_.getMovelJointNames(circle_params.arm_name);
 
         return true;
+    }
+
+    Eigen::VectorXd StateMoveJ::getCurrentJointAngles() const
+    {
+        size_t num_joints = ctrl_interfaces_.joint_position_state_interface_.size();
+        Eigen::VectorXd angles(num_joints);
+
+        for (size_t i = 0; i < num_joints; ++i)
+        {
+            auto value = ctrl_interfaces_.joint_position_state_interface_[i].get().get_optional();
+            angles(i) = value.value_or(0.0);
+        }
+        return angles;
+    }
+
+    bool StateMoveJ::checkAndHandleCollision()
+    {
+        if (!collision_detection_enabled_ || !collision_detector_)
+        {
+            return false;
+        }
+
+        Eigen::VectorXd current_joints = getCurrentJointAngles();
+
+        if (collision_detector_->checkCollision(current_joints, collision_threshold_))
+        {
+            auto logger = node_ ? node_->get_logger() : rclcpp::get_logger("StateMoveJ");
+            RCLCPP_WARN(logger, "Collision detected! Stopping motion.");
+
+            refreshHoldPositions();
+            for (size_t i = 0; i < ctrl_interfaces_.joint_position_command_interface_.size() && i < hold_positions_.
+                 size(); ++i)
+            {
+                ctrl_interfaces_.setJointPositionCommand(i, hold_positions_[i]);
+            }
+
+            interpolation_active_ = false;
+            has_target_ = false;
+            move_cartesian_active_ = false;
+            waist_lifting_active_ = false;
+            waist_turning_active_ = false;
+            motion_mode_ = MotionMode::MOVEJ;
+            ctrl_interfaces_.fsm_command_ = 2;
+            publishFsmCommand(2);
+
+            return true;
+        }
+
+        return false;
+    }
+
+    void StateMoveJ::setCollisionDetector(std::shared_ptr<CollisionDetector> detector)
+    {
+        collision_detector_ = detector;
+        // collision_detector_->printCollisionPairs();
+    }
+
+    void StateMoveJ::setCollisionEnabled(bool enabled)
+    {
+        collision_detection_enabled_ = enabled;
+    }
+
+    void StateMoveJ::setCollisionThreshold(double threshold)
+    {
+        collision_threshold_ = threshold;
+        std::cout << "collision threshold set to [" << threshold << "]" << std::endl;
     }
 } // namespace arms_controller_common

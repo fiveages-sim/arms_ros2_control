@@ -16,19 +16,18 @@
 
 namespace ocs2::mobile_manipulator
 {
-
     rcl_interfaces::msg::SetParametersResult CtrlComponent::on_parameter_change(
-        const std::vector<rclcpp::Parameter> &parameters)
+        const std::vector<rclcpp::Parameter>& parameters)
     {
         rcl_interfaces::msg::SetParametersResult result;
         result.successful = true;
 
         // Check if the 'speed' parameter was changed
-        for (const auto &param : parameters)
+        for (const auto& param : parameters)
         {
             if (param.get_name() == "hardware_latency")
             {
-                hardware_latency_ = param.as_double();  // Update the speed variable
+                hardware_latency_ = param.as_double(); // Update the speed variable
                 RCLCPP_INFO(node_->get_logger(), "Updated hardware_latency to: %f", hardware_latency_);
             }
         }
@@ -43,7 +42,8 @@ namespace ocs2::mobile_manipulator
     {
         // Create Mobile Manipulator interface
         interface_ = std::make_shared<MobileManipulatorInterface>(task_file, lib_folder, urdf_file);
-
+        task_file_ = task_file;
+        urdf_file_ = urdf_file;
         // Setup publishers
         setupPublisher();
     }
@@ -53,7 +53,7 @@ namespace ocs2::mobile_manipulator
         // Initialize MPC observation publisher
         mpc_observation_publisher_ = node_->create_publisher<ocs2_msgs::msg::MpcObservation>(
             robot_name_ + "_mpc_observation", 1);
-        
+
         // Initialize FSM command publisher (for stopping all controllers)
         fsm_command_publisher_ = node_->create_publisher<std_msgs::msg::Int32>("/fsm_command", 10);
     }
@@ -66,11 +66,11 @@ namespace ocs2::mobile_manipulator
         }
         // Update observation state
         observation_.time = time.seconds();
-            for (size_t i = 0; i < joint_names_.size(); ++i)
-            {
-                auto value = ctrl_interfaces_.joint_position_state_interface_[i].get().get_optional();
-                observation_.state[i] = value.value_or(0.0);
-            }
+        for (size_t i = 0; i < joint_names_.size(); ++i)
+        {
+            auto value = ctrl_interfaces_.joint_position_state_interface_[i].get().get_optional();
+            observation_.state[i] = value.value_or(0.0);
+        }
         observation_.input = vector_t::Zero(interface_->getManipulatorModelInfo().inputDim);
 
         // 更新PoseBasedReferenceManager的当前观测
@@ -97,7 +97,7 @@ namespace ocs2::mobile_manipulator
         {
             observation_.state = cached_last_action_;
         }
-        
+
         mpc_mrt_interface_->setCurrentObservation(observation_);
 
         const auto observation_msg = ros_msg_conversions::createObservationMsg(observation_);
@@ -127,7 +127,7 @@ namespace ocs2::mobile_manipulator
                 policy.timeTrajectory_,
                 policy.inputTrajectory_
             );
-            
+
             // Extract joint positions from state and set as commands
             if (ctrl_interfaces_.control_mode_ == ControlMode::POSITION)
             {
@@ -155,7 +155,8 @@ namespace ocs2::mobile_manipulator
 
                 for (size_t i = 0; i < joint_names_.size() && i < static_cast<size_t>(future_input.size()); ++i)
                 {
-                    std::ignore = ctrl_interfaces_.joint_velocity_command_interface_[i].get().set_value(future_input(i));
+                    std::ignore = ctrl_interfaces_.joint_velocity_command_interface_[i].get().
+                        set_value(future_input(i));
                 }
             }
             else
@@ -223,7 +224,8 @@ namespace ocs2::mobile_manipulator
             if (pose_reference_manager_)
             {
                 pose_reference_manager_->setCurrentObservation(observation_);
-                pose_reference_manager_->setCurrentEndEffectorPoses(left_initial_ee_state, right_initial_ee_state, false);
+                pose_reference_manager_->setCurrentEndEffectorPoses(left_initial_ee_state, right_initial_ee_state,
+                                                                    false);
             }
 
             // Dual arm mode: create target trajectory containing two end effectors
