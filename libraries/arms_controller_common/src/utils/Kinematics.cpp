@@ -1557,7 +1557,7 @@ namespace arms_controller_common
             // }
             // else
             // {
-                pose = computeSingleEndEffectorPose(state, "left");
+            pose = computeSingleEndEffectorPose(state, "left");
             // }
 
 
@@ -1588,7 +1588,7 @@ namespace arms_controller_common
             // }
             // else
             // {
-                pose = computeSingleEndEffectorPose(state, "right");
+            pose = computeSingleEndEffectorPose(state, "right");
             // }
 
             result_poses.push_back(pose);
@@ -1624,7 +1624,7 @@ namespace arms_controller_common
             // }
             // else
             // {
-                computeBothEndEffectorPose(state, left_pose, right_pose);
+            computeBothEndEffectorPose(state, left_pose, right_pose);
             // }
 
 
@@ -1674,8 +1674,8 @@ namespace arms_controller_common
 
             Eigen::VectorXd solution;
             bool success;
-                success = solveSingleArmIK(target_poses[0], initial_eigen, solution,
-                                           "left", max_iterations, tolerance);
+            success = solveSingleArmIK(target_poses[0], initial_eigen, solution,
+                                       "left", max_iterations, tolerance);
 
 
             if (success)
@@ -1715,8 +1715,8 @@ namespace arms_controller_common
 
             Eigen::VectorXd solution;
             bool success;
-                success = solveSingleArmIK(target_poses[0], initial_eigen, solution,
-                                           "right", max_iterations, tolerance);
+            success = solveSingleArmIK(target_poses[0], initial_eigen, solution,
+                                       "right", max_iterations, tolerance);
 
             if (success)
             {
@@ -1990,8 +1990,12 @@ namespace arms_controller_common
 
         // 提取旋转矩阵和平移
         Eigen::Matrix3d rot_mat = final_pose.block < 3,
+
+
         3 > (0, 0);
         Eigen::Vector3d trans = final_pose.block < 3,
+
+
         1 > (0, 3);
 
         pose.position = trans;

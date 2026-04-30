@@ -17,6 +17,7 @@
 #include <rclcpp/rclcpp.hpp>
 #include <rclcpp_lifecycle/lifecycle_node.hpp>
 #include <std_msgs/msg/float64_multi_array.hpp>
+#include <std_msgs/msg/int32.hpp>
 #include <trajectory_msgs/msg/joint_trajectory.hpp>
 #include <eigen3/Eigen/Dense>
 #include "arms_controller_common/utils/WaistLiftingPlaner.h"
@@ -26,6 +27,7 @@
 #include "arms_controller_common/utils/CartesianTrajectoryManager.h"
 #include "arms_ros2_control_msgs/srv/execute_linear.hpp"
 #include "arms_ros2_control_msgs/srv/movec_use_ik.hpp"
+#include "arms_controller_common/utils/CollisionDetector.h"
 
 namespace arms_controller_common
 {
@@ -186,6 +188,20 @@ namespace arms_controller_common
         * @param service_name Service name (default: "execute_linear")
         */
         void setupCircleTrajectoryService(const std::string& service_name = "execute_circle_use_ik");
+        /**
+             * @brief 设置碰撞检测器
+             */
+        void setCollisionDetector(std::shared_ptr<CollisionDetector> detector);
+
+        /**
+         * @brief 启用/禁用碰撞检测
+         */
+        void setCollisionEnabled(bool enabled);
+
+        /**
+         * @brief 设置碰撞检测阈值
+         */
+        void setCollisionThreshold(double threshold);
 
     private:
         void updateParam();
@@ -224,6 +240,10 @@ namespace arms_controller_common
         // Current target joint publisher (shared convention across controllers)
         rclcpp::Publisher<std_msgs::msg::Float64MultiArray>::SharedPtr current_target_joint_publisher_;
         void publishCurrentTargetJoint(const std::vector<double>& target_positions);
+
+        // Global FSM command publisher for collision-triggered HOLD transitions
+        rclcpp::Publisher<std_msgs::msg::Int32>::SharedPtr fsm_command_publisher_;
+        void publishFsmCommand(int32_t command);
 
         // Joint limit checking
         std::shared_ptr<JointLimitsManager> joint_limits_manager_;
@@ -369,5 +389,11 @@ namespace arms_controller_common
         // 添加 MoveL 相关的辅助方法
         bool validateCircleRequest(const arms_ros2_control_msgs::msg::CircleMessage& circle_params,
                                    std::string& error_msg);
+        std::shared_ptr<CollisionDetector> collision_detector_;
+        bool collision_detection_enabled_{false};
+        double collision_threshold_{0.01};
+
+        Eigen::VectorXd getCurrentJointAngles() const;
+        bool checkAndHandleCollision();
     };
 } // namespace arms_controller_common
