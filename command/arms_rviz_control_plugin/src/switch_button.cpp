@@ -1,16 +1,61 @@
 #include "arms_rviz_control_plugin/switch_button.hpp"
 
+#include <algorithm>
+#include <cmath>
+#include <QEvent>
+#include <QGuiApplication>
 #include <QPainter>
 #include <QMouseEvent>
+#include <QScreen>
+#include <QSizePolicy>
 
 namespace arms_rviz_control_plugin
 {
+namespace
+{
+qreal uiScale()
+{
+    qreal scale = 1.0;
+    const QScreen* screen = QGuiApplication::primaryScreen();
+    if (screen)
+    {
+        scale = std::max(scale, screen->availableGeometry().width() / 1920.0);
+        scale = std::max(scale, screen->logicalDotsPerInchX() / 96.0);
+    }
+    return std::min(scale, 1.35);
+}
+
+int scaled(int value)
+{
+    return std::max(1, static_cast<int>(std::round(value * uiScale())));
+}
+}  // namespace
 
 SwitchButton::SwitchButton(QWidget* parent)
     : QWidget(parent)
 {
     setCursor(Qt::PointingHandCursor);
     setSizePolicy(QSizePolicy::Fixed, QSizePolicy::Fixed);
+    updateFixedSize();
+}
+
+QSize SwitchButton::sizeHint() const
+{
+    return QSize(scaled(72), scaled(32));
+}
+
+QSize SwitchButton::minimumSizeHint() const
+{
+    return sizeHint();
+}
+
+void SwitchButton::updateFixedSize()
+{
+    const QSize target_size = sizeHint();
+    if (size() != target_size)
+    {
+        setFixedSize(target_size);
+    }
 }
 
 void SwitchButton::setVisualState(VisualState state)
@@ -26,6 +71,16 @@ void SwitchButton::setClickable(bool clickable)
     clickable_ = clickable;
     setCursor(clickable_ ? Qt::PointingHandCursor : Qt::ArrowCursor);
     update();
+}
+
+void SwitchButton::changeEvent(QEvent* event)
+{
+    if (event->type() == QEvent::FontChange || event->type() == QEvent::StyleChange)
+    {
+        updateFixedSize();
+        updateGeometry();
+    }
+    QWidget::changeEvent(event);
 }
 
 void SwitchButton::mousePressEvent(QMouseEvent* event)
@@ -74,7 +129,7 @@ void SwitchButton::paintEvent(QPaintEvent* /*event*/)
     p.drawRoundedRect(r, radius, radius);
 
     // 滑块
-    const qreal margin = 2.0;
+    const qreal margin = std::max<qreal>(2.0, r.height() * 0.0625);
     const qreal knobSize = r.height() - 2 * margin;
     QRectF knobRect;
     if (isOn)
@@ -92,18 +147,21 @@ void SwitchButton::paintEvent(QPaintEvent* /*event*/)
     // 文字
     QFont f = font();
     f.setBold(true);
-    f.setPointSize(10);
+    f.setPixelSize(std::max(10, static_cast<int>(r.height() * 0.42)));
     p.setFont(f);
 
     p.setPen(QColor(255, 255, 255));
+    const qreal textMargin = std::max<qreal>(4.0, r.height() * 0.18);
     if (isOn)
     {
-        QRectF textRect(r.left() + 10, r.top(), r.width() / 2.0, r.height());
-        p.drawText(textRect, Qt::AlignVCenter | Qt::AlignLeft, text);
+        QRectF textRect(r.left() + textMargin, r.top(),
+                        knobRect.left() - r.left() - 2 * textMargin, r.height());
+        p.drawText(textRect, Qt::AlignCenter, text);
     }
     else
     {
-        QRectF textRect(r.left() + 34, r.top(), 24, r.height());
+        QRectF textRect(knobRect.right() + textMargin, r.top(),
+                        r.right() - knobRect.right() - 2 * textMargin, r.height());
         p.drawText(textRect, Qt::AlignVCenter | Qt::AlignLeft, text);
     }
 }
