@@ -1,7 +1,5 @@
 #pragma once
 #include "arms_controller_common/utils/Kinematics.h"
-#include "lina_planning/planning/path_planner/circular_curve.h"
-#include "lina_planning/planning/path_planner/movel.h"
 #include <Eigen/Dense>
 #include <arms_ros2_control_msgs/msg/circle_message.hpp>
 #include <arms_ros2_control_msgs/msg/linear_message.hpp>
@@ -11,8 +9,14 @@
 #include <string>
 #include <vector>
 
+#ifdef HAS_LINA_PLANNING
+#include "lina_planning/planning/path_planner/circular_curve.h"
+#include "lina_planning/planning/path_planner/movel.h"
+#endif
+
 namespace arms_controller_common
 {
+#ifdef HAS_LINA_PLANNING
     class CartesianTrajectoryManager
     {
     public:
@@ -93,4 +97,76 @@ namespace arms_controller_common
         double min_val = 1.0e-6;
         rclcpp::Logger logger_;
     };
+#else
+    class CartesianTrajectoryManager
+    {
+    public:
+        CartesianTrajectoryManager() = default;
+        ~CartesianTrajectoryManager() = default;
+
+        void setKinematicsSolver(
+            const std::shared_ptr<ArmKinematics>& kinematics = nullptr)
+        {
+            arm_kinematics_ = kinematics;
+        }
+
+        bool planSingleArmMoveL(
+            const std::vector<double>& /*start_joint_pos*/,
+            const arms_ros2_control_msgs::msg::LinearMessage& /*target_point_msg*/,
+            const double /*period*/ = 0.01)
+        {
+            last_error_ = "lina_planning not found; MoveL is disabled";
+            return false;
+        }
+        bool planSingleArmMoveC(
+            const std::vector<double>& /*start_joint_pos*/,
+            const arms_ros2_control_msgs::msg::CircleMessage& /*target_circle_msg*/,
+            const double /*period*/ = 0.01)
+        {
+            last_error_ = "lina_planning not found; MoveC is disabled";
+            return false;
+        }
+        bool planDualArmMoveL(
+            const std::vector<double>& /*start_joint_pos*/,
+            const arms_ros2_control_msgs::msg::LinearMessage& /*target_point_msg*/,
+            const double /*period*/ = 0.01)
+        {
+            last_error_ = "lina_planning not found; dual-arm MoveL is disabled";
+            return false;
+        }
+        bool planDualArmMoveC(
+            const std::vector<double>& /*start_joint_pos*/,
+            const arms_ros2_control_msgs::msg::CircleMessage& /*target_circle_msg*/,
+            const double /*period*/ = 0.01)
+        {
+            last_error_ = "lina_planning not found; dual-arm MoveC is disabled";
+            return false;
+        }
+
+        bool getNextJointPos(std::vector<double>& /*res*/)
+        {
+            last_error_ = "lina_planning not found; no cartesian trajectory available";
+            return false;
+        }
+
+        double getPlanningTime() const { return planningTime_; }
+        bool isCompleted() const { return completed_; }
+        std::string getLastError() const { return last_error_; }
+        std::vector<std::string> getMovelJointNames(std::string /*arm_name*/) { return {}; }
+        void clearPlanner()
+        {
+            completed_ = false;
+            planningTime_ = 0.0;
+            last_error_.clear();
+        }
+
+        bool hasKinematics() { return arm_kinematics_ != nullptr; }
+
+    private:
+        std::shared_ptr<ArmKinematics> arm_kinematics_;
+        bool completed_ = false;
+        std::string last_error_;
+        double planningTime_ = 0.0;
+    };
+#endif
 } // namespace arms_controller_common

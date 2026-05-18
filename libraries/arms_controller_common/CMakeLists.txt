@@ -31,7 +31,7 @@ foreach (Dependency IN ITEMS ${dependencies})
 endforeach ()
 
 
-add_library(${PROJECT_NAME} SHARED
+set(ARMS_CONTROLLER_COMMON_SOURCES
         src/FSM/StateHome.cpp
         src/FSM/StateHold.cpp
         src/FSM/StateMoveJ.cpp
@@ -40,8 +40,17 @@ add_library(${PROJECT_NAME} SHARED
         src/utils/JointTrajectoryManager.cpp
         src/utils/WaistLiftingPlaner.cpp
         src/utils/Kinematics.cpp
-        src/utils/CartesianTrajectoryManager.cpp
         src/utils/CollisionDetector.cpp
+)
+
+if(lina_planning_FOUND)
+    list(APPEND ARMS_CONTROLLER_COMMON_SOURCES
+            src/utils/CartesianTrajectoryManager.cpp
+    )
+endif()
+
+add_library(${PROJECT_NAME} SHARED
+        ${ARMS_CONTROLLER_COMMON_SOURCES}
 )
 
 # Pinocchio headers (ROS Jazzy) can trigger -Wreorder in template instantiation paths.
