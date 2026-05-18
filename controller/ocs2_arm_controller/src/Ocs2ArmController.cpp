@@ -127,9 +127,31 @@ namespace ocs2::mobile_manipulator
             };
             ctrl_comp_ = std::make_shared<CtrlComponent>(get_node(), ctrl_interfaces_, auto_declare_func);
             std::shared_ptr<arms_controller_common::GravityCompensation> gravity_compensation = nullptr;
-            // 新增：从参数读取末端执行器名称
-            std::string left_ee_name_ = auto_declare<std::string>("left_ee_name", "left_tcp");
-            std::string right_ee_name_ = auto_declare<std::string>("right_ee_name", "right_tcp");
+            // // 新增：从参数读取末端执行器名称
+            // std::string left_ee_name_ = auto_declare<std::string>("left_ee_name", "left_tcp");
+            // std::string right_ee_name_ = auto_declare<std::string>("right_ee_name", "right_tcp");
+
+            // 从 CtrlComponent 的 OCS2 接口读取末端执行器名称
+            std::string left_ee_name_ = "left_tcp";  // 默认值
+            std::string right_ee_name_ = "right_tcp"; // 默认值
+
+            if (ctrl_comp_->interface_)
+            {
+                // 从 OCS2 模型信息中获取末端执行器名称
+                const auto& model_info = ctrl_comp_->interface_->getManipulatorModelInfo();
+                left_ee_name_ = model_info.eeFrame;    // 从 .info 文件读取（如 "left_eef"）
+                right_ee_name_ = model_info.eeFrame1;  // 从 .info 文件读取（如 "right_eef"）
+
+                RCLCPP_INFO(get_node()->get_logger(),
+                            "Using end effector names from OCS2 config: left='%s', right='%s'",
+                            left_ee_name_.c_str(), right_ee_name_.c_str());
+            }
+            else
+            {
+                RCLCPP_WARN(get_node()->get_logger(),
+                            "OCS2 interface not available, using default end effector names: left='%s', right='%s'",
+                            left_ee_name_.c_str(), right_ee_name_.c_str());
+            }
             if (ctrl_comp_->interface_)
             {
                 const auto& pinocchio_model = ctrl_comp_->interface_->getPinocchioInterface().getModel();
@@ -137,13 +159,6 @@ namespace ocs2::mobile_manipulator
                 kinematics_ = std::make_shared<arms_controller_common::ArmKinematics>(pinocchio_model);
                 kinematics_->initializeFromParameters(joint_names_, left_ee_name_, right_ee_name_);
                 const std::string robot_name = get_node()->get_parameter("robot_name").as_string();
-                if (robot_name != "m6_ccs")
-                {
-                    kinematics_->disableSdk();
-                    RCLCPP_INFO(get_node()->get_logger(),
-                                "SDK IK solver disabled for robot '%s' (only supported for m6_ccs)",
-                                robot_name.c_str());
-                }
                 RCLCPP_INFO(get_node()->get_logger(),
                             "Gravity compensation initialized from OCS2 Pinocchio model");
             }

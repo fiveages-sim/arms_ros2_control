@@ -14,10 +14,6 @@
 #include <geometry_msgs/msg/pose.hpp>
 #include "arms_ros2_control_msgs/srv/kinematics_service.hpp"
 
-extern "C" {
-#include "FxRobot.h"
-}
-
 namespace arms_controller_common
 {
     // 末端执行器位姿结构体
@@ -89,7 +85,6 @@ namespace arms_controller_common
         {
             BFGS, // BFGS 梯度投影法（适合复杂约束、冗余机械臂）
             DLS, // 阻尼最小二乘法（适合非冗余、速度快）
-            SDK, //新增天机官方sdk，先这么写，后面在考虑好的代码结构
             AUTO // 自动选择（先尝试 DLS，失败后使用 BFGS）
         };
 
@@ -128,16 +123,6 @@ namespace arms_controller_common
         EndEffectorPose computeFramePose(const RobotState& state,
                                          const std::string& frameName);
 
-        /**
- * @brief 使用SDK计算正运动学（直接得到TCP位姿）
- * @param joint_angles 关节角度（弧度）
- * @param arm_type 手臂类型 ("left" 或 "right")
- * @param pose 输出的TCP位姿
- * @return 是否成功
- */
-        bool computeForwardKinematicsWithSDK(const Eigen::VectorXd& joint_angles,
-                                             const std::string& arm_type,
-                                             EndEffectorPose& pose);
 
         // ==================== 逆运动学 ====================
 
@@ -163,17 +148,9 @@ namespace arms_controller_common
             double dlsDamping = 0.01;
             double dlsStepLimit = 0.3;
             int dlsStagnationLimit = 8;
-
-            //sdk的参数
-            double dgr1 = 0.05; // 奇异鲁棒参数1
-            double dgr2 = 0.05; // 奇异鲁棒参数2
-            double dgr3 = 0.0; // 奇异鲁棒参数3
-            bool use_nsp = false; // 是否使用零空间约束
-            double nsp_angle = 0.0; // 零空间角度调整
-            Eigen::Vector3d nsp_direction; // 零空间方向（当use_nsp=true时）
         };
 
-        // 新增SDK专用参数结构
+
 
 
         struct SolutionInfo
@@ -201,11 +178,6 @@ namespace arms_controller_common
                                       int maxIterations = 1500,
                                       double tolerance = 1e-4);
 
-        // 使用TJ_FX_ROBOT_CONTROL_SDK的逆运动学
-        bool solveSingleArmIKWithSDK(const EndEffectorPose& targetPose,
-                                     const Eigen::VectorXd& initialGuess,
-                                     Eigen::VectorXd& solution,
-                                     std::string arm_type);
 
         void setWeight(const Eigen::VectorXd& weight) { weight_ = weight; }
         void setSolverParams(const SolverParams& params) { params_ = params; }
@@ -311,15 +283,12 @@ namespace arms_controller_common
             rightEndEffectorName_ = right_name;
         }
 
-        // 仅 robot_name == "m6_ccs" 时允许 SDK solver，其他机器人调用此方法禁用
-        void disableSdk() { sdkInitialized_ = false; }
 
         static std::string solverTypeName(SolverType t)
         {
             switch (t) {
                 case SolverType::DLS:  return "DLS";
                 case SolverType::BFGS: return "BFGS";
-                case SolverType::SDK:  return "SDK";
                 case SolverType::AUTO: return "AUTO";
                 default:               return "unknown";
             }
@@ -333,10 +302,6 @@ namespace arms_controller_common
         // Pinocchio模型和数据
         pinocchio::Model model_;
         mutable pinocchio::Data data_;
-
-        // TJ_FX_ROBOT_CONTROL_SDK 相关
-        int robotSerial_; // SDK机器人序列号
-        bool sdkInitialized_ = false; // SDK是否成功初始化，由initializeSdkKinematics()结果决定
 
         // 框架名称
         std::string baseFrameName_;
@@ -381,11 +346,6 @@ namespace arms_controller_common
                        const EndEffectorPose& target) const;
 
         // DLS 求解器
-
-        // 缓存
-        // mutable Eigen::VectorXd lastLeftSolution_;
-        // mutable Eigen::VectorXd lastRightSolution_;
-        // mutable std::string lastArmType_;
         std::pair<Eigen::VectorXd, SolutionInfo>
         solveDLS(const Eigen::VectorXd& seed,
                  const Eigen::VectorXd& lower,

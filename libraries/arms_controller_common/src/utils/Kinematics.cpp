@@ -11,79 +11,6 @@
 
 namespace arms_controller_common
 {
-    namespace
-    {
-        std::string resolveKinematicsConfigPath()
-        {
-            if (const char* env_path = std::getenv("ARMS_KINEMATICS_CONFIG_PATH"))
-            {
-                std::ifstream env_file(env_path);
-                if (env_file.good())
-                {
-                    return env_path;
-                }
-                std::cerr << "ARMS_KINEMATICS_CONFIG_PATH is set but file is not readable: "
-                    << env_path << std::endl;
-            }
-
-            const auto package_share =
-                ament_index_cpp::get_package_share_directory("arms_controller_common");
-            const auto config_path = package_share + "/config/ccs_m6.MvKDCfg";
-
-            std::ifstream config_file(config_path);
-            if (!config_file.good())
-            {
-                throw std::runtime_error("Kinematics config file not found: " + config_path);
-            }
-
-            return config_path;
-        }
-
-        bool initializeSdkKinematics()
-        {
-            // 初始化TJ_FX_ROBOT_CONTROL_SDK - 从ccs_m6.MvKDCfg加载M6CCS参数
-            FX_INT32L TYPE[2];
-            FX_DOUBLE GRV[2][3];
-            FX_DOUBLE DH[2][8][4];
-            FX_DOUBLE PNVA[2][7][4];
-            FX_DOUBLE BD[2][4][3];
-            FX_DOUBLE Mass[2][7];
-            FX_DOUBLE MCP[2][7][3];
-            FX_DOUBLE I[2][7][6];
-
-            const auto configPath = resolveKinematicsConfigPath();
-
-            if (LOADMvCfg((char*)configPath.c_str(), TYPE, GRV, DH, PNVA, BD, Mass, MCP, I) == FX_TRUE)
-            {
-                std::cout << "Loaded M6CCS config successfully from " << configPath << std::endl;
-            }
-            else
-            {
-                std::cerr << "SDK not available: failed to load M6CCS config from " << configPath
-                          << ". SDK solver will be disabled." << std::endl;
-                return false;
-            }
-
-            // 初始化左右臂（serial 0: left, serial 1: right）
-            for (int serial = 0; serial < 2; serial++)
-            {
-                if (FX_Robot_Init_Type(serial, TYPE[serial]) == FX_FALSE)
-                {
-                    std::cerr << "Failed to init robot type for serial " << serial << std::endl;
-                }
-                if (FX_Robot_Init_Kine(serial, DH[serial]) == FX_FALSE)
-                {
-                    std::cerr << "Failed to init kinematics for serial " << serial << std::endl;
-                }
-                if (FX_Robot_Init_Lmt(serial, PNVA[serial], BD[serial]) == FX_FALSE)
-                {
-                    std::cerr << "Failed to init limits for serial " << serial << std::endl;
-                }
-            }
-            return true;
-        }
-    }
-
     // ==================== 构造函数 ====================
 
     ArmKinematics::ArmKinematics(const std::string& urdf_path,
@@ -96,8 +23,6 @@ namespace arms_controller_common
 
         // 初始化权重为单位权重
         weight_ = Eigen::VectorXd::Ones(6);
-
-        sdkInitialized_ = initializeSdkKinematics();
     }
 
     ArmKinematics::ArmKinematics(const pinocchio::Model& model) : model_(model)
@@ -105,8 +30,6 @@ namespace arms_controller_common
         data_ = pinocchio::Data(model_);
         buildMappings();
         weight_ = Eigen::VectorXd::Ones(6);
-
-        sdkInitialized_ = initializeSdkKinematics();
     }
 
     ArmKinematics::~ArmKinematics() = default;
@@ -220,16 +143,9 @@ namespace arms_controller_common
                                          int maxIterations,
                                          double tolerance)
     {
-        if (params_.solverType == SolverType::SDK)
-        {
-            return solveSingleArmIKWithSDK(targetPose, initialGuess, solution, arm_type);
-        }
-        else
-        {
-            SolutionInfo info;
-            return solveSingleArmIKWithInfo(targetPose, initialGuess, solution, info,
-                                            arm_type, maxIterations, tolerance);
-        }
+        SolutionInfo info;
+        return solveSingleArmIKWithInfo(targetPose, initialGuess, solution, info,
+                                        arm_type, maxIterations, tolerance);
     }
 
     bool ArmKinematics::solveSingleArmIKWithInfo(const EndEffectorPose& targetPose,
@@ -258,29 +174,6 @@ namespace arms_controller_common
 
         switch (params_.solverType)
         {
-        case SolverType::SDK:
-            result.second.usedSolver = SolverType::SDK;
-            if (!sdkInitialized_)
-            {
-                std::cerr << "SDK solver requested for IK but SDK is not initialized "
-                          << "(not supported on this robot)." << std::endl;
-                result.second.status = "error: SDK solver not supported on this robot";
-            }
-            else
-            {
-                Eigen::VectorXd sdkSolution;
-                if (solveSingleArmIKWithSDK(targetPose, initialGuess, sdkSolution, arm_type))
-                {
-                    result.first = sdkSolution;
-                    result.second.status = "success";
-                }
-                else
-                {
-                    result.second.status = "best available";
-                }
-            }
-            break;
-
         case SolverType::DLS:
             result = solveDLS(initialGuess, lower, upper, arm_type, targetPose);
             result.second.usedSolver = SolverType::DLS;
@@ -333,16 +226,8 @@ namespace arms_controller_common
                             const EndEffectorPose& target)
     {
         SolutionInfo info;
-
-        // 热启动
         Eigen::VectorXd q = seed;
-        // if (lastArmType_ == arm_type)
-        // {
-        //     if (arm_type == "left" && lastLeftSolution_.size() == seed.size())
-        //         q = lastLeftSolution_;
-        //     else if (arm_type == "right" && lastRightSolution_.size() == seed.size())
-        //         q = lastRightSolution_;
-        // }
+
         q = clampToLimits(q, lower, upper);
 
         RobotState state(leftArmJointCount_, rightArmJointCount_);
@@ -1343,172 +1228,6 @@ namespace arms_controller_common
         return {bestSolution, bestInfo};
     }
 
-    // ==================== 使用TJ_FX_ROBOT_CONTROL_SDK的逆运动学 ====================
-
-    bool ArmKinematics::solveSingleArmIKWithSDK(const EndEffectorPose& targetPose,
-                                                const Eigen::VectorXd& initialGuess,
-                                                Eigen::VectorXd& solution,
-                                                std::string arm_type)
-    {
-        int serial = (arm_type == "left") ? 0 : 1;
-        int jointCount = (arm_type == "left") ? leftArmJointCount_ : rightArmJointCount_;
-
-        if (initialGuess.size() != jointCount)
-        {
-            std::cerr << "Joint count mismatch: expected " << jointCount
-                << ", got " << initialGuess.size() << std::endl;
-            return false;
-        }
-
-        // ========== 获取从 SDK 基座到 URDF 基座的固定变换的逆变换 ==========
-        Eigen::Matrix4d base_transform = Eigen::Matrix4d::Identity();
-        Eigen::Matrix4d base_transform_inv = Eigen::Matrix4d::Identity();
-
-        if (arm_type == "left")
-        {
-            std::string base_frame = "left_base_link";
-            int frame_id = getFrameId(base_frame);
-
-            if (frame_id >= 0)
-            {
-                Eigen::VectorXd zero_joints = Eigen::VectorXd::Zero(model_.nv);
-                updateKinematics(zero_joints);
-
-                const auto& placement = data_.oMf[frame_id];
-                base_transform = placement.toHomogeneousMatrix();
-                base_transform_inv = base_transform.inverse();
-            }
-            else
-            {
-                std::cerr << "Warning: Could not find frame " << base_frame << std::endl;
-            }
-        }
-        else if (arm_type == "right")
-        {
-            std::string base_frame = "right_base_link";
-            int frame_id = getFrameId(base_frame);
-
-            if (frame_id >= 0)
-            {
-                Eigen::VectorXd zero_joints = Eigen::VectorXd::Zero(model_.nv);
-                updateKinematics(zero_joints);
-
-                const auto& placement = data_.oMf[frame_id];
-                base_transform = placement.toHomogeneousMatrix();
-                base_transform_inv = base_transform.inverse();
-            }
-            else
-            {
-                std::cerr << "Warning: Could not find frame " << base_frame << std::endl;
-            }
-        }
-
-        // ========== 将 URDF 坐标系下的目标位姿转换到 SDK 坐标系下 ==========
-        // 构建 URDF 目标位姿的 4x4 矩阵
-        Eigen::Matrix4d urdf_target_pose = Eigen::Matrix4d::Identity();
-        for (int i = 0; i < 3; i++)
-        {
-            for (int j = 0; j < 3; j++)
-            {
-                urdf_target_pose(i, j) = targetPose.rotationMatrix(i, j);
-            }
-            urdf_target_pose(i, 3) = targetPose.position(i); // 已经是米
-        }
-
-        // 应用逆变换: T_sdk_target = T_base^{-1} * T_urdf_target
-        Eigen::Matrix4d sdk_target_pose = base_transform_inv * urdf_target_pose;
-
-        // 转换到 SDK 需要的 Matrix4 格式（注意：SDK 使用毫米作为长度单位）
-        Matrix4 targetTCP = {0};
-        for (int i = 0; i < 3; i++)
-        {
-            for (int j = 0; j < 3; j++)
-            {
-                targetTCP[i][j] = sdk_target_pose(i, j);
-            }
-            // SDK 使用毫米，所以乘以 1000
-            targetTCP[i][3] = sdk_target_pose(i, 3) * 1000.0;
-        }
-        targetTCP[3][3] = 1.0;
-
-        // 准备FX_InvKineSolvePara
-        FX_InvKineSolvePara solvePara;
-        memset(&solvePara, 0, sizeof(FX_InvKineSolvePara));
-        memcpy(solvePara.m_Input_IK_TargetTCP, targetTCP, sizeof(Matrix4));
-
-        // 转换初始猜测到Vect7 (SDK使用度)
-        FX_DOUBLE initial_deg[7] = {0};
-        for (int i = 0; i < jointCount; i++)
-        {
-            initial_deg[i] = initialGuess(i) * 180.0 / M_PI;
-            solvePara.m_Input_IK_RefJoint[i] = initial_deg[i];
-        }
-
-        if (params_.use_nsp)
-        {
-            // 如果用户设置了臂角方向，直接使用
-            if (params_.nsp_direction.norm() > 0)
-            {
-                solvePara.m_Input_IK_ZSPType = 1;
-                solvePara.m_Input_IK_ZSPPara[0] = params_.nsp_direction.x();
-                solvePara.m_Input_IK_ZSPPara[1] = params_.nsp_direction.y();
-                solvePara.m_Input_IK_ZSPPara[2] = params_.nsp_direction.z();
-                solvePara.m_Input_ZSP_Angle = params_.nsp_angle;
-            }
-            else
-            {
-                // 没有设置方向，从初始角度的正解自动计算臂角
-                Matrix4 temp_pose;
-                Matrix3 nsp_matrix;
-                if (FX_Robot_Kine_FK_NSP(serial, initial_deg, temp_pose, nsp_matrix))
-                {
-                    solvePara.m_Input_IK_ZSPType = 1;
-                    // 使用臂角矩阵的第一列作为方向
-                    solvePara.m_Input_IK_ZSPPara[0] = nsp_matrix[0][0];
-                    solvePara.m_Input_IK_ZSPPara[1] = nsp_matrix[1][0];
-                    solvePara.m_Input_IK_ZSPPara[2] = nsp_matrix[2][0];
-                    solvePara.m_Input_ZSP_Angle = params_.nsp_angle;
-                }
-                else
-                {
-                    solvePara.m_Input_IK_ZSPType = 0;
-                }
-            }
-        }
-        else
-        {
-            solvePara.m_Input_IK_ZSPType = 0;
-        }
-
-        solvePara.m_DGR1 = params_.dgr1;
-        solvePara.m_DGR2 = params_.dgr2;
-        solvePara.m_DGR3 = params_.dgr3;
-
-        // 调用SDK IK
-        if (FX_Robot_Kine_IK(serial, &solvePara))
-        {
-            // 检查输出
-            if (!solvePara.m_Output_IsOutRange && solvePara.m_OutPut_Result_Num > 0)
-            {
-                // 转换输出到Eigen (从度转换为弧度)
-                solution.resize(jointCount);
-                for (int i = 0; i < jointCount; i++)
-                {
-                    solution(i) = solvePara.m_Output_RetJoint[i] * M_PI / 180.0;
-                }
-                return true;
-            }
-            else
-            {
-                if (solvePara.m_Output_IsOutRange)
-                    std::cerr << "SDK IK: Target pose is out of workspace" << std::endl;
-                if (solvePara.m_OutPut_Result_Num == 0)
-                    std::cerr << "SDK IK: No solution found" << std::endl;
-            }
-        }
-        return false;
-    }
-
 
     //服务相关的代码
     geometry_msgs::msg::Pose ArmKinematics::endEffectorPoseToROSPose(const EndEffectorPose& pose)
@@ -1571,20 +1290,8 @@ namespace arms_controller_common
                 state.leftArmJoints(i) = joint_angles[i];
             }
             EndEffectorPose pose;
-            // if (params_.solverType == SolverType::SDK)
-            // {
-            //     bool success = computeForwardKinematicsWithSDK(state.leftArmJoints, "left", pose);
-            //     if (!success)
-            //     {
-            //         error_msg = "SDK forward kinematics failed for left arm";
-            //         return false;
-            //     }
-            // }
-            // else
-            // {
-            pose = computeSingleEndEffectorPose(state, "left");
-            // }
 
+            pose = computeSingleEndEffectorPose(state, "left");
 
             result_poses.push_back(pose);
         }
@@ -1602,19 +1309,7 @@ namespace arms_controller_common
                 state.rightArmJoints(i) = joint_angles[i];
             }
             EndEffectorPose pose;
-            // if (params_.solverType == SolverType::SDK)
-            // {
-            //     bool success = computeForwardKinematicsWithSDK(state.rightArmJoints, "right", pose);
-            //     if (!success)
-            //     {
-            //         error_msg = "SDK forward kinematics failed for right arm";
-            //         return false;
-            //     }
-            // }
-            // else
-            // {
             pose = computeSingleEndEffectorPose(state, "right");
-            // }
 
             result_poses.push_back(pose);
         }
@@ -1637,20 +1332,7 @@ namespace arms_controller_common
             }
 
             EndEffectorPose left_pose, right_pose;
-            // if (params_.solverType == SolverType::SDK)
-            // {
-            //     bool success_left = computeForwardKinematicsWithSDK(state.leftArmJoints, "left", left_pose);
-            //     bool success_right = computeForwardKinematicsWithSDK(state.rightArmJoints, "right", right_pose);
-            //     if (!success_left || !success_right)
-            //     {
-            //         error_msg = "SDK forward kinematics failed for one or both arms";
-            //         return false;
-            //     }
-            // }
-            // else
-            // {
             computeBothEndEffectorPose(state, left_pose, right_pose);
-            // }
 
 
             result_poses.push_back(left_pose);
@@ -1816,12 +1498,7 @@ namespace arms_controller_common
         // 设置默认参数
         int max_iterations = request->max_iterations > 0 ? request->max_iterations : 100;
         double tolerance = request->tolerance > 0 ? request->tolerance : 1e-6;
-        //设置求解器类型
-        if (request->solver_type == "SDK")
-        {
-            params_.solverType = SolverType::SDK;
-        }
-        else if (request->solver_type == "BFGS")
+        if (request->solver_type == "BFGS")
         {
             params_.solverType = SolverType::BFGS;
         }
@@ -1838,12 +1515,6 @@ namespace arms_controller_common
         params_.solutionTolerance = request->tolerance > 0 ? request->tolerance : 1e-4;
         params_.dlsDamping = request->dls_damping > 0 ? request->dls_damping : 0.01;
         params_.randomRestart = request->enable_random_restart;
-
-        // SDK参数
-        params_.dgr1 = request->dgr1 > 0 ? request->dgr1 : 0.05;
-        params_.dgr2 = request->dgr2 > 0 ? request->dgr2 : 0.05;
-        params_.dgr3 = request->dgr3;
-
 
         if (request->operation_type == "fk")
         {
@@ -1916,115 +1587,5 @@ namespace arms_controller_common
         auto end_time = std::chrono::high_resolution_clock::now();
         response->computation_time_ms = std::chrono::duration<double, std::milli>(
             end_time - start_time).count();
-    }
-
-
-    bool ArmKinematics::computeForwardKinematicsWithSDK(
-        const Eigen::VectorXd& joint_angles,
-        const std::string& arm_type,
-        EndEffectorPose& pose)
-    {
-        int serial = (arm_type == "left") ? 0 : 1;
-        int jointCount = (arm_type == "left") ? leftArmJointCount_ : rightArmJointCount_;
-
-        if (joint_angles.size() != jointCount)
-        {
-            std::cerr << "Joint count mismatch: expected " << jointCount
-                << ", got " << joint_angles.size() << std::endl;
-            return false;
-        }
-        // 转换关节角为度（SDK使用度）
-        FX_DOUBLE joints_deg[7] = {0};
-        for (int i = 0; i < jointCount; i++)
-        {
-            joints_deg[i] = joint_angles(i) * 180.0 / M_PI;
-        }
-
-        // 调用SDK正解（得到TCP位姿，因为工具已经在初始化时设置好了）
-        Matrix4 result_matrix;
-        memset(result_matrix, 0, sizeof(Matrix4));
-
-        bool success = FX_Robot_Kine_FK(serial, joints_deg, result_matrix);
-
-        if (!success)
-        {
-            std::cerr << "SDK FK failed for " << arm_type << " arm" << std::endl;
-            return false;
-        }
-
-        // 将 SDK 结果转换为 Eigen 矩阵 (4x4)
-        Eigen::Matrix4d sdk_pose = Eigen::Matrix4d::Identity();
-        for (int i = 0; i < 3; i++)
-        {
-            for (int j = 0; j < 3; j++)
-            {
-                sdk_pose(i, j) = result_matrix[i][j];
-            }
-            sdk_pose(i, 3) = result_matrix[i][3] * 0.001; // 毫米转米
-        }
-
-        // ========== 获取从 SDK 基座到 URDF 基座的固定变换 ==========
-        Eigen::Matrix4d base_transform = Eigen::Matrix4d::Identity();
-
-        // 创建临时状态来获取固定关节的变换
-        if (arm_type == "left")
-        {
-            // 获取 left_arm_base_joint 的变换
-            // 这个方法会计算从 base_link 到 left_base_link 的变换
-            std::string base_frame = "left_base_link";
-            int frame_id = getFrameId(base_frame);
-
-            if (frame_id >= 0)
-            {
-                // 需要先更新一次运动学（使用零位关节角）
-                Eigen::VectorXd zero_joints = Eigen::VectorXd::Zero(model_.nv);
-                updateKinematics(zero_joints);
-
-                // 获取从 base_link 到 left_base_link 的变换
-                const auto& placement = data_.oMf[frame_id];
-                base_transform = placement.toHomogeneousMatrix();
-            }
-            else
-            {
-                std::cerr << "Warning: Could not find frame " << base_frame << std::endl;
-            }
-        }
-        else if (arm_type == "right")
-        {
-            // 获取 right_arm_base_joint 的变换
-            std::string base_frame = "right_base_link";
-            int frame_id = getFrameId(base_frame);
-
-            if (frame_id >= 0)
-            {
-                Eigen::VectorXd zero_joints = Eigen::VectorXd::Zero(model_.nv);
-                updateKinematics(zero_joints);
-
-                const auto& placement = data_.oMf[frame_id];
-                base_transform = placement.toHomogeneousMatrix();
-            }
-            else
-            {
-                std::cerr << "Warning: Could not find frame " << base_frame << std::endl;
-            }
-        }
-
-        // 应用变换: SDK 的结果是在 SDK 基座坐标系下，需要转换到 URDF 的 base_link 坐标系
-        // SDK 的基座可能是 left_base_link/right_base_link，而我们需要的是 base_link 坐标系下的位姿
-        Eigen::Matrix4d final_pose = base_transform * sdk_pose;
-
-        // 提取旋转矩阵和平移
-        Eigen::Matrix3d rot_mat = final_pose.block < 3,
-
-
-        3 > (0, 0);
-        Eigen::Vector3d trans = final_pose.block < 3,
-
-
-        1 > (0, 3);
-
-        pose.position = trans;
-        pose.setRotation(rot_mat);
-        return true;
     }
 } // namespace arms_controller_common

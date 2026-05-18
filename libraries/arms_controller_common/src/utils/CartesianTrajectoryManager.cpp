@@ -76,18 +76,15 @@ namespace arms_controller_common
             return false;
         }
         ArmKinematics::SolverType ik_tp;
-        if (target_point_msg.ik_type=="BFGS")
+        if (target_point_msg.ik_type == "BFGS")
         {
             ik_tp = ArmKinematics::SolverType::BFGS;
             std::cout << "BFGS is set" << std::endl;
-        }else if (target_point_msg.ik_type=="DLS")
+        }
+        else if (target_point_msg.ik_type == "DLS")
         {
             ik_tp = ArmKinematics::SolverType::DLS;
             std::cout << "DLS is set" << std::endl;
-        }else if (target_point_msg.ik_type=="SDK")
-        {
-            ik_tp=ArmKinematics::SolverType::SDK;
-            std::cout << "SDK is set" << std::endl;
         }
         else
         {
@@ -197,15 +194,13 @@ namespace arms_controller_common
             }
         }
         ArmKinematics::SolverType ik_tp;
-        if (target_circle_msg.ik_type=="BFGS")
+        if (target_circle_msg.ik_type == "BFGS")
         {
             ik_tp = ArmKinematics::SolverType::BFGS;
-        }else if (target_circle_msg.ik_type=="DLS")
+        }
+        else if (target_circle_msg.ik_type == "DLS")
         {
             ik_tp = ArmKinematics::SolverType::DLS;
-        }else if (target_circle_msg.ik_type=="SDK")
-        {
-            ik_tp=ArmKinematics::SolverType::SDK;
         }
         else
         {
@@ -259,7 +254,7 @@ namespace arms_controller_common
         if (start_joint_pos.size() != left_count + right_count)
         {
             last_error_ = "Dual-arm MoveL requires " + std::to_string(left_count + right_count) +
-                          " start joints, got " + std::to_string(start_joint_pos.size());
+                " start joints, got " + std::to_string(start_joint_pos.size());
             return false;
         }
 
@@ -330,7 +325,7 @@ namespace arms_controller_common
         if (start_joint_pos.size() != left_count + right_count)
         {
             last_error_ = "Dual-arm MoveC requires " + std::to_string(left_count + right_count) +
-                          " start joints, got " + std::to_string(start_joint_pos.size());
+                " start joints, got " + std::to_string(start_joint_pos.size());
             return false;
         }
 
@@ -386,7 +381,11 @@ namespace arms_controller_common
     bool CartesianTrajectoryManager::getNextJointPos(std::vector<double>& res)
     {
         last_error_.clear();
-        if (dual_arm_mode_ && path_type_ == PathType::LINE)
+        if (dual_arm_mode_&& path_type_
+
+        ==
+        PathType::LINE
+        )
         {
             std::vector<double> left_res;
             std::vector<double> right_res;
@@ -406,7 +405,12 @@ namespace arms_controller_common
             completed_ = left_done && right_done;
             return true;
         }
-        else if (dual_arm_mode_ && path_type_ == PathType::CIRCLE)
+        else
+        if (dual_arm_mode_&& path_type_
+
+        ==
+        PathType::CIRCLE
+        )
         {
             std::vector<double> left_res;
             std::vector<double> right_res;
@@ -426,19 +430,39 @@ namespace arms_controller_common
             completed_ = left_done && right_done;
             return true;
         }
-        else if (left_movel_planner_ && path_type_ == PathType::LINE && left_arm_active_)
+        else
+        if (left_movel_planner_&& path_type_
+
+        ==
+        PathType::LINE&& left_arm_active_
+        )
         {
             return stepLineArm("left", left_movel_planner_, left_current_joint_pos_, res);
         }
-        else if (right_movel_planner_ && path_type_ == PathType::LINE && right_arm_active_)
+        else
+        if (right_movel_planner_&& path_type_
+
+        ==
+        PathType::LINE&& right_arm_active_
+        )
         {
             return stepLineArm("right", right_movel_planner_, right_current_joint_pos_, res);
         }
-        else if (left_movec_planner_ && path_type_ == PathType::CIRCLE && left_arm_active_)
+        else
+        if (left_movec_planner_&& path_type_
+
+        ==
+        PathType::CIRCLE&& left_arm_active_
+        )
         {
             return stepCircleArm("left", left_movec_planner_, left_current_joint_pos_, res);
         }
-        else if (right_movec_planner_ && path_type_ == PathType::CIRCLE && right_arm_active_)
+        else
+        if (right_movec_planner_&& path_type_
+
+        ==
+        PathType::CIRCLE&& right_arm_active_
+        )
         {
             return stepCircleArm("right", right_movec_planner_, right_current_joint_pos_, res);
         }
@@ -548,7 +572,7 @@ namespace arms_controller_common
         Eigen::VectorXd solution;
         ArmKinematics::SolutionInfo info;
         if (!arm_kinematics_->solveSingleArmIKWithInfo(
-                pose, current_joint_pos, solution, info, arm_name, 50))
+            pose, current_joint_pos, solution, info, arm_name, 50))
         {
             std::ostringstream oss;
             oss << "IK failed while calculating MoveL joint position for " << arm_name
@@ -598,7 +622,7 @@ namespace arms_controller_common
         Eigen::VectorXd solution;
         ArmKinematics::SolutionInfo info;
         if (!arm_kinematics_->solveSingleArmIKWithInfo(
-                pose, current_joint_pos, solution, info, arm_name, 50, 1e-4))
+            pose, current_joint_pos, solution, info, arm_name, 50, 1e-4))
         {
             std::ostringstream oss;
             oss << "IK failed while calculating MoveC joint position for " << arm_name
@@ -879,5 +903,4 @@ namespace arms_controller_common
             return speed_mode_para;
         }
     }
-
 } // namespace arms_controller_common
