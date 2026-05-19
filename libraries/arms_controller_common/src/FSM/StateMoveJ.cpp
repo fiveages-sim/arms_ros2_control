@@ -435,7 +435,6 @@ namespace arms_controller_common
                         cartesian_manager_.clearPlanner();
                         finishLinearAction(true, false, "MoveL trajectory completed successfully");
                         finishCircleAction(true, false, "MoveC trajectory completed successfully");
-
                     }
                 }
                 else
@@ -1473,36 +1472,64 @@ namespace arms_controller_common
         // 获取当前腰部关节角度
         Eigen::VectorXd current_angles = getCurrentWaistAngles();
 
+        const double waist_control_period = 1.0 / ctrl_interfaces_.frequency_;
+        double planned_lifting_distance = 0.0;
+
         if (waist_lifting_planer_->isBodyThreeJoint() && current_angles.size() >= 3)
         {
             Eigen::Vector3d angles3d(current_angles(0), current_angles(1), current_angles(2));
 
             if (!waist_lifting_planer_->initTargetLiftingLength(
-                angles3d, lifting_distance, waist_lifting_duration_, 1.0 / ctrl_interfaces_.frequency_))
+                angles3d, lifting_distance, waist_lifting_duration_, waist_control_period))
             {
                 RCLCPP_WARN(node_->get_logger(),
                             "Failed to initialize THREE_JOINT waist lifting plan for distance %.3f",
                             lifting_distance);
                 return false;
             }
+            planned_lifting_distance = waist_lifting_planer_->getLastPlannedLiftingLength();
         }
         else if (!waist_lifting_planer_->isBodyThreeJoint() && current_angles.size() >= 1)
         {
             Eigen::Vector3d angles3d(current_angles(0), 0.0, 0.0);
 
             if (!waist_lifting_planer_->initTargetLiftingLength(
-                angles3d, lifting_distance, waist_lifting_duration_, 1.0 / ctrl_interfaces_.frequency_))
+                angles3d, lifting_distance, waist_lifting_duration_, waist_control_period))
             {
                 RCLCPP_WARN(node_->get_logger(),
                             "Failed to initialize SINGLE_JOINT waist lifting plan for distance %.3f",
                             lifting_distance);
                 return false;
             }
+            planned_lifting_distance = waist_lifting_planer_->getLastPlannedLiftingLength();
         }
         else
         {
             RCLCPP_WARN(node_->get_logger(),
                         "Invalid waist lifting type or insufficient joint angles");
+            return false;
+        }
+
+        constexpr double kPlannedDistanceEpsilon = 1.0e-4;
+        if (std::abs(planned_lifting_distance - lifting_distance) > kPlannedDistanceEpsilon)
+        {
+            RCLCPP_WARN(node_->get_logger(),
+                        "Waist lifting distance clamped by end-point IK/limits: requested=%.4f, planned=%.4f",
+                        lifting_distance, planned_lifting_distance);
+        }
+        else
+        {
+            RCLCPP_INFO(node_->get_logger(),
+                        "Waist lifting planned distance: requested=%.4f, planned=%.4f",
+                        lifting_distance, planned_lifting_distance);
+        }
+
+        if (std::abs(planned_lifting_distance) <= kPlannedDistanceEpsilon &&
+            std::abs(lifting_distance) > kPlannedDistanceEpsilon)
+        {
+            RCLCPP_WARN(node_->get_logger(),
+                        "Waist lifting already at limit, no motion planned (requested=%.4f)",
+                        lifting_distance);
             return false;
         }
         // Entering waist lifting should cancel any stale MOVEJ trajectory state,
@@ -1521,10 +1548,9 @@ namespace arms_controller_common
         waist_lifting_active_ = true;
         motion_mode_ = MotionMode::WAIST_CONTROL;
         RCLCPP_INFO(node_->get_logger(),
-                    "Waist lifting started: type=%s, distance=%.3f, duration=%.3f, using %zu joints",
+                    "Waist lifting started: type=%s, requested=%.4f, planned=%.4f, duration=%.3f, using %zu joints",
                     (waist_lifting_planer_->isBodyThreeJoint()? "THREE_JOINT" : "SINGLE_JOINT"),
-                    lifting_distance, waist_lifting_duration_, waist_joint_count_);
-
+                    lifting_distance, planned_lifting_distance, waist_lifting_duration_, waist_joint_count_);
 
         return true;
     };
@@ -2472,9 +2498,11 @@ namespace arms_controller_common
         double period = 1.0 / ctrl_interfaces_.frequency_;
 
         const bool dual_arm = (resolved_linear_params.arm_name == "both");
-        const bool plan_success = dual_arm ?
-            cartesian_manager_.planDualArmMoveL(current_joint_positions, resolved_linear_params, period) :
-            cartesian_manager_.planSingleArmMoveL(current_joint_positions, resolved_linear_params, period);
+        const bool plan_success = dual_arm
+                                      ? cartesian_manager_.planDualArmMoveL(
+                                          current_joint_positions, resolved_linear_params, period)
+                                      : cartesian_manager_.planSingleArmMoveL(
+                                          current_joint_positions, resolved_linear_params, period);
         if (!plan_success)
         {
             message = cartesian_manager_.getLastError();
@@ -2857,9 +2885,11 @@ namespace arms_controller_common
         double period = 1.0 / ctrl_interfaces_.frequency_;
 
         const bool dual_arm = (resolved_circle_params.arm_name == "both");
-        const bool plan_success = dual_arm ?
-            cartesian_manager_.planDualArmMoveC(current_joint_positions, resolved_circle_params, period) :
-            cartesian_manager_.planSingleArmMoveC(current_joint_positions, resolved_circle_params, period);
+        const bool plan_success = dual_arm
+                                      ? cartesian_manager_.planDualArmMoveC(
+                                          current_joint_positions, resolved_circle_params, period)
+                                      : cartesian_manager_.planSingleArmMoveC(
+                                          current_joint_positions, resolved_circle_params, period);
         if (!plan_success)
         {
             message = cartesian_manager_.getLastError();

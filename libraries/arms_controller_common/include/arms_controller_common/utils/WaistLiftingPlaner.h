@@ -72,7 +72,27 @@ namespace arms_controller_common
 
         void setCurrentVelToZero();
 
+        /** @brief 最近一次定距升降实际规划的距离（可能因限位/逆解被裁剪） */
+        double getLastPlannedLiftingLength() const { return last_planned_lifting_length_; }
+
     private:
+        /** @brief 根据终点逆解/关节限位，将目标升降坐标裁剪到可达范围 */
+        bool resolveFeasibleLiftingEnd(const Eigen::Vector3d& init_joint_angle,
+                                       double start_pos, double requested_end,
+                                       double& feasible_end);
+
+        bool resolveFeasibleLiftingEndSingleJoint(double start_pos, double requested_end,
+                                                  double& feasible_end);
+
+        bool resolveFeasibleLiftingEndThreeJoint(const Eigen::Vector3d& init_joint_angle,
+                                                 double start_pos, double requested_end,
+                                                 double& feasible_end);
+
+        /** @brief 定距规划终点逆解：仅检查工作空间与关节限位，不做 0.05rad 步长约束 */
+        bool threeLinkPlanerEndpointIK(const Eigen::Vector3d& init_joint_angle,
+                                       double x, double z, double phi,
+                                       Eigen::Vector3d& output_joint_angle,
+                                       bool log_errors = false);
         bool type_three_joint_{false}; // true为三个平行腰部关节，false为单个腰部移动关节
 
         bool type_speed_{false}; // true 为speedj，false为movej
@@ -94,7 +114,8 @@ namespace arms_controller_common
                                const double x, const double z, const double phi,
                                Eigen::Vector3d& output_joint_angle);
         bool threeLinkPlanerFullIK(const double x, const double z, const double phi,
-                                   std::array<Eigen::Vector3d, 2>& solutions);
+                                   std::array<Eigen::Vector3d, 2>& solutions,
+                                   bool log_errors = true);
         Eigen::Vector3d choose_nearest_solution_of_body_joint3(
             const Eigen::Vector3d& q0, std::array<Eigen::Vector3d, 2>& solutions);
         bool isThreeJointsOverLimits(const Eigen::Vector3d& joint_angle);
@@ -114,6 +135,7 @@ namespace arms_controller_common
 #endif
 
         double min_val = 1.0e-9;
+        double last_planned_lifting_length_{0.0};
         // Cached waist state shared by speed/length planning in this instance.
         double waist_position_cache_{0.0};
         double waist_velocity_cache_{0.0};
