@@ -1457,6 +1457,11 @@ namespace arms_controller_common
 
     bool StateMoveJ::moveWaistLifting(double lifting_distance)
     {
+        if(motion_mode_==MotionMode::WAIST_CONTROL){
+            RCLCPP_INFO(node_->get_logger(),
+                        "Please wait previous motion over!");
+            return false;
+        }
         if (!waist_lifting_planer_) // 只在没有规划器时创建
         {
             setWaistLiftingPlaner();
