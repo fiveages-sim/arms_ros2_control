@@ -15,14 +15,23 @@
 #include <functional>
 #include <utility>
 #include <rclcpp/rclcpp.hpp>
+#include <rclcpp_action/rclcpp_action.hpp>
 #include <rclcpp_lifecycle/lifecycle_node.hpp>
 #include <std_msgs/msg/float64_multi_array.hpp>
+#include <std_msgs/msg/int32.hpp>
 #include <trajectory_msgs/msg/joint_trajectory.hpp>
 #include <eigen3/Eigen/Dense>
 #include "arms_controller_common/utils/WaistLiftingPlaner.h"
+#include "arms_ros2_control_msgs/action/joint_trajectory.hpp"
 #include "arms_ros2_control_msgs/msg/joint_waypoint.hpp"
 #include "arms_ros2_control_msgs/srv/joint_trajectory.hpp"
-
+#include "arms_controller_common/utils/Kinematics.h"
+#include "arms_controller_common/utils/CartesianTrajectoryManager.h"
+#include "arms_ros2_control_msgs/action/execute_linear.hpp"
+#include "arms_ros2_control_msgs/action/movec_use_ik.hpp"
+#include "arms_ros2_control_msgs/srv/execute_linear.hpp"
+#include "arms_ros2_control_msgs/srv/movec_use_ik.hpp"
+#include "arms_controller_common/utils/CollisionDetector.h"
 
 namespace arms_controller_common
 {
@@ -132,6 +141,7 @@ namespace arms_controller_common
         enum class MotionMode
         {
             MOVEJ,
+            MOVECARTESIAN,
             WAIST_CONTROL
         };
 
@@ -152,13 +162,13 @@ namespace arms_controller_common
 
         /**
          * @brief 控制腰部升降速度系数，factor取值建议[-1, 1]
-         * 实际目标速度 = factor * default_waist_para_[0]
+         * 实际目标速度 = factor * default_waist_lifting_para_[0]
          */
         bool setWaistLiftingFactor(double factor);
 
         /**
          * @brief 控制腰部转向速度系数，factor取值建议[-1, 1]
-         * 实际目标速度 = factor * default_waist_para_[0]
+         * 实际目标速度 = factor * default_waist_turning_para_[0]
          */
         bool setWaistTurningFactor(double factor);
 
@@ -168,6 +178,47 @@ namespace arms_controller_common
          * @param service_name Service name (default: "joint_trajectory")
          */
         void setupJointTrajectoryService(const std::string& service_name = "joint_trajectory");
+        void setupJointTrajectoryAction(const std::string& action_name = "joint_trajectory");
+
+        void setKinematicsSolver(const std::shared_ptr<ArmKinematics>& kinematics = nullptr);
+        // 在 StateMoveJ.h 的 public 部分添加
+        /**
+        * @brief Setup linear trajectory service for MoveL planning
+        * @param service_name Service name (default: "execute_linear")
+        */
+        void setupLinearTrajectoryService(const std::string& service_name = "execute_linear");
+
+        /**
+        * @brief Setup linear trajectory action for MoveL planning and execution
+        * @param action_name Action name (default: "execute_linear")
+        */
+        void setupLinearTrajectoryAction(const std::string& action_name = "execute_linear");
+
+        /**
+        * @brief Setup linear trajectory service for MoveL planning
+        * @param service_name Service name (default: "execute_linear")
+        */
+        void setupCircleTrajectoryService(const std::string& service_name = "execute_circle_use_ik");
+        /**
+             * @brief 设置碰撞检测器
+             */
+        void setCollisionDetector(std::shared_ptr<CollisionDetector> detector);
+
+        /**
+         * @brief 启用/禁用碰撞检测
+         */
+        void setCollisionEnabled(bool enabled);
+
+        /**
+         * @brief 设置碰撞检测阈值
+         */
+        void setCollisionThreshold(double threshold);
+
+        /**
+        * @brief Setup circle trajectory action for MoveC planning and execution
+        * @param action_name Action name (default: "execute_circle_use_ik")
+        */
+        void setupCircleTrajectoryAction(const std::string& action_name = "execute_circle_use_ik");
 
     private:
         void updateParam();
@@ -206,6 +257,10 @@ namespace arms_controller_common
         // Current target joint publisher (shared convention across controllers)
         rclcpp::Publisher<std_msgs::msg::Float64MultiArray>::SharedPtr current_target_joint_publisher_;
         void publishCurrentTargetJoint(const std::vector<double>& target_positions);
+
+        // Global FSM command publisher for collision-triggered HOLD transitions
+        rclcpp::Publisher<std_msgs::msg::Int32>::SharedPtr fsm_command_publisher_;
+        void publishFsmCommand(int32_t command);
 
         // Joint limit checking
         std::shared_ptr<JointLimitsManager> joint_limits_manager_;
@@ -277,7 +332,8 @@ namespace arms_controller_common
         std::shared_ptr<arms_controller_common::WaistLiftingPlaner> waist_turning_planer_;
         bool waist_turning_active_{false};
         double waist_lifting_duration_{3.0};
-        Eigen::Vector3d default_waist_para_;
+        Eigen::Vector3d default_waist_lifting_para_;
+        Eigen::Vector3d default_waist_turning_para_;
         void updateWaistParam();
 
         double last_waist_factor_{0.0};
@@ -308,11 +364,33 @@ namespace arms_controller_common
         // Service server
         rclcpp::Service<arms_ros2_control_msgs::srv::JointTrajectory>::SharedPtr joint_trajectory_service_;
 
+        using JointTrajectoryAction = arms_ros2_control_msgs::action::JointTrajectory;
+        using JointTrajectoryGoalHandle = rclcpp_action::ServerGoalHandle<JointTrajectoryAction>;
+        rclcpp_action::Server<JointTrajectoryAction>::SharedPtr joint_trajectory_action_server_;
+        std::shared_ptr<JointTrajectoryGoalHandle> active_joint_trajectory_goal_;
+        rclcpp::Time joint_trajectory_action_start_time_;
+        double joint_trajectory_planned_duration_{0.0};
+        bool joint_trajectory_action_active_{false};
+
         // Service handler
         void handleJointTrajectory(
             const std::shared_ptr<rmw_request_id_t> request_header,
             const std::shared_ptr<arms_ros2_control_msgs::srv::JointTrajectory::Request> request,
             const std::shared_ptr<arms_ros2_control_msgs::srv::JointTrajectory::Response> response);
+        rclcpp_action::GoalResponse handleJointTrajectoryGoal(
+            const rclcpp_action::GoalUUID& uuid,
+            std::shared_ptr<const JointTrajectoryAction::Goal> goal);
+        rclcpp_action::CancelResponse handleJointTrajectoryCancel(
+            const std::shared_ptr<JointTrajectoryGoalHandle> goal_handle);
+        void handleJointTrajectoryAccepted(
+            const std::shared_ptr<JointTrajectoryGoalHandle> goal_handle);
+        bool startJointTrajectoryRequest(
+            const std::vector<std::string>& joint_names,
+            const std::vector<arms_ros2_control_msgs::msg::JointWaypoint>& waypoints,
+            std::string& message,
+            double& planned_duration);
+        void publishJointTrajectoryFeedback();
+        void finishJointTrajectoryAction(bool success, bool canceled, const std::string& message);
 
         // 辅助函数
         bool validateJointNames(const std::vector<std::string>& request_joint_names, std::string& error_msg);
@@ -320,6 +398,109 @@ namespace arms_controller_common
         std::vector<double> mapToFullJointPositions(
             const std::vector<std::string>& request_joint_names,
             const std::vector<double>& request_positions);
+
+        //增加movel相关的代码
+        CartesianTrajectoryManager cartesian_manager_;
+
+        struct CartesianCommandDefaults
+        {
+            std::string frame_id{"base_link"};
+            std::string ik_type{"AUTO"};
+            double max_linear_velocity{0.25};
+            double max_linear_acceleration{1.0};
+            double max_linear_jerk{5.0};
+            double max_angular_velocity{0.5};
+            double max_angular_acceleration{1.0};
+            double max_angular_jerk{5.0};
+        };
+
+        CartesianCommandDefaults cartesian_defaults_;
+        void declareCartesianDefaultParameters();
+        void updateCartesianDefaults();
+        arms_ros2_control_msgs::msg::LinearMessage applyCartesianDefaults(
+            const arms_ros2_control_msgs::msg::LinearMessage& linear_params) const;
+        arms_ros2_control_msgs::msg::CircleMessage applyCartesianDefaults(
+            const arms_ros2_control_msgs::msg::CircleMessage& circle_params) const;
+
+        using ExecuteLinearAction = arms_ros2_control_msgs::action::ExecuteLinear;
+        using ExecuteLinearGoalHandle = rclcpp_action::ServerGoalHandle<ExecuteLinearAction>;
+        using MovecUseIKAction = arms_ros2_control_msgs::action::MovecUseIK;
+        using MovecUseIKGoalHandle = rclcpp_action::ServerGoalHandle<MovecUseIKAction>;
+
+        // Service server for MoveL
+        rclcpp::Service<arms_ros2_control_msgs::srv::ExecuteLinear>::SharedPtr linear_trajectory_service_;
+
+        // Action server for MoveL
+        rclcpp_action::Server<ExecuteLinearAction>::SharedPtr linear_trajectory_action_server_;
+        std::shared_ptr<ExecuteLinearGoalHandle> active_linear_goal_;
+        rclcpp::Time linear_action_start_time_;
+        double linear_action_estimated_duration_{0.0};
+        bool linear_action_active_{false};
+
+        // Service handler for MoveL
+        void handleLinearTrajectory(
+            const std::shared_ptr<rmw_request_id_t> request_header,
+            const std::shared_ptr<arms_ros2_control_msgs::srv::ExecuteLinear::Request> request,
+            const std::shared_ptr<arms_ros2_control_msgs::srv::ExecuteLinear::Response> response);
+
+        rclcpp_action::GoalResponse handleLinearGoal(
+            const rclcpp_action::GoalUUID& uuid,
+            std::shared_ptr<const ExecuteLinearAction::Goal> goal);
+        rclcpp_action::CancelResponse handleLinearCancel(
+            const std::shared_ptr<ExecuteLinearGoalHandle> goal_handle);
+        void handleLinearAccepted(
+            const std::shared_ptr<ExecuteLinearGoalHandle> goal_handle);
+        bool startLinearTrajectory(
+            const arms_ros2_control_msgs::msg::LinearMessage& linear_params,
+            std::string& message,
+            double& estimated_duration);
+        void publishLinearFeedback();
+        void finishLinearAction(bool success, bool canceled, const std::string& message);
+
+        // 添加 MoveL 相关的辅助方法
+        bool validateLinearRequest(const arms_ros2_control_msgs::msg::LinearMessage& linear_params,
+                                   std::string& error_msg);
+
+        bool move_cartesian_active_{false};
+        std::vector<std::string> move_cartesian_joint_names_;
+        //Service for movec
+        rclcpp::Service<arms_ros2_control_msgs::srv::MovecUseIK>::SharedPtr circle_trajectory_service_;
+
+        // Action server for MoveC
+        rclcpp_action::Server<MovecUseIKAction>::SharedPtr circle_trajectory_action_server_;
+        std::shared_ptr<MovecUseIKGoalHandle> active_circle_goal_;
+        rclcpp::Time circle_action_start_time_;
+        double circle_action_estimated_duration_{0.0};
+        bool circle_action_active_{false};
+
+        // Service handler for Movec
+        void handleCircleTrajectory(
+            const std::shared_ptr<rmw_request_id_t> request_header,
+            const std::shared_ptr<arms_ros2_control_msgs::srv::MovecUseIK::Request> request,
+            const std::shared_ptr<arms_ros2_control_msgs::srv::MovecUseIK::Response> response);
+
+        rclcpp_action::GoalResponse handleCircleGoal(
+            const rclcpp_action::GoalUUID& uuid,
+            std::shared_ptr<const MovecUseIKAction::Goal> goal);
+        rclcpp_action::CancelResponse handleCircleCancel(
+            const std::shared_ptr<MovecUseIKGoalHandle> goal_handle);
+        void handleCircleAccepted(
+            const std::shared_ptr<MovecUseIKGoalHandle> goal_handle);
+        bool startCircleTrajectory(
+            const arms_ros2_control_msgs::msg::CircleMessage& circle_params,
+            std::string& message,
+            double& estimated_duration);
+        void publishCircleFeedback();
+        void finishCircleAction(bool success, bool canceled, const std::string& message);
+
+        // 添加 MoveL 相关的辅助方法
+        bool validateCircleRequest(const arms_ros2_control_msgs::msg::CircleMessage& circle_params,
+                                   std::string& error_msg);
+        std::shared_ptr<CollisionDetector> collision_detector_;
+        bool collision_detection_enabled_{false};
+        double collision_threshold_{0.01};
+
+        Eigen::VectorXd getCurrentJointAngles() const;
+        bool checkAndHandleCollision();
     };
-    ;
 } // namespace arms_controller_common

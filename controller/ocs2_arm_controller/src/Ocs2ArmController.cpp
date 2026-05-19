@@ -3,14 +3,15 @@
 //
 
 #include "ocs2_arm_controller/Ocs2ArmController.h"
-
 #include <algorithm>
-
 #include "ocs2_arm_controller/FSM/StateHome.h"
 #include "ocs2_arm_controller/FSM/StateOCS2.h"
 #include "ocs2_arm_controller/FSM/StateHold.h"
 #include "ocs2_arm_controller/FSM/StateMoveJ.h"
 #include <arms_controller_common/utils/GravityCompensation.h>
+#include "arms_controller_common/utils/Kinematics.h"
+#include "arms_controller_common/utils/CollisionDetector.h"
+#include <ocs2_core/misc/LoadStdVectorOfPair.h>
 
 namespace ocs2::mobile_manipulator
 {
@@ -124,14 +125,40 @@ namespace ocs2::mobile_manipulator
                 using T = std::decay_t<decltype(default_value)>;
                 return this->auto_declare<T>(name, default_value);
             };
-
             ctrl_comp_ = std::make_shared<CtrlComponent>(get_node(), ctrl_interfaces_, auto_declare_func);
-
             std::shared_ptr<arms_controller_common::GravityCompensation> gravity_compensation = nullptr;
+            // // 新增：从参数读取末端执行器名称
+            // std::string left_ee_name_ = auto_declare<std::string>("left_ee_name", "left_tcp");
+            // std::string right_ee_name_ = auto_declare<std::string>("right_ee_name", "right_tcp");
+
+            // 从 CtrlComponent 的 OCS2 接口读取末端执行器名称
+            std::string left_ee_name_ = "left_tcp";  // 默认值
+            std::string right_ee_name_ = "right_tcp"; // 默认值
+
+            if (ctrl_comp_->interface_)
+            {
+                // 从 OCS2 模型信息中获取末端执行器名称
+                const auto& model_info = ctrl_comp_->interface_->getManipulatorModelInfo();
+                left_ee_name_ = model_info.eeFrame;    // 从 .info 文件读取（如 "left_eef"）
+                right_ee_name_ = model_info.eeFrame1;  // 从 .info 文件读取（如 "right_eef"）
+
+                RCLCPP_INFO(get_node()->get_logger(),
+                            "Using end effector names from OCS2 config: left='%s', right='%s'",
+                            left_ee_name_.c_str(), right_ee_name_.c_str());
+            }
+            else
+            {
+                RCLCPP_WARN(get_node()->get_logger(),
+                            "OCS2 interface not available, using default end effector names: left='%s', right='%s'",
+                            left_ee_name_.c_str(), right_ee_name_.c_str());
+            }
             if (ctrl_comp_->interface_)
             {
                 const auto& pinocchio_model = ctrl_comp_->interface_->getPinocchioInterface().getModel();
                 gravity_compensation = std::make_shared<arms_controller_common::GravityCompensation>(pinocchio_model);
+                kinematics_ = std::make_shared<arms_controller_common::ArmKinematics>(pinocchio_model);
+                kinematics_->initializeFromParameters(joint_names_, left_ee_name_, right_ee_name_);
+                const std::string robot_name = get_node()->get_parameter("robot_name").as_string();
                 RCLCPP_INFO(get_node()->get_logger(),
                             "Gravity compensation initialized from OCS2 Pinocchio model");
             }
@@ -141,7 +168,6 @@ namespace ocs2::mobile_manipulator
             auto_declare<std::string>("home_interpolation_type", "linear");
             auto_declare<double>("home_tanh_scale", 3.0);
             auto_declare<int>("switch_command_base", 100);
-
             state_list_.home = std::make_shared<StateHome>(
                 ctrl_interfaces_, gravity_compensation, get_node());
 
@@ -185,6 +211,7 @@ namespace ocs2::mobile_manipulator
 
             state_list_.movej = std::make_shared<StateMoveJ>(
                 ctrl_interfaces_, get_node(), joint_names_, gravity_compensation);
+            state_list_.movej->setKinematicsSolver(kinematics_);
 
             // ===== Waist lifting parameters copied from BasicJointController =====
             waist_lifting_enabled_ = auto_declare<bool>("waist_lifting_enabled", false);
@@ -192,7 +219,8 @@ namespace ocs2::mobile_manipulator
             if (waist_lifting_enabled_)
             {
                 auto_declare<double>("waist_lifting_duration", 3.0);
-                auto_declare<std::vector<double>>("waist_default_parameter", {0.25, 1.0, 5.0});
+                auto_declare<std::vector<double>>("waist_lifting_default_parameter", {0.25, 1.0, 5.0});
+                auto_declare<std::vector<double>>("waist_turning_default_parameter", {0.25, 1.0, 5.0});
                 std::string waist_lifting_type = auto_declare<std::string>("waist_lifting_type", "three_joint");
                 if (waist_lifting_type == "three_joint")
                 {
@@ -234,6 +262,37 @@ namespace ocs2::mobile_manipulator
                 RCLCPP_INFO(get_node()->get_logger(),
                             "Joint limit checker initialized from Pinocchio model (arm joints: %d)",
                             arm_state_dim);
+
+                if (ctrl_comp_->interface_->isSelfCollisionEnabled())
+                {
+                    // 获取碰撞对配置
+                    std::vector<std::pair<std::string, std::string>> collision_pairs;
+                    ocs2::loadData::loadStdVectorOfPair(
+                        ctrl_comp_->getTaskFilePath(),
+                        "selfCollision.collisionLinkPairs",
+                        collision_pairs,
+                        false);
+
+                    if (!collision_pairs.empty())
+                    {
+                        // 获取 URDF 内容
+                        std::string urdf_file = ctrl_comp_->getUrdfFilePath();
+
+                        if (!urdf_file.empty())
+                        {
+                            // const auto& pinocchio_model = ctrl_comp_->interface_->getPinocchioInterface().getModel();
+
+                            // 使用 URDF 字符串构造函数（已测试通过）
+                            auto collision_detector = std::make_shared<arms_controller_common::CollisionDetector>(
+                                pinocchio_model, urdf_file, collision_pairs);
+
+                            state_list_.movej->setCollisionDetector(collision_detector);
+                            state_list_.movej->setCollisionEnabled(true);
+                            state_list_.movej->setCollisionThreshold(
+                                ctrl_comp_->interface_->getSelfCollisionMinimumDistance());
+                        }
+                    }
+                }
             }
 
             return CallbackReturn::SUCCESS;
@@ -266,8 +325,14 @@ namespace ocs2::mobile_manipulator
             {
                 state_list_.movej->updateJointLimitsFromURDF(msg->data);
             });
-        state_list_.movej->setupJointTrajectoryService("joint_trajectory_with_para");
+        state_list_.movej->setupJointTrajectoryAction("joint_trajectory_with_para");
+        state_list_.movej->setupLinearTrajectoryAction("execute_linear");
+        state_list_.movej->setupCircleTrajectoryAction("execute_circle_use_ik");
 
+        kinematics_service_ = get_node()->create_service<arms_ros2_control_msgs::srv::KinematicsService>(
+            "kinematics_service",
+            std::bind(&Ocs2ArmController::handleKinematicsService, this,
+                      std::placeholders::_1, std::placeholders::_2));
         // ===== Waist-related subscriptions copied from BasicJointController =====
         if (waist_lifting_enabled_)
         {
@@ -393,7 +458,6 @@ namespace ocs2::mobile_manipulator
         }
 
         ctrl_interfaces_.initializeLastSentPositions();
-
         // Initialize FSM
         current_state_ = state_list_.hold;
         current_state_->enter();
@@ -449,6 +513,21 @@ namespace ocs2::mobile_manipulator
         }
     }
 
+    void Ocs2ArmController::handleKinematicsService(
+        const std::shared_ptr<arms_ros2_control_msgs::srv::KinematicsService::Request> request,
+        const std::shared_ptr<arms_ros2_control_msgs::srv::KinematicsService::Response> response)
+    {
+        if (kinematics_)
+        {
+            kinematics_->handleKinematicsService(request, response);
+        }
+        else
+        {
+            response->success = false;
+            response->message = "Kinematics not initialized";
+        }
+    }
+
     void Ocs2ArmController::publishCurrentFsmState() const
     {
         if (!fsm_state_publisher_ || !current_state_)
@@ -481,7 +560,7 @@ namespace ocs2::mobile_manipulator
         msg.data = state_code;
         fsm_state_publisher_->publish(msg);
     }
-} // namespace ocs2::mobile_manipulator
+} // namespace mobile_manipulator
 
 #include "pluginlib/class_list_macros.hpp"
 PLUGINLIB_EXPORT_CLASS(ocs2::mobile_manipulator::Ocs2ArmController, controller_interface::ControllerInterface);
