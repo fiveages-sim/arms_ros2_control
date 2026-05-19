@@ -42,7 +42,7 @@ namespace gripper_hardware_common
             static uint16_t normalizedToModbus(double normalized)
             {
                 // Limit to valid range
-                normalized = std::max(0.0, std::min(1.0, normalized));
+                normalized = std::clamp(normalized, 0.0, 1.0);
                 
                 // Changingtek: 0.0(closed) -> 9000, 1.0(open) -> 0
                 return static_cast<uint16_t>((1.0 - normalized) * MAX_POSITION);
@@ -62,7 +62,7 @@ namespace gripper_hardware_common
                 }
 
                 double normalized = 1.0 - (static_cast<double>(modbus_pos) / MAX_POSITION);
-                return std::max(0.0, std::min(1.0, normalized));
+                return std::clamp(normalized, 0.0, 1.0);
             }
         };
 
@@ -141,7 +141,7 @@ namespace gripper_hardware_common
             static double normalizedToPhysical(double normalized)
             {
                 // Limit to valid range
-                normalized = std::max(0.0, std::min(1.0, normalized));
+                normalized = std::clamp(normalized, 0.0, 1.0);
                 return normalized * MAX_OPENING_DISTANCE;
             }
         };
