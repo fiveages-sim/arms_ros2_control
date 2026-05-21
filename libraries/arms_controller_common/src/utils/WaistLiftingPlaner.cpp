@@ -5,6 +5,72 @@
 
 namespace arms_controller_common
 {
+    bool WaistLiftingPlaner::initSpeedJPlannerFromState(
+        const double start_pos, const double start_vel, const double target_vel,
+        const double max_acc, const double max_jerk, const double total_time,
+        const double period)
+    {
+#ifdef HAS_LINA_PLANNING
+        speedj_planner_ = std::make_unique<planning::SpeedJ>();
+        size_t nr_of_joints = 1;
+        planning::TrajectPoint start_joint_point(nr_of_joints);
+        planning::TrajectPoint end_joint_point(nr_of_joints);
+        planning::TrajectoryParameter traj_param(nr_of_joints);
+        start_joint_point.joint_pos(0) = start_pos;
+        start_joint_point.joint_vel(0) = start_vel;
+        end_joint_point.joint_vel(0) = target_vel;
+        traj_param.joint_max_acc(0) = max_acc;
+        traj_param.joint_max_jerk(0) = max_jerk;
+        if (std::fabs(target_vel - start_vel) > min_val)
+        {
+            traj_param.total_time = total_time;
+        }
+        else
+        {
+            traj_param.total_time = 0.0;
+        }
+        planning::TrajectoryInitParameters speedj_init_para(
+            start_joint_point, end_joint_point, traj_param, period);
+        if (!speedj_planner_->init(speedj_init_para))
+        {
+            std::cerr << "Failed to init speedj planning" << std::endl;
+            return false;
+        }
+        speedj_planner_->setRealStartTime(0.0);
+        return true;
+#else
+        (void)start_pos;
+        (void)start_vel;
+        (void)target_vel;
+        (void)max_acc;
+        (void)max_jerk;
+        (void)total_time;
+        (void)period;
+        return false;
+#endif
+    }
+
+    bool WaistLiftingPlaner::resolveSpeedModeMaxReachablePos(
+        const Eigen::Vector3d& init_joint_angle, const double start_pos,
+        const double target_speed, double& max_reachable_pos)
+    {
+        if (std::abs(target_speed) <= min_val)
+        {
+            max_reachable_pos = start_pos;
+            return true;
+        }
+        const double direction = (target_speed > 0.0) ? 1.0 : -1.0;
+        if (type_three_joint_)
+        {
+            const double max_workspace = std::abs(l1_) + std::abs(l2_);
+            const double requested_end = start_pos + direction * (2.0 * max_workspace + 0.01);
+            return resolveFeasibleLiftingEnd(init_joint_angle, start_pos, requested_end,
+                                             max_reachable_pos);
+        }
+        max_reachable_pos = (direction > 0.0) ? single_joint_limit_upper_ : single_joint_limit_lower_;
+        return true;
+    }
+
     bool WaistLiftingPlaner::resolveFeasibleLiftingEndSingleJoint(
         const double start_pos, const double requested_end, double& feasible_end)
     {
@@ -75,6 +141,8 @@ namespace arms_controller_common
         const double duration, const double period)
     {
         type_speed_ = false;
+        speed_mode_max_reachable_valid_ = false;
+        speed_mode_stop_replanned_ = false;
         current_joint_angle_ = init_joint_angle;
         double start_pos = 0.0;
         double requested_end_pos = 0.0;
@@ -147,6 +215,14 @@ namespace arms_controller_common
         const double total_time, const double period)
     {
         type_speed_ = true;
+        speed_mode_direction_ = (target_lifting_speed > 0.0) ? 1.0 :
+            ((target_lifting_speed < 0.0) ? -1.0 : 0.0);
+        speed_mode_max_acc_ = max_lifting_acc;
+        speed_mode_max_jerk_ = max_lifting_jerk;
+        speed_mode_total_time_ = total_time;
+        speed_mode_period_ = period;
+        speed_mode_max_reachable_valid_ = false;
+        speed_mode_stop_replanned_ = false;
         current_joint_angle_ = init_joint_angle;
         double start_pos = 0.0;
 
@@ -165,39 +241,22 @@ namespace arms_controller_common
             start_pos = init_joint_angle(0);
         }
 
+        if (std::abs(target_lifting_speed) > min_val)
+        {
+            if (!resolveSpeedModeMaxReachablePos(
+                    init_joint_angle, start_pos, target_lifting_speed, speed_mode_max_reachable_pos_))
+            {
+                return false;
+            }
+            speed_mode_max_reachable_valid_ = true;
+        }
 #ifdef HAS_LINA_PLANNING
-        speedj_planner_ = std::make_unique<planning::SpeedJ>();
-
-        size_t nr_of_joints = 1;
-        planning::TrajectPoint start_joint_point(nr_of_joints);
-        planning::TrajectPoint end_joint_point(nr_of_joints);
-        planning::TrajectoryParameter traj_param(nr_of_joints);
-        start_joint_point.joint_pos(0) = start_pos;
-        start_joint_point.joint_vel(0) = waist_velocity_cache_;
-        end_joint_point.joint_vel(0) = target_lifting_speed;
-        traj_param.joint_max_acc(0) = max_lifting_acc;
-        traj_param.joint_max_jerk(0) = max_lifting_jerk;
-
-        if (fabs(target_lifting_speed) > min_val)
+        if (!initSpeedJPlannerFromState(start_pos, waist_velocity_cache_,
+                                        target_lifting_speed, max_lifting_acc,
+                                        max_lifting_jerk, total_time, period))
         {
-            traj_param.total_time = total_time;
-        }
-        else
-        {
-            // 停止的时候这个时间一定要设置为0
-            traj_param.total_time = 0.0;
-        }
-
-        planning::TrajectoryInitParameters speedj_init_para(
-            start_joint_point, end_joint_point, traj_param, period);
-
-        if (!speedj_planner_->init(speedj_init_para))
-        {
-            std::cerr << "Failed to init speedj planning" << std::endl;
             return false;
         }
-
-        speedj_planner_->setRealStartTime(0.0);
 #else
         (void)max_lifting_jerk;
         speed_plan_state_.period = std::max(period, 1.0e-4);
@@ -236,7 +295,46 @@ namespace arms_controller_common
         planning::TrajectPoint point(1);
         if (type_speed_)
         {
+            if (!speedj_planner_)
+            {
+                return false;
+            }
             point = speedj_planner_->run();
+            const double current_pos = point.joint_pos(0);
+            const double current_vel = point.joint_vel(0);
+            if (speed_mode_max_reachable_valid_ && !speed_mode_stop_replanned_)
+            {
+                const double moving_direction =
+                    (std::abs(current_vel) > min_val) ? ((current_vel > 0.0) ? 1.0 : -1.0)
+                                                      : speed_mode_direction_;
+                if (std::abs(moving_direction) > min_val)
+                {
+                    const double stop_dist = speedj_planner_->calculateDecDistanceOfV(
+                        current_vel, speed_mode_max_acc_, speed_mode_max_jerk_);
+                    const double stop_pos = current_pos + moving_direction * stop_dist;
+                    const bool need_stop_replan =
+                        (moving_direction > 0.0) ?
+                        (stop_pos >= speed_mode_max_reachable_pos_ - min_val) :
+                        (stop_pos <= speed_mode_max_reachable_pos_ + min_val);
+                    if (need_stop_replan && std::abs(current_vel) > min_val)
+                    {
+                        std::cout << "Waist speedj reaches deceleration point, replan to stop. "
+                            << "current_pos: " << current_pos
+                            << ", current_vel: " << current_vel
+                            << ", stop_pos: " << stop_pos
+                            << ", max_reachable_pos: " << speed_mode_max_reachable_pos_
+                            << std::endl;
+                        speed_mode_stop_replanned_ = true;
+                        if (!initSpeedJPlannerFromState(
+                                current_pos, current_vel, 0.0, speed_mode_max_acc_,
+                                speed_mode_max_jerk_, 0.0, speed_mode_period_))
+                        {
+                            return false;
+                        }
+                        point = speedj_planner_->run();
+                    }
+                }
+            }
         }
         else
         {

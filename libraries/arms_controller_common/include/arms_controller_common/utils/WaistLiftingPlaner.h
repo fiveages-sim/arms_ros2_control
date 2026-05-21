@@ -76,6 +76,14 @@ namespace arms_controller_common
         double getLastPlannedLiftingLength() const { return last_planned_lifting_length_; }
 
     private:
+        bool initSpeedJPlannerFromState(double start_pos, double start_vel,
+                                        double target_vel, double max_acc,
+                                        double max_jerk, double total_time,
+                                        double period);
+        bool resolveSpeedModeMaxReachablePos(const Eigen::Vector3d& init_joint_angle,
+                                             double start_pos, double target_speed,
+                                             double& max_reachable_pos);
+
         /** @brief 根据终点逆解/关节限位，将目标升降坐标裁剪到可达范围 */
         bool resolveFeasibleLiftingEnd(const Eigen::Vector3d& init_joint_angle,
                                        double start_pos, double requested_end,
@@ -136,6 +144,14 @@ namespace arms_controller_common
 
         double min_val = 1.0e-9;
         double last_planned_lifting_length_{0.0};
+        double speed_mode_max_reachable_pos_{0.0};
+        double speed_mode_direction_{0.0};
+        double speed_mode_max_acc_{0.0};
+        double speed_mode_max_jerk_{0.0};
+        double speed_mode_total_time_{0.0};
+        double speed_mode_period_{0.01};
+        bool speed_mode_max_reachable_valid_{false};
+        bool speed_mode_stop_replanned_{false};
         // Cached waist state shared by speed/length planning in this instance.
         double waist_position_cache_{0.0};
         double waist_velocity_cache_{0.0};
