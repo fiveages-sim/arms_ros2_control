@@ -115,6 +115,7 @@ namespace basic_joint_controller
             });
 
             // HOLD state
+            auto_declare<double>("hold_first_check_position_threshold", 0.1);
             auto_declare<double>("hold_position_threshold", 0.1);
             state_list_.hold = std::make_shared<StateHold>(
                 ctrl_interfaces_, get_node());
