@@ -7,6 +7,7 @@
 #include "arms_controller_common/utils/Interpolation.h"
 #include "arms_controller_common/utils/GravityCompensation.h"
 #include "arms_controller_common/utils/JointTrajectoryManager.h"
+#include "arms_controller_common/utils/JointSpeedStopPlanner.h"
 #include "arms_controller_common/utils/JointLimitsManager.h"
 #include <vector>
 #include <memory>
@@ -223,6 +224,38 @@ namespace arms_controller_common
     private:
         void updateParam();
 
+        bool isMotionBusy() const;
+        bool isNonWaistMotionBusy() const;
+        void requestWaistOnlyMotionOrDefer(std::function<void()> apply_motion);
+        void beginWaistSpeedjStop();
+        void requestMotionOrDefer(std::function<void()> apply_motion);
+        void requestWaistMotionOrDefer(std::function<void()> apply_motion);
+        void abortActiveMotionForStop();
+        void beginStopToZero();
+        void clearPendingMotion();
+        bool runStopToZero(const rclcpp::Duration& period);
+        void updateJointObservation(double dt, bool advance_prev = true);
+
+        void setTargetPositionImpl(const std::vector<double>& target_pos);
+        void setTargetPositionImpl(const std::string& prefix, const std::vector<double>& target_pos);
+        void setTrajectoryImpl(const trajectory_msgs::msg::JointTrajectory& trajectory);
+        bool moveWaistLiftingImpl(double lifting_distance);
+        bool setWaistLiftingFactorImpl(double factor);
+        bool setWaistTurningFactorImpl(double factor);
+        bool startJointTrajectoryRequestImpl(
+            const std::vector<std::string>& request_joint_names,
+            const std::vector<arms_ros2_control_msgs::msg::JointWaypoint>& request_waypoints,
+            std::string& message,
+            double& planned_duration);
+        bool startLinearTrajectoryImpl(
+            const arms_ros2_control_msgs::msg::LinearMessage& linear_params,
+            std::string& message,
+            double& estimated_duration);
+        bool startCircleTrajectoryImpl(
+            const arms_ros2_control_msgs::msg::CircleMessage& circle_params,
+            std::string& message,
+            double& estimated_duration);
+
         std::shared_ptr<rclcpp_lifecycle::LifecycleNode> node_;
         std::shared_ptr<GravityCompensation> gravity_compensation_;
 
@@ -318,6 +351,9 @@ namespace arms_controller_common
          * @brief Capture the latest commanded/observed joint positions for hold behavior
          */
         void refreshHoldPositions();
+
+        /** Sync hold/start/target from last_sent and command all joints (no stale hold). */
+        void maintainCommandFromLastSent();
 
         static constexpr double TARGET_EPSILON = 1e-6; // Tolerance for comparing target positions
 
@@ -502,5 +538,16 @@ namespace arms_controller_common
 
         Eigen::VectorXd getCurrentJointAngles() const;
         bool checkAndHandleCollision();
+
+        std::vector<double> current_joint_pos_;
+        std::vector<double> prev_joint_pos_;
+        std::vector<double> joint_vel_;
+
+        bool stop_to_zero_active_{false};
+        std::function<void()> pending_motion_;
+        std::function<void()> pending_waist_motion_;
+        JointSpeedStopPlanner speed_stop_planner_;
+        static constexpr double kDefaultStopMaxAcc = 0.5;
+        static constexpr double kDefaultStopMaxJerk = 5.0;
     };
 } // namespace arms_controller_common

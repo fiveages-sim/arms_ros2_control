@@ -5,6 +5,7 @@
 #include "arms_controller_common/utils/SharedPublishers.h"
 #include <algorithm>
 #include <cmath>
+#include <sstream>
 #include <string>
 #include <std_msgs/msg/int32.hpp>
 
@@ -35,6 +36,21 @@ namespace arms_controller_common
         for (size_t i = 0; i < num_joints; ++i)
         {
             hold_positions_[i] = ctrl_interfaces_.last_sent_joint_positions_[i];
+        }
+    }
+
+    void StateMoveJ::maintainCommandFromLastSent()
+    {
+        refreshHoldPositions();
+        target_pos_ = ctrl_interfaces_.last_sent_joint_positions_;
+        start_pos_ = target_pos_;
+        for (size_t i = 0; i < ctrl_interfaces_.joint_position_command_interface_.size(); ++i)
+        {
+            if (i < ctrl_interfaces_.last_sent_joint_positions_.size())
+            {
+                ctrl_interfaces_.setJointPositionCommand(
+                    i, ctrl_interfaces_.last_sent_joint_positions_[i]);
+            }
         }
     }
 
@@ -264,9 +280,58 @@ namespace arms_controller_common
         }
     }
 
+    void StateMoveJ::updateJointObservation(double dt, bool advance_prev)
+    {
+        const size_t num_joints = ctrl_interfaces_.joint_position_state_interface_.size();
+        if (advance_prev)
+        {
+            prev_joint_pos_ = current_joint_pos_;
+        }
+        current_joint_pos_.resize(num_joints);
+        joint_vel_.resize(num_joints);
+
+        for (size_t i = 0; i < num_joints; ++i)
+        {
+            const auto value = ctrl_interfaces_.joint_position_state_interface_[i].get().get_optional();
+            current_joint_pos_[i] = value.value_or(0.0);
+        }
+
+        constexpr double kMinDt = 1.0e-6;
+        if (prev_joint_pos_.size() != current_joint_pos_.size() || dt < kMinDt)
+        {
+            std::fill(joint_vel_.begin(), joint_vel_.end(), 0.0);
+            return;
+        }
+
+        const double inv_dt = 1.0 / dt;
+        for (size_t i = 0; i < num_joints; ++i)
+        {
+            joint_vel_[i] = (current_joint_pos_[i] - prev_joint_pos_[i]) * inv_dt;
+        }
+    }
+
     void StateMoveJ::run(const rclcpp::Time& /*time*/, const rclcpp::Duration& period)
     {
         std::lock_guard lock(target_mutex_);
+
+        updateJointObservation(period.seconds());
+
+        const int32_t fsm_cmd = ctrl_interfaces_.fsm_command_;
+        if (fsm_cmd == 1 || fsm_cmd == 2)
+        {
+            clearPendingMotion();
+            stop_to_zero_active_ = false;
+            speed_stop_planner_.reset();
+            abortActiveMotionForStop();
+            refreshHoldPositions();
+            return;
+        }
+
+        if (runStopToZero(period))
+        {
+            return;
+        }
+
         if (checkAndHandleCollision())
         {
             return;
@@ -307,11 +372,19 @@ namespace arms_controller_common
 
                     if (waist_lifting_planer_->isMotionOver())
                     {
-                        refreshHoldPositions();
+                        if (pending_waist_motion_)
+                        {
+                            auto apply = std::move(pending_waist_motion_);
+                            pending_waist_motion_ = nullptr;
+                            apply();
+                            return;
+                        }
                         waist_lifting_active_ = false;
-                        motion_mode_ = MotionMode::MOVEJ; // revert mode
-                        //设置target为movel完成后的位置（不是恢复到之前的位置）
-                        RCLCPP_INFO(node_->get_logger(), "waist lifting trajectory completed, returning to MOVEJ mode");
+                        motion_mode_ = MotionMode::MOVEJ;
+                        maintainCommandFromLastSent();
+                        has_target_ = false;
+                        RCLCPP_INFO(node_->get_logger(),
+                                    "waist lifting trajectory completed, returning to MOVEJ mode");
                     }
                 }
                 else
@@ -363,6 +436,13 @@ namespace arms_controller_common
 
                 if (waist_turning_planer_->isMotionOver())
                 {
+                    if (pending_waist_motion_)
+                    {
+                        auto apply = std::move(pending_waist_motion_);
+                        pending_waist_motion_ = nullptr;
+                        apply();
+                        return;
+                    }
                     refreshHoldPositions();
                     waist_turning_active_ = false;
                     motion_mode_ = MotionMode::MOVEJ;
@@ -497,12 +577,7 @@ namespace arms_controller_common
         // Check single-node trajectory conditions
         else if (!has_target_ || target_pos_.size() != start_pos_.size())
         {
-            // No valid target, maintain current position
-            for (size_t i = 0; i < ctrl_interfaces_.joint_position_command_interface_.size() &&
-                 i < hold_positions_.size(); ++i)
-            {
-                ctrl_interfaces_.setJointPositionCommand(i, hold_positions_[i]);
-            }
+            maintainCommandFromLastSent();
             return;
         }
         else if (!interpolation_active_)
@@ -564,12 +639,7 @@ namespace arms_controller_common
             }
             else
             {
-                // Trajectory not initialized - maintain current position
-                for (size_t i = 0; i < ctrl_interfaces_.joint_position_command_interface_.size() &&
-                     i < start_pos_.size(); ++i)
-                {
-                    ctrl_interfaces_.setJointPositionCommand(i, start_pos_[i]);
-                }
+                maintainCommandFromLastSent();
             }
             return;
         }
@@ -714,11 +784,256 @@ namespace arms_controller_common
         last_waist_turning_factor_ = 0.0;
         waist_lifting_active_ = false;
         waist_turning_active_ = false;
+        clearPendingMotion();
+        stop_to_zero_active_ = false;
+        speed_stop_planner_.reset();
         waist_lifting_planer_.reset();
         waist_turning_planer_.reset();
         RCLCPP_DEBUG(node_->get_logger(), "StateMoveJ exited, all state variables reset");
     }
 
+    bool StateMoveJ::isNonWaistMotionBusy() const
+    {
+        if (stop_to_zero_active_)
+        {
+            return false;
+        }
+        if (move_cartesian_active_ || joint_trajectory_action_active_ ||
+            linear_action_active_ || circle_action_active_)
+        {
+            return true;
+        }
+        if (trajectory_manager_.isInitialized() && !trajectory_manager_.isCompleted())
+        {
+            return true;
+        }
+        if (interpolation_active_ && has_target_)
+        {
+            return true;
+        }
+        return false;
+    }
+
+    bool StateMoveJ::isMotionBusy() const
+    {
+        if (waist_lifting_active_ || waist_turning_active_)
+        {
+            return true;
+        }
+        return isNonWaistMotionBusy();
+    }
+
+    void StateMoveJ::beginWaistSpeedjStop()
+    {
+        if (waist_turning_active_)
+        {
+            setWaistTurningFactorImpl(0.0);
+            RCLCPP_INFO(node_->get_logger(), "Waist turning speedj stop-to-zero before pending motion");
+            return;
+        }
+        if (waist_lifting_active_)
+        {
+            setWaistLiftingFactorImpl(0.0);
+            RCLCPP_INFO(node_->get_logger(), "Waist lifting speedj stop-to-zero before pending motion");
+        }
+    }
+
+    void StateMoveJ::requestWaistOnlyMotionOrDefer(std::function<void()> apply_motion)
+    {
+        if (waist_lifting_active_ || waist_turning_active_)
+        {
+            const bool already_stopping = static_cast<bool>(pending_waist_motion_);
+            pending_waist_motion_ = std::move(apply_motion);
+            if (!already_stopping)
+            {
+                beginWaistSpeedjStop();
+            }
+            else
+            {
+                RCLCPP_INFO(node_->get_logger(), "Updated pending waist motion while speedj stop is active");
+            }
+            return;
+        }
+
+        apply_motion();
+    }
+
+    void StateMoveJ::requestWaistMotionOrDefer(std::function<void()> apply_motion)
+    {
+        if (!isNonWaistMotionBusy() && !stop_to_zero_active_)
+        {
+            requestWaistOnlyMotionOrDefer(std::move(apply_motion));
+            return;
+        }
+
+        pending_motion_ = std::move(apply_motion);
+        if (!stop_to_zero_active_)
+        {
+            abortActiveMotionForStop();
+            beginStopToZero();
+        }
+        else
+        {
+            RCLCPP_INFO(node_->get_logger(),
+                        "Updated pending waist motion while stop-to-zero is active");
+        }
+    }
+
+    void StateMoveJ::clearPendingMotion()
+    {
+        pending_motion_ = nullptr;
+        pending_waist_motion_ = nullptr;
+    }
+
+    void StateMoveJ::abortActiveMotionForStop()
+    {
+        trajectory_manager_.reset();
+        interpolation_active_ = false;
+
+        move_cartesian_active_ = false;
+        cartesian_manager_.clearPlanner();
+        finishLinearAction(false, false, "MoveL preempted for stop-to-zero");
+        finishCircleAction(false, false, "MoveC preempted for stop-to-zero");
+        finishJointTrajectoryAction(false, false, "Joint trajectory preempted for stop-to-zero");
+
+        waist_lifting_active_ = false;
+        waist_turning_active_ = false;
+        last_waist_factor_ = 0.0;
+        last_waist_turning_factor_ = 0.0;
+        if (waist_lifting_planer_)
+        {
+            waist_lifting_planer_->setCurrentVelToZero();
+        }
+        if (waist_turning_planer_)
+        {
+            waist_turning_planer_->setCurrentVelToZero();
+        }
+        motion_mode_ = MotionMode::MOVEJ;
+
+        const size_t num_joints = ctrl_interfaces_.joint_position_command_interface_.size();
+        for (size_t i = 0; i < num_joints; ++i)
+        {
+            if (i < ctrl_interfaces_.last_sent_joint_positions_.size())
+            {
+                ctrl_interfaces_.setJointPositionCommand(
+                    i, ctrl_interfaces_.last_sent_joint_positions_[i]);
+            }
+        }
+    }
+
+    void StateMoveJ::beginStopToZero()
+    {
+        const double dt = 1.0 / std::max(static_cast<double>(ctrl_interfaces_.frequency_), 1.0);
+        updateJointObservation(dt, false);
+
+        std::vector<double> stop_start_pos = ctrl_interfaces_.last_sent_joint_positions_;
+        if (stop_start_pos.size() != current_joint_pos_.size())
+        {
+            stop_start_pos = current_joint_pos_;
+        }
+
+        std::ostringstream vel_log;
+        vel_log << "[";
+        for (size_t i = 0; i < joint_vel_.size(); ++i)
+        {
+            if (i > 0)
+            {
+                vel_log << ", ";
+            }
+            vel_log << joint_vel_[i];
+        }
+        vel_log << "]";
+        RCLCPP_INFO(node_->get_logger(),
+                    "MoveJ stop-to-zero init: vel_source=finite_diff, dq=%s",
+                    vel_log.str().c_str());
+
+        const double period = dt;
+        if (!speed_stop_planner_.init(
+                stop_start_pos, joint_vel_, period, kDefaultStopMaxAcc, kDefaultStopMaxJerk))
+        {
+            RCLCPP_WARN(node_->get_logger(), "Failed to initialize joint speed stop planner");
+            stop_to_zero_active_ = false;
+            if (pending_motion_)
+            {
+                auto apply = std::move(pending_motion_);
+                pending_motion_ = nullptr;
+                apply();
+            }
+            return;
+        }
+
+        stop_to_zero_active_ = true;
+        RCLCPP_INFO(node_->get_logger(), "Stop-to-zero started before pending motion");
+    }
+
+    void StateMoveJ::requestMotionOrDefer(std::function<void()> apply_motion)
+    {
+        if (!isMotionBusy() && !stop_to_zero_active_)
+        {
+            apply_motion();
+            return;
+        }
+
+        pending_motion_ = std::move(apply_motion);
+        if (!stop_to_zero_active_)
+        {
+            abortActiveMotionForStop();
+            beginStopToZero();
+        }
+        else
+        {
+            RCLCPP_INFO(node_->get_logger(), "Updated pending motion while stop-to-zero is active");
+        }
+    }
+
+    bool StateMoveJ::runStopToZero(const rclcpp::Duration& /*period*/)
+    {
+        if (!stop_to_zero_active_)
+        {
+            return false;
+        }
+
+        std::vector<double> next_positions = speed_stop_planner_.run();
+        if (!next_positions.empty() &&
+            next_positions.size() == ctrl_interfaces_.joint_position_command_interface_.size())
+        {
+            if (waist_joint_count_ > 0 && next_positions.size() >= waist_joint_count_)
+            {
+                std::vector<double> waist_positions(
+                    next_positions.begin(), next_positions.begin() + waist_joint_count_);
+                waist_positions = applyWaistJointLimits(waist_positions);
+                for (size_t i = 0; i < waist_joint_count_; ++i)
+                {
+                    next_positions[i] = waist_positions[i];
+                }
+            }
+
+            for (size_t i = 0; i < next_positions.size(); ++i)
+            {
+                ctrl_interfaces_.setJointPositionCommand(i, next_positions[i]);
+            }
+            refreshHoldPositions();
+            target_pos_ = ctrl_interfaces_.last_sent_joint_positions_;
+            start_pos_ = target_pos_;
+        }
+
+        if (speed_stop_planner_.isMotionOver())
+        {
+            stop_to_zero_active_ = false;
+            speed_stop_planner_.reset();
+            RCLCPP_INFO(node_->get_logger(), "Stop-to-zero completed");
+
+            if (pending_motion_)
+            {
+                auto apply = std::move(pending_motion_);
+                pending_motion_ = nullptr;
+                apply();
+                RCLCPP_INFO(node_->get_logger(), "Pending motion applied");
+            }
+        }
+
+        return true;
+    }
 
     FSMStateName StateMoveJ::checkChange()
     {
@@ -738,7 +1053,6 @@ namespace arms_controller_common
         updateParam();
         std::lock_guard lock(target_mutex_);
 
-        // Check if state is active
         if (!state_active_)
         {
             RCLCPP_WARN(
@@ -747,7 +1061,12 @@ namespace arms_controller_common
             return;
         }
 
-        // Disable prefix filtering when using the original method
+        const std::vector<double> captured_target = target_pos;
+        requestMotionOrDefer([this, captured_target]() { setTargetPositionImpl(captured_target); });
+    }
+
+    void StateMoveJ::setTargetPositionImpl(const std::vector<double>& target_pos)
+    {
         use_prefix_filter_ = false;
         active_prefix_.clear();
         joint_mask_.clear();
@@ -756,7 +1075,6 @@ namespace arms_controller_common
             joint_mask_.resize(joint_names_.size(), true);
         }
 
-        // Check if the new target is the same as the current target_pos_
         bool is_same_target = false;
         if (has_target_ && target_pos_.size() == target_pos.size())
         {
@@ -771,41 +1089,17 @@ namespace arms_controller_common
             }
         }
 
-        // If target is the same, skip re-interpolation
         if (is_same_target && interpolation_active_)
         {
             RCLCPP_DEBUG(node_->get_logger(), "Received same target position, skipping re-interpolation");
             return;
         }
 
-        // Apply joint limit checking if callback is set
         target_pos_ = applyJointLimits(target_pos, "target position");
         has_target_ = true;
         publishCurrentTargetJoint(target_pos_);
-
-        // Reset interpolation if we're already in the state
-        if (interpolation_active_)
-        {
-            // Update start position to current position for new interpolation
-            start_pos_.clear();
-            for (auto i : ctrl_interfaces_.joint_position_state_interface_)
-            {
-                auto value = i.get().get_optional();
-                start_pos_.push_back(value.value_or(0.0));
-            }
-
-            // Reinitialize trajectory manager with new target
-            trajectory_manager_.initSingleNode(
-                start_pos_,
-                target_pos_,
-                duration_,
-                interpolation_type_,
-                ctrl_interfaces_.frequency_,
-                tanh_scale_
-            );
-
-            RCLCPP_INFO(node_->get_logger(), "New target position received, restarting interpolation");
-        }
+        interpolation_active_ = false;
+        trajectory_manager_.reset();
     }
 
     void StateMoveJ::setTargetPosition(const std::string& prefix, const std::vector<double>& target_pos)
@@ -813,7 +1107,6 @@ namespace arms_controller_common
         updateParam();
         std::lock_guard lock(target_mutex_);
 
-        // Check if state is active
         if (!state_active_)
         {
             RCLCPP_WARN(
@@ -823,7 +1116,16 @@ namespace arms_controller_common
             return;
         }
 
-        // Update joint mask based on prefix
+        const std::string captured_prefix = prefix;
+        const std::vector<double> captured_target = target_pos;
+        requestMotionOrDefer([this, captured_prefix, captured_target]()
+        {
+            setTargetPositionImpl(captured_prefix, captured_target);
+        });
+    }
+
+    void StateMoveJ::setTargetPositionImpl(const std::string& prefix, const std::vector<double>& target_pos)
+    {
         updateJointMask(prefix);
 
         // Count how many joints match the prefix
@@ -877,32 +1179,8 @@ namespace arms_controller_common
         use_prefix_filter_ = true;
         active_prefix_ = prefix;
         refreshHoldPositions();
-
-        // Reset interpolation if we're already in the state
-        if (interpolation_active_)
-        {
-            // Update start position to current position for new interpolation
-            start_pos_.clear();
-            for (auto i : ctrl_interfaces_.joint_position_state_interface_)
-            {
-                auto value = i.get().get_optional();
-                start_pos_.push_back(value.value_or(0.0));
-            }
-
-            // Reinitialize trajectory manager with new target
-            trajectory_manager_.initSingleNode(
-                start_pos_,
-                target_pos_,
-                duration_,
-                interpolation_type_,
-                ctrl_interfaces_.frequency_,
-                tanh_scale_
-            );
-
-            RCLCPP_INFO(node_->get_logger(),
-                        "New target position received for joints with prefix '%s', restarting interpolation",
-                        prefix.c_str());
-        }
+        interpolation_active_ = false;
+        trajectory_manager_.reset();
     }
 
     void StateMoveJ::setJointNames(const std::vector<std::string>& joint_names)
@@ -1155,12 +1433,20 @@ namespace arms_controller_common
         updateParam();
         std::lock_guard lock(target_mutex_);
 
-        // 1. Validate message
         if (!validateTrajectory(trajectory))
         {
             return;
         }
 
+        const trajectory_msgs::msg::JointTrajectory captured_trajectory = trajectory;
+        requestMotionOrDefer([this, captured_trajectory]()
+        {
+            setTrajectoryImpl(captured_trajectory);
+        });
+    }
+
+    void StateMoveJ::setTrajectoryImpl(const trajectory_msgs::msg::JointTrajectory& trajectory)
+    {
         // 2. Map joint names
         std::vector<size_t> joint_indices = mapJointNames(trajectory.joint_names);
         if (joint_indices.empty())
@@ -1457,26 +1743,36 @@ namespace arms_controller_common
 
     bool StateMoveJ::moveWaistLifting(double lifting_distance)
     {
-        if(motion_mode_==MotionMode::WAIST_CONTROL){
-            RCLCPP_INFO(node_->get_logger(),
-                        "Please wait previous motion over!");
-            return false;
-        }
-        if (!waist_lifting_planer_) // 只在没有规划器时创建
+        if (!waist_lifting_planer_)
         {
             setWaistLiftingPlaner();
         }
         std::lock_guard lock(target_mutex_);
 
+        if (!isNonWaistMotionBusy() && !stop_to_zero_active_)
+        {
+            const double captured_distance = lifting_distance;
+            requestWaistOnlyMotionOrDefer(
+                [this, captured_distance]() { moveWaistLiftingImpl(captured_distance); });
+            return true;
+        }
+
+        const double captured_distance = lifting_distance;
+        requestWaistMotionOrDefer([this, captured_distance]() { moveWaistLiftingImpl(captured_distance); });
+        return true;
+    }
+
+    bool StateMoveJ::moveWaistLiftingImpl(double lifting_distance)
+    {
         if (!waist_lifting_planer_)
         {
             RCLCPP_WARN(node_->get_logger(), "Waist lifting planner not initialized");
             return false;
         }
         StateMoveJ::updateWaistParam();
-        // 获取当前腰部关节角度
-        Eigen::VectorXd current_angles = getCurrentWaistAngles();
+        updateWaistLiftingLimits();
 
+        Eigen::VectorXd current_angles = getCurrentWaistAngles();
         const double waist_control_period = 1.0 / ctrl_interfaces_.frequency_;
         double planned_lifting_distance = 0.0;
 
@@ -1586,18 +1882,38 @@ namespace arms_controller_common
 
     bool StateMoveJ::setWaistLiftingFactor(double factor)
     {
-        // 避免重复执行计算
         if (std::fabs(factor - last_waist_factor_) < waist_factor_epsilon_)
         {
             return true;
         }
 
-        if (!waist_lifting_planer_) // 只在没有规划器时创建
+        if (!waist_lifting_planer_)
         {
             setWaistLiftingPlaner();
         }
         std::lock_guard lock(target_mutex_);
 
+        if (std::fabs(factor) < waist_factor_epsilon_)
+        {
+            pending_waist_motion_ = nullptr;
+            return setWaistLiftingFactorImpl(factor);
+        }
+
+        if (!isNonWaistMotionBusy() && !stop_to_zero_active_)
+        {
+            const double captured_factor = factor;
+            requestWaistOnlyMotionOrDefer(
+                [this, captured_factor]() { setWaistLiftingFactorImpl(captured_factor); });
+            return true;
+        }
+
+        const double captured_factor = factor;
+        requestWaistMotionOrDefer([this, captured_factor]() { setWaistLiftingFactorImpl(captured_factor); });
+        return true;
+    }
+
+    bool StateMoveJ::setWaistLiftingFactorImpl(double factor)
+    {
         if (!waist_lifting_planer_)
         {
             RCLCPP_WARN(node_->get_logger(), "Waist lifting planner not initialized");
@@ -1640,19 +1956,28 @@ namespace arms_controller_common
             return false;
         }
 
-        // Entering waist lifting should cancel any stale MOVEJ trajectory state,
-        // otherwise previous targets may be replayed after waist motion ends.
         trajectory_manager_.reset();
         interpolation_active_ = false;
         has_target_ = false;
         target_pos_.clear();
-        // Controller-side mutual exclusion: lifting preempts turning.
         waist_turning_active_ = false;
         last_waist_turning_factor_ = 0.0;
         if (waist_turning_planer_)
         {
             waist_turning_planer_->setCurrentVelToZero();
         }
+
+        if (std::fabs(clamped_factor) < waist_factor_epsilon_)
+        {
+            // Keep waist branch active until planner reports isMotionOver (speedj decel to zero).
+            waist_lifting_active_ = true;
+            motion_mode_ = MotionMode::WAIST_CONTROL;
+            last_waist_factor_ = 0.0;
+            refreshHoldPositions();
+            return true;
+        }
+
+        refreshHoldPositions();
         waist_lifting_active_ = true;
         motion_mode_ = MotionMode::WAIST_CONTROL;
         RCLCPP_INFO(node_->get_logger(),
@@ -1672,6 +1997,28 @@ namespace arms_controller_common
         }
 
         std::lock_guard lock(target_mutex_);
+
+        if (std::fabs(factor) < waist_factor_epsilon_)
+        {
+            pending_waist_motion_ = nullptr;
+            return setWaistTurningFactorImpl(factor);
+        }
+
+        if (!isNonWaistMotionBusy() && !stop_to_zero_active_)
+        {
+            const double captured_factor = factor;
+            requestWaistOnlyMotionOrDefer(
+                [this, captured_factor]() { setWaistTurningFactorImpl(captured_factor); });
+            return true;
+        }
+
+        const double captured_factor = factor;
+        requestWaistMotionOrDefer([this, captured_factor]() { setWaistTurningFactorImpl(captured_factor); });
+        return true;
+    }
+
+    bool StateMoveJ::setWaistTurningFactorImpl(double factor)
+    {
         if (waist_joint_names_.empty())
         {
             setWaistLiftingPlaner();
@@ -1958,12 +2305,6 @@ namespace arms_controller_common
             RCLCPP_WARN(node_->get_logger(), "Rejecting joint trajectory action goal: StateMoveJ is not active");
             return rclcpp_action::GoalResponse::REJECT;
         }
-        if (joint_trajectory_action_active_ || move_cartesian_active_ ||
-            linear_action_active_ || circle_action_active_)
-        {
-            RCLCPP_WARN(node_->get_logger(), "Rejecting joint trajectory action goal: another motion is active");
-            return rclcpp_action::GoalResponse::REJECT;
-        }
         return rclcpp_action::GoalResponse::ACCEPT_AND_EXECUTE;
     }
 
@@ -1977,14 +2318,16 @@ namespace arms_controller_common
     void StateMoveJ::handleJointTrajectoryAccepted(
         const std::shared_ptr<JointTrajectoryGoalHandle> goal_handle)
     {
-        std::string message;
-        double planned_duration = 0.0;
+        std::lock_guard lock(target_mutex_);
+        const auto goal = goal_handle->get_goal();
+        const std::vector<std::string> joint_names = goal->joint_names;
+        const std::vector<arms_ros2_control_msgs::msg::JointWaypoint> waypoints = goal->waypoints;
+
+        requestMotionOrDefer([this, goal_handle, joint_names, waypoints]()
         {
-            std::lock_guard lock(target_mutex_);
-            if (!startJointTrajectoryRequest(goal_handle->get_goal()->joint_names,
-                                             goal_handle->get_goal()->waypoints,
-                                             message,
-                                             planned_duration))
+            std::string message;
+            double planned_duration = 0.0;
+            if (!startJointTrajectoryRequestImpl(joint_names, waypoints, message, planned_duration))
             {
                 auto result = std::make_shared<JointTrajectoryAction::Result>();
                 result->success = false;
@@ -1999,10 +2342,9 @@ namespace arms_controller_common
             joint_trajectory_action_start_time_ = node_->now();
             joint_trajectory_planned_duration_ = planned_duration;
             joint_trajectory_action_active_ = true;
-        }
-
-        publishJointTrajectoryFeedback();
-        RCLCPP_INFO(node_->get_logger(), "Joint trajectory action accepted: duration=%.3f", planned_duration);
+            publishJointTrajectoryFeedback();
+            RCLCPP_INFO(node_->get_logger(), "Joint trajectory action started: duration=%.3f", planned_duration);
+        });
     }
 
     bool StateMoveJ::validateJointNames(
@@ -2120,7 +2462,33 @@ namespace arms_controller_common
         std::string& message,
         double& planned_duration)
     {
-        // 1. 检查状态
+        if (!isMotionBusy() && !stop_to_zero_active_)
+        {
+            return startJointTrajectoryRequestImpl(
+                request_joint_names, request_waypoints, message, planned_duration);
+        }
+
+        const std::vector<std::string> captured_joint_names = request_joint_names;
+        const std::vector<arms_ros2_control_msgs::msg::JointWaypoint> captured_waypoints = request_waypoints;
+        requestMotionOrDefer([this, captured_joint_names, captured_waypoints]()
+        {
+            std::string deferred_message;
+            double deferred_duration = 0.0;
+            startJointTrajectoryRequestImpl(
+                captured_joint_names, captured_waypoints, deferred_message, deferred_duration);
+        });
+
+        message = "Joint trajectory deferred until stop-to-zero completes";
+        planned_duration = 0.0;
+        return true;
+    }
+
+    bool StateMoveJ::startJointTrajectoryRequestImpl(
+        const std::vector<std::string>& request_joint_names,
+        const std::vector<arms_ros2_control_msgs::msg::JointWaypoint>& request_waypoints,
+        std::string& message,
+        double& planned_duration)
+    {
         if (!state_active_)
         {
             message = "StateMoveJ is not active";
@@ -2392,11 +2760,6 @@ namespace arms_controller_common
             RCLCPP_WARN(node_->get_logger(), "Rejecting MoveL action goal: StateMoveJ is not active");
             return rclcpp_action::GoalResponse::REJECT;
         }
-        if (linear_action_active_ || circle_action_active_ || move_cartesian_active_)
-        {
-            RCLCPP_WARN(node_->get_logger(), "Rejecting MoveL action goal: another cartesian trajectory is active");
-            return rclcpp_action::GoalResponse::REJECT;
-        }
         return rclcpp_action::GoalResponse::ACCEPT_AND_EXECUTE;
     }
 
@@ -2410,11 +2773,15 @@ namespace arms_controller_common
     void StateMoveJ::handleLinearAccepted(
         const std::shared_ptr<ExecuteLinearGoalHandle> goal_handle)
     {
-        std::string message;
-        double estimated_duration = 0.0;
+        std::lock_guard lock(target_mutex_);
+        const arms_ros2_control_msgs::msg::LinearMessage linear_params =
+            goal_handle->get_goal()->linear_params;
+
+        requestMotionOrDefer([this, goal_handle, linear_params]()
         {
-            std::lock_guard lock(target_mutex_);
-            if (!startLinearTrajectory(goal_handle->get_goal()->linear_params, message, estimated_duration))
+            std::string message;
+            double estimated_duration = 0.0;
+            if (!startLinearTrajectoryImpl(linear_params, message, estimated_duration))
             {
                 auto result = std::make_shared<ExecuteLinearAction::Result>();
                 result->success = false;
@@ -2429,10 +2796,9 @@ namespace arms_controller_common
             linear_action_start_time_ = node_->now();
             linear_action_estimated_duration_ = estimated_duration;
             linear_action_active_ = true;
-        }
-
-        publishLinearFeedback();
-        RCLCPP_INFO(node_->get_logger(), "MoveL action accepted: duration=%.3f", estimated_duration);
+            publishLinearFeedback();
+            RCLCPP_INFO(node_->get_logger(), "MoveL action started: duration=%.3f", estimated_duration);
+        });
     }
 
     void StateMoveJ::handleLinearTrajectory(
@@ -2463,7 +2829,29 @@ namespace arms_controller_common
         std::string& message,
         double& estimated_duration)
     {
-        // 1. 检查状态
+        if (!isMotionBusy() && !stop_to_zero_active_)
+        {
+            return startLinearTrajectoryImpl(linear_params, message, estimated_duration);
+        }
+
+        const arms_ros2_control_msgs::msg::LinearMessage captured_params = linear_params;
+        requestMotionOrDefer([this, captured_params]()
+        {
+            std::string deferred_message;
+            double deferred_duration = 0.0;
+            startLinearTrajectoryImpl(captured_params, deferred_message, deferred_duration);
+        });
+
+        message = "MoveL deferred until stop-to-zero completes";
+        estimated_duration = 0.0;
+        return true;
+    }
+
+    bool StateMoveJ::startLinearTrajectoryImpl(
+        const arms_ros2_control_msgs::msg::LinearMessage& linear_params,
+        std::string& message,
+        double& estimated_duration)
+    {
         if (!state_active_)
         {
             message = "StateMoveJ is not active";
@@ -2778,11 +3166,6 @@ namespace arms_controller_common
             RCLCPP_WARN(node_->get_logger(), "Rejecting MoveC action goal: StateMoveJ is not active");
             return rclcpp_action::GoalResponse::REJECT;
         }
-        if (linear_action_active_ || circle_action_active_ || move_cartesian_active_)
-        {
-            RCLCPP_WARN(node_->get_logger(), "Rejecting MoveC action goal: another cartesian trajectory is active");
-            return rclcpp_action::GoalResponse::REJECT;
-        }
         return rclcpp_action::GoalResponse::ACCEPT_AND_EXECUTE;
     }
 
@@ -2796,11 +3179,15 @@ namespace arms_controller_common
     void StateMoveJ::handleCircleAccepted(
         const std::shared_ptr<MovecUseIKGoalHandle> goal_handle)
     {
-        std::string message;
-        double estimated_duration = 0.0;
+        std::lock_guard lock(target_mutex_);
+        const arms_ros2_control_msgs::msg::CircleMessage circle_params =
+            goal_handle->get_goal()->circle_params;
+
+        requestMotionOrDefer([this, goal_handle, circle_params]()
         {
-            std::lock_guard lock(target_mutex_);
-            if (!startCircleTrajectory(goal_handle->get_goal()->circle_params, message, estimated_duration))
+            std::string message;
+            double estimated_duration = 0.0;
+            if (!startCircleTrajectoryImpl(circle_params, message, estimated_duration))
             {
                 auto result = std::make_shared<MovecUseIKAction::Result>();
                 result->success = false;
@@ -2815,10 +3202,9 @@ namespace arms_controller_common
             circle_action_start_time_ = node_->now();
             circle_action_estimated_duration_ = estimated_duration;
             circle_action_active_ = true;
-        }
-
-        publishCircleFeedback();
-        RCLCPP_INFO(node_->get_logger(), "MoveC action accepted: duration=%.3f", estimated_duration);
+            publishCircleFeedback();
+            RCLCPP_INFO(node_->get_logger(), "MoveC action started: duration=%.3f", estimated_duration);
+        });
     }
 
     // Service handler for Movec
@@ -2850,7 +3236,29 @@ namespace arms_controller_common
         std::string& message,
         double& estimated_duration)
     {
-        // 1. 检查状态
+        if (!isMotionBusy() && !stop_to_zero_active_)
+        {
+            return startCircleTrajectoryImpl(circle_params, message, estimated_duration);
+        }
+
+        const arms_ros2_control_msgs::msg::CircleMessage captured_params = circle_params;
+        requestMotionOrDefer([this, captured_params]()
+        {
+            std::string deferred_message;
+            double deferred_duration = 0.0;
+            startCircleTrajectoryImpl(captured_params, deferred_message, deferred_duration);
+        });
+
+        message = "MoveC deferred until stop-to-zero completes";
+        estimated_duration = 0.0;
+        return true;
+    }
+
+    bool StateMoveJ::startCircleTrajectoryImpl(
+        const arms_ros2_control_msgs::msg::CircleMessage& circle_params,
+        std::string& message,
+        double& estimated_duration)
+    {
         if (!state_active_)
         {
             message = "StateMoveJ is not active";

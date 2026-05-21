@@ -38,6 +38,7 @@ set(ARMS_CONTROLLER_COMMON_SOURCES
         src/utils/GravityCompensation.cpp
         src/utils/JointLimitsManager.cpp
         src/utils/JointTrajectoryManager.cpp
+        src/utils/JointSpeedStopPlanner.cpp
         src/utils/WaistLiftingPlaner.cpp
         src/utils/Kinematics.cpp
         src/utils/CollisionDetector.cpp
