@@ -49,7 +49,7 @@ namespace arms_ros2_control::command
          * @param vr_thumbstick_linear_scale VR摇杆线性缩放因子（单位 m/step）
          * @param vr_thumbstick_angular_scale VR摇杆角度缩放因子（单位 rad/step）
          * @param vr_pose_scale 手柄位姿位置缩放因子（左右共用，可由组合键动态校准）
-         * @param reference_link 参考link名称（例如 base_link），用于VR/头显关联
+         * @param reference_link 参考link名称（例如 head_link2），用于VR/头显关联
          */
         VRInputHandler(
             rclcpp::Node::SharedPtr node,
