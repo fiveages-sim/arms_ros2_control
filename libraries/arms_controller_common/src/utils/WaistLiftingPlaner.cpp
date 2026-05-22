@@ -310,12 +310,12 @@ namespace arms_controller_common
                 if (std::abs(moving_direction) > min_val)
                 {
                     const double stop_dist = speedj_planner_->calculateDecDistanceOfV(
-                        current_vel, speed_mode_max_acc_, speed_mode_max_jerk_);
+                        current_vel, 0.1, 0.2);
                     const double stop_pos = current_pos + moving_direction * stop_dist;
                     const bool need_stop_replan =
                         (moving_direction > 0.0) ?
-                        (stop_pos >= speed_mode_max_reachable_pos_ - 0.01) :
-                        (stop_pos <= speed_mode_max_reachable_pos_ + 0.01);
+                        (stop_pos >= speed_mode_max_reachable_pos_ - 0.001) :
+                        (stop_pos <= speed_mode_max_reachable_pos_ + 0.001);
                     if (need_stop_replan && std::abs(current_vel) > min_val)
                     {
                         std::cout << "Waist speedj reaches deceleration point, replan to stop. "
@@ -486,6 +486,8 @@ namespace arms_controller_common
         {
             if (log_errors)
             {
+                std::cout << "solution 1: " << solutions[0].transpose() << std::endl;
+                std::cout << "solution 2: " << solutions[1].transpose() << std::endl;
                 std::cerr << "All solutions over joint limt" << std::endl;
             }
             return false;
