@@ -314,8 +314,8 @@ namespace arms_controller_common
                     const double stop_pos = current_pos + moving_direction * stop_dist;
                     const bool need_stop_replan =
                         (moving_direction > 0.0) ?
-                        (stop_pos >= speed_mode_max_reachable_pos_ - min_val) :
-                        (stop_pos <= speed_mode_max_reachable_pos_ + min_val);
+                        (stop_pos >= speed_mode_max_reachable_pos_ - 0.01) :
+                        (stop_pos <= speed_mode_max_reachable_pos_ + 0.01);
                     if (need_stop_replan && std::abs(current_vel) > min_val)
                     {
                         std::cout << "Waist speedj reaches deceleration point, replan to stop. "
