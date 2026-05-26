@@ -36,8 +36,8 @@ jobs:
       PACKAGE_NAME: ros-jazzy-arms-ros2-control
       DEB_FILE_PREFIX: ros-jazzy-arms-ros2-control
       INSTALL_PREFIX: /opt/ros/jazzy
-      OCS2_PACKAGE_NAME: ros-jazzy-ocs2-ros2-mobile-manipulator
-      OCS2_DEB_FILE_PREFIX: ros-jazzy-ocs2-ros2-mobile-manipulator
+      OCS2_PACKAGE_NAME: ocs2-ros2-jazzy-mobile-manipulator
+      OCS2_DEB_FILE_PREFIX: ocs2-ros2-jazzy-mobile-manipulator
       COMMON_PACKAGE_NAME: ros-jazzy-robot-descriptions-common
       COMMON_DEB_FILE_PREFIX: ros-jazzy-robot-descriptions-common
       DEFAULT_ROS_DISTRO: jazzy
