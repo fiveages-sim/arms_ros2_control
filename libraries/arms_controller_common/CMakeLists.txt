@@ -42,7 +42,6 @@ set(ARMS_CONTROLLER_COMMON_SOURCES
         src/utils/JointSpeedStopPlanner.cpp
         src/utils/WaistLiftingPlaner.cpp
         src/utils/Kinematics.cpp
-        src/utils/CollisionDetector.cpp
 )
 
 if(lina_planning_FOUND)
@@ -91,10 +90,6 @@ if(lina_planning_FOUND)
 else()
     message(STATUS "lina_planning not found - DOUBLES interpolation disabled")
 endif()
-
-ament_target_dependencies(${PROJECT_NAME} PUBLIC ${dependencies})
-
-target_compile_definitions(${PROJECT_NAME} PRIVATE PINOCCHIO_WITH_HPP_FCL)
 
 # 只链接 libKine.so（运动学库）
 target_link_libraries(${PROJECT_NAME} PRIVATE

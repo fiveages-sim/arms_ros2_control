@@ -10,8 +10,6 @@
 #include "ocs2_arm_controller/FSM/StateMoveJ.h"
 #include <arms_controller_common/utils/GravityCompensation.h>
 #include "arms_controller_common/utils/Kinematics.h"
-#include "arms_controller_common/utils/CollisionDetector.h"
-#include <ocs2_core/misc/LoadStdVectorOfPair.h>
 
 namespace ocs2::mobile_manipulator
 {
@@ -265,33 +263,14 @@ namespace ocs2::mobile_manipulator
 
                 if (ctrl_comp_->interface_->isSelfCollisionEnabled())
                 {
-                    // 获取碰撞对配置
-                    std::vector<std::pair<std::string, std::string>> collision_pairs;
-                    ocs2::loadData::loadStdVectorOfPair(
-                        ctrl_comp_->getTaskFilePath(),
-                        "selfCollision.collisionLinkPairs",
-                        collision_pairs,
-                        false);
-
-                    if (!collision_pairs.empty())
-                    {
-                        // 获取 URDF 内容
-                        std::string urdf_file = ctrl_comp_->getUrdfFilePath();
-
-                        if (!urdf_file.empty())
+                    state_list_.movej->setCollisionCheckCallback(
+                        [ctrl_comp = ctrl_comp_](double threshold)
                         {
-                            // const auto& pinocchio_model = ctrl_comp_->interface_->getPinocchioInterface().getModel();
-
-                            // 使用 URDF 字符串构造函数（已测试通过）
-                            auto collision_detector = std::make_shared<arms_controller_common::CollisionDetector>(
-                                pinocchio_model, urdf_file, collision_pairs);
-
-                            state_list_.movej->setCollisionDetector(collision_detector);
-                            state_list_.movej->setCollisionEnabled(true);
-                            state_list_.movej->setCollisionThreshold(
-                                ctrl_comp_->interface_->getSelfCollisionMinimumDistance());
-                        }
-                    }
+                            return ctrl_comp && ctrl_comp->isCollisionDetected(threshold);
+                        });
+                    state_list_.movej->setCollisionEnabled(true);
+                    state_list_.movej->setCollisionThreshold(
+                        ctrl_comp_->interface_->getSelfCollisionMinimumDistance());
                 }
             }
 

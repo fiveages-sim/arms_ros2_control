@@ -24,6 +24,7 @@ endforeach ()
 
 # 添加 Eigen3 查找
 find_package(Eigen3 REQUIRED)
+find_package(pinocchio REQUIRED)
 
 add_library(${PROJECT_NAME} SHARED
         src/BasicJointController.cpp
@@ -44,9 +45,8 @@ target_link_libraries(${PROJECT_NAME} PUBLIC
         ${std_msgs_TARGETS}
         arms_controller_common::arms_controller_common
         Eigen3::Eigen
+        pinocchio::pinocchio
 )
-find_package(pinocchio REQUIRED)
-target_link_libraries(basic_joint_controller pinocchio::pinocchio)
 
 pluginlib_export_plugin_description_file(controller_interface basic_joint_controller.xml)
 

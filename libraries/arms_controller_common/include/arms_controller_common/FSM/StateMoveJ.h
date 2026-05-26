@@ -32,7 +32,6 @@
 #include "arms_ros2_control_msgs/action/movec_use_ik.hpp"
 #include "arms_ros2_control_msgs/srv/execute_linear.hpp"
 #include "arms_ros2_control_msgs/srv/movec_use_ik.hpp"
-#include "arms_controller_common/utils/CollisionDetector.h"
 
 namespace arms_controller_common
 {
@@ -48,6 +47,8 @@ namespace arms_controller_common
     class StateMoveJ : public FSMState
     {
     public:
+        using CollisionCheckCallback = std::function<bool(double)>;
+
         /**
          * @brief Constructor
          * @param ctrl_interfaces Control interfaces
@@ -201,9 +202,9 @@ namespace arms_controller_common
         */
         void setupCircleTrajectoryService(const std::string& service_name = "execute_circle_use_ik");
         /**
-             * @brief 设置碰撞检测器
-             */
-        void setCollisionDetector(std::shared_ptr<CollisionDetector> detector);
+         * @brief 设置碰撞检查回调
+         */
+        void setCollisionCheckCallback(CollisionCheckCallback callback);
 
         /**
          * @brief 启用/禁用碰撞检测
@@ -532,7 +533,7 @@ namespace arms_controller_common
         // 添加 MoveL 相关的辅助方法
         bool validateCircleRequest(const arms_ros2_control_msgs::msg::CircleMessage& circle_params,
                                    std::string& error_msg);
-        std::shared_ptr<CollisionDetector> collision_detector_;
+        CollisionCheckCallback collision_check_callback_;
         bool collision_detection_enabled_{false};
         double collision_threshold_{0.01};
 

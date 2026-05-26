@@ -3557,14 +3557,12 @@ namespace arms_controller_common
 
     bool StateMoveJ::checkAndHandleCollision()
     {
-        if (!collision_detection_enabled_ || !collision_detector_)
+        if (!collision_detection_enabled_ || !collision_check_callback_)
         {
             return false;
         }
 
-        Eigen::VectorXd current_joints = getCurrentJointAngles();
-
-        if (collision_detector_->checkCollision(current_joints, collision_threshold_))
+        if (collision_check_callback_(collision_threshold_))
         {
             auto logger = node_ ? node_->get_logger() : rclcpp::get_logger("StateMoveJ");
             RCLCPP_WARN(logger, "Collision detected! Stopping motion.");
@@ -3591,10 +3589,9 @@ namespace arms_controller_common
         return false;
     }
 
-    void StateMoveJ::setCollisionDetector(std::shared_ptr<CollisionDetector> detector)
+    void StateMoveJ::setCollisionCheckCallback(CollisionCheckCallback callback)
     {
-        collision_detector_ = detector;
-        // collision_detector_->printCollisionPairs();
+        collision_check_callback_ = std::move(callback);
     }
 
     void StateMoveJ::setCollisionEnabled(bool enabled)
