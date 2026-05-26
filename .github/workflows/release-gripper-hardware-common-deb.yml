@@ -480,7 +480,7 @@ jobs:
 
           int main()
           {
-            return gripper_hardware_common::PositionConverter::Jodell::normalizedToModbus(1.0) == 255 ? 0 : 1;
+            return gripper_hardware_common::PositionConverter::Jodell::normalizedToJodell(0.0) == 255 ? 0 : 1;
           }
           EOF
 
