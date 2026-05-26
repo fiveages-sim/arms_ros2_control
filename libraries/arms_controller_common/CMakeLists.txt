@@ -12,6 +12,7 @@ set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 set(dependencies
         hardware_interface
         rclcpp
+        rclcpp_action
         pinocchio
         urdf
         ament_index_cpp
@@ -23,23 +24,34 @@ set(dependencies
 )
 
 find_package(ament_cmake REQUIRED)
-# lina_planning is optional - DOUBLES interpolation requires it
 find_package(lina_planning QUIET)
-# Find Eigen3 (required by Pinocchio)
 find_package(Eigen3 REQUIRED)
 
 foreach (Dependency IN ITEMS ${dependencies})
     find_package(${Dependency} REQUIRED)
 endforeach ()
 
-add_library(${PROJECT_NAME} SHARED
+
+set(ARMS_CONTROLLER_COMMON_SOURCES
         src/FSM/StateHome.cpp
         src/FSM/StateHold.cpp
         src/FSM/StateMoveJ.cpp
         src/utils/GravityCompensation.cpp
         src/utils/JointLimitsManager.cpp
         src/utils/JointTrajectoryManager.cpp
+        src/utils/JointSpeedStopPlanner.cpp
         src/utils/WaistLiftingPlaner.cpp
+        src/utils/Kinematics.cpp
+)
+
+if(lina_planning_FOUND)
+    list(APPEND ARMS_CONTROLLER_COMMON_SOURCES
+            src/utils/CartesianTrajectoryManager.cpp
+    )
+endif()
+
+add_library(${PROJECT_NAME} SHARED
+        ${ARMS_CONTROLLER_COMMON_SOURCES}
 )
 
 # Pinocchio headers (ROS Jazzy) can trigger -Wreorder in template instantiation paths.
@@ -53,7 +65,8 @@ target_include_directories(${PROJECT_NAME}
         "$<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>"
         "$<INSTALL_INTERFACE:include/${PROJECT_NAME}>"
         PRIVATE
-        src)
+        src
+)
 
 target_link_libraries(${PROJECT_NAME} PUBLIC
         ${hardware_interface_TARGETS}
@@ -75,8 +88,15 @@ if(lina_planning_FOUND)
     target_link_libraries(${PROJECT_NAME} PUBLIC lina_planning::lina_planning)
     message(STATUS "lina_planning found - DOUBLES interpolation enabled")
 else()
-    message(STATUS "lina_planning not found - DOUBLES interpolation disabled (basic interpolation still available)")
+    message(STATUS "lina_planning not found - DOUBLES interpolation disabled")
 endif()
+
+# 只链接 libKine.so（运动学库）
+target_link_libraries(${PROJECT_NAME} PRIVATE
+        pthread
+        rt
+)
+
 
 install(
         DIRECTORY include/
@@ -92,7 +112,6 @@ install(
 )
 
 ament_export_dependencies(${dependencies})
-# Conditionally export lina_planning dependency
 if(lina_planning_FOUND)
     ament_export_dependencies(lina_planning)
 endif()
