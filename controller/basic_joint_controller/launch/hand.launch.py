@@ -23,7 +23,12 @@ def launch_setup(context, *args, **kwargs):
 
     # 显示手部配置信息
     hand_side = "left" if direction == "1" else "right"
-    modbus_id = "0x28" if direction == "1" else "0x27"
+    if hand_name == "freedom":
+        modbus_id = "1" if direction == "1" else "0"
+    elif hand_name == "inspire":
+        modbus_id = "2" if direction == "1" else "1"
+    else:
+        modbus_id = "0x28" if direction == "1" else "0x27"
     print(f"[INFO] Hand configuration: {hand_side} hand (direction={direction}, Modbus ID={modbus_id})")
 
     # 生成 ros2_control robot_description
