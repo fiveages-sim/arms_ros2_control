@@ -810,6 +810,9 @@ jobs:
           cmake_minimum_required(VERSION 3.16)
           project(arms_ros2_control_downstream_check CXX)
 
+          set(CMAKE_BUILD_TYPE Release CACHE STRING "" FORCE)
+          set(Boost_USE_DEBUG_RUNTIME OFF CACHE BOOL "" FORCE)
+
           find_package(arms_controller_common REQUIRED)
           find_package(ocs2_controller_common REQUIRED)
           find_package(basic_joint_controller REQUIRED)
@@ -818,4 +821,8 @@ jobs:
           find_package(topic_based_ros2_control REQUIRED)
           EOF
 
-          cmake -Wno-dev -S downstream_check -B downstream_check/build
+          cmake -Wno-dev \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DBoost_USE_DEBUG_RUNTIME=OFF \
+            -S downstream_check \
+            -B downstream_check/build
