@@ -19,14 +19,34 @@ on:
 permissions:
   contents: write
 
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}-${{ github.event.inputs.tag || github.ref_name }}
+  cancel-in-progress: true
+
+env:
+  DEFAULT_ROS_DISTRO: jazzy
+  PACKAGE_NAME: arms-gripper-hardware-common-jazzy
+  DEB_FILE_PREFIX: arms-gripper-hardware-common-jazzy
+  INSTALL_PREFIX: /opt/ros/jazzy
+
 jobs:
-  build-gripper-hardware-common-deb:
-    runs-on: ubuntu-24.04
-    env:
-      PACKAGE_NAME: ros-jazzy-gripper-hardware-common
-      DEB_FILE_PREFIX: ros-jazzy-gripper-hardware-common
-      INSTALL_PREFIX: /opt/ros/jazzy
-      DEFAULT_ROS_DISTRO: jazzy
+  build_gripper_hardware_common_deb:
+    name: build gripper common deb (${{ matrix.arch }})
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: amd64
+            runner: ubuntu-24.04
+            ros_distro: jazzy
+            image: ros:jazzy-ros-base-noble
+          - arch: arm64
+            runner: ubuntu-24.04-arm
+            ros_distro: jazzy
+            image: ros:jazzy-ros-base-noble
+    container:
+      image: ${{ matrix.image }}
 
     steps:
       - name: Checkout repository
@@ -41,6 +61,8 @@ jobs:
         env:
           INPUT_TAG: ${{ github.event.inputs.tag }}
           INPUT_ROS_DISTRO: ${{ github.event.inputs.ros_distro }}
+          MATRIX_ROS_DISTRO: ${{ matrix.ros_distro }}
+          DEB_ARCH: ${{ matrix.arch }}
         run: |
           set -eo pipefail
 
@@ -56,39 +78,36 @@ jobs:
             tag="v${tag}"
           fi
 
+          ros_distro="${INPUT_ROS_DISTRO:-$MATRIX_ROS_DISTRO}"
+          if [[ "${ros_distro}" != "${MATRIX_ROS_DISTRO}" ]]; then
+            echo "This containerized deb workflow currently supports only ROS 2 ${MATRIX_ROS_DISTRO}." >&2
+            echo "Requested: ${ros_distro}" >&2
+            exit 1
+          fi
+
           version="${tag#v}"
           version="${version#V}"
           version="$(printf '%s' "$version" | sed 's/-/~/g')"
-
-          ros_distro="${INPUT_ROS_DISTRO:-$DEFAULT_ROS_DISTRO}"
-          deb_file="${DEB_FILE_PREFIX}_${version}_amd64.deb"
+          deb_file="${DEB_FILE_PREFIX}_${version}_${DEB_ARCH}.deb"
 
           echo "tag=$tag" >> "$GITHUB_OUTPUT"
           echo "version=$version" >> "$GITHUB_OUTPUT"
           echo "ros_distro=$ros_distro" >> "$GITHUB_OUTPUT"
+          echo "deb_arch=$DEB_ARCH" >> "$GITHUB_OUTPUT"
           echo "deb_file=$deb_file" >> "$GITHUB_OUTPUT"
 
-      - name: Install system tools
+      - name: Install build tools
         shell: bash
         run: |
           set -eo pipefail
 
-          sudo apt-get update
-          sudo apt-get install -y curl gnupg lsb-release software-properties-common
-          sudo add-apt-repository universe
-
-          sudo mkdir -p /etc/apt/keyrings
-          curl -fsSL https://raw.githubusercontent.com/ros/rosdistro/master/ros.key \
-            | sudo gpg --dearmor -o /etc/apt/keyrings/ros-archive-keyring.gpg
-
-          echo "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/ros-archive-keyring.gpg] http://packages.ros.org/ros2/ubuntu $(. /etc/os-release && echo "${UBUNTU_CODENAME}") main" \
-            | sudo tee /etc/apt/sources.list.d/ros2.list > /dev/null
-
-          sudo apt-get update
-          sudo apt-get install -y \
+          apt-get update
+          apt-get install -y \
             python3-rosdep \
             python3-colcon-core \
             python3-colcon-common-extensions \
+            sudo \
+            zstd \
             fakeroot \
             dpkg-dev \
             rsync \
@@ -96,14 +115,49 @@ jobs:
             cmake \
             ros-${{ steps.meta.outputs.ros_distro }}-ament-cmake \
             ros-${{ steps.meta.outputs.ros_distro }}-ament-cmake-core \
-            ros-${{ steps.meta.outputs.ros_distro }}-ament-package \
-            ros-${{ steps.meta.outputs.ros_distro }}-ros-base
-
-          sudo rosdep init || true
-          rosdep update
+            ros-${{ steps.meta.outputs.ros_distro }}-ament-package
 
           source "/opt/ros/${{ steps.meta.outputs.ros_distro }}/setup.bash"
           python3 -c "import ament_package; print('ament_package ready:', ament_package.__file__)"
+
+      - name: Prepare rosdep user
+        shell: bash
+        run: |
+          set -eo pipefail
+          if ! id -u rosdep >/dev/null 2>&1; then
+            useradd --create-home --shell /bin/bash rosdep
+          fi
+          mkdir -p /home/rosdep/.ros/rosdep
+          chown -R rosdep:rosdep /home/rosdep/.ros
+          echo "rosdep ALL=(ALL) NOPASSWD:ALL" > /etc/sudoers.d/rosdep
+          chmod 0440 /etc/sudoers.d/rosdep
+
+      - name: Cache rosdep sources
+        id: cache-rosdep
+        uses: actions/cache@v4
+        with:
+          path: /home/rosdep/.ros/rosdep/sources.cache
+          key: rosdep-${{ runner.os }}-${{ matrix.arch }}-${{ steps.meta.outputs.ros_distro }}-${{ hashFiles('**/package.xml') }}
+          restore-keys: |
+            rosdep-${{ runner.os }}-${{ matrix.arch }}-${{ steps.meta.outputs.ros_distro }}-
+            rosdep-${{ runner.os }}-${{ matrix.arch }}-
+
+      - name: Update rosdep sources
+        shell: bash
+        run: |
+          set -eo pipefail
+          chown -R rosdep:rosdep /home/rosdep/.ros
+
+          if [[ ! -f /etc/ros/rosdep/sources.list.d/20-default.list ]]; then
+            PYTHONWARNINGS="ignore:pkg_resources is deprecated as an API:DeprecationWarning" rosdep init
+          fi
+          if [[ "${{ steps.cache-rosdep.outputs.cache-hit }}" == "true" ]]; then
+            echo "Using restored rosdep sources cache."
+          else
+            sudo -H -u rosdep env \
+              PYTHONWARNINGS="ignore:pkg_resources is deprecated as an API:DeprecationWarning" \
+              rosdep update
+          fi
 
       - name: Prepare package sources
         shell: bash
@@ -113,7 +167,6 @@ jobs:
           source_root="${RUNNER_TEMP}/gripper-hw-src"
           rm -rf "$source_root"
           mkdir -p "$source_root"
-
           rsync -a "${GITHUB_WORKSPACE}/libraries/gripper_hardware_common/" "${source_root}/gripper_hardware_common/"
 
       - name: Install workspace dependencies
@@ -125,15 +178,20 @@ jobs:
           source "/opt/ros/${ROS_DISTRO}/setup.bash"
 
           ros_python_path="/opt/ros/${ROS_DISTRO}/lib/python$(python3 -c 'import sys; print(str(sys.version_info.major) + "." + str(sys.version_info.minor))')/site-packages"
-          export PYTHONPATH="${ros_python_path}:${PYTHONPATH:-}"
-
-          rosdep install \
-            --from-paths "${RUNNER_TEMP}/gripper-hw-src" \
-            --ignore-src \
-            --rosdistro "${ROS_DISTRO}" \
-            --reinstall \
-            -r \
-            -y
+          sudo -H -u rosdep env \
+            PYTHONPATH="${ros_python_path}:${PYTHONPATH:-}" \
+            PYTHONWARNINGS="ignore:pkg_resources is deprecated as an API:DeprecationWarning" \
+            ROS_DISTRO="${ROS_DISTRO}" \
+            RUNNER_TEMP="${RUNNER_TEMP}" \
+            bash -lc '
+              source "/opt/ros/${ROS_DISTRO}/setup.bash"
+              rosdep install \
+                --from-paths "${RUNNER_TEMP}/gripper-hw-src" \
+                --ignore-src \
+                --rosdistro "${ROS_DISTRO}" \
+                -r \
+                -y
+            '
 
       - name: Build install space
         shell: bash
@@ -158,7 +216,12 @@ jobs:
             --base-paths "${RUNNER_TEMP}/gripper-hw-src" \
             --build-base "${build_root}/build" \
             --install-base "${install_root}" \
-            --merge-install
+            --merge-install \
+            --packages-select gripper_hardware_common \
+            --cmake-args \
+            --no-warn-unused-cli \
+            -DBUILD_TESTING=OFF \
+            -DCMAKE_BUILD_TYPE=Release
 
           python3 -c "import sys; exec('''import os\ninstall_root = sys.argv[1]\nruntime_prefix = sys.argv[2]\nfor dirpath, _, filenames in os.walk(install_root):\n    for filename in filenames:\n        path = os.path.join(dirpath, filename)\n        try:\n            with open(path, 'r', encoding='utf-8') as f:\n                content = f.read()\n        except Exception:\n            continue\n        if install_root not in content:\n            continue\n        with open(path, 'w', encoding='utf-8') as f:\n            f.write(content.replace(install_root, runtime_prefix))''')" "$install_root" "$install_prefix"
 
@@ -181,6 +244,10 @@ jobs:
             echo "ament index was not generated in the install space." >&2
             exit 1
           fi
+          if [[ ! -f "${install_root}/share/gripper_hardware_common/package.sh" ]]; then
+            echo "gripper_hardware_common package.sh was not installed." >&2
+            exit 1
+          fi
 
       - name: Build deb package
         id: build
@@ -189,6 +256,7 @@ jobs:
           ROS_DISTRO: ${{ steps.meta.outputs.ros_distro }}
           VERSION: ${{ steps.meta.outputs.version }}
           DEB_FILE: ${{ steps.meta.outputs.deb_file }}
+          DEB_ARCH: ${{ steps.meta.outputs.deb_arch }}
         run: |
           set -eo pipefail
 
@@ -203,8 +271,9 @@ jobs:
           Version: ${VERSION}
           Section: misc
           Priority: optional
-          Architecture: amd64
-          Depends: ros-${ROS_DISTRO}-ros-base
+          Architecture: ${DEB_ARCH}
+          Depends: ros-${ROS_DISTRO}-ros-base, ros-${ROS_DISTRO}-rclcpp
+          Provides: gripper-hardware-common-${ROS_DISTRO}, ros-${ROS_DISTRO}-gripper-hardware-common
           Maintainer: ${GITHUB_REPOSITORY} maintainers <github-actions[bot]@users.noreply.github.com>
           Installed-Size: ${installed_size}
           Description: gripper_hardware_common ROS 2 package (standalone deb)
@@ -217,22 +286,203 @@ jobs:
           fi
 
           dpkg-deb --root-owner-group --build "$package_root" "$DEB_FILE"
-
           echo "deb_path=${GITHUB_WORKSPACE}/${DEB_FILE}" >> "$GITHUB_OUTPUT"
 
-      - name: Upload deb to release
+      - name: Upload workflow artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: gripper-hardware-common-${{ steps.meta.outputs.version }}-${{ matrix.arch }}
+          path: ${{ steps.meta.outputs.deb_file }}
+          if-no-files-found: error
+          retention-days: 7
+
+  publish_gripper_hardware_common_deb:
+    name: publish gripper common debs
+    runs-on: ubuntu-24.04
+    needs: build_gripper_hardware_common_deb
+    outputs:
+      tag: ${{ steps.meta.outputs.tag }}
+      ros_distro: ${{ steps.meta.outputs.ros_distro }}
+      version: ${{ steps.meta.outputs.version }}
+
+    steps:
+      - name: Resolve release metadata
+        id: meta
+        shell: bash
+        env:
+          INPUT_TAG: ${{ github.event.inputs.tag }}
+          INPUT_ROS_DISTRO: ${{ github.event.inputs.ros_distro }}
+        run: |
+          set -eo pipefail
+
+          if [[ -n "${INPUT_TAG:-}" ]]; then
+            tag="$INPUT_TAG"
+          elif [[ "${GITHUB_REF_TYPE:-}" == "tag" ]]; then
+            tag="${GITHUB_REF_NAME}"
+          else
+            echo "A release tag is required for workflow_dispatch." >&2
+            exit 1
+          fi
+          if [[ "${tag}" != [vV]* ]]; then
+            tag="v${tag}"
+          fi
+
+          ros_distro="${INPUT_ROS_DISTRO:-$DEFAULT_ROS_DISTRO}"
+          version="${tag#v}"
+          version="${version#V}"
+          version="$(printf '%s' "$version" | sed 's/-/~/g')"
+
+          echo "tag=$tag" >> "$GITHUB_OUTPUT"
+          echo "ros_distro=$ros_distro" >> "$GITHUB_OUTPUT"
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+
+      - name: Download built deb artifacts
+        uses: actions/download-artifact@v4
+        with:
+          pattern: gripper-hardware-common-${{ steps.meta.outputs.version }}-*
+          merge-multiple: true
+
+      - name: Publish debs to GitHub Release
         shell: bash
         env:
           GH_TOKEN: ${{ github.token }}
           TAG: ${{ steps.meta.outputs.tag }}
-          DEB_PATH: ${{ steps.build.outputs.deb_path }}
         run: |
           set -eo pipefail
 
-          if ! gh release view "$TAG" > /dev/null 2>&1; then
+          ls -lh *.deb
+          if ! gh release view "$TAG" --repo "${GITHUB_REPOSITORY}" > /dev/null 2>&1; then
             gh release create "$TAG" \
+              --repo "${GITHUB_REPOSITORY}" \
               --title "$TAG" \
               --notes "Automated release for Debian packages."
           fi
 
-          gh release upload "$TAG" "$DEB_PATH" --clobber
+          gh release upload "$TAG" ./*.deb --repo "${GITHUB_REPOSITORY}" --clobber
+
+  verify_gripper_hardware_common_deb:
+    name: verify gripper common deb (${{ matrix.arch }})
+    runs-on: ${{ matrix.runner }}
+    needs: publish_gripper_hardware_common_deb
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: amd64
+            runner: ubuntu-24.04
+            image: ros:jazzy-ros-base-noble
+          - arch: arm64
+            runner: ubuntu-24.04-arm
+            image: ros:jazzy-ros-base-noble
+    container:
+      image: ${{ matrix.image }}
+
+    steps:
+      - name: Resolve verify metadata
+        id: meta
+        shell: bash
+        env:
+          TAG: ${{ needs.publish_gripper_hardware_common_deb.outputs.tag }}
+          VERSION: ${{ needs.publish_gripper_hardware_common_deb.outputs.version }}
+          ROS_DISTRO: ${{ needs.publish_gripper_hardware_common_deb.outputs.ros_distro }}
+          DEB_ARCH: ${{ matrix.arch }}
+        run: |
+          set -eo pipefail
+          echo "tag=${TAG}" >> "$GITHUB_OUTPUT"
+          echo "version=${VERSION}" >> "$GITHUB_OUTPUT"
+          echo "ros_distro=${ROS_DISTRO}" >> "$GITHUB_OUTPUT"
+          echo "deb_file=${DEB_FILE_PREFIX}_${VERSION}_${DEB_ARCH}.deb" >> "$GITHUB_OUTPUT"
+
+      - name: Install verification tools
+        shell: bash
+        run: |
+          set -eo pipefail
+
+          apt-get update
+          apt-get install -y ca-certificates curl cmake build-essential
+
+          mkdir -p -m 755 /etc/apt/keyrings
+          curl -fsSL https://cli.github.com/packages/githubcli-archive-keyring.gpg \
+            -o /etc/apt/keyrings/githubcli-archive-keyring.gpg
+          chmod go+r /etc/apt/keyrings/githubcli-archive-keyring.gpg
+          echo "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/githubcli-archive-keyring.gpg] https://cli.github.com/packages stable main" \
+            > /etc/apt/sources.list.d/github-cli.list
+
+          apt-get update
+          apt-get install -y gh
+
+      - name: Download deb from release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -eo pipefail
+
+          deb_file="${{ steps.meta.outputs.deb_file }}"
+          tag="${{ steps.meta.outputs.tag }}"
+          for attempt in {1..30}; do
+            rm -f "${deb_file}"
+            if gh release download "$tag" \
+              --repo "${GITHUB_REPOSITORY}" \
+              --pattern "${deb_file}"; then
+              break
+            fi
+            echo "Asset ${deb_file} is not available yet (attempt ${attempt}/30); retrying in 20s..."
+            sleep 20
+          done
+
+          if [[ ! -f "${deb_file}" ]]; then
+            echo "Timed out waiting for ${deb_file} in release ${tag}." >&2
+            gh release view "$tag" \
+              --repo "${GITHUB_REPOSITORY}" \
+              --json assets \
+              --jq '.assets[].name' || true
+            exit 1
+          fi
+
+          ls -lh "${deb_file}"
+
+      - name: Install deb and verify downstream configure
+        shell: bash
+        run: |
+          set -eo pipefail
+
+          deb_file="${{ steps.meta.outputs.deb_file }}"
+          ros_distro="${{ steps.meta.outputs.ros_distro }}"
+
+          dpkg -i "./${deb_file}" || apt-get -f install -y
+
+          set +u
+          source "/opt/ros/${ros_distro}/setup.bash"
+          set -u
+          export CMAKE_PREFIX_PATH="${INSTALL_PREFIX}:${CMAKE_PREFIX_PATH:-}"
+          export AMENT_PREFIX_PATH="${INSTALL_PREFIX}:${AMENT_PREFIX_PATH:-}"
+
+          find "${INSTALL_PREFIX}" \( \
+            -name 'gripper_hardware_commonConfig.cmake' -o \
+            -name 'gripper_hardware_common-config.cmake' \
+          \) -print
+
+          rm -rf downstream_check
+          mkdir -p downstream_check
+          cat > downstream_check/CMakeLists.txt <<'EOF'
+          cmake_minimum_required(VERSION 3.16)
+          project(gripper_hardware_common_downstream_check CXX)
+
+          find_package(gripper_hardware_common REQUIRED)
+
+          add_executable(dummy main.cpp)
+          target_link_libraries(dummy ${gripper_hardware_common_TARGETS})
+          EOF
+
+          cat > downstream_check/main.cpp <<'EOF'
+          #include <gripper_hardware_common/utils/PositionConverter.h>
+
+          int main()
+          {
+            return gripper_hardware_common::PositionConverter::Jodell::normalizedToModbus(1.0) == 255 ? 0 : 1;
+          }
+          EOF
+
+          cmake -Wno-dev -S downstream_check -B downstream_check/build
+          cmake --build downstream_check/build -j2

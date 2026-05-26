@@ -7,6 +7,7 @@ if (CMAKE_COMPILER_IS_GNUCXX OR CMAKE_CXX_COMPILER_ID MATCHES "Clang")
 endif ()
 
 set(CMAKE_BUILD_TYPE Release)
+set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 
 set(dependencies
         hardware_interface
@@ -25,7 +26,7 @@ set(dependencies
 find_package(ament_cmake REQUIRED)
 find_package(lina_planning QUIET)
 find_package(Eigen3 REQUIRED)
-find_package(hpp-fcl REQUIRED)
+
 foreach (Dependency IN ITEMS ${dependencies})
     find_package(${Dependency} REQUIRED)
 endforeach ()
@@ -68,7 +69,21 @@ target_include_directories(${PROJECT_NAME}
         src
 )
 
-find_package(hpp-fcl REQUIRED)
+target_link_libraries(${PROJECT_NAME} PUBLIC
+        ${hardware_interface_TARGETS}
+        ${rclcpp_TARGETS}
+        pinocchio::pinocchio
+        ${urdf_TARGETS}
+        ament_index_cpp::ament_index_cpp
+        ${tf2_geometry_msgs_TARGETS}
+        ${tf2_TARGETS}
+        ${geometry_msgs_TARGETS}
+        ${trajectory_msgs_TARGETS}
+        ${arms_ros2_control_msgs_TARGETS}
+        Eigen3::Eigen
+)
+
+# Conditionally link lina_planning if available
 if(lina_planning_FOUND)
     target_compile_definitions(${PROJECT_NAME} PUBLIC HAS_LINA_PLANNING)
     target_link_libraries(${PROJECT_NAME} PUBLIC lina_planning::lina_planning)

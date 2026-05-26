@@ -30,8 +30,12 @@ target_include_directories(${PROJECT_NAME}
         "$<INSTALL_INTERFACE:include/${PROJECT_NAME}>"
         PRIVATE
         src)
-ament_target_dependencies(${PROJECT_NAME}
-        ${THIS_PACKAGE_INCLUDE_DEPENDS}
+target_link_libraries(${PROJECT_NAME} PUBLIC
+        ${controller_interface_TARGETS}
+        ${hardware_interface_TARGETS}
+        ${pluginlib_TARGETS}
+        ${rclcpp_TARGETS}
+        ${rclcpp_lifecycle_TARGETS}
 )
 
 pluginlib_export_plugin_description_file(controller_interface ros_control_plugins.xml)
@@ -54,7 +58,7 @@ install(
         DESTINATION share/${PROJECT_NAME}/
 )
 
-ament_export_dependencies(${CONTROLLER_INCLUDE_DEPENDS})
+ament_export_dependencies(${THIS_PACKAGE_INCLUDE_DEPENDS})
 ament_export_targets(export_${PROJECT_NAME} HAS_LIBRARY_TARGET)
 
 ament_package()

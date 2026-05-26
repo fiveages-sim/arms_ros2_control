@@ -1,4 +1,4 @@
-cmake_minimum_required(VERSION 3.5)
+cmake_minimum_required(VERSION 3.18)  # for cmake_language(CALL ...)
 project(arms_rviz_control_plugin)
 
 if(CMAKE_COMPILER_IS_GNUCXX OR CMAKE_CXX_COMPILER_ID MATCHES "Clang")
@@ -14,11 +14,21 @@ find_package(rviz_common REQUIRED)
 find_package(arms_controller_common REQUIRED)
 find_package(sensor_msgs REQUIRED)
 find_package(std_msgs REQUIRED)
-find_package(Qt5 COMPONENTS Widgets REQUIRED)
 find_package(arms_ros2_control_msgs REQUIRED)
 
-# 使用 qt5_wrap_cpp 宏生成MOC_FILES，用于处理Qt元对象编译
-qt5_wrap_cpp(MOC_FILES
+# rviz2 is built against Qt5 on Jazzy and Qt6 on Kilted+ / Lyrical. A plugin
+# compiled against the wrong Qt major still loads, but QObject vtable layout
+# differs between Qt5 and Qt6, so the first virtual call into a panel SIGSEGV-s
+# inside rviz2 (exit code -11). Discover the major version dynamically by
+# probing Qt6 first (the newer / preferred one) and falling back to Qt5,
+# matching the convention used by rviz_default_plugins.
+find_package(QT NAMES Qt6 Qt5 REQUIRED COMPONENTS Widgets)
+find_package(Qt${QT_VERSION_MAJOR} REQUIRED COMPONENTS Widgets)
+
+# qtN_wrap_cpp is exported by both Qt5 and Qt6 packages, but CMake does not
+# allow variable expansion in a command name position, so dispatch via
+# cmake_language(CALL ...) to keep the rest of this file version-agnostic.
+cmake_language(CALL qt${QT_VERSION_MAJOR}_wrap_cpp MOC_FILES
         include/arms_rviz_control_plugin/ocs2_fsm_panel.hpp
         include/arms_rviz_control_plugin/gripper_control_panel.hpp
         include/arms_rviz_control_plugin/joint_control_panel.hpp
@@ -43,19 +53,14 @@ include_directories(include)
 # Create library
 add_library(${PROJECT_NAME} SHARED ${MOC_FILES} ${SRC_FILES})
 
-# 链接所需的库
-target_link_libraries(${PROJECT_NAME}
-  Qt5::Widgets
-)
-
-# Target dependencies
-ament_target_dependencies(${PROJECT_NAME}
-  rclcpp
-  rviz_common
-  arms_controller_common
-  sensor_msgs
-  std_msgs
-  arms_ros2_control_msgs
+target_link_libraries(${PROJECT_NAME} PUBLIC
+  Qt${QT_VERSION_MAJOR}::Widgets
+  ${rclcpp_TARGETS}
+  rviz_common::rviz_common
+  arms_controller_common::arms_controller_common
+  ${sensor_msgs_TARGETS}
+  ${std_msgs_TARGETS}
+  ${arms_ros2_control_msgs_TARGETS}
 )
 
 # Export the plugin
