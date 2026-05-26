@@ -55,6 +55,20 @@ target_include_directories(${PROJECT_NAME}
         PRIVATE
         src)
 
+target_link_libraries(${PROJECT_NAME} PUBLIC
+        ${hardware_interface_TARGETS}
+        ${rclcpp_TARGETS}
+        pinocchio::pinocchio
+        ${urdf_TARGETS}
+        ament_index_cpp::ament_index_cpp
+        ${tf2_geometry_msgs_TARGETS}
+        ${tf2_TARGETS}
+        ${geometry_msgs_TARGETS}
+        ${trajectory_msgs_TARGETS}
+        ${arms_ros2_control_msgs_TARGETS}
+        Eigen3::Eigen
+)
+
 # Conditionally link lina_planning if available
 if(lina_planning_FOUND)
     target_compile_definitions(${PROJECT_NAME} PUBLIC HAS_LINA_PLANNING)
@@ -63,14 +77,6 @@ if(lina_planning_FOUND)
 else()
     message(STATUS "lina_planning not found - DOUBLES interpolation disabled (basic interpolation still available)")
 endif()
-
-ament_target_dependencies(
-        ${PROJECT_NAME} PUBLIC
-        ${dependencies}
-)
-
-# Link Eigen3
-target_include_directories(${PROJECT_NAME} PUBLIC ${EIGEN3_INCLUDE_DIR})
 
 install(
         DIRECTORY include/

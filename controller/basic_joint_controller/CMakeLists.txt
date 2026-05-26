@@ -37,12 +37,12 @@ target_include_directories(${PROJECT_NAME}
         "$<INSTALL_INTERFACE:include/${PROJECT_NAME}>"
         PRIVATE
         src)
-ament_target_dependencies(${PROJECT_NAME}
-        ${CONTROLLER_INCLUDE_DEPENDS}
-)
-
-# 然后再链接 Eigen3（也使用 plain signature 保持一致）
-target_link_libraries(${PROJECT_NAME}
+target_link_libraries(${PROJECT_NAME} PUBLIC
+        ${pluginlib_TARGETS}
+        ${rcpputils_TARGETS}
+        ${controller_interface_TARGETS}
+        ${std_msgs_TARGETS}
+        arms_controller_common::arms_controller_common
         Eigen3::Eigen
 )
 
