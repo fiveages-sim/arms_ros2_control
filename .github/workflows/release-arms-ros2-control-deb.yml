@@ -27,24 +27,42 @@ on:
 permissions:
   contents: write
 
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}-${{ github.event.inputs.tag || github.ref_name }}
+  cancel-in-progress: true
+
+env:
+  PACKAGE_NAME: ros-jazzy-arms-ros2-control
+  DEB_FILE_PREFIX: ros-jazzy-arms-ros2-control
+  INSTALL_PREFIX: /opt/ros/jazzy
+  OCS2_PACKAGE_NAME: ocs2-ros2-jazzy-mobile-manipulator
+  OCS2_DEB_FILE_PREFIX: ocs2-ros2-jazzy-mobile-manipulator
+  COMMON_PACKAGE_NAME: ros-jazzy-robot-descriptions-common
+  COMMON_DEB_FILE_PREFIX: ros-jazzy-robot-descriptions-common
+  DEFAULT_ROS_DISTRO: jazzy
+  PREFERRED_OCS2_RELEASE_REPO: legubiao/ocs2_ros2
+  FALLBACK_OCS2_RELEASE_REPO: YangLuo-Bionics/ocs2_ros2
+  PREFERRED_COMMON_RELEASE_REPO: fiveages-sim/robot-descriptions-common
+  FALLBACK_COMMON_RELEASE_REPO: YangLuo-Bionics/robot-descriptions-common
+
 jobs:
-  build-arms-ros2-control-deb:
-    runs-on: ubuntu-24.04
+  build_arms_ros2_control_deb:
+    name: build arms deb (${{ matrix.arch }})
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: amd64
+            runner: ubuntu-24.04
+            ros_distro: jazzy
+            image: ros:jazzy-ros-base-noble
+          - arch: arm64
+            runner: ubuntu-24.04-arm
+            ros_distro: jazzy
+            image: ros:jazzy-ros-base-noble
     container:
-      image: ros:jazzy-ros-base-noble
-    env:
-      PACKAGE_NAME: ros-jazzy-arms-ros2-control
-      DEB_FILE_PREFIX: ros-jazzy-arms-ros2-control
-      INSTALL_PREFIX: /opt/ros/jazzy
-      OCS2_PACKAGE_NAME: ocs2-ros2-jazzy-mobile-manipulator
-      OCS2_DEB_FILE_PREFIX: ocs2-ros2-jazzy-mobile-manipulator
-      COMMON_PACKAGE_NAME: ros-jazzy-robot-descriptions-common
-      COMMON_DEB_FILE_PREFIX: ros-jazzy-robot-descriptions-common
-      DEFAULT_ROS_DISTRO: jazzy
-      PREFERRED_OCS2_RELEASE_REPO: legubiao/ocs2_ros2
-      FALLBACK_OCS2_RELEASE_REPO: YangLuo-Bionics/ocs2_ros2
-      PREFERRED_COMMON_RELEASE_REPO: fiveages-sim/robot-descriptions-common
-      FALLBACK_COMMON_RELEASE_REPO: YangLuo-Bionics/robot-descriptions-common
+      image: ${{ matrix.image }}
 
     steps:
       - name: Install GitHub CLI
@@ -80,6 +98,8 @@ jobs:
           INPUT_ROS_DISTRO: ${{ github.event.inputs.ros_distro }}
           INPUT_OCS2_TAG: ${{ github.event.inputs.ocs2_release_tag }}
           INPUT_COMMON_TAG: ${{ github.event.inputs.common_release_tag }}
+          MATRIX_ROS_DISTRO: ${{ matrix.ros_distro }}
+          DEB_ARCH: ${{ matrix.arch }}
         run: |
           set -eo pipefail
 
@@ -135,13 +155,13 @@ jobs:
           version="${version#V}"
           version="$(printf '%s' "$version" | sed 's/-/~/g')"
 
-          ros_distro="${INPUT_ROS_DISTRO:-$DEFAULT_ROS_DISTRO}"
-          if [[ "${ros_distro}" != "${DEFAULT_ROS_DISTRO}" ]]; then
-            echo "This containerized deb workflow currently supports only ROS 2 ${DEFAULT_ROS_DISTRO}." >&2
+          ros_distro="${INPUT_ROS_DISTRO:-$MATRIX_ROS_DISTRO}"
+          if [[ "${ros_distro}" != "${MATRIX_ROS_DISTRO}" ]]; then
+            echo "This containerized deb workflow currently supports only ROS 2 ${MATRIX_ROS_DISTRO}." >&2
             echo "Requested: ${ros_distro}" >&2
             exit 1
           fi
-          deb_file="${DEB_FILE_PREFIX}_${version}_amd64.deb"
+          deb_file="${DEB_FILE_PREFIX}_${version}_${DEB_ARCH}.deb"
 
           ocs2_tag="$(resolve_dependency_release_tag \
             "${INPUT_OCS2_TAG:-}" \
@@ -158,6 +178,7 @@ jobs:
           echo "tag=$tag" >> "$GITHUB_OUTPUT"
           echo "version=$version" >> "$GITHUB_OUTPUT"
           echo "ros_distro=$ros_distro" >> "$GITHUB_OUTPUT"
+          echo "deb_arch=$DEB_ARCH" >> "$GITHUB_OUTPUT"
           echo "deb_file=$deb_file" >> "$GITHUB_OUTPUT"
           echo "ocs2_tag=$ocs2_tag" >> "$GITHUB_OUTPUT"
           echo "common_tag=$common_tag" >> "$GITHUB_OUTPUT"
@@ -210,10 +231,10 @@ jobs:
         uses: actions/cache@v4
         with:
           path: /home/rosdep/.ros/rosdep/sources.cache
-          key: rosdep-${{ runner.os }}-amd64-${{ steps.meta.outputs.ros_distro }}-${{ hashFiles('**/package.xml') }}
+          key: rosdep-${{ runner.os }}-${{ matrix.arch }}-${{ steps.meta.outputs.ros_distro }}-${{ hashFiles('**/package.xml') }}
           restore-keys: |
-            rosdep-${{ runner.os }}-amd64-${{ steps.meta.outputs.ros_distro }}-
-            rosdep-${{ runner.os }}-amd64-
+            rosdep-${{ runner.os }}-${{ matrix.arch }}-${{ steps.meta.outputs.ros_distro }}-
+            rosdep-${{ runner.os }}-${{ matrix.arch }}-
 
       - name: Update rosdep sources
         shell: bash
@@ -238,6 +259,7 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           OCS2_TAG: ${{ steps.meta.outputs.ocs2_tag }}
           COMMON_TAG: ${{ steps.meta.outputs.common_tag }}
+          DEB_ARCH: ${{ steps.meta.outputs.deb_arch }}
         run: |
           set -eo pipefail
 
@@ -283,22 +305,22 @@ jobs:
           }
 
           try_download_from_repos "$OCS2_TAG" "ocs2" "$PREFERRED_OCS2_RELEASE_REPO" "$FALLBACK_OCS2_RELEASE_REPO" \
-            "${OCS2_DEB_FILE_PREFIX}_*_amd64.deb" \
-            "*${OCS2_DEB_FILE_PREFIX}*_amd64.deb" \
-            "*ocs2*jazzy*mobile-manipulator*_amd64.deb"
+            "${OCS2_DEB_FILE_PREFIX}_*_${DEB_ARCH}.deb" \
+            "*${OCS2_DEB_FILE_PREFIX}*_${DEB_ARCH}.deb" \
+            "*ocs2*jazzy*mobile-manipulator*_${DEB_ARCH}.deb"
 
           try_download_from_repos "$COMMON_TAG" "robot_descriptions common" \
             "$PREFERRED_COMMON_RELEASE_REPO" "$FALLBACK_COMMON_RELEASE_REPO" \
-            "${COMMON_DEB_FILE_PREFIX}_*_amd64.deb" \
-            "*${COMMON_DEB_FILE_PREFIX}*_amd64.deb" \
-            "*robot-descriptions*jazzy*common*_amd64.deb"
+            "${COMMON_DEB_FILE_PREFIX}_*_${DEB_ARCH}.deb" \
+            "*${COMMON_DEB_FILE_PREFIX}*_${DEB_ARCH}.deb" \
+            "*robot-descriptions*jazzy*common*_${DEB_ARCH}.deb"
 
           resolve_one_deb() {
             local dir="$1" prefix="$2" label="$3"
             shopt -s nullglob
-            local matches=("$dir/${prefix}"_*_amd64.deb)
+            local matches=("$dir/${prefix}"_*_"${DEB_ARCH}".deb)
             if [[ ${#matches[@]} -eq 0 ]]; then
-              matches=("$dir"/*"${prefix}"*_amd64.deb)
+              matches=("$dir"/*"${prefix}"*_"${DEB_ARCH}".deb)
             fi
             if [[ ${#matches[@]} -ne 1 ]]; then
               echo "Expected exactly one ${label} .deb in ${dir}, got ${#matches[@]}: ${matches[*]}" >&2
@@ -427,6 +449,7 @@ jobs:
           ROS_DISTRO: ${{ steps.meta.outputs.ros_distro }}
           VERSION: ${{ steps.meta.outputs.version }}
           DEB_FILE: ${{ steps.meta.outputs.deb_file }}
+          DEB_ARCH: ${{ steps.meta.outputs.deb_arch }}
         run: |
           set -eo pipefail
 
@@ -441,7 +464,7 @@ jobs:
           Version: ${VERSION}
           Section: misc
           Priority: optional
-          Architecture: amd64
+          Architecture: ${DEB_ARCH}
           Depends: ros-${ROS_DISTRO}-ros-base, ${OCS2_PACKAGE_NAME}, ${COMMON_PACKAGE_NAME}
           Maintainer: ${GITHUB_REPOSITORY} maintainers <github-actions[bot]@users.noreply.github.com>
           Installed-Size: ${installed_size}
@@ -462,15 +485,129 @@ jobs:
 
           echo "deb_path=${GITHUB_WORKSPACE}/${DEB_FILE}" >> "$GITHUB_OUTPUT"
 
-      - name: Upload deb to release
+      - name: Upload workflow artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: arms-ros2-control-${{ steps.meta.outputs.version }}-${{ matrix.arch }}
+          path: ${{ steps.meta.outputs.deb_file }}
+          if-no-files-found: error
+          retention-days: 7
+
+  publish_arms_ros2_control_deb:
+    name: publish arms debs
+    runs-on: ubuntu-24.04
+    needs: build_arms_ros2_control_deb
+    outputs:
+      tag: ${{ steps.meta.outputs.tag }}
+      ros_distro: ${{ steps.meta.outputs.ros_distro }}
+      version: ${{ steps.meta.outputs.version }}
+      ocs2_tag: ${{ steps.meta.outputs.ocs2_tag }}
+      common_tag: ${{ steps.meta.outputs.common_tag }}
+
+    steps:
+      - name: Resolve release metadata
+        id: meta
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          INPUT_TAG: ${{ github.event.inputs.tag }}
+          INPUT_ROS_DISTRO: ${{ github.event.inputs.ros_distro }}
+          INPUT_OCS2_TAG: ${{ github.event.inputs.ocs2_release_tag }}
+          INPUT_COMMON_TAG: ${{ github.event.inputs.common_release_tag }}
+        run: |
+          set -eo pipefail
+
+          resolve_dependency_release_tag() {
+            local requested_tag="$1"
+            local primary_repo="$2"
+            local fallback_repo="$3"
+            local dependency_name="$4"
+
+            if [[ -n "${requested_tag:-}" && "${requested_tag}" != [vV]* ]]; then
+              requested_tag="v${requested_tag}"
+            fi
+
+            if [[ -n "${requested_tag:-}" ]]; then
+              if gh release view "$requested_tag" --repo "$primary_repo" --json tagName >/dev/null 2>&1 \
+                || gh release view "$requested_tag" --repo "$fallback_repo" --json tagName >/dev/null 2>&1; then
+                printf '%s\n' "$requested_tag"
+                return 0
+              fi
+              echo "Unable to find release tag ${requested_tag} for ${dependency_name} in ${primary_repo} or ${fallback_repo}." >&2
+              exit 1
+            fi
+
+            local resolved_tag=""
+            resolved_tag="$(gh release view --repo "$primary_repo" --json tagName --jq .tagName 2>/dev/null || true)"
+            if [[ -n "${resolved_tag}" ]]; then
+              printf '%s\n' "$resolved_tag"
+              return 0
+            fi
+            resolved_tag="$(gh release view --repo "$fallback_repo" --json tagName --jq .tagName 2>/dev/null || true)"
+            if [[ -n "${resolved_tag}" ]]; then
+              printf '%s\n' "$resolved_tag"
+              return 0
+            fi
+            echo "Unable to find any published release for ${dependency_name} in ${primary_repo} or ${fallback_repo}." >&2
+            exit 1
+          }
+
+          if [[ -n "${INPUT_TAG:-}" ]]; then
+            tag="$INPUT_TAG"
+          elif [[ "${GITHUB_REF_TYPE:-}" == "tag" ]]; then
+            tag="${GITHUB_REF_NAME}"
+          else
+            echo "A release tag is required for workflow_dispatch." >&2
+            exit 1
+          fi
+          if [[ "${tag}" != [vV]* ]]; then
+            tag="v${tag}"
+          fi
+
+          ros_distro="${INPUT_ROS_DISTRO:-$DEFAULT_ROS_DISTRO}"
+          if [[ "${ros_distro}" != "${DEFAULT_ROS_DISTRO}" ]]; then
+            echo "This workflow currently supports only ROS 2 ${DEFAULT_ROS_DISTRO}." >&2
+            echo "Requested: ${ros_distro}" >&2
+            exit 1
+          fi
+
+          version="${tag#v}"
+          version="${version#V}"
+          version="$(printf '%s' "$version" | sed 's/-/~/g')"
+
+          ocs2_tag="$(resolve_dependency_release_tag \
+            "${INPUT_OCS2_TAG:-}" \
+            "$PREFERRED_OCS2_RELEASE_REPO" \
+            "$FALLBACK_OCS2_RELEASE_REPO" \
+            "ocs2_ros2")"
+
+          common_tag="$(resolve_dependency_release_tag \
+            "${INPUT_COMMON_TAG:-}" \
+            "$PREFERRED_COMMON_RELEASE_REPO" \
+            "$FALLBACK_COMMON_RELEASE_REPO" \
+            "robot_descriptions")"
+
+          echo "tag=$tag" >> "$GITHUB_OUTPUT"
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          echo "ros_distro=$ros_distro" >> "$GITHUB_OUTPUT"
+          echo "ocs2_tag=$ocs2_tag" >> "$GITHUB_OUTPUT"
+          echo "common_tag=$common_tag" >> "$GITHUB_OUTPUT"
+
+      - name: Download built deb artifacts
+        uses: actions/download-artifact@v4
+        with:
+          pattern: arms-ros2-control-${{ steps.meta.outputs.version }}-*
+          merge-multiple: true
+
+      - name: Publish debs to GitHub Release
         shell: bash
         env:
           GH_TOKEN: ${{ github.token }}
           TAG: ${{ steps.meta.outputs.tag }}
-          DEB_PATH: ${{ steps.build.outputs.deb_path }}
         run: |
           set -eo pipefail
 
+          ls -lh *.deb
           if ! gh release view "$TAG" --repo "${GITHUB_REPOSITORY}" > /dev/null 2>&1; then
             gh release create "$TAG" \
               --repo "${GITHUB_REPOSITORY}" \
@@ -478,10 +615,207 @@ jobs:
               --notes "Automated release for Debian packages."
           fi
 
-          for _i in 1 2 3 4 5; do
-            if gh release upload "$TAG" "$DEB_PATH" --repo "${GITHUB_REPOSITORY}" --clobber; then
+          gh release upload "$TAG" ./*.deb --repo "${GITHUB_REPOSITORY}" --clobber
+
+  verify_arms_ros2_control_deb:
+    name: verify arms deb (${{ matrix.arch }})
+    runs-on: ${{ matrix.runner }}
+    needs: publish_arms_ros2_control_deb
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: amd64
+            runner: ubuntu-24.04
+            image: ros:jazzy-ros-base-noble
+          - arch: arm64
+            runner: ubuntu-24.04-arm
+            image: ros:jazzy-ros-base-noble
+    container:
+      image: ${{ matrix.image }}
+
+    steps:
+      - name: Resolve verify metadata
+        id: meta
+        shell: bash
+        env:
+          TAG: ${{ needs.publish_arms_ros2_control_deb.outputs.tag }}
+          VERSION: ${{ needs.publish_arms_ros2_control_deb.outputs.version }}
+          ROS_DISTRO: ${{ needs.publish_arms_ros2_control_deb.outputs.ros_distro }}
+          OCS2_TAG: ${{ needs.publish_arms_ros2_control_deb.outputs.ocs2_tag }}
+          COMMON_TAG: ${{ needs.publish_arms_ros2_control_deb.outputs.common_tag }}
+          DEB_ARCH: ${{ matrix.arch }}
+        run: |
+          set -eo pipefail
+          echo "tag=${TAG}" >> "$GITHUB_OUTPUT"
+          echo "version=${VERSION}" >> "$GITHUB_OUTPUT"
+          echo "ros_distro=${ROS_DISTRO}" >> "$GITHUB_OUTPUT"
+          echo "ocs2_tag=${OCS2_TAG}" >> "$GITHUB_OUTPUT"
+          echo "common_tag=${COMMON_TAG}" >> "$GITHUB_OUTPUT"
+          echo "deb_arch=${DEB_ARCH}" >> "$GITHUB_OUTPUT"
+          echo "deb_file=${DEB_FILE_PREFIX}_${VERSION}_${DEB_ARCH}.deb" >> "$GITHUB_OUTPUT"
+
+      - name: Install verification tools
+        shell: bash
+        run: |
+          set -eo pipefail
+
+          apt-get update
+          apt-get install -y ca-certificates curl cmake build-essential
+
+          mkdir -p -m 755 /etc/apt/keyrings
+          curl -fsSL https://cli.github.com/packages/githubcli-archive-keyring.gpg \
+            -o /etc/apt/keyrings/githubcli-archive-keyring.gpg
+          chmod go+r /etc/apt/keyrings/githubcli-archive-keyring.gpg
+          echo "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/githubcli-archive-keyring.gpg] https://cli.github.com/packages stable main" \
+            > /etc/apt/sources.list.d/github-cli.list
+
+          apt-get update
+          apt-get install -y gh
+
+      - name: Download debs from releases
+        env:
+          GH_TOKEN: ${{ github.token }}
+          ARMS_TAG: ${{ steps.meta.outputs.tag }}
+          OCS2_TAG: ${{ steps.meta.outputs.ocs2_tag }}
+          COMMON_TAG: ${{ steps.meta.outputs.common_tag }}
+          DEB_ARCH: ${{ steps.meta.outputs.deb_arch }}
+        shell: bash
+        run: |
+          set -eo pipefail
+
+          deps_dir="${RUNNER_TEMP}/verify-debs"
+          rm -rf "$deps_dir"
+          mkdir -p "$deps_dir"
+
+          arms_deb="${{ steps.meta.outputs.deb_file }}"
+          for attempt in {1..30}; do
+            rm -f "${deps_dir}/${arms_deb}"
+            if gh release download "$ARMS_TAG" \
+              --repo "${GITHUB_REPOSITORY}" \
+              --pattern "${arms_deb}" \
+              --dir "$deps_dir"; then
               break
             fi
-            echo "Upload attempt ${_i}/5 failed, retrying in 10s..." >&2
-            sleep 10
+            echo "Asset ${arms_deb} is not available yet (attempt ${attempt}/30); retrying in 20s..."
+            sleep 20
           done
+
+          try_download() {
+            local tag="$1" repo="$2" label="$3"
+            shift 3
+            local p
+            for p in "$@"; do
+              if gh release download "$tag" --repo "$repo" --pattern "$p" --dir "$deps_dir" 2>/dev/null; then
+                return 0
+              fi
+            done
+            echo "No asset matched any pattern for ${label} (${repo}@${tag}). Published assets:" >&2
+            gh release view "$tag" --repo "$repo" --json assets --jq '.assets[].name' >&2 || true
+            return 1
+          }
+
+          try_download_from_repos() {
+            local tag="$1" label="$2" primary="$3" fallback="$4"
+            shift 4
+            local repo
+            for repo in "$primary" "$fallback"; do
+              if ! gh release view "$tag" --repo "$repo" --json tagName >/dev/null 2>&1; then
+                continue
+              fi
+              if try_download "$tag" "$repo" "$label" "$@"; then
+                return 0
+              fi
+            done
+            echo "Could not download ${label} from ${primary} or ${fallback} @ ${tag} (no matching asset)." >&2
+            return 1
+          }
+
+          try_download_from_repos "$OCS2_TAG" "ocs2" "$PREFERRED_OCS2_RELEASE_REPO" "$FALLBACK_OCS2_RELEASE_REPO" \
+            "${OCS2_DEB_FILE_PREFIX}_*_${DEB_ARCH}.deb" \
+            "*${OCS2_DEB_FILE_PREFIX}*_${DEB_ARCH}.deb" \
+            "*ocs2*jazzy*mobile-manipulator*_${DEB_ARCH}.deb"
+
+          try_download_from_repos "$COMMON_TAG" "robot_descriptions common" \
+            "$PREFERRED_COMMON_RELEASE_REPO" "$FALLBACK_COMMON_RELEASE_REPO" \
+            "${COMMON_DEB_FILE_PREFIX}_*_${DEB_ARCH}.deb" \
+            "*${COMMON_DEB_FILE_PREFIX}*_${DEB_ARCH}.deb" \
+            "*robot-descriptions*jazzy*common*_${DEB_ARCH}.deb"
+
+          resolve_one_deb() {
+            local dir="$1" prefix="$2" label="$3"
+            shopt -s nullglob
+            local matches=("$dir/${prefix}"_*_"${DEB_ARCH}".deb)
+            if [[ ${#matches[@]} -eq 0 ]]; then
+              matches=("$dir"/*"${prefix}"*_"${DEB_ARCH}".deb)
+            fi
+            if [[ ${#matches[@]} -ne 1 ]]; then
+              echo "Expected exactly one ${label} .deb in ${dir}, got ${#matches[@]}: ${matches[*]}" >&2
+              ls -la "$dir" >&2 || true
+              exit 1
+            fi
+            printf '%s\n' "${matches[0]}"
+          }
+
+          if [[ ! -f "${deps_dir}/${arms_deb}" ]]; then
+            echo "Timed out waiting for ${arms_deb} in release ${ARMS_TAG}." >&2
+            gh release view "$ARMS_TAG" \
+              --repo "${GITHUB_REPOSITORY}" \
+              --json assets \
+              --jq '.assets[].name' || true
+            exit 1
+          fi
+
+          {
+            echo "ARMS_DEB_PATH=${deps_dir}/${arms_deb}"
+            echo "OCS2_DEB_PATH=$(resolve_one_deb "$deps_dir" "$OCS2_DEB_FILE_PREFIX" "OCS2")"
+            echo "COMMON_DEB_PATH=$(resolve_one_deb "$deps_dir" "$COMMON_DEB_FILE_PREFIX" "common")"
+          } >> "$GITHUB_ENV"
+
+          ls -lh "$deps_dir"/*.deb
+
+      - name: Install debs and verify package discovery
+        shell: bash
+        run: |
+          set -eo pipefail
+
+          ros_distro="${{ steps.meta.outputs.ros_distro }}"
+
+          dpkg -i "$OCS2_DEB_PATH" "$COMMON_DEB_PATH" "$ARMS_DEB_PATH" || apt-get -f install -y
+
+          set +u
+          source "/opt/ros/${ros_distro}/setup.bash"
+          set -u
+          export CMAKE_PREFIX_PATH="${INSTALL_PREFIX}:${CMAKE_PREFIX_PATH:-}"
+          export AMENT_PREFIX_PATH="${INSTALL_PREFIX}:${AMENT_PREFIX_PATH:-}"
+
+          python3 - <<'PY'
+          from ament_index_python.packages import get_package_share_directory
+
+          for package_name in [
+              "arms_ros2_control_msgs",
+              "arms_controller_common",
+              "ocs2_controller_common",
+              "basic_joint_controller",
+              "adaptive_gripper_controller",
+              "ocs2_arm_controller",
+              "topic_based_ros2_control",
+          ]:
+              print(package_name, get_package_share_directory(package_name))
+          PY
+
+          rm -rf downstream_check
+          mkdir -p downstream_check
+          cat > downstream_check/CMakeLists.txt <<'EOF'
+          cmake_minimum_required(VERSION 3.16)
+          project(arms_ros2_control_downstream_check CXX)
+
+          find_package(arms_controller_common REQUIRED)
+          find_package(ocs2_controller_common REQUIRED)
+          find_package(basic_joint_controller REQUIRED)
+          find_package(adaptive_gripper_controller REQUIRED)
+          find_package(ocs2_arm_controller REQUIRED)
+          find_package(topic_based_ros2_control REQUIRED)
+          EOF
+
+          cmake -Wno-dev -S downstream_check -B downstream_check/build
