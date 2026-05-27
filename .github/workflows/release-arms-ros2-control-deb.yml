@@ -728,16 +728,18 @@ jobs:
           rm -rf "$check_root"
           mkdir -p "$check_root"
           dpkg-deb -x "$DEB_PATH" "$check_root"
+          # Only flag package source trees under */src/* — not rosidl-generated *.c / *__type_support.cpp in include/ or site-packages.
           mapfile -t forbidden < <(find "$check_root" -type f \( \
-            -name '*.cpp' -o -name '*.cc' -o -name '*.cxx' -o -name '*.c' \
-            -o -path '*/.git/*' -o -path '*/src/*.cpp' \
+            -path '*/.git/*' \
+            -o -path '*/src/*.cpp' -o -path '*/src/*.cc' -o -path '*/src/*.cxx' -o -path '*/src/*.c' \
+            -o -path '*/src/*.h' -o -path '*/src/*.hpp' \
           \) 2>/dev/null || true)
           if [[ ${#forbidden[@]} -gt 0 ]]; then
-            echo "Source or VCS files found inside ${DEB_PATH}:" >&2
+            echo "Package source tree (*/src/*) or .git metadata found inside ${DEB_PATH}:" >&2
             printf '  %s\n' "${forbidden[@]}" >&2
             exit 1
           fi
-          echo "No .cpp/.c sources or .git metadata in deb."
+          echo "No package */src/* sources or .git metadata in deb (rosidl-generated .c/.cpp allowed)."
 
       - name: Upload workflow artifact
         uses: actions/upload-artifact@v4

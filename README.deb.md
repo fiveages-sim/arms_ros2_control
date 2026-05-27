@@ -39,7 +39,7 @@ sudo dpkg -i ros-jazzy-arms-ros2-control-full_<version>_<arch>.deb
 - Workflow 只 **按需** `git submodule update` 上述路径；不克隆 arx / dobot / eyou / rokae / unitree 等未打包子模块
 - CI 容器无 `ssh`：子模块 URL 改为 **仅** `https://x-access-token:<PAT>@github.com/...`（不要同时设 `http.extraHeader: Authorization`，否则会 `Duplicate header` / 400）
 - **`full` bundle**：构建前删除误提交的 `libKine.so` / `libMarvinSDK.so`，按 runner 架构从源码重编 Marvin SDK
-- 产物仅含 colcon **install**（二进制 + 公共头文件 + 配置），不含 `.cpp` 源码
+- 产物仅含 colcon **install**（二进制 + 公共头文件 + 配置）；CI 拒绝误打包的 `*/src/*` 源码树（**允许** rosidl 生成的 `*_s.c` / `__type_support.cpp` 等）
 
 ## 子模块仓库
 
