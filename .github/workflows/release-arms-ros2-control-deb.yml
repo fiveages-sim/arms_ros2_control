@@ -114,28 +114,57 @@ jobs:
           fetch-depth: 0
           submodules: false
 
-      - name: Configure git credentials for private submodules
+      - name: Initialize required submodules (HTTPS + PAT)
         shell: bash
         env:
+          BUNDLE: ${{ matrix.bundle }}
           SUBMODULE_TOKEN: ${{ secrets.PRIVATE_SUBMODULES_TOKEN }}
         run: |
           set -eo pipefail
           if [[ -z "${SUBMODULE_TOKEN:-}" ]]; then
             echo "::error::PRIVATE_SUBMODULES_TOKEN is not set."
-            echo "Create a classic PAT with repo scope, or a fine-grained PAT with Contents:read on:"
-            echo "  lina_planning, ocs2-humanoid, ocs2-wbc-controller, marvin-ros2-control, modbus-ros2-control, juxie-ros2-control"
             exit 1
           fi
           git config --global --add safe.directory "${GITHUB_WORKSPACE}"
-          git config --global url."https://x-access-token:${SUBMODULE_TOKEN}@github.com/".insteadOf "git@github.com:"
-          git config --global url."https://x-access-token:${SUBMODULE_TOKEN}@github.com/".insteadOf "ssh://git@github.com/"
 
-      - name: Initialize required submodules only
-        shell: bash
-        env:
-          BUNDLE: ${{ matrix.bundle }}
-        run: |
-          set -eo pipefail
+          # ROS CI image has no openssh-client; .gitmodules uses git@ URLs — rewrite to HTTPS explicitly.
+          submodule_url_to_https() {
+            local sm_path="$1"
+            local old_url new_url host_path
+            old_url="$(git config -f .gitmodules --get "submodule.${sm_path}.url")"
+            if [[ -z "${old_url}" ]]; then
+              echo "::error::No submodule.${sm_path}.url in .gitmodules" >&2
+              return 1
+            fi
+            case "${old_url}" in
+              git@github.com:*)
+                host_path="${old_url#git@github.com:}"
+                ;;
+              ssh://git@github.com/*)
+                host_path="${old_url#ssh://git@github.com/}"
+                ;;
+              https://github.com/*)
+                host_path="${old_url#https://github.com/}"
+                ;;
+              *)
+                echo "::error::Unsupported submodule URL for ${sm_path}: ${old_url}" >&2
+                return 1
+                ;;
+            esac
+            new_url="https://x-access-token:${SUBMODULE_TOKEN}@github.com/${host_path}"
+            git config -f .git/config "submodule.${sm_path}.url" "${new_url}"
+            echo "submodule ${sm_path}: HTTPS (token auth)"
+          }
+
+          init_submodules_in_repo() {
+            local -n _paths=$1
+            for path in "${_paths[@]}"; do
+              submodule_url_to_https "${path}"
+            done
+            # Do not run `git submodule sync` here — it would copy git@ URLs back from .gitmodules.
+            git submodule update --init --force --depth 1 -- "${_paths[@]}"
+          }
+
           wbc_paths=(
             libraries/lina_planning
             libraries/ocs2_humanoid
@@ -151,11 +180,17 @@ jobs:
             paths+=("${full_hw_paths[@]}")
           fi
           echo "Initializing: ${paths[*]}"
-          git submodule sync -- "${paths[@]}"
-          git submodule update --init --force --depth 1 -- "${paths[@]}"
+          init_submodules_in_repo paths
+
           if [[ "${BUNDLE}" == "full" ]]; then
-            git -C hardwares/marvin_ros2_control submodule sync --recursive
-            git -C hardwares/marvin_ros2_control submodule update --init --force --recursive --depth 1
+            marvin_root="${GITHUB_WORKSPACE}/hardwares/marvin_ros2_control"
+            mapfile -t marvin_subs < <(git config -f "${marvin_root}/.gitmodules" --get-regexp '^submodule\..*\.path$' | awk '{print $2}')
+            if [[ ${#marvin_subs[@]} -gt 0 ]]; then
+              (
+                cd "${marvin_root}"
+                init_submodules_in_repo marvin_subs
+              )
+            fi
           fi
 
       - name: Verify required sources are present
