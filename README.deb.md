@@ -28,8 +28,12 @@ sudo dpkg -i ros-jazzy-arms-ros2-control-full_<version>_<arch>.deb
 
 ## CI 要求
 
-- Secret：**`PRIVATE_SUBMODULES_TOKEN`**（读取 private 子模块）
-- **`full` bundle**：构建前删除子模块里可能误提交的 `libKine.so` / `libMarvinSDK.so`，由 CI 按目标架构（amd64 / arm64）从源码重编
+- Secret：**`PRIVATE_SUBMODULES_TOKEN`**（PAT，不要用默认 `GITHUB_TOKEN` 代替）
+  - **Classic PAT**：勾选 `repo`（读 private 仓库）
+  - **Fine-grained PAT**：对以下仓库授予 **Contents: Read**（仅构建所需，不要 `submodules: recursive` 拉全表）  
+    `lina_planning`、`ocs2-humanoid`、`ocs2-wbc-controller`；full 另需 `marvin-ros2-control`、`modbus-ros2-control`、`juxie-ros2-control`
+- Workflow 只 **按需** `git submodule update` 上述路径；不克隆 arx / dobot / eyou / rokae / unitree 等未打包子模块
+- **`full` bundle**：构建前删除误提交的 `libKine.so` / `libMarvinSDK.so`，按 runner 架构从源码重编 Marvin SDK
 - 产物仅含 colcon **install**（二进制 + 公共头文件 + 配置），不含 `.cpp` 源码
 
 ## 子模块仓库
