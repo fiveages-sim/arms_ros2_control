@@ -124,6 +124,10 @@ namespace arms_controller_common
         double controller_frequency,
         double tanh_scale)
     {
+#ifndef HAS_LINA_PLANNING
+        (void)joint_blend_ratios;
+#endif
+
         if (!validateMultiNodeParams(waypoints, durations))
         {
             return false;
@@ -848,6 +852,8 @@ namespace arms_controller_common
             return false;
         }
 #else
+        (void)start_pos;
+        (void)waypoint;
         RCLCPP_ERROR(logger_, "lina_planning not available");
         return false;
 #endif
@@ -858,6 +864,9 @@ namespace arms_controller_common
                                                      waypoints)
     {
         clearPlan();
+#ifndef HAS_LINA_PLANNING
+        (void)start_pos;
+#endif
 
         if (waypoints.size() < 2)
         {
