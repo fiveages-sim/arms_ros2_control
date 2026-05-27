@@ -126,7 +126,8 @@ jobs:
             exit 1
           fi
           git config --global --add safe.directory "${GITHUB_WORKSPACE}"
-          # Fine-grained PAT: prefer Authorization bearer header (not x-access-token in URL).
+          export GIT_TERMINAL_PROMPT=0
+          # Submodule clone does not always inherit http.extraHeader; embed PAT in HTTPS URLs for git.
           git config --global --unset-all http.https://github.com/.extraheader || true
           git config --global http.https://github.com/.extraheader \
             "AUTHORIZATION: bearer ${SUBMODULE_TOKEN}"
@@ -184,16 +185,18 @@ jobs:
                 return 1
                 ;;
             esac
-            printf '%s\n' "https://github.com/${host_path}"
+            # PAT in URL: required for `git submodule update` (child clone may ignore extraHeader).
+            printf '%s\n' "https://x-access-token:${SUBMODULE_TOKEN}@github.com/${host_path}"
           }
 
-          # Use `git config` (no -f .git/config): in checked-out submodules .git is a file, not a directory.
+          # Use `git -C` + `git config` (no -f .git/config): submodule worktrees use a .git file, not a directory.
           set_submodule_url() {
             local git_cwd="$1"
             local sm_name="$2"
             local new_url="$3"
+            local display_url="${new_url#https://x-access-token:*@}"
             git -C "${git_cwd}" config "submodule.${sm_name}.url" "${new_url}"
-            echo "submodule ${sm_name} @ ${git_cwd}: ${new_url}"
+            echo "submodule ${sm_name} @ ${git_cwd}: ${display_url}"
           }
 
           init_submodules_at() {
@@ -210,7 +213,9 @@ jobs:
             for sm_name in "${sm_names[@]}"; do
               path_args+=("$(git config -f "${gitmodules_file}" --get "submodule.${sm_name}.path")")
             done
-            git -C "${git_cwd}" submodule update --init --force --depth 1 -- "${path_args[@]}"
+            git -C "${git_cwd}" \
+              -c "http.https://github.com/.extraheader=AUTHORIZATION: bearer ${SUBMODULE_TOKEN}" \
+              submodule update --init --force --depth 1 -- "${path_args[@]}"
           }
 
           wbc_paths=(
