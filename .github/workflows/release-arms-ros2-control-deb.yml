@@ -695,11 +695,15 @@ jobs:
           if [[ "${BUNDLE}" == "full" ]]; then
             deb_description="Prebuilt arms_ros2_control full bundle for ROS 2 ${ROS_DISTRO}
              Includes WBC stack (lina_planning, ocs2_humanoid, ocs2_wbc_controller) plus gripper_hardware_common, marvin_ros2_control, modbus_ros2_control, juxie_ros2_control. Installed into ${INSTALL_PREFIX} without shared prefix setup files."
-            deb_provides=""
           else
             deb_description="Prebuilt arms_ros2_control WBC bundle for ROS 2 ${ROS_DISTRO}
              Includes command, controllers, arms_controller_common, ocs2_controller_common, lina_planning, ocs2_humanoid, ocs2_wbc_controller. Installed into ${INSTALL_PREFIX} without shared prefix setup files."
-            deb_provides="Provides: arms-ros2-control-jazzy"
+          fi
+
+          # Omit Provides on its own line when empty — a blank line splits control stanzas.
+          deb_provides_line=""
+          if [[ "${BUNDLE}" != "full" ]]; then
+            deb_provides_line=$'Provides: arms-ros2-control-jazzy\n'
           fi
 
           cat > "$package_root/DEBIAN/control" <<EOF
@@ -709,8 +713,7 @@ jobs:
           Priority: optional
           Architecture: ${DEB_ARCH}
           Depends: ros-${ROS_DISTRO}-ros-base, ${OCS2_PACKAGE_NAME}, ${COMMON_PACKAGE_NAME}, ros-${ROS_DISTRO}-ament-index-cpp, ros-${ROS_DISTRO}-angles, ros-${ROS_DISTRO}-controller-interface, ros-${ROS_DISTRO}-controller-manager, ros-${ROS_DISTRO}-geometry-msgs, ros-${ROS_DISTRO}-hardware-interface, ros-${ROS_DISTRO}-joint-state-broadcaster, ros-${ROS_DISTRO}-pluginlib, ros-${ROS_DISTRO}-rclcpp-action, ros-${ROS_DISTRO}-rclcpp-lifecycle, ros-${ROS_DISTRO}-sensor-msgs, ros-${ROS_DISTRO}-std-msgs, ros-${ROS_DISTRO}-tf2, ros-${ROS_DISTRO}-tf2-geometry-msgs, ros-${ROS_DISTRO}-tf2-ros, ros-${ROS_DISTRO}-urdf, ros-${ROS_DISTRO}-visualization-msgs
-          ${deb_provides}
-          Maintainer: ${GITHUB_REPOSITORY} maintainers <github-actions[bot]@users.noreply.github.com>
+          ${deb_provides_line}Maintainer: ${GITHUB_REPOSITORY} maintainers <github-actions[bot]@users.noreply.github.com>
           Installed-Size: ${installed_size}
           Description: ${deb_description}
           EOF
