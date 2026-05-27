@@ -37,3 +37,7 @@
 	path = controller/ocs2_wbc_controller
 	url = git@github.com:fiveages-sim/ocs2-wbc-controller.git
 	branch = main
+[submodule "hardwares/juxie_ros2_control"]
+	path = hardwares/juxie_ros2_control
+	url = git@github.com:fiveages-sim/juxie-ros2-control.git
+	branch = main

@@ -1,3 +1,9 @@
+# Sole release path for arms_ros2_control. See README.deb.md.
+#   ros-jazzy-arms-ros2-control       — WBC stack (amd64 + arm64)
+#   ros-jazzy-arms-ros2-control-full  — WBC + gripper_hardware_common + marvin + modbus + juxie (amd64 + arm64)
+# Retired: standalone gripper / per-hardware debs / arms-ros2-control-jazzy-wbc.
+# Requires PRIVATE_SUBMODULES_TOKEN. Debs contain colcon install only (no .cpp sources).
+
 name: Build arms-ros2-control deb
 
 on:
@@ -32,8 +38,6 @@ concurrency:
   cancel-in-progress: true
 
 env:
-  PACKAGE_NAME: ros-jazzy-arms-ros2-control
-  DEB_FILE_PREFIX: ros-jazzy-arms-ros2-control
   INSTALL_PREFIX: /opt/ros/jazzy
   OCS2_PACKAGE_NAME: ocs2-ros2-jazzy-mobile-manipulator
   OCS2_DEB_FILE_PREFIX: ocs2-ros2-jazzy-mobile-manipulator
@@ -47,17 +51,38 @@ env:
 
 jobs:
   build_arms_ros2_control_deb:
-    name: build arms deb (${{ matrix.arch }})
+    if: github.event.repository.fork == false
+    name: build ${{ matrix.bundle }} (${{ matrix.arch }})
     runs-on: ${{ matrix.runner }}
     strategy:
       fail-fast: false
       matrix:
         include:
-          - arch: amd64
+          - bundle: standard
+            package_name: ros-jazzy-arms-ros2-control
+            deb_prefix: ros-jazzy-arms-ros2-control
+            arch: amd64
             runner: ubuntu-24.04
             ros_distro: jazzy
             image: ros:jazzy-ros-base-noble
-          - arch: arm64
+          - bundle: standard
+            package_name: ros-jazzy-arms-ros2-control
+            deb_prefix: ros-jazzy-arms-ros2-control
+            arch: arm64
+            runner: ubuntu-24.04-arm
+            ros_distro: jazzy
+            image: ros:jazzy-ros-base-noble
+          - bundle: full
+            package_name: ros-jazzy-arms-ros2-control-full
+            deb_prefix: ros-jazzy-arms-ros2-control-full
+            arch: amd64
+            runner: ubuntu-24.04
+            ros_distro: jazzy
+            image: ros:jazzy-ros-base-noble
+          - bundle: full
+            package_name: ros-jazzy-arms-ros2-control-full
+            deb_prefix: ros-jazzy-arms-ros2-control-full
+            arch: arm64
             runner: ubuntu-24.04-arm
             ros_distro: jazzy
             image: ros:jazzy-ros-base-noble
@@ -83,11 +108,45 @@ jobs:
           apt-get update
           apt-get install -y gh
 
-      - name: Checkout repository
+      - name: Checkout repository (with private submodules)
         uses: actions/checkout@v4
         with:
           fetch-depth: 0
-          submodules: false
+          submodules: recursive
+          token: ${{ secrets.PRIVATE_SUBMODULES_TOKEN }}
+
+      - name: Verify required sources are present
+        shell: bash
+        env:
+          BUNDLE: ${{ matrix.bundle }}
+        run: |
+          set -eo pipefail
+          ws="${GITHUB_WORKSPACE}"
+          for p in \
+            libraries/lina_planning/package.xml \
+            libraries/ocs2_humanoid/ocs2_wheel_humanoid/package.xml \
+            controller/ocs2_wbc_controller/package.xml; do
+            if [[ ! -f "${ws}/${p}" ]]; then
+              echo "Missing ${p}. Check PRIVATE_SUBMODULES_TOKEN and submodule URLs." >&2
+              exit 1
+            fi
+          done
+          if [[ "${BUNDLE}" == "full" ]]; then
+            for p in \
+              libraries/gripper_hardware_common/package.xml \
+              hardwares/marvin_ros2_control/package.xml \
+              hardwares/modbus_ros2_control/package.xml \
+              hardwares/juxie_ros2_control/package.xml; do
+              if [[ ! -f "${ws}/${p}" ]]; then
+                echo "Missing ${p} for full bundle." >&2
+                exit 1
+              fi
+            done
+            if [[ ! -d "${ws}/hardwares/marvin_ros2_control/external/TJ_FX_ROBOT_CONTRL_SDK" ]]; then
+              echo "Missing marvin SDK submodule (recursive checkout required)." >&2
+              exit 1
+            fi
+          fi
 
       - name: Resolve release metadata
         id: meta
@@ -100,6 +159,7 @@ jobs:
           INPUT_COMMON_TAG: ${{ github.event.inputs.common_release_tag }}
           MATRIX_ROS_DISTRO: ${{ matrix.ros_distro }}
           DEB_ARCH: ${{ matrix.arch }}
+          DEB_PREFIX: ${{ matrix.deb_prefix }}
         run: |
           set -eo pipefail
 
@@ -161,7 +221,7 @@ jobs:
             echo "Requested: ${ros_distro}" >&2
             exit 1
           fi
-          deb_file="${DEB_FILE_PREFIX}_${version}_${DEB_ARCH}.deb"
+          deb_file="${DEB_PREFIX}_${version}_${DEB_ARCH}.deb"
 
           ocs2_tag="$(resolve_dependency_release_tag \
             "${INPUT_OCS2_TAG:-}" \
@@ -204,6 +264,7 @@ jobs:
             build-essential \
             cmake \
             libeigen3-dev \
+            libmodbus-dev \
             qtbase5-dev \
             qttools5-dev \
             libqt5svg5-dev \
@@ -352,22 +413,45 @@ jobs:
           rsync -a "$extract_root/ocs2${INSTALL_PREFIX}/" "${INSTALL_PREFIX}/"
           rsync -a "$extract_root/common${INSTALL_PREFIX}/" "${INSTALL_PREFIX}/"
 
+      - name: Remove vendored Marvin SDK prebuilt libraries
+        if: matrix.bundle == 'full'
+        shell: bash
+        run: |
+          set -eo pipefail
+          sdk="${GITHUB_WORKSPACE}/hardwares/marvin_ros2_control/external/TJ_FX_ROBOT_CONTRL_SDK"
+          rm -f \
+            "${sdk}/kinematicsSDK/libKine.so" \
+            "${sdk}/contrlSDK/libMarvinSDK.so"
+          echo "Removed prebuilt libKine.so / libMarvinSDK.so; Marvin SDK will be compiled from source for ${{ matrix.arch }}."
+
       - name: Prepare bundle sources
         shell: bash
+        env:
+          BUNDLE: ${{ matrix.bundle }}
         run: |
           set -eo pipefail
 
           source_root="${RUNNER_TEMP}/arms-bundle-src"
+          ws="${GITHUB_WORKSPACE}"
           rm -rf "$source_root"
           mkdir -p "$source_root"
 
-          rsync -a "${GITHUB_WORKSPACE}/command/" "${source_root}/"
-          rsync -a "${GITHUB_WORKSPACE}/controller/ocs2_arm_controller/" "${source_root}/ocs2_arm_controller/"
-          rsync -a "${GITHUB_WORKSPACE}/controller/basic_joint_controller/" "${source_root}/basic_joint_controller/"
-          rsync -a "${GITHUB_WORKSPACE}/controller/adaptive_gripper_controller/" "${source_root}/adaptive_gripper_controller/"
-          rsync -a "${GITHUB_WORKSPACE}/libraries/arms_controller_common/" "${source_root}/arms_controller_common/"
-          rsync -a "${GITHUB_WORKSPACE}/libraries/ocs2_controller_common/" "${source_root}/ocs2_controller_common/"
-          rsync -a "${GITHUB_WORKSPACE}/hardwares/topic_based_ros2_control/" "${source_root}/topic_based_ros2_control/"
+          rsync -a "${ws}/command/" "${source_root}/"
+          rsync -a "${ws}/controller/ocs2_arm_controller/" "${source_root}/ocs2_arm_controller/"
+          rsync -a "${ws}/controller/basic_joint_controller/" "${source_root}/basic_joint_controller/"
+          rsync -a "${ws}/controller/adaptive_gripper_controller/" "${source_root}/adaptive_gripper_controller/"
+          rsync -a "${ws}/controller/ocs2_wbc_controller/" "${source_root}/ocs2_wbc_controller/"
+          rsync -a "${ws}/libraries/arms_controller_common/" "${source_root}/arms_controller_common/"
+          rsync -a "${ws}/libraries/ocs2_controller_common/" "${source_root}/ocs2_controller_common/"
+          rsync -a "${ws}/libraries/lina_planning/" "${source_root}/lina_planning/"
+          rsync -a "${ws}/libraries/ocs2_humanoid/" "${source_root}/ocs2_humanoid/"
+
+          if [[ "${BUNDLE}" == "full" ]]; then
+            rsync -a "${ws}/libraries/gripper_hardware_common/" "${source_root}/gripper_hardware_common/"
+            rsync -a "${ws}/hardwares/marvin_ros2_control/" "${source_root}/marvin_ros2_control/"
+            rsync -a "${ws}/hardwares/modbus_ros2_control/" "${source_root}/modbus_ros2_control/"
+            rsync -a "${ws}/hardwares/juxie_ros2_control/" "${source_root}/juxie_ros2_control/"
+          fi
 
       - name: Install workspace dependencies
         shell: bash
@@ -441,6 +525,22 @@ jobs:
             echo "ament index was not generated in the arms install space." >&2
             exit 1
           fi
+          if [[ ! -d "${install_root}/share/ocs2_wbc_controller" ]]; then
+            echo "ocs2_wbc_controller was not installed into the package root." >&2
+            exit 1
+          fi
+          if [[ ! -d "${install_root}/share/lina_planning" ]]; then
+            echo "lina_planning was not installed into the package root." >&2
+            exit 1
+          fi
+          if [[ "${{ matrix.bundle }}" == "full" ]]; then
+            for pkg in gripper_hardware_common marvin_ros2_control modbus_ros2_control juxie_ros2_control; do
+              if [[ ! -d "${install_root}/share/${pkg}" ]]; then
+                echo "${pkg} was not installed into the package root." >&2
+                exit 1
+              fi
+            done
+          fi
 
       - name: Build deb package
         id: build
@@ -450,6 +550,8 @@ jobs:
           VERSION: ${{ steps.meta.outputs.version }}
           DEB_FILE: ${{ steps.meta.outputs.deb_file }}
           DEB_ARCH: ${{ steps.meta.outputs.deb_arch }}
+          PACKAGE_NAME: ${{ matrix.package_name }}
+          BUNDLE: ${{ matrix.bundle }}
         run: |
           set -eo pipefail
 
@@ -458,6 +560,14 @@ jobs:
 
           mkdir -p "$package_root/DEBIAN"
           installed_size="$(du -sk "$package_root" | cut -f1)"
+
+          if [[ "${BUNDLE}" == "full" ]]; then
+            deb_description="Prebuilt arms_ros2_control full bundle for ROS 2 ${ROS_DISTRO}
+             Includes WBC stack (lina_planning, ocs2_humanoid, ocs2_wbc_controller) plus gripper_hardware_common, marvin_ros2_control, modbus_ros2_control, juxie_ros2_control. Installed into ${INSTALL_PREFIX} without shared prefix setup files."
+          else
+            deb_description="Prebuilt arms_ros2_control WBC bundle for ROS 2 ${ROS_DISTRO}
+             Includes command, controllers, arms_controller_common, ocs2_controller_common, lina_planning, ocs2_humanoid, ocs2_wbc_controller. Installed into ${INSTALL_PREFIX} without shared prefix setup files."
+          fi
 
           cat > "$package_root/DEBIAN/control" <<EOF
           Package: ${PACKAGE_NAME}
@@ -468,16 +578,11 @@ jobs:
           Depends: ros-${ROS_DISTRO}-ros-base, ${OCS2_PACKAGE_NAME}, ${COMMON_PACKAGE_NAME}, ros-${ROS_DISTRO}-ament-index-cpp, ros-${ROS_DISTRO}-angles, ros-${ROS_DISTRO}-controller-interface, ros-${ROS_DISTRO}-controller-manager, ros-${ROS_DISTRO}-geometry-msgs, ros-${ROS_DISTRO}-hardware-interface, ros-${ROS_DISTRO}-joint-state-broadcaster, ros-${ROS_DISTRO}-pluginlib, ros-${ROS_DISTRO}-rclcpp-action, ros-${ROS_DISTRO}-rclcpp-lifecycle, ros-${ROS_DISTRO}-sensor-msgs, ros-${ROS_DISTRO}-std-msgs, ros-${ROS_DISTRO}-tf2, ros-${ROS_DISTRO}-tf2-geometry-msgs, ros-${ROS_DISTRO}-tf2-ros, ros-${ROS_DISTRO}-urdf, ros-${ROS_DISTRO}-visualization-msgs
           Maintainer: ${GITHUB_REPOSITORY} maintainers <github-actions[bot]@users.noreply.github.com>
           Installed-Size: ${installed_size}
-          Description: Prebuilt arms_ros2_control ROS workspace bundle
-           command (full), controller (excluding ocs2_wbc_controller submodule), libraries arms_controller_common and ocs2_controller_common, hardwares/topic_based_ros2_control. Excludes other hardwares, gripper_hardware_common (separate deb), private submodules. Installed into ${INSTALL_PREFIX} without shared prefix setup files.
+          Description: ${deb_description}
           EOF
 
           if [[ ! -d "${install_root}/share/ocs2_arm_controller" ]]; then
             echo "ocs2_arm_controller was not installed into the package root." >&2
-            exit 1
-          fi
-          if [[ ! -d "${install_root}/share/topic_based_ros2_control" ]]; then
-            echo "topic_based_ros2_control was not installed into the package root." >&2
             exit 1
           fi
 
@@ -485,15 +590,37 @@ jobs:
 
           echo "deb_path=${GITHUB_WORKSPACE}/${DEB_FILE}" >> "$GITHUB_OUTPUT"
 
+      - name: Verify deb contains no source files
+        shell: bash
+        env:
+          DEB_PATH: ${{ steps.build.outputs.deb_path }}
+        run: |
+          set -eo pipefail
+          check_root="${RUNNER_TEMP}/deb-source-check"
+          rm -rf "$check_root"
+          mkdir -p "$check_root"
+          dpkg-deb -x "$DEB_PATH" "$check_root"
+          mapfile -t forbidden < <(find "$check_root" -type f \( \
+            -name '*.cpp' -o -name '*.cc' -o -name '*.cxx' -o -name '*.c' \
+            -o -path '*/.git/*' -o -path '*/src/*.cpp' \
+          \) 2>/dev/null || true)
+          if [[ ${#forbidden[@]} -gt 0 ]]; then
+            echo "Source or VCS files found inside ${DEB_PATH}:" >&2
+            printf '  %s\n' "${forbidden[@]}" >&2
+            exit 1
+          fi
+          echo "No .cpp/.c sources or .git metadata in deb."
+
       - name: Upload workflow artifact
         uses: actions/upload-artifact@v4
         with:
-          name: arms-ros2-control-${{ steps.meta.outputs.version }}-${{ matrix.arch }}
+          name: arms-ros2-control-${{ steps.meta.outputs.version }}-${{ matrix.bundle }}-${{ matrix.arch }}
           path: ${{ steps.meta.outputs.deb_file }}
           if-no-files-found: error
           retention-days: 7
 
   publish_arms_ros2_control_deb:
+    if: github.event.repository.fork == false
     name: publish arms debs
     runs-on: ubuntu-24.04
     needs: build_arms_ros2_control_deb
@@ -612,23 +739,38 @@ jobs:
             gh release create "$TAG" \
               --repo "${GITHUB_REPOSITORY}" \
               --title "$TAG" \
-              --notes "Automated release for Debian packages."
+              --notes "Automated release: ros-jazzy-arms-ros2-control (WBC) and ros-jazzy-arms-ros2-control-full."
           fi
 
           gh release upload "$TAG" ./*.deb --repo "${GITHUB_REPOSITORY}" --clobber
 
   verify_arms_ros2_control_deb:
-    name: verify arms deb (${{ matrix.arch }})
+    if: github.event.repository.fork == false
+    name: verify ${{ matrix.bundle }} (${{ matrix.arch }})
     runs-on: ${{ matrix.runner }}
     needs: publish_arms_ros2_control_deb
     strategy:
       fail-fast: false
       matrix:
         include:
-          - arch: amd64
+          - bundle: standard
+            deb_prefix: ros-jazzy-arms-ros2-control
+            arch: amd64
             runner: ubuntu-24.04
             image: ros:jazzy-ros-base-noble
-          - arch: arm64
+          - bundle: standard
+            deb_prefix: ros-jazzy-arms-ros2-control
+            arch: arm64
+            runner: ubuntu-24.04-arm
+            image: ros:jazzy-ros-base-noble
+          - bundle: full
+            deb_prefix: ros-jazzy-arms-ros2-control-full
+            arch: amd64
+            runner: ubuntu-24.04
+            image: ros:jazzy-ros-base-noble
+          - bundle: full
+            deb_prefix: ros-jazzy-arms-ros2-control-full
+            arch: arm64
             runner: ubuntu-24.04-arm
             image: ros:jazzy-ros-base-noble
     container:
@@ -645,6 +787,8 @@ jobs:
           OCS2_TAG: ${{ needs.publish_arms_ros2_control_deb.outputs.ocs2_tag }}
           COMMON_TAG: ${{ needs.publish_arms_ros2_control_deb.outputs.common_tag }}
           DEB_ARCH: ${{ matrix.arch }}
+          DEB_PREFIX: ${{ matrix.deb_prefix }}
+          BUNDLE: ${{ matrix.bundle }}
         run: |
           set -eo pipefail
           echo "tag=${TAG}" >> "$GITHUB_OUTPUT"
@@ -653,7 +797,8 @@ jobs:
           echo "ocs2_tag=${OCS2_TAG}" >> "$GITHUB_OUTPUT"
           echo "common_tag=${COMMON_TAG}" >> "$GITHUB_OUTPUT"
           echo "deb_arch=${DEB_ARCH}" >> "$GITHUB_OUTPUT"
-          echo "deb_file=${DEB_FILE_PREFIX}_${VERSION}_${DEB_ARCH}.deb" >> "$GITHUB_OUTPUT"
+          echo "bundle=${BUNDLE}" >> "$GITHUB_OUTPUT"
+          echo "deb_file=${DEB_PREFIX}_${VERSION}_${DEB_ARCH}.deb" >> "$GITHUB_OUTPUT"
 
       - name: Install verification tools
         shell: bash
@@ -790,19 +935,45 @@ jobs:
           export AMENT_PREFIX_PATH="${INSTALL_PREFIX}:${AMENT_PREFIX_PATH:-}"
 
           python3 - <<'PY'
+          import os
           from ament_index_python.packages import get_package_share_directory
 
-          for package_name in [
+          bundle = os.environ["VERIFY_BUNDLE"]
+          packages = [
               "arms_ros2_control_msgs",
               "arms_controller_common",
               "ocs2_controller_common",
               "basic_joint_controller",
               "adaptive_gripper_controller",
               "ocs2_arm_controller",
-              "topic_based_ros2_control",
-          ]:
+              "ocs2_wbc_controller",
+              "lina_planning",
+          ]
+          if bundle == "full":
+              packages.extend([
+                  "gripper_hardware_common",
+                  "marvin_ros2_control",
+                  "modbus_ros2_control",
+                  "juxie_ros2_control",
+              ])
+          for package_name in packages:
               print(package_name, get_package_share_directory(package_name))
           PY
+        env:
+          VERIFY_BUNDLE: ${{ matrix.bundle }}
+
+      - name: Verify downstream CMake discovery
+        shell: bash
+        env:
+          VERIFY_BUNDLE: ${{ matrix.bundle }}
+        run: |
+          set -eo pipefail
+          ros_distro="${{ steps.meta.outputs.ros_distro }}"
+          set +u
+          source "/opt/ros/${ros_distro}/setup.bash"
+          set -u
+          export CMAKE_PREFIX_PATH="${INSTALL_PREFIX}:${CMAKE_PREFIX_PATH:-}"
+          export AMENT_PREFIX_PATH="${INSTALL_PREFIX}:${AMENT_PREFIX_PATH:-}"
 
           rm -rf downstream_check
           mkdir -p downstream_check
@@ -818,8 +989,18 @@ jobs:
           find_package(basic_joint_controller REQUIRED)
           find_package(adaptive_gripper_controller REQUIRED)
           find_package(ocs2_arm_controller REQUIRED)
-          find_package(topic_based_ros2_control REQUIRED)
+          find_package(ocs2_wbc_controller REQUIRED)
+          find_package(lina_planning REQUIRED)
           EOF
+
+          if [[ "${VERIFY_BUNDLE}" == "full" ]]; then
+            cat >> downstream_check/CMakeLists.txt <<'EOF'
+          find_package(gripper_hardware_common REQUIRED)
+          find_package(marvin_ros2_control REQUIRED)
+          find_package(modbus_ros2_control REQUIRED)
+          find_package(juxie_ros2_control REQUIRED)
+          EOF
+          fi
 
           cmake -Wno-dev \
             -DCMAKE_BUILD_TYPE=Release \
