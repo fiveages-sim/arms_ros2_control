@@ -31,6 +31,12 @@ namespace arms_controller_common
                                     const double total_time,
                                     const double period = 0.01);
 
+        bool initTargetLiftingSpeedFromCache(double target_lifting_speed,
+                                             double max_lifting_acc,
+                                             double max_lifting_jerk,
+                                             double total_time,
+                                             double period = 0.01);
+
         bool calNextPoint(std::vector<double>& next_point);
 
         void setBodyJointThreeJointType(bool is_three_rotation_joint)

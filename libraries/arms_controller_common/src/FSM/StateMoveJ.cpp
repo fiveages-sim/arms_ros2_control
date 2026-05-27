@@ -4,9 +4,15 @@
 #include "arms_controller_common/FSM/StateMoveJ.h"
 #include "arms_controller_common/utils/SharedPublishers.h"
 #include <algorithm>
+#include <cerrno>
+#include <cstdlib>
 #include <cmath>
+#include <fstream>
+#include <iomanip>
 #include <sstream>
 #include <string>
+#include <sys/stat.h>
+#include <sys/types.h>
 #include <std_msgs/msg/int32.hpp>
 
 // // planners/kinematics required for cartesian moveL support
@@ -17,6 +23,29 @@
 
 namespace arms_controller_common
 {
+    namespace
+    {
+        std::string getWaistDebugDataDirectory()
+        {
+            const char* home = std::getenv("HOME");
+            if (home && home[0] != '\0')
+            {
+                return std::string(home) + "/ros2_ws/data";
+            }
+            return "/home/fiveages/ros2_ws/data";
+        }
+
+        std::string getWaistDebugJointColumnName(const std::vector<std::string>& waist_joint_names,
+                                                 size_t joint_index)
+        {
+            if (joint_index < waist_joint_names.size() && !waist_joint_names[joint_index].empty())
+            {
+                return waist_joint_names[joint_index];
+            }
+            return "body_joint" + std::to_string(joint_index + 1);
+        }
+    }
+
     void StateMoveJ::publishCurrentTargetJoint(const std::vector<double>& target_positions)
     {
         if (!current_target_joint_publisher_)
@@ -37,6 +66,73 @@ namespace arms_controller_common
         {
             hold_positions_[i] = ctrl_interfaces_.last_sent_joint_positions_[i];
         }
+    }
+
+    void StateMoveJ::appendWaistDebugCsv(const std::string& source,
+                                         const std::vector<double>& planned_positions,
+                                         const std::vector<double>& actual_positions,
+                                         const std::vector<double>& diff_velocities)
+    {
+        const std::string data_dir = getWaistDebugDataDirectory();
+        if (::mkdir(data_dir.c_str(), 0755) != 0 && errno != EEXIST)
+        {
+            RCLCPP_WARN(node_->get_logger(),
+                        "Failed to create waist debug csv directory: %s",
+                        data_dir.c_str());
+            return;
+        }
+
+        const std::string csv_path = data_dir + "/waist_lifting_debug.csv";
+        std::ifstream existing_file(csv_path);
+        const bool file_has_content = existing_file.good() && existing_file.peek() != std::ifstream::traits_type::eof();
+        existing_file.close();
+
+        std::ofstream csv_file(csv_path, std::ios::app);
+        if (!csv_file.is_open())
+        {
+            RCLCPP_WARN(node_->get_logger(),
+                        "Failed to open waist debug csv file: %s",
+                        csv_path.c_str());
+            return;
+        }
+
+        if (!waist_lifting_debug_csv_header_written_ && !file_has_content)
+        {
+            csv_file << "time,source";
+            for (size_t i = 0; i < waist_joint_count_; ++i)
+            {
+                const std::string joint_name = getWaistDebugJointColumnName(waist_joint_names_, i);
+                csv_file
+                    << ',' << joint_name << "_planned_angle"
+                    << ',' << joint_name << "_actual_angle"
+                    << ',' << joint_name << "_diff_velocity";
+            }
+            csv_file << '\n';
+        }
+        waist_lifting_debug_csv_header_written_ = true;
+
+        const double stamp = node_ ? node_->now().seconds() : 0.0;
+        csv_file << std::fixed << std::setprecision(9);
+        csv_file << stamp << ',' << source;
+        for (size_t i = 0; i < waist_joint_count_; ++i)
+        {
+            csv_file << ',';
+            if (i < planned_positions.size())
+            {
+                csv_file << planned_positions[i];
+            }
+            csv_file << ',';
+            if (i < actual_positions.size())
+            {
+                csv_file << actual_positions[i];
+            }
+            csv_file << ',';
+            if (i < diff_velocities.size())
+            {
+                csv_file << diff_velocities[i];
+            }
+        }
+        csv_file << '\n';
     }
 
     void StateMoveJ::maintainCommandFromLastSent()
@@ -356,6 +452,29 @@ namespace arms_controller_common
                         ctrl_interfaces_.setJointPositionCommand(i, waist_positions[i]);
                     }
 
+                    if (waist_lifting_debug_print_active_)
+                    {
+                        std::ostringstream oss;
+                        oss << "Waist lifting command positions:";
+                        for (size_t i = 0; i < waist_positions.size(); ++i)
+                        {
+                            oss << " [" << i << "]=" << waist_positions[i];
+                        }
+                        RCLCPP_INFO(node_->get_logger(), "%s", oss.str().c_str());
+
+                        const size_t actual_count = std::min(waist_joint_count_, current_joint_pos_.size());
+                        const size_t vel_count = std::min(waist_joint_count_, joint_vel_.size());
+                        std::vector<double> actual_waist_positions(
+                            current_joint_pos_.begin(), current_joint_pos_.begin() + actual_count);
+                        std::vector<double> actual_waist_velocities(
+                            joint_vel_.begin(), joint_vel_.begin() + vel_count);
+                        appendWaistDebugCsv(
+                            "waist_command",
+                            waist_positions,
+                            actual_waist_positions,
+                            actual_waist_velocities);
+                    }
+
                     for (size_t i = waist_joint_count_;
                          i < ctrl_interfaces_.joint_position_command_interface_.size(); i++)
                     {
@@ -380,6 +499,7 @@ namespace arms_controller_common
                             return;
                         }
                         waist_lifting_active_ = false;
+                        waist_lifting_debug_print_active_ = false;
                         motion_mode_ = MotionMode::MOVEJ;
                         maintainCommandFromLastSent();
                         has_target_ = false;
@@ -401,6 +521,7 @@ namespace arms_controller_common
                 refreshHoldPositions();
                 last_waist_factor_ = 0.0;
                 waist_lifting_active_ = false;
+                waist_lifting_debug_print_active_ = false;
                 waist_lifting_planer_->setCurrentVelToZero(); //奇异了，报错停止，然后把当前实际的速度设为0
                 motion_mode_ = MotionMode::MOVEJ;
                 RCLCPP_WARN(node_->get_logger(), "Failed to calculate next waist lifting point");
@@ -946,6 +1067,21 @@ namespace arms_controller_common
         RCLCPP_INFO(node_->get_logger(),
                     "MoveJ stop-to-zero init: vel_source=finite_diff, dq=%s",
                     vel_log.str().c_str());
+
+        const size_t planned_count = std::min(waist_joint_count_, stop_start_pos.size());
+        const size_t actual_count = std::min(waist_joint_count_, current_joint_pos_.size());
+        const size_t vel_count = std::min(waist_joint_count_, joint_vel_.size());
+        std::vector<double> planned_waist_positions(
+            stop_start_pos.begin(), stop_start_pos.begin() + planned_count);
+        std::vector<double> actual_waist_positions(
+            current_joint_pos_.begin(), current_joint_pos_.begin() + actual_count);
+        std::vector<double> actual_waist_velocities(
+            joint_vel_.begin(), joint_vel_.begin() + vel_count);
+        appendWaistDebugCsv(
+            "stop_to_zero_diff_velocity",
+            planned_waist_positions,
+            actual_waist_positions,
+            actual_waist_velocities);
 
         const double period = dt;
         if (!speed_stop_planner_.init(
@@ -1940,21 +2076,35 @@ namespace arms_controller_common
         double clamped_factor = std::clamp(factor, -1.0, 1.0);
         double speedj_time = 100000000.0;
         double target_speed = clamped_factor * default_waist_lifting_para_(0);
+        bool start_debug_print = false;
         if (std::fabs(clamped_factor) < waist_factor_epsilon_)
         {
             speedj_time = 0.0;
             target_speed = 0.0;
+            start_debug_print = true;
+            RCLCPP_INFO(node_->get_logger(),
+                        "Waist lifting speedj stop requested from actual angles3d: [%.6f, %.6f, %.6f], using cached planned start",
+                        angles3d(0), angles3d(1), angles3d(2));
         }
-        if (!waist_lifting_planer_->initTargetLiftingSpeed(angles3d, target_speed, default_waist_lifting_para_(1),
-                                                           default_waist_lifting_para_(2), speedj_time,
-                                                           1.0 / ctrl_interfaces_.frequency_))
+        const bool speed_plan_initialized = start_debug_print
+            ? waist_lifting_planer_->initTargetLiftingSpeedFromCache(
+                target_speed, default_waist_lifting_para_(1),
+                default_waist_lifting_para_(2), speedj_time,
+                1.0 / ctrl_interfaces_.frequency_)
+            : waist_lifting_planer_->initTargetLiftingSpeed(
+                angles3d, target_speed, default_waist_lifting_para_(1),
+                default_waist_lifting_para_(2), speedj_time,
+                1.0 / ctrl_interfaces_.frequency_);
+        if (!speed_plan_initialized)
         {
             RCLCPP_WARN(node_->get_logger(),
                         "Failed to initialize SINGLE_JOINT waist lifting speed plan for velocity %.3f",
                         target_speed);
             waist_lifting_planer_->setCurrentVelToZero();
+            waist_lifting_debug_print_active_ = false;
             return false;
         }
+        waist_lifting_debug_print_active_ = start_debug_print;
 
         trajectory_manager_.reset();
         interpolation_active_ = false;
