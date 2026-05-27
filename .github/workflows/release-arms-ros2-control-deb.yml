@@ -127,10 +127,8 @@ jobs:
           fi
           git config --global --add safe.directory "${GITHUB_WORKSPACE}"
           export GIT_TERMINAL_PROMPT=0
-          # Submodule clone does not always inherit http.extraHeader; embed PAT in HTTPS URLs for git.
+          # Clear any Authorization extraheader (URL embeds x-access-token; both => "Duplicate header: Authorization" / 400).
           git config --global --unset-all http.https://github.com/.extraheader || true
-          git config --global http.https://github.com/.extraheader \
-            "AUTHORIZATION: bearer ${SUBMODULE_TOKEN}"
 
           check_pat_repo_read() {
             local repo="$1"
@@ -213,9 +211,7 @@ jobs:
             for sm_name in "${sm_names[@]}"; do
               path_args+=("$(git config -f "${gitmodules_file}" --get "submodule.${sm_name}.path")")
             done
-            git -C "${git_cwd}" \
-              -c "http.https://github.com/.extraheader=AUTHORIZATION: bearer ${SUBMODULE_TOKEN}" \
-              submodule update --init --force --depth 1 -- "${path_args[@]}"
+            git -C "${git_cwd}" submodule update --init --force --depth 1 -- "${path_args[@]}"
           }
 
           wbc_paths=(
