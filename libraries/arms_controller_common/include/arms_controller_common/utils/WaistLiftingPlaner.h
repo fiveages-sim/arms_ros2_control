@@ -17,9 +17,9 @@ namespace arms_controller_common
     public:
         WaistLiftingPlaner() = default;
         ~WaistLiftingPlaner() = default;
-        // 腰部 movej 定距升降（lifting_length 为 z/关节角增量，可能被限位裁剪）
+        // 腰部 movej 定距升降（lifting_delta=[dx,dz]，可能被限位裁剪）
         bool initTargetLiftingLength(const Eigen::Vector3d& init_joint_angle,
-                                     const double lifting_length,
+                                     const Eigen::Vector2d& lifting_delta,
                                      const double duration,
                                      const double period = 0.01);
 
@@ -110,10 +110,11 @@ namespace arms_controller_common
         bool resolveFeasibleLiftingEndSingleJoint(double start_pos, double requested_end,
                                                   double& feasible_end);
 
-        // 三关节模式下将目标 z 裁剪到逆解可达范围（二分搜索）
+        // 三关节模式下将目标 (x,z) 裁剪到逆解可达范围（二分搜索）
         bool resolveFeasibleLiftingEndThreeJoint(const Eigen::Vector3d& init_joint_angle,
-                                                 double start_pos, double requested_end,
-                                                 double& feasible_end);
+                                                 const Eigen::Vector2d& start_pos,
+                                                 const Eigen::Vector2d& requested_end,
+                                                 Eigen::Vector2d& feasible_end);
 
         // 定距规划终点逆解：仅检查工作空间与关节限位，不做 0.05rad 步长约束
         bool threeLinkPlanerEndpointIK(const Eigen::Vector3d& init_joint_angle,
@@ -127,8 +128,13 @@ namespace arms_controller_common
         /*三关节腰部参数*/
         double l1_;
         double l2_;
-        double x_; // 由于只是升降腰部，只有z改变，其他参数不变
+        double x_; // 速度模式与兼容路径中的固定 x
         double phi_;
+        double start_x_{0.0};
+        double start_z_{0.0};
+        double target_x_{0.0};
+        double target_z_{0.0};
+        bool length_plan_uses_xz_{false};
         Eigen::Vector3d rotation_direction_;
         Eigen::Vector3d angle_offset_;
         Eigen::Vector3d limit_angler_lower_;

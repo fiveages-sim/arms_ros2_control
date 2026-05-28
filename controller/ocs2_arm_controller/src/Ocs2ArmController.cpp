@@ -330,7 +330,8 @@ namespace ocs2::mobile_manipulator
 
                     if (state_list_.movej)
                     {
-                        bool success = state_list_.movej->moveWaistLifting(msg->data);
+                        bool success = state_list_.movej->moveWaistLifting(
+                            Eigen::Vector2d(0.0, msg->data));
 
                         if (success)
                         {

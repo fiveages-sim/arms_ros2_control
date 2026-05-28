@@ -214,7 +214,7 @@ namespace basic_joint_controller
                     if (state_list_.movej)
                     {
                         bool success = state_list_.movej->moveWaistLifting(
-                            msg->data); //腰部升降距离
+                            Eigen::Vector2d(0.0, msg->data)); //兼容旧接口：仅dz
 
                         if (success)
                         {
@@ -227,6 +227,34 @@ namespace basic_joint_controller
                             RCLCPP_WARN(get_node()->get_logger(),
                                         "waist lifting command failed");
                         }
+                    }
+                });
+            std::string waist_lifting_xz_topic = "/" + controller_name_ + "/waist_lifting_xz";
+            waist_lifting_xz_subscription_ = get_node()->create_subscription<std_msgs::msg::Float64MultiArray>(
+                waist_lifting_xz_topic, 10,
+                [this](const std_msgs::msg::Float64MultiArray::SharedPtr msg)
+                {
+                    if (!current_state_ || current_state_->state_name != FSMStateName::MOVEJ)
+                    {
+                        return;
+                    }
+                    if (!state_list_.movej)
+                    {
+                        return;
+                    }
+                    if (msg->data.size() < 2)
+                    {
+                        RCLCPP_WARN(get_node()->get_logger(),
+                                    "waist_lifting_xz expects [dx, dz], got %zu values",
+                                    msg->data.size());
+                        return;
+                    }
+
+                    const Eigen::Vector2d lifting_delta(msg->data[0], msg->data[1]);
+                    bool success = state_list_.movej->moveWaistLifting(lifting_delta);
+                    if (!success)
+                    {
+                        RCLCPP_WARN(get_node()->get_logger(), "waist lifting x/z command failed");
                     }
                 });
             // 订阅腰部升降speedj 指令

@@ -152,10 +152,10 @@ namespace arms_controller_common
          */
         void setMotionMode(MotionMode mode) { motion_mode_ = mode; }
 
-        /** 
-         * @brief 控制腰部升降指令，让腰部相对当前位置移动lifting_distance的距离
+        /**
+         * @brief 控制腰部升降指令，让腰部相对当前位置移动局部 lifting_delta=[dx,dz]
          */
-        bool moveWaistLifting(double lifting_distance);
+        bool moveWaistLifting(const Eigen::Vector2d& lifting_delta);
 
         /**
          * @brief 控制腰部升降指令，command=0 停止，command=1 上升 ，command=2 下降
@@ -240,7 +240,7 @@ namespace arms_controller_common
         void setTargetPositionImpl(const std::vector<double>& target_pos);
         void setTargetPositionImpl(const std::string& prefix, const std::vector<double>& target_pos);
         void setTrajectoryImpl(const trajectory_msgs::msg::JointTrajectory& trajectory);
-        bool moveWaistLiftingImpl(double lifting_distance);
+        bool moveWaistLiftingImpl(const Eigen::Vector2d& lifting_delta);
         bool setWaistLiftingFactorImpl(double factor);
         bool setWaistTurningFactorImpl(double factor);
         bool startJointTrajectoryRequestImpl(
