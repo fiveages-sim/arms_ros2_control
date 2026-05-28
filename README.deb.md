@@ -8,8 +8,10 @@
 
 | 包名 | 适用场景 |
 |------|----------|
-| `ros-jazzy-arms-ros2-control` | WBC 完整栈：`lina_planning`、`ocs2_humanoid`、`ocs2_wbc_controller`、command、controllers、公共库等（amd64 + arm64） |
+| `ros-jazzy-arms-ros2-control` | WBC 完整栈：`lina_planning`、`ocs2_humanoid`、`ocs2_wbc_controller`、command、controllers、公共库等（amd64 + arm64）；`Provides: arms-ros2-control-jazzy` |
 | `ros-jazzy-arms-ros2-control-full` | 上表 + `gripper_hardware_common` + `marvin_ros2_control` + `modbus_ros2_control` + `juxie_ros2_control`（amd64 + arm64） |
+
+运行时依赖：`ros-jazzy-ocs2`、`ros-jazzy-robot-descriptions-common`（旧 OCS2 包名见 `ros-jazzy-ocs2` 的 `Provides` 字段）。
 
 安装示例：
 
