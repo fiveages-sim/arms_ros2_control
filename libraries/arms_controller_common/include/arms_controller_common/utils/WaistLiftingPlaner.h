@@ -89,6 +89,9 @@ namespace arms_controller_common
 
         // 最近一次定距升降实际规划的距离（可能因限位/逆解被裁剪）
         double getLastPlannedLiftingLength() const { return last_planned_lifting_length_; }
+        // 用当前三关节角计算 body_base 下腰部末端点 (x, z)
+        bool calculateThreeJointEndpointXz(const Eigen::Vector3d& joint_angle,
+                                           Eigen::Vector2d& endpoint_xz);
 
     private:
         // 用给定位置/速度初始化 speedj 规划器

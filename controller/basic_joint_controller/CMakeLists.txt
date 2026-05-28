@@ -13,6 +13,8 @@ set(CONTROLLER_INCLUDE_DEPENDS
         rcpputils
         controller_interface
         std_msgs
+        tf2_ros
+        tf2_geometry_msgs
         arms_controller_common
 )
 
@@ -43,6 +45,8 @@ target_link_libraries(${PROJECT_NAME} PUBLIC
         ${rcpputils_TARGETS}
         ${controller_interface_TARGETS}
         ${std_msgs_TARGETS}
+        ${tf2_ros_TARGETS}
+        ${tf2_geometry_msgs_TARGETS}
         arms_controller_common::arms_controller_common
         Eigen3::Eigen
         pinocchio::pinocchio

@@ -551,6 +551,22 @@ namespace arms_controller_common
         single_joint_limit_upper_ = angle_upper;
     };
 
+    bool WaistLiftingPlaner::calculateThreeJointEndpointXz(
+        const Eigen::Vector3d& joint_angle, Eigen::Vector2d& endpoint_xz)
+    {
+        if (!type_three_joint_)
+        {
+            return false;
+        }
+
+        double x = 0.0;
+        double z = 0.0;
+        double phi = 0.0;
+        threeLinkPlanerFK(joint_angle, &x, &z, &phi);
+        endpoint_xz << x, z;
+        return true;
+    }
+
     void WaistLiftingPlaner::threeLinkPlanerFK(const Eigen::Vector3d& joint_angle,
                                                double* x, double* z, double* phi)
     {

@@ -156,6 +156,10 @@ namespace arms_controller_common
          * @brief 控制腰部升降指令，让腰部相对当前位置移动局部 lifting_delta=[dx,dz]
          */
         bool moveWaistLifting(const Eigen::Vector2d& lifting_delta);
+        /**
+         * @brief 控制腰部移动到 body_base 坐标系下的绝对目标 target_xz=[x,z]
+         */
+        bool moveWaistLiftingToBodyBaseXz(const Eigen::Vector2d& target_xz);
 
         /**
          * @brief 控制腰部升降指令，command=0 停止，command=1 上升 ，command=2 下降
@@ -241,6 +245,7 @@ namespace arms_controller_common
         void setTargetPositionImpl(const std::string& prefix, const std::vector<double>& target_pos);
         void setTrajectoryImpl(const trajectory_msgs::msg::JointTrajectory& trajectory);
         bool moveWaistLiftingImpl(const Eigen::Vector2d& lifting_delta);
+        bool moveWaistLiftingToBodyBaseXzImpl(const Eigen::Vector2d& target_xz);
         bool setWaistLiftingFactorImpl(double factor);
         bool setWaistTurningFactorImpl(double factor);
         bool startJointTrajectoryRequestImpl(

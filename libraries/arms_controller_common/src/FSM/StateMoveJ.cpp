@@ -1783,6 +1783,68 @@ namespace arms_controller_common
         return true;
     }
 
+    bool StateMoveJ::moveWaistLiftingToBodyBaseXz(const Eigen::Vector2d& target_xz)
+    {
+        if (!waist_lifting_planer_)
+        {
+            setWaistLiftingPlaner();
+        }
+
+        std::lock_guard lock(target_mutex_);
+
+        const Eigen::Vector2d captured_target = target_xz;
+        if (!isNonWaistMotionBusy() && !stop_to_zero_active_)
+        {
+            requestWaistOnlyMotionOrDefer(
+                [this, captured_target]() { moveWaistLiftingToBodyBaseXzImpl(captured_target); });
+            return true;
+        }
+
+        requestWaistMotionOrDefer(
+            [this, captured_target]() { moveWaistLiftingToBodyBaseXzImpl(captured_target); });
+        return true;
+    }
+
+    bool StateMoveJ::moveWaistLiftingToBodyBaseXzImpl(const Eigen::Vector2d& target_xz)
+    {
+        if (!waist_lifting_planer_)
+        {
+            RCLCPP_WARN(node_->get_logger(), "Waist lifting planner not initialized");
+            return false;
+        }
+        if (!waist_lifting_planer_->isBodyThreeJoint())
+        {
+            RCLCPP_WARN(node_->get_logger(),
+                        "Absolute waist x/z target is only supported for THREE_JOINT waist lifting");
+            return false;
+        }
+
+        Eigen::VectorXd current_angles = getCurrentWaistAngles();
+        if (current_angles.size() < 3)
+        {
+            RCLCPP_WARN(node_->get_logger(),
+                        "Cannot compute current waist x/z: expected at least 3 waist joints, got %ld",
+                        current_angles.size());
+            return false;
+        }
+
+        Eigen::Vector3d angles3d(current_angles(0), current_angles(1), current_angles(2));
+        Eigen::Vector2d current_xz;
+        if (!waist_lifting_planer_->calculateThreeJointEndpointXz(angles3d, current_xz))
+        {
+            RCLCPP_WARN(node_->get_logger(), "Failed to calculate current waist x/z in body_base");
+            return false;
+        }
+
+        const Eigen::Vector2d lifting_delta = target_xz - current_xz;
+        RCLCPP_INFO(node_->get_logger(),
+                    "Waist absolute target in body_base: target=(%.4f, %.4f), current=(%.4f, %.4f), delta=(%.4f, %.4f)",
+                    target_xz(0), target_xz(1), current_xz(0), current_xz(1),
+                    lifting_delta(0), lifting_delta(1));
+
+        return moveWaistLiftingImpl(lifting_delta);
+    }
+
     bool StateMoveJ::moveWaistLiftingImpl(const Eigen::Vector2d& lifting_delta)
     {
         if (!waist_lifting_planer_)
