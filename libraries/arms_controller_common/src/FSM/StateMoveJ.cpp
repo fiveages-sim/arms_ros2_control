@@ -2196,7 +2196,15 @@ namespace arms_controller_common
         }
 
         Eigen::Vector3d angles3d = Eigen::Vector3d::Zero();
-        if (waist_turning_joint_index_ < ctrl_interfaces_.joint_position_state_interface_.size())
+        if (waist_turning_active_ &&
+            waist_turning_joint_index_ < ctrl_interfaces_.last_sent_joint_positions_.size())
+        {
+            // A speed change, especially a stop command, must continue from the
+            // last commanded position. Starting from delayed hardware feedback
+            // would introduce a position target jump during replanning.
+            angles3d(0) = ctrl_interfaces_.last_sent_joint_positions_[waist_turning_joint_index_];
+        }
+        else if (waist_turning_joint_index_ < ctrl_interfaces_.joint_position_state_interface_.size())
         {
             auto value = ctrl_interfaces_.joint_position_state_interface_[waist_turning_joint_index_].get().
                 get_optional();
