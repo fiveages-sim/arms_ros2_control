@@ -430,6 +430,8 @@ namespace arms_controller_common
         }
         else
         {
+            // 定距模式下推进一维 moveJ 轨迹，得到标量进度/位置 planner_pos；
+            // 后续再把该标量映射为 x/z（three_joint）或直接作为 z（single_joint）。
             point = movej_planner_->run();
             planner_pos = point.joint_pos(0);
             waist_position_cache_ = planner_pos;

@@ -367,7 +367,7 @@ namespace arms_controller_common
                         RCLCPP_INFO(node_->get_logger(), "%s", oss.str().c_str());
 
                     }
-
+                    // 仅让腰部关节参与本次升降，其他关节保持上一周期已下发命令，防止被旧轨迹/插值意外改写。
                     for (size_t i = waist_joint_count_;
                          i < ctrl_interfaces_.joint_position_command_interface_.size(); i++)
                     {
@@ -1757,20 +1757,27 @@ namespace arms_controller_common
 
     bool StateMoveJ::moveWaistLifting(const Eigen::Vector2d& lifting_delta)
     {
+        // 懒初始化腰部升降规划器：首次收到指令时再创建并加载参数/限位。
         if (!waist_lifting_planer_)
         {
             setWaistLiftingPlaner();
         }
+        // 与其他目标/轨迹相关状态共享同一把锁，避免并发修改引发竞态。
         std::lock_guard lock(target_mutex_);
 
+        // 当非腰部运动空闲且未处于 stop-to-zero 过渡时，
+        // 直接发起“仅腰部”动作（若当前仍有腰部互斥动作则内部会做 defer）。
         if (!isNonWaistMotionBusy() && !stop_to_zero_active_)
         {
+            // 捕获参数副本，避免异步执行时引用到已失效的临时对象。
             const Eigen::Vector2d captured_delta = lifting_delta;
             requestWaistOnlyMotionOrDefer(
                 [this, captured_delta]() { moveWaistLiftingImpl(captured_delta); });
             return true;
         }
 
+        // 若当前有非腰部运动或正在 stop-to-zero，则把本次请求挂起，
+        // 等安全时机由调度器再执行，避免与主运动指令冲突。
         const Eigen::Vector2d captured_delta = lifting_delta;
         requestWaistMotionOrDefer([this, captured_delta]() { moveWaistLiftingImpl(captured_delta); });
         return true;
@@ -1794,6 +1801,11 @@ namespace arms_controller_common
         {
             Eigen::Vector3d angles3d(current_angles(0), current_angles(1), current_angles(2));
 
+            // initTargetLiftingLength 内部关键判断：
+            // 1) 模式分支：按 three_joint / single_joint 走不同规划路径；
+            // 2) 可达性与限位：three_joint 会先尝试终点 IK，不可达则二分裁剪到可达终点；
+            //    single_joint 会对目标角做上下限 clamp；
+            // 3) 轨迹初始化：初始化 moveJ（或 fallback 轨迹状态），初始化失败则返回 false。
             if (!waist_lifting_planer_->initTargetLiftingLength(
                 angles3d, lifting_delta, waist_lifting_duration_, waist_control_period))
             {
@@ -1825,6 +1837,8 @@ namespace arms_controller_common
             return false;
         }
 
+        // 对比“请求位移大小”和“实际规划位移大小”：
+        // 若二者差异明显，说明请求被 IK/关节限位裁剪；否则记录正常规划结果。
         const double requested_norm = waist_lifting_planer_->isBodyThreeJoint()
             ? lifting_delta.norm()
             : std::abs(lifting_delta(1));
