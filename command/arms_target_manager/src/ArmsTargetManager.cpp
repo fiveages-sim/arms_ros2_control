@@ -8,7 +8,7 @@
 #include <Eigen/Core>
 #include <Eigen/Geometry>
 #include <tf2_geometry_msgs/tf2_geometry_msgs.hpp>
-#include <tf2/exceptions.h>
+#include <tf2/exceptions.hpp>
 #include <cmath>
 #include <algorithm>
 #include <utility>

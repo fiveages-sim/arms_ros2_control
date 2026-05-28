@@ -31,6 +31,12 @@ namespace arms_controller_common
                                     const double total_time,
                                     const double period = 0.01);
 
+        bool initTargetLiftingSpeedFromCache(double target_lifting_speed,
+                                             double max_lifting_acc,
+                                             double max_lifting_jerk,
+                                             double total_time,
+                                             double period = 0.01);
+
         bool calNextPoint(std::vector<double>& next_point);
 
         void setBodyJointThreeJointType(bool is_three_rotation_joint)
@@ -72,7 +78,35 @@ namespace arms_controller_common
 
         void setCurrentVelToZero();
 
+        /** @brief 最近一次定距升降实际规划的距离（可能因限位/逆解被裁剪） */
+        double getLastPlannedLiftingLength() const { return last_planned_lifting_length_; }
+
     private:
+        bool initSpeedJPlannerFromState(double start_pos, double start_vel,
+                                        double target_vel, double max_acc,
+                                        double max_jerk, double total_time,
+                                        double period);
+        bool resolveSpeedModeMaxReachablePos(const Eigen::Vector3d& init_joint_angle,
+                                             double start_pos, double target_speed,
+                                             double& max_reachable_pos);
+
+        /** @brief 根据终点逆解/关节限位，将目标升降坐标裁剪到可达范围 */
+        bool resolveFeasibleLiftingEnd(const Eigen::Vector3d& init_joint_angle,
+                                       double start_pos, double requested_end,
+                                       double& feasible_end);
+
+        bool resolveFeasibleLiftingEndSingleJoint(double start_pos, double requested_end,
+                                                  double& feasible_end);
+
+        bool resolveFeasibleLiftingEndThreeJoint(const Eigen::Vector3d& init_joint_angle,
+                                                 double start_pos, double requested_end,
+                                                 double& feasible_end);
+
+        /** @brief 定距规划终点逆解：仅检查工作空间与关节限位，不做 0.05rad 步长约束 */
+        bool threeLinkPlanerEndpointIK(const Eigen::Vector3d& init_joint_angle,
+                                       double x, double z, double phi,
+                                       Eigen::Vector3d& output_joint_angle,
+                                       bool log_errors = false);
         bool type_three_joint_{false}; // true为三个平行腰部关节，false为单个腰部移动关节
 
         bool type_speed_{false}; // true 为speedj，false为movej
@@ -94,7 +128,8 @@ namespace arms_controller_common
                                const double x, const double z, const double phi,
                                Eigen::Vector3d& output_joint_angle);
         bool threeLinkPlanerFullIK(const double x, const double z, const double phi,
-                                   std::array<Eigen::Vector3d, 2>& solutions);
+                                   std::array<Eigen::Vector3d, 2>& solutions,
+                                   bool log_errors = true);
         Eigen::Vector3d choose_nearest_solution_of_body_joint3(
             const Eigen::Vector3d& q0, std::array<Eigen::Vector3d, 2>& solutions);
         bool isThreeJointsOverLimits(const Eigen::Vector3d& joint_angle);
@@ -114,6 +149,15 @@ namespace arms_controller_common
 #endif
 
         double min_val = 1.0e-9;
+        double last_planned_lifting_length_{0.0};
+        double speed_mode_max_reachable_pos_{0.0};
+        double speed_mode_direction_{0.0};
+        double speed_mode_max_acc_{0.0};
+        double speed_mode_max_jerk_{0.0};
+        double speed_mode_total_time_{0.0};
+        double speed_mode_period_{0.01};
+        bool speed_mode_max_reachable_valid_{false};
+        bool speed_mode_stop_replanned_{false};
         // Cached waist state shared by speed/length planning in this instance.
         double waist_position_cache_{0.0};
         double waist_velocity_cache_{0.0};

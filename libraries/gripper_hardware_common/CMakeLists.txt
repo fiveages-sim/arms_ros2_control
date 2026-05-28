@@ -29,9 +29,8 @@ target_include_directories(${PROJECT_NAME}
         "$<INSTALL_INTERFACE:include>"
 )
 
-ament_target_dependencies(
-        ${PROJECT_NAME} INTERFACE
-        ${dependencies}
+target_link_libraries(${PROJECT_NAME} INTERFACE
+        ${rclcpp_TARGETS}
 )
 
 install(

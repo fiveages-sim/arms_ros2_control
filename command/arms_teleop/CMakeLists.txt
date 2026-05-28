@@ -23,15 +23,14 @@ target_include_directories(joystick_teleop
         PUBLIC
         "$<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>"
         "$<INSTALL_INTERFACE:include/${PROJECT_NAME}>")
-ament_target_dependencies(
-        joystick_teleop PUBLIC
-        rclcpp
-        sensor_msgs
-        std_msgs
-        geometry_msgs
-        arms_ros2_control_msgs
-        control_msgs
-        rclcpp_action
+target_link_libraries(joystick_teleop PUBLIC
+        ${rclcpp_TARGETS}
+        ${sensor_msgs_TARGETS}
+        ${std_msgs_TARGETS}
+        ${geometry_msgs_TARGETS}
+        ${arms_ros2_control_msgs_TARGETS}
+        ${control_msgs_TARGETS}
+        ${rclcpp_action_TARGETS}
 )
 
 install(TARGETS

@@ -1,0 +1,14 @@
+# Goal
+string[] joint_names
+arms_ros2_control_msgs/JointWaypoint[] waypoints
+---
+# Result
+bool success
+string message
+float64 planned_duration
+float64 actual_duration
+---
+# Feedback
+float64 progress
+float64 elapsed_time
+float64 remaining_time
