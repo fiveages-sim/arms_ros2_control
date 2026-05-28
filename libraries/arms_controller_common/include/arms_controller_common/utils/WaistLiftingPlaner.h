@@ -17,13 +17,13 @@ namespace arms_controller_common
     public:
         WaistLiftingPlaner() = default;
         ~WaistLiftingPlaner() = default;
-        // 腰部移动一定距离，
+        // 腰部 movej 定距升降（lifting_length 为 z/关节角增量，可能被限位裁剪）
         bool initTargetLiftingLength(const Eigen::Vector3d& init_joint_angle,
                                      const double lifting_length,
                                      const double duration,
                                      const double period = 0.01);
 
-        // 腰部speedj到达目标速度：
+        // 腰部 speedj 从关节角起点规划到目标速度
         bool initTargetLiftingSpeed(const Eigen::Vector3d& init_joint_angle,
                                     const double target_lifting_speed,
                                     const double max_lifting_acc,
@@ -31,27 +31,35 @@ namespace arms_controller_common
                                     const double total_time,
                                     const double period = 0.01);
 
+        // 用缓存的升降位置/速度续接 speedj 规划（松手停升等，避免从关节角重算起点）
         bool initTargetLiftingSpeedFromCache(double target_lifting_speed,
                                              double max_lifting_acc,
                                              double max_lifting_jerk,
                                              double total_time,
                                              double period = 0.01);
 
+        // 计算下一控制周期的腰部关节目标角（movej/speedj 插值后经逆解输出）
         bool calNextPoint(std::vector<double>& next_point);
 
+        // 设置腰部为三平行旋转关节或单升降关节
         void setBodyJointThreeJointType(bool is_three_rotation_joint)
         {
             type_three_joint_ = is_three_rotation_joint;
         };
 
+        // 是否为三平行旋转关节腰部
         bool isBodyThreeJoint() { return type_three_joint_; };
+        // 设置三连杆几何参数（杆长、旋转方向、角度偏置）
         void setThreeJointParameter(double l1, double l2,
                                     const Eigen::Vector3d& rotation_direction,
                                     const Eigen::Vector3d& angle_offset);
+        // 设置三关节角度上下限
         void setThreeJointLimit(const Eigen::Vector3d& angle_lower,
                                 const Eigen::Vector3d& angle_upper);
+        // 设置单关节升降角度上下限
         void setSingleJointLimit(const double angle_lower, const double angle_upper);
 
+        // 当前 movej/speedj 轨迹是否已执行完毕
         bool isMotionOver()
         {
             if (type_speed_)
@@ -76,33 +84,38 @@ namespace arms_controller_common
             }
         }
 
+        // 将缓存速度置零并标记运动结束（规划失败或急停时用）
         void setCurrentVelToZero();
 
-        /** @brief 最近一次定距升降实际规划的距离（可能因限位/逆解被裁剪） */
+        // 最近一次定距升降实际规划的距离（可能因限位/逆解被裁剪）
         double getLastPlannedLiftingLength() const { return last_planned_lifting_length_; }
 
     private:
+        // 用给定位置/速度初始化 speedj 规划器
         bool initSpeedJPlannerFromState(double start_pos, double start_vel,
                                         double target_vel, double max_acc,
                                         double max_jerk, double total_time,
                                         double period);
+        // speedj 模式下按目标速度方向求可达极限位置（限位/工作空间）
         bool resolveSpeedModeMaxReachablePos(const Eigen::Vector3d& init_joint_angle,
                                              double start_pos, double target_speed,
                                              double& max_reachable_pos);
 
-        /** @brief 根据终点逆解/关节限位，将目标升降坐标裁剪到可达范围 */
+        // 根据终点逆解/关节限位，将目标升降坐标裁剪到可达范围
         bool resolveFeasibleLiftingEnd(const Eigen::Vector3d& init_joint_angle,
                                        double start_pos, double requested_end,
                                        double& feasible_end);
 
+        // 单关节模式下将目标升降角裁剪到关节限位内
         bool resolveFeasibleLiftingEndSingleJoint(double start_pos, double requested_end,
                                                   double& feasible_end);
 
+        // 三关节模式下将目标 z 裁剪到逆解可达范围（二分搜索）
         bool resolveFeasibleLiftingEndThreeJoint(const Eigen::Vector3d& init_joint_angle,
                                                  double start_pos, double requested_end,
                                                  double& feasible_end);
 
-        /** @brief 定距规划终点逆解：仅检查工作空间与关节限位，不做 0.05rad 步长约束 */
+        // 定距规划终点逆解：仅检查工作空间与关节限位，不做 0.05rad 步长约束
         bool threeLinkPlanerEndpointIK(const Eigen::Vector3d& init_joint_angle,
                                        double x, double z, double phi,
                                        Eigen::Vector3d& output_joint_angle,
@@ -121,22 +134,27 @@ namespace arms_controller_common
         Eigen::Vector3d limit_angler_lower_;
         Eigen::Vector3d limit_angle_upper_;
         Eigen::Vector3d current_joint_angle_;
-        // 几何法求平行三连杆的正逆解
+        // 平行三连杆正解：关节角 -> 末端 (x, z, phi)
         void threeLinkPlanerFK(const Eigen::Vector3d& joint_angle, double* x,
                                double* z, double* phi);
+        // 轨迹跟踪逆解：在 endpoint IK 基础上限制相对当前角不超过 0.05rad
         bool threeLinkPlanerIK(const Eigen::Vector3d& init_joint_angle,
                                const double x, const double z, const double phi,
                                Eigen::Vector3d& output_joint_angle);
+        // 平行三连杆完整逆解，返回两组关节角解
         bool threeLinkPlanerFullIK(const double x, const double z, const double phi,
                                    std::array<Eigen::Vector3d, 2>& solutions,
                                    bool log_errors = true);
+        // 从两组逆解中选取更接近初始关节角的一组
         Eigen::Vector3d choose_nearest_solution_of_body_joint3(
             const Eigen::Vector3d& q0, std::array<Eigen::Vector3d, 2>& solutions);
+        // 检查三关节角是否超出限位
         bool isThreeJointsOverLimits(const Eigen::Vector3d& joint_angle);
 
         /*单关节限制参数*/
         double single_joint_limit_lower_;
         double single_joint_limit_upper_;
+        // 检查单关节升降角是否超出限位
         bool isSingleJointsOverLimts(const double joint_angle);
 
         /*由于只升降腰部，就使用简单的movej单关节*/
