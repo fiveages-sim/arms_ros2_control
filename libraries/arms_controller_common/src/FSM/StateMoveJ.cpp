@@ -356,6 +356,18 @@ namespace arms_controller_common
                         ctrl_interfaces_.setJointPositionCommand(i, waist_positions[i]);
                     }
 
+                    if (waist_lifting_debug_print_active_)
+                    {
+                        std::ostringstream oss;
+                        oss << "Waist lifting command positions:";
+                        for (size_t i = 0; i < waist_positions.size(); ++i)
+                        {
+                            oss << " [" << i << "]=" << waist_positions[i];
+                        }
+                        RCLCPP_INFO(node_->get_logger(), "%s", oss.str().c_str());
+
+                    }
+
                     for (size_t i = waist_joint_count_;
                          i < ctrl_interfaces_.joint_position_command_interface_.size(); i++)
                     {
@@ -380,6 +392,7 @@ namespace arms_controller_common
                             return;
                         }
                         waist_lifting_active_ = false;
+                        waist_lifting_debug_print_active_ = false;
                         motion_mode_ = MotionMode::MOVEJ;
                         maintainCommandFromLastSent();
                         has_target_ = false;
@@ -401,6 +414,7 @@ namespace arms_controller_common
                 refreshHoldPositions();
                 last_waist_factor_ = 0.0;
                 waist_lifting_active_ = false;
+                waist_lifting_debug_print_active_ = false;
                 waist_lifting_planer_->setCurrentVelToZero(); //奇异了，报错停止，然后把当前实际的速度设为0
                 motion_mode_ = MotionMode::MOVEJ;
                 RCLCPP_WARN(node_->get_logger(), "Failed to calculate next waist lifting point");
@@ -1940,21 +1954,35 @@ namespace arms_controller_common
         double clamped_factor = std::clamp(factor, -1.0, 1.0);
         double speedj_time = 100000000.0;
         double target_speed = clamped_factor * default_waist_lifting_para_(0);
+        bool start_debug_print = false;
         if (std::fabs(clamped_factor) < waist_factor_epsilon_)
         {
             speedj_time = 0.0;
             target_speed = 0.0;
+            start_debug_print = true;
+            RCLCPP_INFO(node_->get_logger(),
+                        "Waist lifting speedj stop requested from actual angles3d: [%.6f, %.6f, %.6f], using cached planned start",
+                        angles3d(0), angles3d(1), angles3d(2));
         }
-        if (!waist_lifting_planer_->initTargetLiftingSpeed(angles3d, target_speed, default_waist_lifting_para_(1),
-                                                           default_waist_lifting_para_(2), speedj_time,
-                                                           1.0 / ctrl_interfaces_.frequency_))
+        const bool speed_plan_initialized = start_debug_print
+            ? waist_lifting_planer_->initTargetLiftingSpeedFromCache(
+                target_speed, default_waist_lifting_para_(1),
+                default_waist_lifting_para_(2), speedj_time,
+                1.0 / ctrl_interfaces_.frequency_)
+            : waist_lifting_planer_->initTargetLiftingSpeed(
+                angles3d, target_speed, default_waist_lifting_para_(1),
+                default_waist_lifting_para_(2), speedj_time,
+                1.0 / ctrl_interfaces_.frequency_);
+        if (!speed_plan_initialized)
         {
             RCLCPP_WARN(node_->get_logger(),
                         "Failed to initialize SINGLE_JOINT waist lifting speed plan for velocity %.3f",
                         target_speed);
             waist_lifting_planer_->setCurrentVelToZero();
+            waist_lifting_debug_print_active_ = false;
             return false;
         }
+        waist_lifting_debug_print_active_ = start_debug_print;
 
         trajectory_manager_.reset();
         interpolation_active_ = false;
@@ -2046,7 +2074,15 @@ namespace arms_controller_common
         }
 
         Eigen::Vector3d angles3d = Eigen::Vector3d::Zero();
-        if (waist_turning_joint_index_ < ctrl_interfaces_.joint_position_state_interface_.size())
+        if (waist_turning_active_ &&
+            waist_turning_joint_index_ < ctrl_interfaces_.last_sent_joint_positions_.size())
+        {
+            // A speed change, especially a stop command, must continue from the
+            // last commanded position. Starting from delayed hardware feedback
+            // would introduce a position target jump during replanning.
+            angles3d(0) = ctrl_interfaces_.last_sent_joint_positions_[waist_turning_joint_index_];
+        }
+        else if (waist_turning_joint_index_ < ctrl_interfaces_.joint_position_state_interface_.size())
         {
             auto value = ctrl_interfaces_.joint_position_state_interface_[waist_turning_joint_index_].get().
                 get_optional();

@@ -234,6 +234,15 @@ namespace arms_controller_common
             x_ = init_x;
             phi_ = init_phi;
             start_pos = init_z;
+            std::cout << "Waist lifting speedj init: "
+                << "x=" << x_
+                << ", z=" << init_z
+                << ", phi=" << phi_
+                << ", target_speed=" << target_lifting_speed
+                << ", max_acc=" << max_lifting_acc
+                << ", max_jerk=" << max_lifting_jerk
+                << ", period=" << period
+                << std::endl;
         }
         else
         {
@@ -281,6 +290,55 @@ namespace arms_controller_common
         return true;
     }
 
+    bool WaistLiftingPlaner::initTargetLiftingSpeedFromCache(
+        const double target_lifting_speed, const double max_lifting_acc,
+        const double max_lifting_jerk, const double total_time, const double period)
+    {
+        type_speed_ = true;
+        speed_mode_direction_ = (target_lifting_speed > 0.0) ? 1.0 :
+            ((target_lifting_speed < 0.0) ? -1.0 : 0.0);
+        speed_mode_max_acc_ = max_lifting_acc;
+        speed_mode_max_jerk_ = max_lifting_jerk;
+        speed_mode_total_time_ = total_time;
+        speed_mode_period_ = period;
+        speed_mode_max_reachable_valid_ = false;
+        speed_mode_stop_replanned_ = false;
+
+        const double start_pos = waist_position_cache_;
+
+#ifdef HAS_LINA_PLANNING
+        if (std::abs(target_lifting_speed - waist_velocity_cache_) <= min_val)
+        {
+            speedj_planner_.reset();
+            speed_plan_state_.motion_over = true;
+            waist_velocity_cache_ = target_lifting_speed;
+            return true;
+        }
+
+        if (!initSpeedJPlannerFromState(start_pos, waist_velocity_cache_,
+                                        target_lifting_speed, max_lifting_acc,
+                                        max_lifting_jerk, total_time, period))
+        {
+            return false;
+        }
+#else
+        (void)max_lifting_jerk;
+        speed_plan_state_.period = std::max(period, 1.0e-4);
+        speed_plan_state_.elapsed_time = 0.0;
+        speed_plan_state_.total_time = std::max(total_time, 0.0);
+        speed_plan_state_.start_pos = start_pos;
+        speed_plan_state_.target_pos = start_pos;
+        speed_plan_state_.target_speed = target_lifting_speed;
+        speed_plan_state_.max_acc = std::max(max_lifting_acc, 0.0);
+        speed_plan_state_.motion_over = (std::abs(target_lifting_speed - waist_velocity_cache_) <= min_val);
+        if (speed_plan_state_.motion_over)
+        {
+            waist_velocity_cache_ = target_lifting_speed;
+        }
+#endif
+        return true;
+    }
+
     void WaistLiftingPlaner::setCurrentVelToZero()
     {
         waist_velocity_cache_ = 0.0;
@@ -297,52 +355,58 @@ namespace arms_controller_common
         {
             if (!speedj_planner_)
             {
-                return false;
+                curr_z = waist_position_cache_;
             }
-            point = speedj_planner_->run();
-            const double current_pos = point.joint_pos(0);
-            const double current_vel = point.joint_vel(0);
-            if (speed_mode_max_reachable_valid_ && !speed_mode_stop_replanned_)
+            else
             {
-                const double moving_direction =
-                    (std::abs(current_vel) > min_val) ? ((current_vel > 0.0) ? 1.0 : -1.0)
-                                                      : speed_mode_direction_;
-                if (std::abs(moving_direction) > min_val)
+                point = speedj_planner_->run();
+                const double current_pos = point.joint_pos(0);
+                const double current_vel = point.joint_vel(0);
+                if (speed_mode_max_reachable_valid_ && !speed_mode_stop_replanned_)
                 {
-                    const double stop_dist = speedj_planner_->calculateDecDistanceOfV(
-                        current_vel, 0.1, 0.2);
-                    const double stop_pos = current_pos + moving_direction * stop_dist;
-                    const bool need_stop_replan =
-                        (moving_direction > 0.0) ?
-                        (stop_pos >= speed_mode_max_reachable_pos_ - 0.001) :
-                        (stop_pos <= speed_mode_max_reachable_pos_ + 0.001);
-                    if (need_stop_replan && std::abs(current_vel) > min_val)
+                    const double moving_direction =
+                        (std::abs(current_vel) > min_val) ? ((current_vel > 0.0) ? 1.0 : -1.0)
+                                                          : speed_mode_direction_;
+                    if (std::abs(moving_direction) > min_val)
                     {
-                        std::cout << "Waist speedj reaches deceleration point, replan to stop. "
-                            << "current_pos: " << current_pos
-                            << ", current_vel: " << current_vel
-                            << ", stop_pos: " << stop_pos
-                            << ", max_reachable_pos: " << speed_mode_max_reachable_pos_
-                            << std::endl;
-                        speed_mode_stop_replanned_ = true;
-                        if (!initSpeedJPlannerFromState(
-                                current_pos, current_vel, 0.0, speed_mode_max_acc_,
-                                speed_mode_max_jerk_, 0.0, speed_mode_period_))
+                        const double stop_dist = speedj_planner_->calculateDecDistanceOfV(
+                            current_vel, 0.1, 0.2);
+                        const double stop_pos = current_pos + moving_direction * stop_dist;
+                        const bool need_stop_replan =
+                            (moving_direction > 0.0) ?
+                            (stop_pos >= speed_mode_max_reachable_pos_ - 0.001) :
+                            (stop_pos <= speed_mode_max_reachable_pos_ + 0.001);
+                        if (need_stop_replan && std::abs(current_vel) > min_val)
                         {
-                            return false;
+                            std::cout << "Waist speedj reaches deceleration point, replan to stop. "
+                                << "current_pos: " << current_pos
+                                << ", current_vel: " << current_vel
+                                << ", stop_pos: " << stop_pos
+                                << ", max_reachable_pos: " << speed_mode_max_reachable_pos_
+                                << std::endl;
+                            speed_mode_stop_replanned_ = true;
+                            if (!initSpeedJPlannerFromState(
+                                    current_pos, current_vel, 0.0, speed_mode_max_acc_,
+                                    speed_mode_max_jerk_, 0.0, speed_mode_period_))
+                            {
+                                return false;
+                            }
+                            point = speedj_planner_->run();
                         }
-                        point = speedj_planner_->run();
                     }
                 }
+                curr_z = point.joint_pos(0);
+                waist_position_cache_ = curr_z;
+                waist_velocity_cache_ = point.joint_vel(0);
             }
         }
         else
         {
             point = movej_planner_->run();
+            curr_z = point.joint_pos(0);
+            waist_position_cache_ = curr_z;
+            waist_velocity_cache_ = point.joint_vel(0);
         }
-        curr_z = point.joint_pos(0);
-        waist_position_cache_ = curr_z;
-        waist_velocity_cache_ = point.joint_vel(0);
 #else
         if (type_speed_)
         {
@@ -486,8 +550,6 @@ namespace arms_controller_common
         {
             if (log_errors)
             {
-                std::cout << "solution 1: " << solutions[0].transpose() << std::endl;
-                std::cout << "solution 2: " << solutions[1].transpose() << std::endl;
                 std::cerr << "All solutions over joint limt" << std::endl;
             }
             return false;
@@ -573,8 +635,23 @@ namespace arms_controller_common
     Eigen::Vector3d WaistLiftingPlaner::choose_nearest_solution_of_body_joint3(
         const Eigen::Vector3d& q0, std::array<Eigen::Vector3d, 2>& solutions)
     {
+        if (std::abs(q0(0)) <= min_val &&
+            std::abs(q0(1)) <= min_val &&
+            std::abs(q0(2)) <= min_val)
+        {
+            if (solutions[0](0) < 0.0)
+            {
+                return solutions[0];
+            }
+            if (solutions[1](0) < 0.0)
+            {
+                return solutions[1];
+            }
+        }
+
         double d1 = (q0 - solutions[0]).squaredNorm();
         double d2 = (q0 - solutions[1]).squaredNorm();
+
         return (d1 < d2) ? solutions[0] : solutions[1];
     };
 
