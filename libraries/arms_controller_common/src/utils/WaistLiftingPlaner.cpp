@@ -550,8 +550,6 @@ namespace arms_controller_common
         {
             if (log_errors)
             {
-                std::cout << "solution 1: " << solutions[0].transpose() << std::endl;
-                std::cout << "solution 2: " << solutions[1].transpose() << std::endl;
                 std::cerr << "All solutions over joint limt" << std::endl;
             }
             return false;
@@ -559,42 +557,11 @@ namespace arms_controller_common
         if (size_of_solutions_with_constraints == 1)
         {
             output_joint_angle = solutions_with_constraints[0];
-            if (log_errors)
-            {
-                std::cout << "Waist IK selected only valid solution: "
-                    << output_joint_angle.transpose()
-                    << std::endl;
-            }
         }
         else
         {
-            if (log_errors)
-            {
-                const double d1 = (init_joint_angle - solutions_with_constraints[0]).squaredNorm();
-                const double d2 = (init_joint_angle - solutions_with_constraints[1]).squaredNorm();
-                std::cout << "Waist IK solutions for x=" << x
-                    << ", z=" << z
-                    << ", phi=" << phi
-                    << std::endl;
-                std::cout << "  init_joint_angle: " << init_joint_angle.transpose()
-                    << std::endl;
-                std::cout << "  solution[0]: " << solutions_with_constraints[0].transpose()
-                    << ", squared_distance=" << d1
-                    << std::endl;
-                std::cout << "  solution[1]: " << solutions_with_constraints[1].transpose()
-                    << ", squared_distance=" << d2
-                    << std::endl;
-                std::cout << "  selection rule: if init_joint_angle is near zero choose solution with negative first joint; "
-                    << "otherwise choose smaller squared distance to init_joint_angle; if equal choose solution[1]"
-                    << std::endl;
-            }
             output_joint_angle = choose_nearest_solution_of_body_joint3(
                 init_joint_angle, solutions_with_constraints);
-            if (log_errors)
-            {
-                std::cout << "  selected solution: " << output_joint_angle.transpose()
-                    << std::endl;
-            }
         }
         return true;
     }

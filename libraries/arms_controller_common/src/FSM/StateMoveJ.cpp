@@ -4,15 +4,9 @@
 #include "arms_controller_common/FSM/StateMoveJ.h"
 #include "arms_controller_common/utils/SharedPublishers.h"
 #include <algorithm>
-#include <cerrno>
-#include <cstdlib>
 #include <cmath>
-#include <fstream>
-#include <iomanip>
 #include <sstream>
 #include <string>
-#include <sys/stat.h>
-#include <sys/types.h>
 #include <std_msgs/msg/int32.hpp>
 
 // // planners/kinematics required for cartesian moveL support
@@ -23,29 +17,6 @@
 
 namespace arms_controller_common
 {
-    namespace
-    {
-        std::string getWaistDebugDataDirectory()
-        {
-            const char* home = std::getenv("HOME");
-            if (home && home[0] != '\0')
-            {
-                return std::string(home) + "/ros2_ws/data";
-            }
-            return "/home/fiveages/ros2_ws/data";
-        }
-
-        std::string getWaistDebugJointColumnName(const std::vector<std::string>& waist_joint_names,
-                                                 size_t joint_index)
-        {
-            if (joint_index < waist_joint_names.size() && !waist_joint_names[joint_index].empty())
-            {
-                return waist_joint_names[joint_index];
-            }
-            return "body_joint" + std::to_string(joint_index + 1);
-        }
-    }
-
     void StateMoveJ::publishCurrentTargetJoint(const std::vector<double>& target_positions)
     {
         if (!current_target_joint_publisher_)
@@ -66,73 +37,6 @@ namespace arms_controller_common
         {
             hold_positions_[i] = ctrl_interfaces_.last_sent_joint_positions_[i];
         }
-    }
-
-    void StateMoveJ::appendWaistDebugCsv(const std::string& source,
-                                         const std::vector<double>& planned_positions,
-                                         const std::vector<double>& actual_positions,
-                                         const std::vector<double>& diff_velocities)
-    {
-        const std::string data_dir = getWaistDebugDataDirectory();
-        if (::mkdir(data_dir.c_str(), 0755) != 0 && errno != EEXIST)
-        {
-            RCLCPP_WARN(node_->get_logger(),
-                        "Failed to create waist debug csv directory: %s",
-                        data_dir.c_str());
-            return;
-        }
-
-        const std::string csv_path = data_dir + "/waist_lifting_debug.csv";
-        std::ifstream existing_file(csv_path);
-        const bool file_has_content = existing_file.good() && existing_file.peek() != std::ifstream::traits_type::eof();
-        existing_file.close();
-
-        std::ofstream csv_file(csv_path, std::ios::app);
-        if (!csv_file.is_open())
-        {
-            RCLCPP_WARN(node_->get_logger(),
-                        "Failed to open waist debug csv file: %s",
-                        csv_path.c_str());
-            return;
-        }
-
-        if (!waist_lifting_debug_csv_header_written_ && !file_has_content)
-        {
-            csv_file << "time,source";
-            for (size_t i = 0; i < waist_joint_count_; ++i)
-            {
-                const std::string joint_name = getWaistDebugJointColumnName(waist_joint_names_, i);
-                csv_file
-                    << ',' << joint_name << "_planned_angle"
-                    << ',' << joint_name << "_actual_angle"
-                    << ',' << joint_name << "_diff_velocity";
-            }
-            csv_file << '\n';
-        }
-        waist_lifting_debug_csv_header_written_ = true;
-
-        const double stamp = node_ ? node_->now().seconds() : 0.0;
-        csv_file << std::fixed << std::setprecision(9);
-        csv_file << stamp << ',' << source;
-        for (size_t i = 0; i < waist_joint_count_; ++i)
-        {
-            csv_file << ',';
-            if (i < planned_positions.size())
-            {
-                csv_file << planned_positions[i];
-            }
-            csv_file << ',';
-            if (i < actual_positions.size())
-            {
-                csv_file << actual_positions[i];
-            }
-            csv_file << ',';
-            if (i < diff_velocities.size())
-            {
-                csv_file << diff_velocities[i];
-            }
-        }
-        csv_file << '\n';
     }
 
     void StateMoveJ::maintainCommandFromLastSent()
@@ -462,17 +366,6 @@ namespace arms_controller_common
                         }
                         RCLCPP_INFO(node_->get_logger(), "%s", oss.str().c_str());
 
-                        const size_t actual_count = std::min(waist_joint_count_, current_joint_pos_.size());
-                        const size_t vel_count = std::min(waist_joint_count_, joint_vel_.size());
-                        std::vector<double> actual_waist_positions(
-                            current_joint_pos_.begin(), current_joint_pos_.begin() + actual_count);
-                        std::vector<double> actual_waist_velocities(
-                            joint_vel_.begin(), joint_vel_.begin() + vel_count);
-                        appendWaistDebugCsv(
-                            "waist_command",
-                            waist_positions,
-                            actual_waist_positions,
-                            actual_waist_velocities);
                     }
 
                     for (size_t i = waist_joint_count_;
@@ -1067,21 +960,6 @@ namespace arms_controller_common
         RCLCPP_INFO(node_->get_logger(),
                     "MoveJ stop-to-zero init: vel_source=finite_diff, dq=%s",
                     vel_log.str().c_str());
-
-        const size_t planned_count = std::min(waist_joint_count_, stop_start_pos.size());
-        const size_t actual_count = std::min(waist_joint_count_, current_joint_pos_.size());
-        const size_t vel_count = std::min(waist_joint_count_, joint_vel_.size());
-        std::vector<double> planned_waist_positions(
-            stop_start_pos.begin(), stop_start_pos.begin() + planned_count);
-        std::vector<double> actual_waist_positions(
-            current_joint_pos_.begin(), current_joint_pos_.begin() + actual_count);
-        std::vector<double> actual_waist_velocities(
-            joint_vel_.begin(), joint_vel_.begin() + vel_count);
-        appendWaistDebugCsv(
-            "stop_to_zero_diff_velocity",
-            planned_waist_positions,
-            actual_waist_positions,
-            actual_waist_velocities);
 
         const double period = dt;
         if (!speed_stop_planner_.init(

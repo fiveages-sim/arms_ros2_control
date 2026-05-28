@@ -236,10 +236,6 @@ namespace arms_controller_common
         void clearPendingMotion();
         bool runStopToZero(const rclcpp::Duration& period);
         void updateJointObservation(double dt, bool advance_prev = true);
-        void appendWaistDebugCsv(const std::string& source,
-                                 const std::vector<double>& planned_positions,
-                                 const std::vector<double>& actual_positions,
-                                 const std::vector<double>& diff_velocities);
 
         void setTargetPositionImpl(const std::vector<double>& target_pos);
         void setTargetPositionImpl(const std::string& prefix, const std::vector<double>& target_pos);
@@ -371,7 +367,6 @@ namespace arms_controller_common
         std::shared_ptr<arms_controller_common::WaistLiftingPlaner> waist_lifting_planer_;
         bool waist_lifting_active_{false};
         bool waist_lifting_debug_print_active_{false};
-        bool waist_lifting_debug_csv_header_written_{false};
         std::shared_ptr<arms_controller_common::WaistLiftingPlaner> waist_turning_planer_;
         bool waist_turning_active_{false};
         double waist_lifting_duration_{3.0};
