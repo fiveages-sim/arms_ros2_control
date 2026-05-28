@@ -1,6 +1,6 @@
 # Sole release path for arms_ros2_control. See README.deb.md.
 #   ros-jazzy-arms-ros2-control       — WBC stack (amd64 + arm64)
-#   ros-jazzy-arms-ros2-control-full  — WBC + gripper_hardware_common + marvin + modbus + juxie (amd64 + arm64)
+#   ros-jazzy-arms-ros2-control-full  — WBC + gripper_hardware_common + marvin + modbus + juxie + rokae (amd64 + arm64)
 # Retired: standalone gripper / per-hardware debs / arms-ros2-control-jazzy-wbc.
 # Requires PRIVATE_SUBMODULES_TOKEN (selective submodule init; never submodules: recursive). Debs: install only, no .cpp.
 
@@ -153,6 +153,7 @@ jobs:
             check_pat_repo_read "marvin-ros2-control"
             check_pat_repo_read "modbus-ros2-control"
             check_pat_repo_read "juxie-ros2-control"
+            check_pat_repo_read "rokae-ros2-control"
             check_pat_repo_read "TJ_FX_ROBOT_CONTRL_SDK"
           fi
 
@@ -223,6 +224,7 @@ jobs:
             hardwares/marvin_ros2_control
             hardwares/modbus_ros2_control
             hardwares/juxie_ros2_control
+            hardwares/rokae_ros2_control
           )
           paths=("${wbc_paths[@]}")
           if [[ "${BUNDLE}" == "full" ]]; then
@@ -264,7 +266,8 @@ jobs:
               libraries/gripper_hardware_common/package.xml \
               hardwares/marvin_ros2_control/package.xml \
               hardwares/modbus_ros2_control/package.xml \
-              hardwares/juxie_ros2_control/package.xml; do
+              hardwares/juxie_ros2_control/package.xml \
+              hardwares/rokae_ros2_control/package.xml; do
               if [[ ! -f "${ws}/${p}" ]]; then
                 echo "Missing ${p} for full bundle." >&2
                 exit 1
@@ -582,6 +585,7 @@ jobs:
             rsync -a "${ws}/hardwares/marvin_ros2_control/" "${source_root}/marvin_ros2_control/"
             rsync -a "${ws}/hardwares/modbus_ros2_control/" "${source_root}/modbus_ros2_control/"
             rsync -a "${ws}/hardwares/juxie_ros2_control/" "${source_root}/juxie_ros2_control/"
+            rsync -a "${ws}/hardwares/rokae_ros2_control/" "${source_root}/rokae_ros2_control/"
           fi
 
       - name: Install workspace dependencies
@@ -665,7 +669,7 @@ jobs:
             exit 1
           fi
           if [[ "${{ matrix.bundle }}" == "full" ]]; then
-            for pkg in gripper_hardware_common marvin_ros2_control modbus_ros2_control juxie_ros2_control; do
+            for pkg in gripper_hardware_common marvin_ros2_control modbus_ros2_control juxie_ros2_control rokae_ros2_control; do
               if [[ ! -d "${install_root}/share/${pkg}" ]]; then
                 echo "${pkg} was not installed into the package root." >&2
                 exit 1
@@ -694,7 +698,7 @@ jobs:
 
           if [[ "${BUNDLE}" == "full" ]]; then
             deb_description="Prebuilt arms_ros2_control full bundle for ROS 2 ${ROS_DISTRO}
-             Includes WBC stack (lina_planning, ocs2_humanoid, ocs2_wbc_controller) plus gripper_hardware_common, marvin_ros2_control, modbus_ros2_control, juxie_ros2_control. Installed into ${INSTALL_PREFIX} without shared prefix setup files."
+             Includes WBC stack (lina_planning, ocs2_humanoid, ocs2_wbc_controller) plus gripper_hardware_common, marvin_ros2_control, modbus_ros2_control, juxie_ros2_control, rokae_ros2_control. Installed into ${INSTALL_PREFIX} without shared prefix setup files."
           else
             deb_description="Prebuilt arms_ros2_control WBC bundle for ROS 2 ${ROS_DISTRO}
              Includes command, controllers, arms_controller_common, ocs2_controller_common, lina_planning, ocs2_humanoid, ocs2_wbc_controller. Installed into ${INSTALL_PREFIX} without shared prefix setup files."
@@ -1097,6 +1101,7 @@ jobs:
                   "marvin_ros2_control",
                   "modbus_ros2_control",
                   "juxie_ros2_control",
+                  "rokae_ros2_control",
               ])
           for package_name in packages:
               print(package_name, get_package_share_directory(package_name))
@@ -1141,6 +1146,7 @@ jobs:
           find_package(marvin_ros2_control REQUIRED)
           find_package(modbus_ros2_control REQUIRED)
           find_package(juxie_ros2_control REQUIRED)
+          find_package(rokae_ros2_control REQUIRED)
           EOF
           fi
 
