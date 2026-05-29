@@ -1,0 +1,20 @@
+<?xml version="1.0"?>
+<library path="can_ros2_control">
+  <class name="can_ros2_control/O6CanHardware"
+         type="can_ros2_control::O6CanHardware"
+         base_class_type="hardware_interface::SystemInterface">
+    <description>
+      SocketCAN ros2_control hardware interface for LinkerHand O6/L6 compatible hands.
+      CAN ID defaults: right hand 0x27, left hand 0x28.
+      Command frame: 0x01 followed by six raw angle bytes.
+    </description>
+  </class>
+  <class name="can_ros2_control/FreedomCanHardware"
+         type="can_ros2_control::FreedomCanHardware"
+         base_class_type="hardware_interface::SystemInterface">
+    <description>
+      SocketCAN ros2_control hardware interface for Freedom dexterous hands.
+      Uses Freedom CAN2.0 extended-frame protocol.
+    </description>
+  </class>
+</library>

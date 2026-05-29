@@ -24,7 +24,7 @@ def launch_setup(context, *args, **kwargs):
     # 显示手部配置信息
     hand_side = "left" if direction == "1" else "right"
     if hand_name == "freedom":
-        modbus_id = "1" if direction == "1" else "0"
+        modbus_id = "0" if direction == "1" else "1"
     elif hand_name == "inspire":
         modbus_id = "2" if direction == "1" else "1"
     else:
