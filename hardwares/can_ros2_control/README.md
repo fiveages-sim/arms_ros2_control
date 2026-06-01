@@ -17,11 +17,29 @@ Protocol:
 - Command frame: `0x01` followed by 6 raw angle bytes
 - Raw angle mapping: `255` is open/extended, `0` is closed/flexed
 
-Example:
+Bring up the SocketCAN interface before launching ROS2 control:
 
 ```bash
 source ~/ros2_ws/install/setup.bash
-ros2 launch basic_joint_controller hand.launch.py type:=o6 hardware:=real_can can_interface:=can0 direction:=-1
+ip -details link show can0
+sudo ip link set can0 down
+sudo ip link set can0 type can bitrate 500000
+sudo ip link set can0 up
+
+```
+
+Left hand (`direction:=1`, default, CAN ID `0x28`):
+
+```bash
+source ~/ros2_ws/install/setup.bash
+ros2 launch basic_joint_controller hand.launch.py hand:=linkerhand type:=o6 hardware:=real_can
+```
+
+Right hand (`direction:=-1`, CAN ID `0x27`):
+
+```bash
+source ~/ros2_ws/install/setup.bash
+ros2 launch basic_joint_controller hand.launch.py hand:=linkerhand type:=o6 hardware:=real_can direction:=-1
 ```
 
 ## Freedom
@@ -33,5 +51,5 @@ Example:
 
 ```bash
 source ~/ros2_ws/install/setup.bash
-ros2 launch basic_joint_controller hand.launch.py hand:=freedom type:=freedom hardware:=real_can can_interface:=can0
+ros2 launch basic_joint_controller hand.launch.py hand:=freedom type:=freedom hardware:=real_can
 ```
