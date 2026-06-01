@@ -166,21 +166,35 @@ Moves the waist by the specified distance (meters) from its current position.
 ros2 topic pub --once /body_controller/waist_lifting std_msgs/msg/Float64 "data: 0.05"
 ```
 
-### 5.6 Waist lifting — local x/z relative motion
+### 5.6 Waist lifting — local x/z/phi relative motion
 
-**Topic:** `/{controller_name}/waist_lifting_xz`  
+**Topic:** `/{controller_name}/waist_lifting_pose_relative`  
 **Type:** `std_msgs/Float64MultiArray`  
 **Requires:** `waist_lifting_enabled: true`, active state: MOVEJ
 
-Semantics: `data: [dx, dz]` in the waist mechanism local FK frame.  
+Semantics: `data: [dx, dz, dphi]` in the waist mechanism local FK frame (`dphi` in rad).  
 This command does not perform world/ground frame transforms.
 
 ```bash
-ros2 topic pub --once /body_controller/waist_lifting_xz \
-  std_msgs/msg/Float64MultiArray "{data: [0.02, 0.05]}"
+ros2 topic pub --once /body_controller/waist_lifting_pose_relative \
+  std_msgs/msg/Float64MultiArray "{data: [0.02, 0.05, 0.10]}"
 ```
 
-### 5.7 Waist lifting — velocity factor
+### 5.7 Waist lifting — x/z/phi absolute target
+
+**Topic:** `/{controller_name}/waist_lifting_pose_absolute`  
+**Type:** `std_msgs/Float64MultiArray`  
+**Requires:** `waist_lifting_enabled: true`, active state: MOVEJ
+
+Semantics: `data: [x, z, phi]`. Position `(x, z)` is interpreted in `base_footprint`; `phi` is the planar angle in `body_base`, in radians.  
+The controller transforms the position into `body_base`, then computes a relative delta from the current `(x, z, phi)` before planning.
+
+```bash
+ros2 topic pub --once /body_controller/waist_lifting_pose_absolute \
+  std_msgs/msg/Float64MultiArray "{data: [0.12, 0.45, 0.20]}"
+```
+
+### 5.8 Waist lifting — velocity factor
 
 **Topic:** `/{controller_name}/waist_lifting_command`  
 **Type:** `std_msgs/Float64` (factor range: `[-1.0, 1.0]`)  
@@ -194,7 +208,7 @@ ros2 topic pub /body_controller/waist_lifting_command std_msgs/msg/Float64 "data
 ros2 topic pub --once /body_controller/waist_lifting_command std_msgs/msg/Float64 "data: 0.0"  # stop
 ```
 
-### 5.8 Waist turning — velocity factor
+### 5.9 Waist turning — velocity factor
 
 **Topic:** `/{controller_name}/waist_turning_command`  
 **Type:** `std_msgs/Float64` (factor range: `[-1.0, 1.0]`)  
@@ -221,7 +235,8 @@ Assuming controller name `my_controller`, joint name `j1`:
 | `/my_controller/target_command` | `Int32` (0/1) | MOVEJ | Hand open/close switch |
 | `/my_controller/target_percent` | `Float64` (0~1) | MOVEJ | Hand proportional control |
 | `/my_controller/waist_lifting` | `Float64` | MOVEJ | Waist position delta |
-| `/my_controller/waist_lifting_xz` | `Float64MultiArray` | MOVEJ | Waist local relative `[dx, dz]` |
+| `/my_controller/waist_lifting_pose_relative` | `Float64MultiArray` | MOVEJ | Waist local relative `[dx, dz, dphi]` |
+| `/my_controller/waist_lifting_pose_absolute` | `Float64MultiArray` | MOVEJ | Waist absolute target `[x, z, phi]` |
 | `/my_controller/waist_lifting_command` | `Float64` | MOVEJ | Waist velocity factor |
 | `/my_controller/waist_turning_command` | `Float64` | MOVEJ | Waist turning velocity factor |
 

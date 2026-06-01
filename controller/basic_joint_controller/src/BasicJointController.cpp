@@ -219,7 +219,7 @@ namespace basic_joint_controller
                     if (state_list_.movej)
                     {
                         bool success = state_list_.movej->moveWaistLifting(
-                            Eigen::Vector2d(0.0, msg->data)); //兼容旧接口：仅dz
+                            Eigen::Vector3d(0.0, msg->data, 0.0)); //兼容旧接口：仅dz
 
                         if (success)
                         {
@@ -234,9 +234,11 @@ namespace basic_joint_controller
                         }
                     }
                 });
-            std::string waist_lifting_xz_topic = "/" + controller_name_ + "/waist_lifting_xz";
-            waist_lifting_xz_subscription_ = get_node()->create_subscription<std_msgs::msg::Float64MultiArray>(
-                waist_lifting_xz_topic, 10,
+            std::string waist_lifting_pose_relative_topic =
+                "/" + controller_name_ + "/waist_lifting_pose_relative";
+            waist_lifting_pose_relative_subscription_ =
+                get_node()->create_subscription<std_msgs::msg::Float64MultiArray>(
+                waist_lifting_pose_relative_topic, 10,
                 [this](const std_msgs::msg::Float64MultiArray::SharedPtr msg)
                 {
                     if (!current_state_ || current_state_->state_name != FSMStateName::MOVEJ)
@@ -247,26 +249,26 @@ namespace basic_joint_controller
                     {
                         return;
                     }
-                    if (msg->data.size() < 2)
+                    if (msg->data.size() < 3)
                     {
                         RCLCPP_WARN(get_node()->get_logger(),
-                                    "waist_lifting_xz expects [dx, dz], got %zu values",
+                                    "waist_lifting_pose_relative expects [dx, dz, dphi], got %zu values",
                                     msg->data.size());
                         return;
                     }
 
-                    const Eigen::Vector2d lifting_delta(msg->data[0], msg->data[1]);
+                    const Eigen::Vector3d lifting_delta(msg->data[0], msg->data[1], msg->data[2]);
                     bool success = state_list_.movej->moveWaistLifting(lifting_delta);
                     if (!success)
                     {
-                        RCLCPP_WARN(get_node()->get_logger(), "waist lifting x/z command failed");
+                        RCLCPP_WARN(get_node()->get_logger(), "waist lifting x/z/phi delta command failed");
                     }
                 });
-            std::string waist_lifting_absolute_xz_topic =
-                "/" + controller_name_ + "/waist_lifting_absolute_xz";
-            waist_lifting_absolute_xz_subscription_ =
+            std::string waist_lifting_pose_absolute_topic =
+                "/" + controller_name_ + "/waist_lifting_pose_absolute";
+            waist_lifting_pose_absolute_subscription_ =
                 get_node()->create_subscription<std_msgs::msg::Float64MultiArray>(
-                    waist_lifting_absolute_xz_topic, 10,
+                    waist_lifting_pose_absolute_topic, 10,
                     [this](const std_msgs::msg::Float64MultiArray::SharedPtr msg)
                     {
                         if (!current_state_ || current_state_->state_name != FSMStateName::MOVEJ)
@@ -277,10 +279,10 @@ namespace basic_joint_controller
                         {
                             return;
                         }
-                        if (msg->data.size() < 2)
+                        if (msg->data.size() < 3)
                         {
                             RCLCPP_WARN(get_node()->get_logger(),
-                                        "waist_lifting_absolute_xz expects [x, z], got %zu values",
+                                        "waist_lifting_pose_absolute expects [x, z, phi], got %zu values",
                                         msg->data.size());
                             return;
                         }
@@ -313,11 +315,12 @@ namespace basic_joint_controller
                                             waist_absolute_target_frame_.c_str(), target_body.point.y);
                             }
 
-                            const Eigen::Vector2d target_xz(target_body.point.x, target_body.point.z);
-                            if (!state_list_.movej->moveWaistLiftingToBodyBaseXz(target_xz))
+                            const Eigen::Vector3d target_xz_phi(
+                                target_body.point.x, target_body.point.z, msg->data[2]);
+                            if (!state_list_.movej->moveWaistLiftingToBodyBaseXz(target_xz_phi))
                             {
                                 RCLCPP_WARN(get_node()->get_logger(),
-                                            "waist absolute x/z command failed");
+                                            "waist absolute x/z/phi command failed");
                             }
                         }
                         catch (const tf2::TransformException& ex)

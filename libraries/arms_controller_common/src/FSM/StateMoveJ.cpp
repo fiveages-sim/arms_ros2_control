@@ -1755,35 +1755,28 @@ namespace arms_controller_common
         waist_lifting_duration_ = node_->get_parameter("waist_lifting_duration").as_double();
     }
 
-    bool StateMoveJ::moveWaistLifting(const Eigen::Vector2d& lifting_delta)
+    bool StateMoveJ::moveWaistLifting(const Eigen::Vector3d& lifting_delta)
     {
-        // 懒初始化腰部升降规划器：首次收到指令时再创建并加载参数/限位。
         if (!waist_lifting_planer_)
         {
             setWaistLiftingPlaner();
         }
-        // 与其他目标/轨迹相关状态共享同一把锁，避免并发修改引发竞态。
+
         std::lock_guard lock(target_mutex_);
 
-        // 当非腰部运动空闲且未处于 stop-to-zero 过渡时，
-        // 直接发起“仅腰部”动作（若当前仍有腰部互斥动作则内部会做 defer）。
+        const Eigen::Vector3d captured_delta = lifting_delta;
         if (!isNonWaistMotionBusy() && !stop_to_zero_active_)
         {
-            // 捕获参数副本，避免异步执行时引用到已失效的临时对象。
-            const Eigen::Vector2d captured_delta = lifting_delta;
             requestWaistOnlyMotionOrDefer(
                 [this, captured_delta]() { moveWaistLiftingImpl(captured_delta); });
             return true;
         }
 
-        // 若当前有非腰部运动或正在 stop-to-zero，则把本次请求挂起，
-        // 等安全时机由调度器再执行，避免与主运动指令冲突。
-        const Eigen::Vector2d captured_delta = lifting_delta;
         requestWaistMotionOrDefer([this, captured_delta]() { moveWaistLiftingImpl(captured_delta); });
         return true;
     }
 
-    bool StateMoveJ::moveWaistLiftingToBodyBaseXz(const Eigen::Vector2d& target_xz)
+    bool StateMoveJ::moveWaistLiftingToBodyBaseXz(const Eigen::Vector3d& target_xz_phi)
     {
         if (!waist_lifting_planer_)
         {
@@ -1792,7 +1785,7 @@ namespace arms_controller_common
 
         std::lock_guard lock(target_mutex_);
 
-        const Eigen::Vector2d captured_target = target_xz;
+        const Eigen::Vector3d captured_target = target_xz_phi;
         if (!isNonWaistMotionBusy() && !stop_to_zero_active_)
         {
             requestWaistOnlyMotionOrDefer(
@@ -1805,7 +1798,7 @@ namespace arms_controller_common
         return true;
     }
 
-    bool StateMoveJ::moveWaistLiftingToBodyBaseXzImpl(const Eigen::Vector2d& target_xz)
+    bool StateMoveJ::moveWaistLiftingToBodyBaseXzImpl(const Eigen::Vector3d& target_xz_phi)
     {
         if (!waist_lifting_planer_)
         {
@@ -1815,7 +1808,7 @@ namespace arms_controller_common
         if (!waist_lifting_planer_->isBodyThreeJoint())
         {
             RCLCPP_WARN(node_->get_logger(),
-                        "Absolute waist x/z target is only supported for THREE_JOINT waist lifting");
+                        "Absolute waist x/z/phi target is only supported for THREE_JOINT waist lifting");
             return false;
         }
 
@@ -1823,29 +1816,30 @@ namespace arms_controller_common
         if (current_angles.size() < 3)
         {
             RCLCPP_WARN(node_->get_logger(),
-                        "Cannot compute current waist x/z: expected at least 3 waist joints, got %ld",
+                        "Cannot compute current waist x/z/phi: expected at least 3 waist joints, got %ld",
                         current_angles.size());
             return false;
         }
 
         Eigen::Vector3d angles3d(current_angles(0), current_angles(1), current_angles(2));
-        Eigen::Vector2d current_xz;
-        if (!waist_lifting_planer_->calculateThreeJointEndpointXz(angles3d, current_xz))
+        Eigen::Vector3d current_pose;
+        if (!waist_lifting_planer_->calculateThreeJointEndpointXzPhi(angles3d, current_pose))
         {
-            RCLCPP_WARN(node_->get_logger(), "Failed to calculate current waist x/z in body_base");
+            RCLCPP_WARN(node_->get_logger(), "Failed to calculate current waist x/z/phi in body_base");
             return false;
         }
 
-        const Eigen::Vector2d lifting_delta = target_xz - current_xz;
+        const Eigen::Vector3d lifting_delta = target_xz_phi - current_pose;
         RCLCPP_INFO(node_->get_logger(),
-                    "Waist absolute target in body_base: target=(%.4f, %.4f), current=(%.4f, %.4f), delta=(%.4f, %.4f)",
-                    target_xz(0), target_xz(1), current_xz(0), current_xz(1),
-                    lifting_delta(0), lifting_delta(1));
+                    "Waist absolute target in body_base: target=(%.4f, %.4f, %.4f), current=(%.4f, %.4f, %.4f), delta=(%.4f, %.4f, %.4f)",
+                    target_xz_phi(0), target_xz_phi(1), target_xz_phi(2),
+                    current_pose(0), current_pose(1), current_pose(2),
+                    lifting_delta(0), lifting_delta(1), lifting_delta(2));
 
         return moveWaistLiftingImpl(lifting_delta);
     }
 
-    bool StateMoveJ::moveWaistLiftingImpl(const Eigen::Vector2d& lifting_delta)
+    bool StateMoveJ::moveWaistLiftingImpl(const Eigen::Vector3d& lifting_delta)
     {
         if (!waist_lifting_planer_)
         {
@@ -1872,8 +1866,8 @@ namespace arms_controller_common
                 angles3d, lifting_delta, waist_lifting_duration_, waist_control_period))
             {
                 RCLCPP_WARN(node_->get_logger(),
-                            "Failed to initialize THREE_JOINT waist lifting plan for delta (%.3f, %.3f)",
-                            lifting_delta(0), lifting_delta(1));
+                            "Failed to initialize THREE_JOINT waist lifting plan for delta (%.3f, %.3f, %.3f)",
+                            lifting_delta(0), lifting_delta(1), lifting_delta(2));
                 return false;
             }
             planned_lifting_distance = waist_lifting_planer_->getLastPlannedLiftingLength();
@@ -1886,8 +1880,8 @@ namespace arms_controller_common
                 angles3d, lifting_delta, waist_lifting_duration_, waist_control_period))
             {
                 RCLCPP_WARN(node_->get_logger(),
-                            "Failed to initialize SINGLE_JOINT waist lifting plan for delta (%.3f, %.3f)",
-                            lifting_delta(0), lifting_delta(1));
+                            "Failed to initialize SINGLE_JOINT waist lifting plan for delta dz (%.3f)",
+                            lifting_delta(1));
                 return false;
             }
             planned_lifting_distance = waist_lifting_planer_->getLastPlannedLiftingLength();
@@ -1908,22 +1902,22 @@ namespace arms_controller_common
         if (std::abs(planned_lifting_distance - requested_norm) > kPlannedDistanceEpsilon)
         {
             RCLCPP_WARN(node_->get_logger(),
-                        "Waist lifting distance clamped by end-point IK/limits: requested=(%.4f, %.4f), planned_norm=%.4f",
-                        lifting_delta(0), lifting_delta(1), planned_lifting_distance);
+                        "Waist lifting distance clamped by end-point IK/limits: requested=(%.4f, %.4f, %.4f), planned_norm=%.4f",
+                        lifting_delta(0), lifting_delta(1), lifting_delta(2), planned_lifting_distance);
         }
         else
         {
             RCLCPP_INFO(node_->get_logger(),
-                        "Waist lifting planned delta: requested=(%.4f, %.4f), planned_norm=%.4f",
-                        lifting_delta(0), lifting_delta(1), planned_lifting_distance);
+                        "Waist lifting planned delta: requested=(%.4f, %.4f, %.4f), planned_norm=%.4f",
+                        lifting_delta(0), lifting_delta(1), lifting_delta(2), planned_lifting_distance);
         }
 
         if (std::abs(planned_lifting_distance) <= kPlannedDistanceEpsilon &&
             requested_norm > kPlannedDistanceEpsilon)
         {
             RCLCPP_WARN(node_->get_logger(),
-                        "Waist lifting already at limit, no motion planned (requested=(%.4f, %.4f))",
-                        lifting_delta(0), lifting_delta(1));
+                        "Waist lifting already at limit, no motion planned (requested=(%.4f, %.4f, %.4f))",
+                        lifting_delta(0), lifting_delta(1), lifting_delta(2));
             return false;
         }
         // Entering waist lifting should cancel any stale MOVEJ trajectory state,

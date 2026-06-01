@@ -179,7 +179,7 @@ state_movej->setJointLimitChecker(
 
 ```cpp
 // 位置控制：腰部局部坐标系相对移动 [dx, dz]
-state_movej->moveWaistLifting(Eigen::Vector2d(0.0, 0.05));
+state_movej->moveWaistLifting(Eigen::Vector3d(0.0, 0.05, 0.0));
 
 // 速度系数控制（-1.0~1.0，0.0 停止）
 state_movej->setWaistLiftingFactor(0.5);   // 上升
