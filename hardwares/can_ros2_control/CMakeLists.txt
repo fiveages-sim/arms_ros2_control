@@ -22,6 +22,7 @@ endforeach()
 add_library(${PROJECT_NAME} SHARED
   src/hands/linkerhand/o6_can_hardware.cpp
   src/hands/freedom/freedom_can_hardware.cpp
+  src/hands/inspire/inspire_canfd_hardware.cpp
 )
 
 target_compile_features(${PROJECT_NAME} PUBLIC cxx_std_17)
@@ -50,8 +51,16 @@ install(
 )
 
 if(BUILD_TESTING)
+  find_package(ament_cmake_gtest REQUIRED)
   find_package(ament_lint_auto REQUIRED)
   ament_lint_auto_find_test_dependencies()
+
+  ament_add_gtest(test_inspire_can_protocol
+    test/test_inspire_can_protocol.cpp
+  )
+  target_include_directories(test_inspire_can_protocol PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}/include
+  )
 endif()
 
 ament_export_dependencies(${THIS_PACKAGE_INCLUDE_DEPENDS})
