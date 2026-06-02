@@ -61,6 +61,8 @@ namespace ocs2::mobile_manipulator
 
             robot_name_ = auto_declare("robot_name", std::string("cr5"));
             robot_type_ = auto_declare("robot_type", std::string(""));
+            planning_urdf_variant_ = auto_declare("planning_urdf_variant", std::string(""));
+            planning_urdf_path_ = auto_declare("planning_urdf_path", std::string(""));
             future_time_offset_ = auto_declare("future_time_offset", 1.0);
             const std::string info_file_name = auto_declare("info_file_name", std::string("task"));
             joint_names_ = node_->get_parameter("joints").as_string_array();
@@ -70,7 +72,7 @@ namespace ocs2::mobile_manipulator
             const std::string task_file = config_path + "/config/ocs2/" + info_file_name + ".info";
             const std::string lib_folder =
                 auto_declare("ocs2_library_folder", defaultOcs2LibraryFolder(robot_pkg));
-            const std::string urdf_file = generateUrdfPath(robot_name_, robot_type_, config_path);
+            const std::string urdf_file = resolvePlanningUrdfPath(robot_name_, robot_type_, config_path);
 
             setupInterface(task_file, lib_folder, urdf_file);
 
@@ -173,6 +175,10 @@ namespace ocs2::mobile_manipulator
         void setupPublisher();
 
         // URDF path generation helper
+        std::string resolvePlanningUrdfPath(const std::string& robot_name,
+                                            const std::string& robot_type,
+                                            const std::string& config_path) const;
+
         std::string generateUrdfPath(const std::string& robot_name,
                                      const std::string& robot_type,
                                      const std::string& config_path) const;
@@ -189,6 +195,8 @@ namespace ocs2::mobile_manipulator
         // Configuration
         std::string robot_name_;
         std::string robot_type_; // Robot type/variant (e.g., red, blue, long_arm, short_arm, etc.)
+        std::string planning_urdf_variant_; // "base" forces {robot_name}.urdf without type suffix
+        std::string planning_urdf_path_; // xacro-generated URDF cache path
         std::vector<std::string> joint_names_;
         bool dual_arm_mode_;
         double future_time_offset_; // Future time offset

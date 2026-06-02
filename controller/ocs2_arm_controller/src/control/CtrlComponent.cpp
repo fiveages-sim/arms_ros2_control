@@ -290,11 +290,40 @@ namespace ocs2::mobile_manipulator
         pose_reference_manager_->resetTargetStateCache();
     }
 
+    std::string CtrlComponent::resolvePlanningUrdfPath(const std::string& robot_name,
+                                                       const std::string& robot_type,
+                                                       const std::string& config_path) const
+    {
+        if (planning_urdf_variant_ == "xacro" && !planning_urdf_path_.empty())
+        {
+            if (std::filesystem::exists(planning_urdf_path_))
+            {
+                RCLCPP_INFO(node_->get_logger(),
+                            "Using xacro-generated planning URDF: %s",
+                            planning_urdf_path_.c_str());
+                return planning_urdf_path_;
+            }
+            RCLCPP_WARN(node_->get_logger(),
+                        "planning_urdf_path not found: %s, falling back to static URDF",
+                        planning_urdf_path_.c_str());
+        }
+        return generateUrdfPath(robot_name, robot_type, config_path);
+    }
+
     std::string CtrlComponent::generateUrdfPath(const std::string& robot_name,
                                                 const std::string& robot_type,
                                                 const std::string& config_path) const
     {
         const std::string urdf_dir = config_path + "/urdf/";
+
+        if (planning_urdf_variant_ == "base")
+        {
+            const std::string default_urdf = urdf_dir + robot_name + ".urdf";
+            RCLCPP_INFO(node_->get_logger(),
+                        "Using base planning URDF (planning_urdf_variant=base): %s",
+                        default_urdf.c_str());
+            return default_urdf;
+        }
 
         // If robot type is specified, try to use type-specific URDF
         if (!robot_type.empty())
