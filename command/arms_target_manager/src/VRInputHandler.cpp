@@ -15,6 +15,7 @@
 #include <Eigen/Geometry>
 #include <algorithm>
 #include <cctype>
+#include <cmath>
 #include <tf2_geometry_msgs/tf2_geometry_msgs.hpp>
 
 namespace arms_ros2_control::command
@@ -193,11 +194,11 @@ namespace arms_ros2_control::command
                 right_gripper_controller_name_ = controller_name;
                 RCLCPP_DEBUG(node_->get_logger(), "🕹️🕶️🕹️ Detected right gripper controller: %s", controller_name.c_str());
             }
-            // 单臂模式：如果只有一个控制器且名称中没有left/right，假设是左控制器
-            else if (hand_controllers.size() == 1 && left_gripper_controller_name_.empty())
+            else
             {
-                left_gripper_controller_name_ = controller_name;
-                RCLCPP_DEBUG(node_->get_logger(), "🕹️🕶️🕹️ Detected single-arm gripper controller (assumed left): %s", controller_name.c_str());
+                RCLCPP_WARN(node_->get_logger(),
+                            "🕹️ Hand controller '%s' has no left/right in name; VR gripper mapping skipped",
+                            controller_name.c_str());
             }
         }
     }
@@ -1385,6 +1386,18 @@ namespace arms_ros2_control::command
 
                 // 计算 VR 头显与 VR 左手柄之间的 Z 轴距离（使用未缩放的原始左手柄位姿）
                 double head_left_dist = std::abs(vr_head_position_.z() - vr_left_position_raw_.z());
+                RCLCPP_INFO(node_->get_logger(),
+                            "🕹️🕶️🕹️ [左组合键][校准调试] frame初始化=%s, ee_frame_id='%s', reference_link='%s'",
+                            ee_frame_id_initialized_ ? "true" : "false",
+                            ee_frame_id_.c_str(),
+                            reference_link_.c_str());
+                RCLCPP_INFO(node_->get_logger(),
+                            "🕹️🕶️🕹️ [左组合键][校准调试] VR raw: head=[%.4f, %.4f, %.4f], "
+                            "left=[%.4f, %.4f, %.4f], right=[%.4f, %.4f, %.4f], head_left_z_dist=%.6f",
+                            vr_head_position_.x(), vr_head_position_.y(), vr_head_position_.z(),
+                            vr_left_position_raw_.x(), vr_left_position_raw_.y(), vr_left_position_raw_.z(),
+                            vr_right_position_raw_.x(), vr_right_position_raw_.y(), vr_right_position_raw_.z(),
+                            head_left_dist);
 
                 // 计算机器人左末端与 reference_link_ 之间的 Z 轴距离
                 double left_ee_dist_from_ref = std::numeric_limits<double>::quiet_NaN();
@@ -1404,9 +1417,28 @@ namespace arms_ros2_control::command
                             tf_ref_in_F.transform.translation.x,
                             tf_ref_in_F.transform.translation.y,
                             tf_ref_in_F.transform.translation.z);
+                        RCLCPP_INFO(node_->get_logger(),
+                                    "🕹️🕶️🕹️ [左组合键][校准调试] TF %s -> %s: translation=[%.4f, %.4f, %.4f], "
+                                    "rotation=[x=%.4f, y=%.4f, z=%.4f, w=%.4f]",
+                                    reference_link_.c_str(), ee_frame_id_.c_str(),
+                                    p_F_ref.x(), p_F_ref.y(), p_F_ref.z(),
+                                    tf_ref_in_F.transform.rotation.x,
+                                    tf_ref_in_F.transform.rotation.y,
+                                    tf_ref_in_F.transform.rotation.z,
+                                    tf_ref_in_F.transform.rotation.w);
 
                         // 取左末端 Z 轴距离
                         left_ee_dist_from_ref = std::abs(robot_current_left_position_.z() - p_F_ref.z());
+                        RCLCPP_INFO(node_->get_logger(),
+                                    "🕹️🕶️🕹️ [左组合键][校准调试] Robot current: left=[%.4f, %.4f, %.4f], "
+                                    "right=[%.4f, %.4f, %.4f], ref_in_%s=[%.4f, %.4f, %.4f], left_z_dist=%.6f",
+                                    robot_current_left_position_.x(), robot_current_left_position_.y(),
+                                    robot_current_left_position_.z(),
+                                    robot_current_right_position_.x(), robot_current_right_position_.y(),
+                                    robot_current_right_position_.z(),
+                                    ee_frame_id_.c_str(),
+                                    p_F_ref.x(), p_F_ref.y(), p_F_ref.z(),
+                                    left_ee_dist_from_ref);
                     }
                     catch (const tf2::TransformException& ex)
                     {
@@ -1415,16 +1447,35 @@ namespace arms_ros2_control::command
                                     reference_link_.c_str(), ee_frame_id_.c_str(), ex.what());
                     }
                 }
+                else
+                {
+                    RCLCPP_WARN(node_->get_logger(),
+                                "🕹️🕶️🕹️ [左组合键][校准调试] 无法查询TF：ee_frame_id_尚未从current_pose初始化");
+                }
 
                 // 用机器人Z轴距离除以VR Z轴距离，更新尺度
                 if (!std::isnan(left_ee_dist_from_ref) && head_left_dist > 1e-6)
                 {
-                    vr_pose_scale_ = std::clamp(left_ee_dist_from_ref / head_left_dist, 0.75, 1.5);
+                    double unclamped_scale = left_ee_dist_from_ref / head_left_dist;
+                    vr_pose_scale_ = std::clamp(unclamped_scale, 0.75, 1.5);
+                    RCLCPP_INFO(node_->get_logger(),
+                                "🕹️🕶️🕹️ [左组合键][校准调试] scale计算: robot_z_dist=%.6f / "
+                                "vr_z_dist=%.6f => raw_scale=%.6f, clamped_scale=%.6f",
+                                left_ee_dist_from_ref, head_left_dist, unclamped_scale, vr_pose_scale_);
 
                     // VR左手柄相对头显的偏移 × scale = 左末端相对 reference_link_ 的目标偏移
                     Eigen::Vector3d left_target_pos = p_F_ref + (vr_left_position_raw_ - vr_head_position_) * vr_pose_scale_;
                     // VR右手柄相对头显的偏移 × scale = 右末端相对 reference_link_ 的目标偏移
                     Eigen::Vector3d right_target_pos = p_F_ref + (vr_right_position_raw_ - vr_head_position_) * vr_pose_scale_;
+                    RCLCPP_INFO(node_->get_logger(),
+                                "🕹️🕶️🕹️ [左组合键][校准调试] VR offset raw: left-head=[%.4f, %.4f, %.4f], "
+                                "right-head=[%.4f, %.4f, %.4f]",
+                                (vr_left_position_raw_ - vr_head_position_).x(),
+                                (vr_left_position_raw_ - vr_head_position_).y(),
+                                (vr_left_position_raw_ - vr_head_position_).z(),
+                                (vr_right_position_raw_ - vr_head_position_).x(),
+                                (vr_right_position_raw_ - vr_head_position_).y(),
+                                (vr_right_position_raw_ - vr_head_position_).z());
 
                     RCLCPP_INFO(node_->get_logger(),
                                 "🕹️🕶️🕹️ [左组合键] vr_pose_scale_ 已更新: "
@@ -1485,6 +1536,18 @@ namespace arms_ros2_control::command
 
                 // 计算 VR 头显与 VR 右手柄之间的 Z 轴距离（使用未缩放的原始右手柄位姿）
                 double head_right_dist = std::abs(vr_head_position_.z() - vr_right_position_raw_.z());
+                RCLCPP_INFO(node_->get_logger(),
+                            "🕹️🕶️🕹️ [右组合键][校准调试] frame初始化=%s, ee_frame_id='%s', reference_link='%s'",
+                            ee_frame_id_initialized_ ? "true" : "false",
+                            ee_frame_id_.c_str(),
+                            reference_link_.c_str());
+                RCLCPP_INFO(node_->get_logger(),
+                            "🕹️🕶️🕹️ [右组合键][校准调试] VR raw: head=[%.4f, %.4f, %.4f], "
+                            "left=[%.4f, %.4f, %.4f], right=[%.4f, %.4f, %.4f], head_right_z_dist=%.6f",
+                            vr_head_position_.x(), vr_head_position_.y(), vr_head_position_.z(),
+                            vr_left_position_raw_.x(), vr_left_position_raw_.y(), vr_left_position_raw_.z(),
+                            vr_right_position_raw_.x(), vr_right_position_raw_.y(), vr_right_position_raw_.z(),
+                            head_right_dist);
 
                 // 计算机器人右末端与 reference_link_ 之间的 Z 轴距离
                 double right_ee_dist_from_ref = std::numeric_limits<double>::quiet_NaN();
@@ -1504,9 +1567,28 @@ namespace arms_ros2_control::command
                             tf_ref_in_F.transform.translation.x,
                             tf_ref_in_F.transform.translation.y,
                             tf_ref_in_F.transform.translation.z);
+                        RCLCPP_INFO(node_->get_logger(),
+                                    "🕹️🕶️🕹️ [右组合键][校准调试] TF %s -> %s: translation=[%.4f, %.4f, %.4f], "
+                                    "rotation=[x=%.4f, y=%.4f, z=%.4f, w=%.4f]",
+                                    reference_link_.c_str(), ee_frame_id_.c_str(),
+                                    p_F_ref.x(), p_F_ref.y(), p_F_ref.z(),
+                                    tf_ref_in_F.transform.rotation.x,
+                                    tf_ref_in_F.transform.rotation.y,
+                                    tf_ref_in_F.transform.rotation.z,
+                                    tf_ref_in_F.transform.rotation.w);
 
                         // 取右末端 Z 轴距离
                         right_ee_dist_from_ref = std::abs(robot_current_right_position_.z() - p_F_ref.z());
+                        RCLCPP_INFO(node_->get_logger(),
+                                    "🕹️🕶️🕹️ [右组合键][校准调试] Robot current: left=[%.4f, %.4f, %.4f], "
+                                    "right=[%.4f, %.4f, %.4f], ref_in_%s=[%.4f, %.4f, %.4f], right_z_dist=%.6f",
+                                    robot_current_left_position_.x(), robot_current_left_position_.y(),
+                                    robot_current_left_position_.z(),
+                                    robot_current_right_position_.x(), robot_current_right_position_.y(),
+                                    robot_current_right_position_.z(),
+                                    ee_frame_id_.c_str(),
+                                    p_F_ref.x(), p_F_ref.y(), p_F_ref.z(),
+                                    right_ee_dist_from_ref);
                     }
                     catch (const tf2::TransformException& ex)
                     {
@@ -1515,16 +1597,35 @@ namespace arms_ros2_control::command
                                     reference_link_.c_str(), ee_frame_id_.c_str(), ex.what());
                     }
                 }
+                else
+                {
+                    RCLCPP_WARN(node_->get_logger(),
+                                "🕹️🕶️🕹️ [右组合键][校准调试] 无法查询TF：ee_frame_id_尚未从current_pose初始化");
+                }
 
                 // 用机器人Z轴距离除以VR Z轴距离，更新尺度
                 if (!std::isnan(right_ee_dist_from_ref) && head_right_dist > 1e-6)
                 {
-                    vr_pose_scale_ = std::clamp(right_ee_dist_from_ref / head_right_dist, 0.75, 1.5);
+                    double unclamped_scale = right_ee_dist_from_ref / head_right_dist;
+                    vr_pose_scale_ = std::clamp(unclamped_scale, 0.75, 1.5);
+                    RCLCPP_INFO(node_->get_logger(),
+                                "🕹️🕶️🕹️ [右组合键][校准调试] scale计算: robot_z_dist=%.6f / "
+                                "vr_z_dist=%.6f => raw_scale=%.6f, clamped_scale=%.6f",
+                                right_ee_dist_from_ref, head_right_dist, unclamped_scale, vr_pose_scale_);
 
                     // VR左手柄相对头显的偏移 × scale = 左末端相对 reference_link_ 的目标偏移
                     Eigen::Vector3d left_target_pos = p_F_ref + (vr_left_position_raw_ - vr_head_position_) * vr_pose_scale_;
                     // VR右手柄相对头显的偏移 × scale = 右末端相对 reference_link_ 的目标偏移
                     Eigen::Vector3d right_target_pos = p_F_ref + (vr_right_position_raw_ - vr_head_position_) * vr_pose_scale_;
+                    RCLCPP_INFO(node_->get_logger(),
+                                "🕹️🕶️🕹️ [右组合键][校准调试] VR offset raw: left-head=[%.4f, %.4f, %.4f], "
+                                "right-head=[%.4f, %.4f, %.4f]",
+                                (vr_left_position_raw_ - vr_head_position_).x(),
+                                (vr_left_position_raw_ - vr_head_position_).y(),
+                                (vr_left_position_raw_ - vr_head_position_).z(),
+                                (vr_right_position_raw_ - vr_head_position_).x(),
+                                (vr_right_position_raw_ - vr_head_position_).y(),
+                                (vr_right_position_raw_ - vr_head_position_).z());
 
                     RCLCPP_INFO(node_->get_logger(),
                                 "🕹️🕶️🕹️ [右组合键] vr_pose_scale_ 已更新: "

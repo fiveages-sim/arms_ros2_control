@@ -8,6 +8,7 @@
 #include <string>
 #include <unordered_map>
 #include <array>
+#include <cstdint>
 
 namespace gripper_hardware_common
 {
@@ -104,7 +105,6 @@ namespace gripper_hardware_common
                 double pos_double = 1.0 - (static_cast<double>(pos_set) / static_cast<double>(MAX_POSITION));
                 // Jodell: 0(closed) -> 0.0, 255(open) -> 1.0
                 // Formula: normalized = 1.0 - (pos_set / 255.0)
-                std::cout << " ++++++ pos set is " << pos_double << std::endl;
                 return normalizedToPhysical(pos_double);
             }
 

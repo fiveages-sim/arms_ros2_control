@@ -43,9 +43,9 @@ namespace arms_controller_common
 
         std::shared_ptr<rclcpp_lifecycle::LifecycleNode> node_;
         std::shared_ptr<GravityCompensation> gravity_compensation_;
-        std::vector<double> hold_positions_;           // Positions recorded when entering
-        double joint_position_threshold_{0.1};         // Threshold for joint position difference (radians). If <= 0, checking is disabled.
-        bool first_threshold_check_passed_;            // Flag to track if first threshold check has passed
+        std::vector<double> hold_positions_;                  // Positions recorded when entering
+        double first_check_position_threshold_{0.1};          // Threshold for the initial hold position check (radians). If <= 0, checking is disabled.
+        double joint_position_diff_threshold_{0.1};           // Threshold for runtime position difference adjustment (radians). If <= 0, adjustment is disabled.
+        bool first_threshold_check_passed_;                   // Flag to track if first threshold check has passed
     };
 } // namespace arms_controller_common
-

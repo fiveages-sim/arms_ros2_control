@@ -43,28 +43,20 @@ namespace arms_rviz_control_plugin
         node_->declare_parameter("hand_controllers", std::vector<std::string>());
         hand_controllers_ = node_->get_parameter("hand_controllers").as_string_array();
 
-        // First check if we have any controllers
         if (hand_controllers_.empty())
         {
             RCLCPP_INFO(node_->get_logger(), "No gripper controllers detected");
-            is_dual_arm_mode_ = false; // Not relevant when no controllers
+            is_dual_arm_mode_ = false;
+            updateButtonVisibility();
         }
         else
         {
-            // Detect if this is a dual-arm robot using controller information
-            is_dual_arm_mode_ = hand_controllers_.size() > 1;
-            RCLCPP_INFO(node_->get_logger(), "Detected mode: %s",
-                        is_dual_arm_mode_ ? "DUAL-ARM" : "SINGLE-ARM");
-        }
-
-        // Update button visibility based on mode
-        updateButtonVisibility();
-
-        // Only create publishers and subscribers if we have controllers
-        if (!hand_controllers_.empty())
-        {
-            // Determine controller mapping (left/right)
             determineControllerMapping();
+            is_dual_arm_mode_ = !left_controller_name_.empty() && !right_controller_name_.empty();
+            RCLCPP_INFO(node_->get_logger(), "Detected mode: %s (controllers=%zu)",
+                        is_dual_arm_mode_ ? "DUAL-ARM" : "SINGLE-SIDE",
+                        hand_controllers_.size());
+            updateButtonVisibility();
 
             // Create target_command publishers
             createTargetCommandPublishers();
@@ -75,10 +67,6 @@ namespace arms_rviz_control_plugin
 
             RCLCPP_INFO(node_->get_logger(), "Gripper Control Panel initialized with %zu controllers",
                         hand_controllers_.size());
-        }
-        else
-        {
-            RCLCPP_INFO(node_->get_logger(), "Gripper Control Panel initialized (no controllers)");
         }
     }
 
@@ -279,12 +267,18 @@ namespace arms_rviz_control_plugin
             }
             else
             {
-                // Default to left arm for single-arm robots
+                // Single-side / diff-eef: first unnamed controller maps to left slot
                 if (left_controller_name_.empty())
                 {
                     left_controller_name_ = controller_name;
                     left_display_name_ = getDisplayNameFromControllerName(controller_name);
                     controller_to_state_[controller_name] = &left_gripper_open_;
+                }
+                else
+                {
+                    RCLCPP_WARN(node_->get_logger(),
+                                "Hand controller '%s' has no left/right in name; ignored",
+                                controller_name.c_str());
                 }
             }
         }

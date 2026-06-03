@@ -22,8 +22,8 @@
 #include <rclcpp/rclcpp.hpp>
 #include <rclcpp_lifecycle/lifecycle_node.hpp>
 #include <string>
-#include <tf2_ros/buffer.h>
-#include <tf2_ros/transform_listener.h>
+#include <tf2_ros/buffer.hpp>
+#include <tf2_ros/transform_listener.hpp>
 
 namespace ocs2::controller_common {
 

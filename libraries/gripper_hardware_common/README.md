@@ -165,7 +165,7 @@ auto command3 = JodellCommandBuilder::buildCommandFromNormalized(normalized);
 
 ## Dependencies
 
-- `rclcpp`: ROS2 C++ client library (for logging, if needed in future)
+- `rclcpp`: ROS 2 C++ client library, exported through the package interface target.
 
 ## Building
 
@@ -176,18 +176,13 @@ colcon build --packages-select gripper_hardware_common --symlink-install
 
 ## Integration
 
-To use this package in other packages, add to `CMakeLists.txt`:
+This is a header-only package. To use it from another ament package, add this to `CMakeLists.txt`:
 
 ```cmake
 find_package(gripper_hardware_common REQUIRED)
 
-target_include_directories(${PROJECT_NAME} PUBLIC
-    $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
-    $<INSTALL_INTERFACE:include>
-)
-
-ament_target_dependencies(${PROJECT_NAME} PUBLIC
-    gripper_hardware_common
+target_link_libraries(${PROJECT_NAME} PUBLIC
+    gripper_hardware_common::gripper_hardware_common
 )
 ```
 
@@ -202,7 +197,6 @@ And to `package.xml`:
 This package is designed to be used by:
 - `modbus_ros2_control`: Modbus-based gripper hardware interface
 - `dobot_ros2_control`: Dobot robot hardware interface (with Changingtek gripper)
-- `rokae_ros2_control`: Rokae robot hardware interface (with Jodell gripper)
 - `marvin_ros2_control`: Marvin robot hardware interface (with Jodell gripper)
 
 ## License

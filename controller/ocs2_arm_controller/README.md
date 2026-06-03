@@ -171,7 +171,7 @@ States can transition between each other based on the control input received on 
 The OCS2 state integrates with the OCS2 mobile manipulator framework:
 
 - **Task File**: Located at `{robot_pkg}/config/ocs2/task.info`
-- **URDF File**: Located at `{robot_pkg}/urdf/robot.urdf`
+- **Planning URDF**: Xacro-generated cache via `robot_common_launch` (`planning_urdf_path`); static `urdf/*.urdf` is not used
 - **Generated Library**: Located at `{robot_pkg}/config/ocs2/generated`
 
 The controller automatically loads these files based on the `robot_pkg` parameter. 

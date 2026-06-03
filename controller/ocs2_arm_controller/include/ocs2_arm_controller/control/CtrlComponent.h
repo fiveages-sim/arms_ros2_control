@@ -49,7 +49,7 @@ namespace ocs2::mobile_manipulator
     class CtrlComponent
     {
     public:
-        template<typename AutoDeclareFunc>
+        template <typename AutoDeclareFunc>
         explicit CtrlComponent(const std::shared_ptr<rclcpp_lifecycle::LifecycleNode>& node,
                                CtrlInterfaces& ctrl_interfaces,
                                AutoDeclareFunc auto_declare)
@@ -61,6 +61,8 @@ namespace ocs2::mobile_manipulator
 
             robot_name_ = auto_declare("robot_name", std::string("cr5"));
             robot_type_ = auto_declare("robot_type", std::string(""));
+            planning_urdf_variant_ = auto_declare("planning_urdf_variant", std::string(""));
+            planning_urdf_path_ = auto_declare("planning_urdf_path", std::string(""));
             future_time_offset_ = auto_declare("future_time_offset", 1.0);
             const std::string info_file_name = auto_declare("info_file_name", std::string("task"));
             joint_names_ = node_->get_parameter("joints").as_string_array();
@@ -70,7 +72,7 @@ namespace ocs2::mobile_manipulator
             const std::string task_file = config_path + "/config/ocs2/" + info_file_name + ".info";
             const std::string lib_folder =
                 auto_declare("ocs2_library_folder", defaultOcs2LibraryFolder(robot_pkg));
-            const std::string urdf_file = generateUrdfPath(robot_name_, robot_type_, config_path);
+            const std::string urdf_file = resolvePlanningUrdfPath();
 
             setupInterface(task_file, lib_folder, urdf_file);
 
@@ -108,7 +110,7 @@ namespace ocs2::mobile_manipulator
             pose_reference_manager_ = std::make_shared<ocs2::controller_common::PoseBasedReferenceManager>(
                 robot_name_, interface_->getReferenceManagerPtr(), ref_ctx);
             pose_reference_manager_->subscribe(node_);
-            
+
             mpc_ = std::make_unique<GaussNewtonDDP_MPC>(
                 interface_->mpcSettings(),
                 interface_->ddpSettings(),
@@ -123,7 +125,7 @@ namespace ocs2::mobile_manipulator
             observation_.state = interface_->getInitialState();
             observation_.input = vector_t::Zero(interface_->getManipulatorModelInfo().inputDim);
             observation_.time = 0.0;
-            
+
             // Initialize cached state
             last_execute_time_ = node_->now();
             cached_last_action_ = observation_.state;
@@ -163,6 +165,8 @@ namespace ocs2::mobile_manipulator
         SystemObservation observation_;
         vector_t optimized_state_;
         vector_t optimized_input_;
+        std::string getUrdfFilePath() const { return urdf_file_; }
+        std::string getTaskFilePath() const { return task_file_; }
 
     private:
         void setupInterface(const std::string& task_file,
@@ -170,14 +174,12 @@ namespace ocs2::mobile_manipulator
                             const std::string& urdf_file);
         void setupPublisher();
 
-        // URDF path generation helper
-        std::string generateUrdfPath(const std::string& robot_name, 
-                                    const std::string& robot_type,
-                                    const std::string& config_path) const;
+        /** Requires launch-injected xacro planning URDF (planning_urdf_path). */
+        std::string resolvePlanningUrdfPath() const;
 
         std::shared_ptr<rclcpp_lifecycle::LifecycleNode> node_;
         CtrlInterfaces& ctrl_interfaces_;
-        
+
         rclcpp::Publisher<ocs2_msgs::msg::MpcObservation>::SharedPtr mpc_observation_publisher_;
         rclcpp::Publisher<std_msgs::msg::Int32>::SharedPtr fsm_command_publisher_;
 
@@ -186,18 +188,23 @@ namespace ocs2::mobile_manipulator
 
         // Configuration
         std::string robot_name_;
-        std::string robot_type_;  // Robot type/variant (e.g., red, blue, long_arm, short_arm, etc.)
+        std::string robot_type_; // Robot type/variant (e.g., red, blue, long_arm, short_arm, etc.)
+        std::string planning_urdf_variant_; // must be "xacro"
+        std::string planning_urdf_path_; // xacro-generated URDF cache path
         std::vector<std::string> joint_names_;
         bool dual_arm_mode_;
         double future_time_offset_; // Future time offset
         /// cached MPC observation state (which is different from real observation on purpose) 
-        bool                  cached_ob_state_;
-        double                joint_speed_threshold_;
-        rclcpp::Time          last_execute_time_;
-        vector_t     cached_last_action_;
-        double       hardware_latency_;
+        bool cached_ob_state_;
+        double joint_speed_threshold_;
+        rclcpp::Time last_execute_time_;
+        vector_t cached_last_action_;
+        double hardware_latency_;
         rclcpp::node_interfaces::OnSetParametersCallbackHandle::SharedPtr parameter_callback_handle_;
         rcl_interfaces::msg::SetParametersResult on_parameter_change(
-        const std::vector<rclcpp::Parameter> &parameters);
+            const std::vector<rclcpp::Parameter>& parameters);
+
+        std::string urdf_file_;
+        std::string task_file_;
     };
 }

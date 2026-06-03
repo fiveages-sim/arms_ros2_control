@@ -126,9 +126,9 @@ namespace adaptive_gripper_controller
                 pending_target_switch_.store(target, std::memory_order_relaxed);
             });
 
-        RCLCPP_INFO(get_node()->get_logger(),
-                    "Target command control subscribed to topic: %s (0=close, 1=open, using controller name)",
-                    target_command_topic.c_str());
+        RCLCPP_DEBUG(get_node()->get_logger(),
+                     "Target command control subscribed to topic: %s (0=close, 1=open, using controller name)",
+                     target_command_topic.c_str());
 
         // 百分比控制订阅器 - 通过 0.0~1.0 比例控制夹爪开合，自动选择力反馈方向
         // 话题名称格式：/<controller_name>/target_percent
@@ -159,9 +159,9 @@ namespace adaptive_gripper_controller
                 pending_percent_command_.store(percent, std::memory_order_relaxed);
             });
 
-        RCLCPP_INFO(get_node()->get_logger(),
-                    "Target percent control subscribed to topic: %s (0.0=closed, 1.0=open, auto force feedback)",
-                    target_percent_topic.c_str());
+        RCLCPP_DEBUG(get_node()->get_logger(),
+                     "Target percent control subscribed to topic: %s (0.0=closed, 1.0=open, auto force feedback)",
+                     target_percent_topic.c_str());
 
         return controller_interface::CallbackReturn::SUCCESS;
     }
