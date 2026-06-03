@@ -72,7 +72,7 @@ namespace ocs2::mobile_manipulator
             const std::string task_file = config_path + "/config/ocs2/" + info_file_name + ".info";
             const std::string lib_folder =
                 auto_declare("ocs2_library_folder", defaultOcs2LibraryFolder(robot_pkg));
-            const std::string urdf_file = resolvePlanningUrdfPath(robot_name_, robot_type_, config_path);
+            const std::string urdf_file = resolvePlanningUrdfPath();
 
             setupInterface(task_file, lib_folder, urdf_file);
 
@@ -174,14 +174,8 @@ namespace ocs2::mobile_manipulator
                             const std::string& urdf_file);
         void setupPublisher();
 
-        // URDF path generation helper
-        std::string resolvePlanningUrdfPath(const std::string& robot_name,
-                                            const std::string& robot_type,
-                                            const std::string& config_path) const;
-
-        std::string generateUrdfPath(const std::string& robot_name,
-                                     const std::string& robot_type,
-                                     const std::string& config_path) const;
+        /** Requires launch-injected xacro planning URDF (planning_urdf_path). */
+        std::string resolvePlanningUrdfPath() const;
 
         std::shared_ptr<rclcpp_lifecycle::LifecycleNode> node_;
         CtrlInterfaces& ctrl_interfaces_;
@@ -195,7 +189,7 @@ namespace ocs2::mobile_manipulator
         // Configuration
         std::string robot_name_;
         std::string robot_type_; // Robot type/variant (e.g., red, blue, long_arm, short_arm, etc.)
-        std::string planning_urdf_variant_; // "base" forces {robot_name}.urdf without type suffix
+        std::string planning_urdf_variant_; // must be "xacro"
         std::string planning_urdf_path_; // xacro-generated URDF cache path
         std::vector<std::string> joint_names_;
         bool dual_arm_mode_;

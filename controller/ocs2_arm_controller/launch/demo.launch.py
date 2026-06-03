@@ -98,6 +98,17 @@ def launch_setup(context, *args, **kwargs):
         hardware,
         profile_path or None,
     )
+    _plan_path = (planning_urdf_params.get("planning_urdf_path") or "").strip()
+    if (
+        planning_urdf_params.get("planning_urdf_variant") != "xacro"
+        or not _plan_path
+        or not os.path.isfile(_plan_path)
+    ):
+        print(
+            f"[ERROR] OCS2 requires xacro planning URDF for '{planning_robot_name}'. "
+            f"variant={planning_urdf_params.get('planning_urdf_variant')!r} path={_plan_path!r}"
+        )
+        return []
 
     # OCS2 Arm Controller spawner
     ocs2_arm_controller_spawner = Node(
