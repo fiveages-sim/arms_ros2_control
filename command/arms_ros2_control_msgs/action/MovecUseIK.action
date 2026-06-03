@@ -1,0 +1,13 @@
+# Goal
+arms_ros2_control_msgs/CircleMessage circle_params
+---
+# Result
+bool success
+string message
+float64 estimated_duration
+float64 actual_duration
+---
+# Feedback
+float64 progress
+float64 elapsed_time
+float64 remaining_time

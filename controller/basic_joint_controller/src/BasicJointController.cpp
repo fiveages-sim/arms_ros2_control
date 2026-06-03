@@ -115,6 +115,7 @@ namespace basic_joint_controller
             });
 
             // HOLD state
+            auto_declare<double>("hold_first_check_position_threshold", 0.1);
             auto_declare<double>("hold_position_threshold", 0.1);
             state_list_.hold = std::make_shared<StateHold>(
                 ctrl_interfaces_, get_node());
@@ -147,7 +148,8 @@ namespace basic_joint_controller
             if (waist_lifting_enabled_)
             {
                 auto_declare<double>("waist_lifting_duration", 3.0);
-                auto_declare<std::vector<double>>("waist_default_parameter", {0.25, 1.0, 5.0});
+                auto_declare<std::vector<double>>("waist_lifting_default_parameter", {0.25, 1.0, 5.0});
+                auto_declare<std::vector<double>>("waist_turning_default_parameter", {0.25, 1.0, 5.0});
                 std::string waist_lifting_type_ = auto_declare<std::string>("waist_lifting_type", "three_joint");
                 if (waist_lifting_type_ == "three_joint")
                 {

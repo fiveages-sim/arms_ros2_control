@@ -7,6 +7,7 @@
 #include "arms_controller_common/utils/Interpolation.h"
 #include "arms_controller_common/utils/GravityCompensation.h"
 #include "arms_controller_common/utils/JointTrajectoryManager.h"
+#include "arms_controller_common/utils/JointSpeedStopPlanner.h"
 #include <vector>
 #include <memory>
 #include <functional>
@@ -187,7 +188,18 @@ namespace arms_controller_common
 
     private:
         void switchConfiguration();
+        void switchConfigurationImpl();
+        void selectConfigurationImpl(size_t config_index);
         void startInterpolation();
+        void startInterpolationImpl();
+
+        bool isMotionBusy() const;
+        void requestMotionOrDefer(std::function<void()> apply_motion);
+        void abortActiveMotionForStop();
+        void beginStopToZero();
+        void clearPendingMotion();
+        bool runStopToZero(const rclcpp::Duration& period);
+        void updateJointObservation(double dt, bool advance_prev = true);
 
         std::shared_ptr<GravityCompensation> gravity_compensation_;
 
@@ -213,6 +225,18 @@ namespace arms_controller_common
         long switch_command_base_{100};                     // Base command for multi-config switching
         int32_t last_command_{0};                           // Last command value for edge detection
         bool has_multiple_configs_{false};                  // Whether multiple configurations are available
+
+        // Joint observation (finite difference velocity)
+        std::vector<double> current_joint_pos_;
+        std::vector<double> prev_joint_pos_;
+        std::vector<double> joint_vel_;
+
+        // Stop-to-zero then apply pending motion
+        bool stop_to_zero_active_{false};
+        std::function<void()> pending_motion_;
+        JointSpeedStopPlanner speed_stop_planner_;
+        static constexpr double kDefaultStopMaxAcc = 0.5;
+        static constexpr double kDefaultStopMaxJerk = 5.0;
     };
 } // namespace arms_controller_common
 

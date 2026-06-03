@@ -135,6 +135,13 @@ namespace arms_controller_common
          * @return Total trajectory duration in seconds
          */
         double getTrajectoryDuration() const;
+
+        /**
+         * @brief Set controller frequency used to derive planner period
+         * @param controller_frequency Controller update frequency in Hz
+         */
+        void setControllerFrequency(double controller_frequency);
+
         /**
          *@brief Set common blend ratio
          * @param blend_ratios Set a common blend ratio for multiple points

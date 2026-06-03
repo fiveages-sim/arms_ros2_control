@@ -27,8 +27,8 @@ int main(int argc, char** argv)
     double vr_thumbstick_linear_scale = node->declare_parameter("vr_thumbstick_linear_scale", 0.005);
     double vr_thumbstick_angular_scale = node->declare_parameter("vr_thumbstick_angular_scale", 0.05);
     double vr_pose_scale = node->declare_parameter("vr_pose_scale", 1.0);
-    // VR/头显参考link（通常为机器人base_link），可在各机器人target_manager.yaml中配置
-    std::string reference_link = node->declare_parameter("reference_link", "base_link");
+    // VR/头显参考link（通常为机器人头部link），可在各机器人target_manager.yaml中配置
+    std::string reference_link = node->declare_parameter("reference_link", "head_link2");
 
     bool enable_vr = node->declare_parameter("enable_vr", true);
 
@@ -91,7 +91,7 @@ int main(int argc, char** argv)
         RCLCPP_INFO(node->get_logger(),
                     "VR pose scale: left=1.0, right=1.0 (fixed, not configurable)");
         RCLCPP_INFO(node->get_logger(),
-                    "VR reference_link: %s (from target_manager.yaml, default=base_link)",
+                    "VR reference_link: %s (from target_manager.yaml, default=head_link2)",
                     reference_link.c_str());
     }
 

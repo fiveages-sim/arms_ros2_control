@@ -40,18 +40,26 @@ add_library(${PROJECT_NAME} SHARED
 
 target_include_directories(${PROJECT_NAME}
         PUBLIC
-        ${EIGEN3_INCLUDE_DIRS}
         "$<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>"
         "$<INSTALL_INTERFACE:include/${PROJECT_NAME}>"
         PRIVATE
         src)
 
-ament_target_dependencies(${PROJECT_NAME}
-        ${TARGET_MANAGER_INCLUDE_DEPENDS}
+target_link_libraries(${PROJECT_NAME} PUBLIC
+        ${rclcpp_TARGETS}
+        ${geometry_msgs_TARGETS}
+        ${visualization_msgs_TARGETS}
+        ${interactive_markers_TARGETS}
+        ${arms_ros2_control_msgs_TARGETS}
+        arms_controller_common::arms_controller_common
+        ${tf2_ros_TARGETS}
+        ${tf2_geometry_msgs_TARGETS}
+        ${std_msgs_TARGETS}
+        ${nav_msgs_TARGETS}
+        Eigen3::Eigen
 )
 
 add_executable(arms_target_manager_node src/arms_target_manager_node.cpp)
-ament_target_dependencies(arms_target_manager_node ${TARGET_MANAGER_INCLUDE_DEPENDS})
 target_link_libraries(arms_target_manager_node ${PROJECT_NAME})
 
 # Ensure the loader finds libarms_target_manager.so next to the executable (same dir as install).

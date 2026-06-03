@@ -124,6 +124,10 @@ namespace arms_controller_common
         double controller_frequency,
         double tanh_scale)
     {
+#ifndef HAS_LINA_PLANNING
+        (void)joint_blend_ratios;
+#endif
+
         if (!validateMultiNodeParams(waypoints, durations))
         {
             return false;
@@ -407,6 +411,21 @@ namespace arms_controller_common
     double JointTrajectoryManager::getTrajectoryDuration() const
     {
         return trajectory_duration_;
+    }
+
+    void JointTrajectoryManager::setControllerFrequency(double controller_frequency)
+    {
+        if (controller_frequency > 0.0)
+        {
+            controller_frequency_ = controller_frequency;
+            period_ = 1.0 / controller_frequency_;
+        }
+        else
+        {
+            RCLCPP_WARN(logger_,
+                        "Invalid controller frequency: %.3f, keeping current value %.3f",
+                        controller_frequency, controller_frequency_);
+        }
     }
 
     void JointTrajectoryManager::setCommonJointBlendRatios(double blend_ratios)
@@ -833,6 +852,8 @@ namespace arms_controller_common
             return false;
         }
 #else
+        (void)start_pos;
+        (void)waypoint;
         RCLCPP_ERROR(logger_, "lina_planning not available");
         return false;
 #endif
@@ -843,6 +864,9 @@ namespace arms_controller_common
                                                      waypoints)
     {
         clearPlan();
+#ifndef HAS_LINA_PLANNING
+        (void)start_pos;
+#endif
 
         if (waypoints.size() < 2)
         {

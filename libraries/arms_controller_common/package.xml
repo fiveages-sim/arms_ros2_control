@@ -2,7 +2,7 @@
 <?xml-model href="http://download.ros.org/schema/package_format3.xsd" schematypens="http://www.w3.org/2001/XMLSchema"?>
 <package format="3">
     <name>arms_controller_common</name>
-    <version>1.3.1</version>
+    <version>1.3.2</version>
     <description>Common libraries for arm controllers including FSM and gravity compensation</description>
     <maintainer email="biao876990970@hotmail.com">Huang Zhenbiao</maintainer>
     <license>Apache-2.0</license>
@@ -11,6 +11,7 @@
 
     <depend>hardware_interface</depend>
     <depend>rclcpp</depend>
+    <depend>rclcpp_action</depend>
     <depend>pinocchio</depend>
     <depend>urdf</depend>
     <depend>ament_index_cpp</depend>
@@ -26,4 +27,3 @@
         <build_type>ament_cmake</build_type>
     </export>
 </package>
-

@@ -20,6 +20,12 @@ from robot_common_launch import (
     prepare_arms_target_manager_parameters,
     parse_launch_mode,
     create_launch_mode_arguments,
+    forward_robot_launch_args,
+    create_robot_profile_launch_arguments,
+    resolve_profile_path,
+    resolve_control_sides,
+    load_robot_profile,
+    build_planning_urdf_launch_params,
 )
 
 
@@ -44,7 +50,17 @@ def launch_setup(context, *args, **kwargs):
     #    - If type is specified, try {type}.yaml first (e.g., dual.yaml), fallback to ros2_controllers.yaml
     # 2. If yaml specifies different robot_name or robot_type, use those values to look up URDF
     # This is needed when full_body mode uses different robot description or type
-    config, _ = load_robot_config(robot_name, "ros2_control", robot_type)
+    profile_path = resolve_profile_path(context.launch_configurations)
+    profile = load_robot_profile(profile_path) if profile_path else {}
+    control_left, control_right = resolve_control_sides(context.launch_configurations, profile)
+
+    config, _ = load_robot_config(
+        robot_name,
+        "ros2_control",
+        robot_type,
+        control_left=control_left,
+        control_right=control_right,
+    )
     planning_robot_name = robot_name
     planning_robot_type = robot_type
     if config is not None:
@@ -83,29 +99,33 @@ def launch_setup(context, *args, **kwargs):
     # The Visualizer will publish /ocs2_robot_description after loading the interface
 
     # 使用通用的 controller manager launch 文件 (包含 Gazebo 支持、robot_state_publisher 和机器人描述生成)
+    forward_args = forward_robot_launch_args(context)
+
     controller_manager_launch = IncludeLaunchDescription(
         PythonLaunchDescriptionSource([
             os.path.join(get_package_share_directory('robot_common_launch'), 'launch'),
             '/controller_manager.launch.py',
         ]),
-        launch_arguments=[
-            ('robot', robot_name),
-            ('type', robot_type),
+        launch_arguments=forward_args + [
             ('use_sim_time', str(use_sim_time)),
             ('world', world),
-            ('hardware', hardware),  # 传递硬件类型，controller_manager 会根据此参数自动判断是否使用 Gazebo
         ],
     )
 
-    # OCS2 Arm Controller spawner
+    planning_urdf_params = build_planning_urdf_launch_params(
+        planning_robot_name,
+        context.launch_configurations,
+        hardware,
+        profile_path or None,
+        planning_scope="full",
+    )
+
     ocs2_wbc_controller_spawner = Node(
         package='controller_manager',
         executable='spawner',
         arguments=['ocs2_wbc_controller'],
         output='screen',
-        parameters=[
-            {'use_sim_time': use_sim_time},
-        ],
+        parameters=[planning_urdf_params, {'use_sim_time': use_sim_time}],
     )
 
     # Detect hand controllers using robot_common_launch (only if gripper is enabled)
@@ -116,11 +136,24 @@ def launch_setup(context, *args, **kwargs):
     if enable_gripper:
         # Get ros2_control robot_description to verify joints exist in xacro
         # This uses the same logic as controller_manager.launch.py
-        robot_description = get_ros2_control_robot_description(robot_name, robot_type, hardware)
+        robot_description = get_ros2_control_robot_description(
+            robot_name,
+            robot_type=robot_type,
+            hardware=hardware,
+            launch_configurations=context.launch_configurations,
+            robot_profile=profile_path or None,
+        )
         
         # Detect controllers matching hand/gripper patterns
         # Pass robot_description to verify joints exist in xacro
-        hand_controllers = detect_controllers(robot_name, robot_type, ['hand', 'gripper'], robot_description=robot_description)
+        hand_controllers = detect_controllers(
+            robot_name,
+            robot_type,
+            ['hand', 'gripper'],
+            robot_description=robot_description,
+            control_left=control_left,
+            control_right=control_right,
+        )
         hand_controller_spawners = create_controller_spawners(hand_controllers, use_sim_time)
 
     body_controller_spawners = []
@@ -130,7 +163,13 @@ def launch_setup(context, *args, **kwargs):
     # spawn head controller additionally for head joint control.
     is_arm_controller_type = (wbc_controller_type == 'ocs2_arm_controller/Ocs2ArmController')
     if is_arm_controller_type:
-        head_controllers = detect_controllers(robot_name, robot_type, ['head'])
+        head_controllers = detect_controllers(
+            robot_name,
+            robot_type,
+            ['head'],
+            control_left=control_left,
+            control_right=control_right,
+        )
         if head_controllers:
             body_controller_spawners.extend(create_controller_spawners(head_controllers, use_sim_time))
             joint_controller_names.extend([c['name'] for c in head_controllers])
@@ -346,6 +385,7 @@ def generate_launch_description():
         world_arg,
         enable_arms_target_manager_arg,
         enable_gripper_arg,
-        *launch_mode_args,  # Unpack the list of arguments
+        *launch_mode_args,
+    ] + create_robot_profile_launch_arguments() + [
         OpaqueFunction(function=launch_setup),
     ])
