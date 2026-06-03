@@ -1258,7 +1258,7 @@ namespace arms_controller_common
                     setTargetPosition(target_pos);
                 }
             });
-        RCLCPP_INFO(node_->get_logger(), "Subscribed to %s for all joints", base_topic.c_str());
+        RCLCPP_DEBUG(node_->get_logger(), "Subscribed to %s for all joints", base_topic.c_str());
 
         // Only create prefix-based topics if enabled
         if (!enable_prefix_topics)
@@ -1310,7 +1310,7 @@ namespace arms_controller_common
                         setTargetPosition("left", target_pos);
                     }
                 });
-            RCLCPP_INFO(node_->get_logger(), "Subscribed to %s/left for left-prefixed joints", base_topic.c_str());
+            RCLCPP_DEBUG(node_->get_logger(), "Subscribed to %s/left for left-prefixed joints", base_topic.c_str());
         }
 
         // Subscribe to right prefix topic if right joints exist
@@ -1330,7 +1330,7 @@ namespace arms_controller_common
                         setTargetPosition("right", target_pos);
                     }
                 });
-            RCLCPP_INFO(node_->get_logger(), "Subscribed to %s/right for right-prefixed joints", base_topic.c_str());
+            RCLCPP_DEBUG(node_->get_logger(), "Subscribed to %s/right for right-prefixed joints", base_topic.c_str());
         }
 
         // Subscribe to body prefix topic if body joints exist
@@ -1350,7 +1350,7 @@ namespace arms_controller_common
                         setTargetPosition("body", target_pos);
                     }
                 });
-            RCLCPP_INFO(node_->get_logger(), "Subscribed to %s/body for body-prefixed joints", base_topic.c_str());
+            RCLCPP_DEBUG(node_->get_logger(), "Subscribed to %s/body for body-prefixed joints", base_topic.c_str());
         }
 
         // Subscribe to head prefix topic if head joints exist
@@ -1370,7 +1370,7 @@ namespace arms_controller_common
                         setTargetPosition("head", target_pos);
                     }
                 });
-            RCLCPP_INFO(node_->get_logger(), "Subscribed to %s/head for head-prefixed joints", base_topic.c_str());
+            RCLCPP_DEBUG(node_->get_logger(), "Subscribed to %s/head for head-prefixed joints", base_topic.c_str());
         }
 
         // Log summary
@@ -1747,7 +1747,7 @@ namespace arms_controller_common
                 }
             });
 
-        RCLCPP_INFO(node_->get_logger(), "Subscribed to trajectory topic: %s", full_topic.c_str());
+        RCLCPP_DEBUG(node_->get_logger(), "Subscribed to trajectory topic: %s", full_topic.c_str());
     }
 
     void StateMoveJ::updateWaistParam()
@@ -2309,8 +2309,8 @@ namespace arms_controller_common
             std::bind(&StateMoveJ::handleJointTrajectory, this,
                       std::placeholders::_1, std::placeholders::_2, std::placeholders::_3));
 
-        RCLCPP_INFO(node_->get_logger(), "Created joint trajectory service at %s",
-                    full_service_name.c_str());
+        RCLCPP_DEBUG(node_->get_logger(), "Created joint trajectory service at %s",
+                     full_service_name.c_str());
     }
 
     void StateMoveJ::setupJointTrajectoryAction(const std::string& action_name)
@@ -2324,8 +2324,8 @@ namespace arms_controller_common
             std::bind(&StateMoveJ::handleJointTrajectoryCancel, this, std::placeholders::_1),
             std::bind(&StateMoveJ::handleJointTrajectoryAccepted, this, std::placeholders::_1));
 
-        RCLCPP_INFO(node_->get_logger(), "Created joint trajectory action at %s",
-                    full_action_name.c_str());
+        RCLCPP_DEBUG(node_->get_logger(), "Created joint trajectory action at %s",
+                     full_action_name.c_str());
     }
 
     rclcpp_action::GoalResponse StateMoveJ::handleJointTrajectoryGoal(
@@ -2764,8 +2764,8 @@ namespace arms_controller_common
             std::bind(&StateMoveJ::handleLinearTrajectory, this,
                       std::placeholders::_1, std::placeholders::_2, std::placeholders::_3));
 
-        RCLCPP_INFO(node_->get_logger(), "Created linear trajectory service at %s",
-                    full_service_name.c_str());
+        RCLCPP_DEBUG(node_->get_logger(), "Created linear trajectory service at %s",
+                     full_service_name.c_str());
     }
 
     void StateMoveJ::setupLinearTrajectoryAction(const std::string& action_name)
@@ -2779,8 +2779,8 @@ namespace arms_controller_common
             std::bind(&StateMoveJ::handleLinearCancel, this, std::placeholders::_1),
             std::bind(&StateMoveJ::handleLinearAccepted, this, std::placeholders::_1));
 
-        RCLCPP_INFO(node_->get_logger(), "Created linear trajectory action at %s",
-                    full_action_name.c_str());
+        RCLCPP_DEBUG(node_->get_logger(), "Created linear trajectory action at %s",
+                     full_action_name.c_str());
     }
 
     rclcpp_action::GoalResponse StateMoveJ::handleLinearGoal(
@@ -3170,8 +3170,8 @@ namespace arms_controller_common
             std::bind(&StateMoveJ::handleCircleTrajectory, this,
                       std::placeholders::_1, std::placeholders::_2, std::placeholders::_3));
 
-        RCLCPP_INFO(node_->get_logger(), "Created circle trajectory service at %s",
-                    full_service_name.c_str());
+        RCLCPP_DEBUG(node_->get_logger(), "Created circle trajectory service at %s",
+                     full_service_name.c_str());
     }
 
     void StateMoveJ::setupCircleTrajectoryAction(const std::string& action_name)
@@ -3185,8 +3185,8 @@ namespace arms_controller_common
             std::bind(&StateMoveJ::handleCircleCancel, this, std::placeholders::_1),
             std::bind(&StateMoveJ::handleCircleAccepted, this, std::placeholders::_1));
 
-        RCLCPP_INFO(node_->get_logger(), "Created circle trajectory action at %s",
-                    full_action_name.c_str());
+        RCLCPP_DEBUG(node_->get_logger(), "Created circle trajectory action at %s",
+                     full_action_name.c_str());
     }
 
     rclcpp_action::GoalResponse StateMoveJ::handleCircleGoal(

@@ -203,7 +203,7 @@ namespace arms_rviz_control_plugin
                 // If joints are already initialized, parse limits immediately
                 if (joint_limits_manager_ && joints_initialized_ && !joint_names_.empty())
                 {
-                    joint_limits_manager_->parseFromURDF(msg->data, joint_names_);
+                    joint_limits_manager_->parseFromURDF(msg->data, joint_names_, false);
                     // Update spinbox ranges after parsing limits
                     updateSpinboxRanges();
                     RCLCPP_INFO(node_->get_logger(),
@@ -1578,7 +1578,8 @@ namespace arms_rviz_control_plugin
         if (robot_description_received_ && !robot_description_cache_.empty() &&
             joint_limits_manager_ && joints_initialized_ && !joint_names_.empty())
         {
-            size_t parsed_count = joint_limits_manager_->parseFromURDF(robot_description_cache_, joint_names_);
+            size_t parsed_count = joint_limits_manager_->parseFromURDF(
+                robot_description_cache_, joint_names_, false);
             if (parsed_count > 0)
             {
                 // Update spinbox ranges after parsing limits

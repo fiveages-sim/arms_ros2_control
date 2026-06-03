@@ -26,7 +26,8 @@ from robot_common_launch import (
     resolve_control_patch,
     load_robot_profile,
     build_planning_urdf_launch_params,
-    wrap_spawner_controller_params,
+    write_spawner_controller_param_file,
+    prepare_ros2_controllers_override_path,
 )
 
 # All utility functions are now imported from robot_common_launch
@@ -81,18 +82,6 @@ def launch_setup(context, *args, **kwargs):
         except KeyError:
             pass
 
-    forward_args = forward_robot_launch_args(context)
-    controller_manager_launch = IncludeLaunchDescription(
-        PythonLaunchDescriptionSource([
-            os.path.join(get_package_share_directory('robot_common_launch'), 'launch'),
-            '/controller_manager.launch.py',
-        ]),
-        launch_arguments=forward_args + [
-            ('use_sim_time', str(use_sim_time)),
-            ('world', world),
-        ],
-    )
-
     planning_urdf_params = build_planning_urdf_launch_params(
         planning_robot_name,
         context.launch_configurations,
@@ -111,16 +100,44 @@ def launch_setup(context, *args, **kwargs):
         )
         return []
 
-    # OCS2 Arm Controller spawner
+    ros2_controllers_override = prepare_ros2_controllers_override_path(
+        config, control_left, control_right, control_patch
+    )
+    if ros2_controllers_override:
+        print(f"[INFO] Preloaded ros2_control config: {ros2_controllers_override}")
+
+    ocs2_planning_param_file = write_spawner_controller_param_file(
+        'ocs2_arm_controller', planning_urdf_params, quiet=True
+    )
+    print(
+        f"[INFO] OCS2 planning URDF: {_plan_path} "
+        f"(params: {ocs2_planning_param_file})"
+    )
+    ocs2_spawner_param_file = ocs2_planning_param_file
+
+    forward_args = forward_robot_launch_args(context)
+    controller_manager_launch = IncludeLaunchDescription(
+        PythonLaunchDescriptionSource([
+            os.path.join(get_package_share_directory('robot_common_launch'), 'launch'),
+            '/controller_manager.launch.py',
+        ]),
+        launch_arguments=forward_args + [
+            ('use_sim_time', str(use_sim_time)),
+            ('world', world),
+            ('ocs2_planning_param_file', ocs2_planning_param_file),
+            ('ros2_controllers_override', ros2_controllers_override),
+        ],
+    )
+
     ocs2_arm_controller_spawner = Node(
         package='controller_manager',
         executable='spawner',
-        arguments=['ocs2_arm_controller'],
-        output='screen',
-        parameters=[
-            wrap_spawner_controller_params('ocs2_arm_controller', planning_urdf_params),
-            {'use_sim_time': use_sim_time},
+        arguments=[
+            'ocs2_arm_controller',
+            '-p',
+            ocs2_spawner_param_file,
         ],
+        output='screen',
     )
 
     # Detect hand controllers using robot_common_launch (only if gripper is enabled)
@@ -148,6 +165,8 @@ def launch_setup(context, *args, **kwargs):
             robot_description=robot_description,
             control_left=control_left,
             control_right=control_right,
+            control_patch=control_patch,
+            ros2_control_config=config,
         )
         hand_controller_spawners = create_controller_spawners(hand_controllers, use_sim_time)
 
@@ -243,7 +262,6 @@ def launch_setup(context, *args, **kwargs):
         rviz_node = Node(
             package="rviz2",
             executable="rviz2",
-            name="rviz2",
             output="log",
             arguments=["-d", rviz_config_path],
             parameters=rviz_parameters,
