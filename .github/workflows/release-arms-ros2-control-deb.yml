@@ -716,7 +716,7 @@ jobs:
           Section: misc
           Priority: optional
           Architecture: ${DEB_ARCH}
-          Depends: ros-${ROS_DISTRO}-ros-base, ${OCS2_PACKAGE_NAME}, ${COMMON_PACKAGE_NAME}, ros-${ROS_DISTRO}-ament-index-cpp, ros-${ROS_DISTRO}-angles, ros-${ROS_DISTRO}-controller-interface, ros-${ROS_DISTRO}-controller-manager, ros-${ROS_DISTRO}-geometry-msgs, ros-${ROS_DISTRO}-hardware-interface, ros-${ROS_DISTRO}-joint-state-broadcaster, ros-${ROS_DISTRO}-pluginlib, ros-${ROS_DISTRO}-rclcpp-action, ros-${ROS_DISTRO}-rclcpp-lifecycle, ros-${ROS_DISTRO}-sensor-msgs, ros-${ROS_DISTRO}-std-msgs, ros-${ROS_DISTRO}-tf2, ros-${ROS_DISTRO}-tf2-geometry-msgs, ros-${ROS_DISTRO}-tf2-ros, ros-${ROS_DISTRO}-urdf, ros-${ROS_DISTRO}-visualization-msgs
+          Depends: ros-${ROS_DISTRO}-ros-base, ros-dev-tools, ${OCS2_PACKAGE_NAME}, ${COMMON_PACKAGE_NAME}, ros-${ROS_DISTRO}-ament-index-cpp, ros-${ROS_DISTRO}-angles, ros-${ROS_DISTRO}-controller-interface, ros-${ROS_DISTRO}-controller-manager, ros-${ROS_DISTRO}-geometry-msgs, ros-${ROS_DISTRO}-hardware-interface, ros-${ROS_DISTRO}-joint-state-broadcaster, ros-${ROS_DISTRO}-pluginlib, ros-${ROS_DISTRO}-rclcpp-action, ros-${ROS_DISTRO}-rclcpp-lifecycle, ros-${ROS_DISTRO}-rviz2, ros-${ROS_DISTRO}-sensor-msgs, ros-${ROS_DISTRO}-std-msgs, ros-${ROS_DISTRO}-tf2, ros-${ROS_DISTRO}-tf2-geometry-msgs, ros-${ROS_DISTRO}-tf2-ros, ros-${ROS_DISTRO}-urdf, ros-${ROS_DISTRO}-visualization-msgs
           ${deb_provides_line}Maintainer: ${GITHUB_REPOSITORY} maintainers <github-actions[bot]@users.noreply.github.com>
           Installed-Size: ${installed_size}
           Description: ${deb_description}
