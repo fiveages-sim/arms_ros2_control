@@ -11,7 +11,7 @@ from launch_ros.actions import Node
 # Import robot_common_launch utilities
 from robot_common_launch import (
     get_robot_package_path,
-    get_info_file_name,
+    extract_info_file_name_from_config,
     detect_controllers,
     create_controller_spawners,
     load_robot_config,
@@ -23,6 +23,7 @@ from robot_common_launch import (
     create_robot_profile_launch_arguments,
     resolve_profile_path,
     resolve_control_sides,
+    resolve_control_patch,
     load_robot_profile,
     build_planning_urdf_launch_params,
 )
@@ -39,6 +40,7 @@ def launch_setup(context, *args, **kwargs):
     profile_path = resolve_profile_path(context.launch_configurations)
     profile = load_robot_profile(profile_path) if profile_path else {}
     control_left, control_right = resolve_control_sides(context.launch_configurations, profile)
+    control_patch = resolve_control_patch(profile)
 
     # 基本参数
     use_sim_time = hardware in ['gz', 'isaac']
@@ -52,6 +54,7 @@ def launch_setup(context, *args, **kwargs):
         robot_type,
         control_left=control_left,
         control_right=control_right,
+        control_patch=control_patch,
     )
     planning_robot_name = robot_name
     planning_robot_type = robot_type
@@ -154,8 +157,7 @@ def launch_setup(context, *args, **kwargs):
         joint_controller_names.extend([c['name'] for c in head_controllers])
 
 
-    # Get info file name from controller configuration
-    info_file_name = get_info_file_name(robot_name, robot_type)
+    info_file_name = extract_info_file_name_from_config(config, launch_mode="split_body")
 
     # Use the same robot_name from config for task file (already loaded above)
     task_robot_name = planning_robot_name

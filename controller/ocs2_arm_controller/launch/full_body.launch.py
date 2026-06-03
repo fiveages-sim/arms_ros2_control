@@ -12,7 +12,7 @@ from launch_ros.actions import Node
 # Import robot_common_launch utilities
 from robot_common_launch import (
     get_robot_package_path,
-    get_info_file_name,
+    extract_info_file_name_from_config,
     detect_controllers,
     create_controller_spawners,
     load_robot_config,
@@ -25,6 +25,7 @@ from robot_common_launch import (
     create_robot_profile_launch_arguments,
     resolve_profile_path,
     resolve_control_sides,
+    resolve_control_patch,
     load_robot_profile,
     build_planning_urdf_launch_params,
 )
@@ -54,6 +55,7 @@ def launch_setup(context, *args, **kwargs):
     profile_path = resolve_profile_path(context.launch_configurations)
     profile = load_robot_profile(profile_path) if profile_path else {}
     control_left, control_right = resolve_control_sides(context.launch_configurations, profile)
+    control_patch = resolve_control_patch(profile)
 
     config, _ = load_robot_config(
         robot_name,
@@ -61,6 +63,7 @@ def launch_setup(context, *args, **kwargs):
         robot_type,
         control_left=control_left,
         control_right=control_right,
+        control_patch=control_patch,
     )
     planning_robot_name = robot_name
     planning_robot_type = robot_type
@@ -179,16 +182,7 @@ def launch_setup(context, *args, **kwargs):
             print("[WARN] ARM type detected in full_body but no head controller found to spawn")
 
 
-    # Get info file name from ocs2_wbc_controller configuration
-    # Use the config already loaded above
-    info_file_name = 'task'  # default
-    if config is not None:
-        try:
-            # Extract info_file_name from ocs2_wbc_controller parameters
-            wbc_params = config.get('ocs2_wbc_controller', {}).get('ros__parameters', {})
-            info_file_name = wbc_params.get('info_file_name', 'task')
-        except KeyError:
-            pass
+    info_file_name = extract_info_file_name_from_config(config, launch_mode="full_body")
 
     # Use the same robot_name from config for task file (already loaded above)
     task_robot_name = planning_robot_name
