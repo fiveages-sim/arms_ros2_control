@@ -28,6 +28,7 @@ from robot_common_launch import (
     resolve_control_patch,
     load_robot_profile,
     build_planning_urdf_launch_params,
+    wrap_spawner_controller_params,
 )
 
 
@@ -141,7 +142,10 @@ def launch_setup(context, *args, **kwargs):
         executable='spawner',
         arguments=['ocs2_wbc_controller'],
         output='screen',
-        parameters=[planning_urdf_params, {'use_sim_time': use_sim_time}],
+        parameters=[
+            wrap_spawner_controller_params('ocs2_wbc_controller', planning_urdf_params),
+            {'use_sim_time': use_sim_time},
+        ],
     )
 
     # Detect hand controllers using robot_common_launch (only if gripper is enabled)
