@@ -1,22 +1,22 @@
 # 手柄按键和摇杆映射配置
-# 适用于 Xbox 控制器 (默认配置)
+# 适用于 Sony Interactive Entertainment Wireless Controller（临时沿用 default 配置）
 
 /**:
   ros__parameters:
     # 按键映射 (Button Mapping)
     # Xbox 控制器按键索引:
     # 0=A, 1=B, 2=X, 3=Y, 4=LB, 5=RB, 6=Back, 7=Start, 8=Guide, 9=LS, 10=RS
-    button_mapping:                             # Arm 64
-      a_button: 1          # A 按钮 - 切换目标手臂     1
-      b_button: 2          # B 按钮 - 发送命令        2
-      x_button: 0          # X 按钮 - 开关夹爪        0
-      y_button: 3          # Y 按钮 - 预留            3
-      lb_button: 4         # 左肩键 - 组合键          4
-      rb_button: 5         # 右肩键 - 切换控制模式（ARM/CHASSIS）5
-      back_button: 8       # Back 按钮 - 切换镜像移动模式    8
-      start_button: 9      # Start 按钮 - 特殊命令         9
-      left_stick_button: 10 # 左摇杆按下 - 切换高速/低速模式  10
-      right_stick_button: 11 # 右摇杆按下 - 启用/禁用控制   11
+    button_mapping:
+      a_button: 1          # A 按钮 - 切换目标手臂
+      b_button: 2          # B 按钮 - 发送命令
+      x_button: 0          # X 按钮 - 开关夹爪
+      y_button: 3          # Y 按钮 - 预留
+      lb_button: 4         # 左肩键 - 组合键
+      rb_button: 5         # 右肩键 - 切换控制模式（ARM/CHASSIS）
+      back_button: 8       # Back 按钮 - 切换镜像移动模式
+      start_button: 9      # Start 按钮 - 特殊命令
+      left_stick_button: 10 # 左摇杆按下 - 切换高速/低速模式
+      right_stick_button: 11 # 右摇杆按下 - 启用/禁用控制
 
     # 摇杆和 D-Pad 映射 (Axes Mapping)
     # Xbox 控制器轴索引:
@@ -24,10 +24,10 @@
     axes_mapping:
       left_stick_x: 0      # 左摇杆 X 轴 - 控制 Y 方向移动
       left_stick_y: 1      # 左摇杆 Y 轴 - 控制 X 方向移动
-      right_stick_x: 2     # 右摇杆 X 轴 - 控制 Yaw 旋转    2
-      right_stick_y: 3     # 右摇杆 Y 轴 - 控制 Z 方向移动   3
-      dpad_x: 4            # D-Pad X 轴 - 控制 Pitch 旋转   5
-      dpad_y: 5           # D-Pad Y 轴 - 控制 Roll 旋转 如果是底盘模式的话，就是控制腰部升降，1是腰部上升，-1是腰部下降，0是停止
+      right_stick_x: 2     # 右摇杆 X 轴 - 控制 Yaw 旋转
+      right_stick_y: 5     # 右摇杆 Y 轴 - 控制 Z 方向移动
+      dpad_x: 6            # D-Pad X 轴 - 控制 Pitch 旋转
+      dpad_y: 7            # D-Pad Y 轴 - 控制 Roll 旋转 如果是底盘模式的话，就是控制腰部升降，1是腰部上升，-1是腰部下降，0是停止
       deadzone: 0.1        # 摇杆死区
       dpad_deadzone: 0.5   # D-Pad 死区
     
@@ -46,4 +46,3 @@
     chassis:
       linear_scale: 0.35   # 线速度缩放因子 (m/s)
       angular_scale: 0.5   # 角速度缩放因子 (rad/s)
-
