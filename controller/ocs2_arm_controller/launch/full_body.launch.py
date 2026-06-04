@@ -28,7 +28,8 @@ from robot_common_launch import (
     resolve_control_patch,
     load_robot_profile,
     build_planning_urdf_launch_params,
-    wrap_spawner_controller_params,
+    write_spawner_controller_param_file,
+    prepare_ros2_controllers_override_path,
 )
 
 
@@ -100,23 +101,6 @@ def launch_setup(context, *args, **kwargs):
         except Exception as e:
             print(f"[WARN] Failed to parse ocs2_wbc_controller.type from config: {e}")
 
-    # Planning URDF path is now handled by Visualizer in ocs2_arm_controller
-    # The Visualizer will publish /ocs2_robot_description after loading the interface
-
-    # 使用通用的 controller manager launch 文件 (包含 Gazebo 支持、robot_state_publisher 和机器人描述生成)
-    forward_args = forward_robot_launch_args(context)
-
-    controller_manager_launch = IncludeLaunchDescription(
-        PythonLaunchDescriptionSource([
-            os.path.join(get_package_share_directory('robot_common_launch'), 'launch'),
-            '/controller_manager.launch.py',
-        ]),
-        launch_arguments=forward_args + [
-            ('use_sim_time', str(use_sim_time)),
-            ('world', world),
-        ],
-    )
-
     planning_urdf_params = build_planning_urdf_launch_params(
         planning_robot_name,
         context.launch_configurations,
@@ -137,15 +121,45 @@ def launch_setup(context, *args, **kwargs):
         )
         return []
 
+    ros2_controllers_override = prepare_ros2_controllers_override_path(
+        config, control_left, control_right, control_patch
+    )
+    if ros2_controllers_override:
+        print(f"[INFO] Preloaded ros2_control config: {ros2_controllers_override}")
+
+    ocs2_planning_param_file = write_spawner_controller_param_file(
+        'ocs2_wbc_controller', planning_urdf_params, quiet=True
+    )
+    print(
+        f"[INFO] OCS2 planning URDF: {_plan_path} "
+        f"(params: {ocs2_planning_param_file})"
+    )
+    ocs2_spawner_param_file = ocs2_planning_param_file
+
+    forward_args = forward_robot_launch_args(context)
+
+    controller_manager_launch = IncludeLaunchDescription(
+        PythonLaunchDescriptionSource([
+            os.path.join(get_package_share_directory('robot_common_launch'), 'launch'),
+            '/controller_manager.launch.py',
+        ]),
+        launch_arguments=forward_args + [
+            ('use_sim_time', str(use_sim_time)),
+            ('world', world),
+            ('ocs2_planning_param_file', ocs2_planning_param_file),
+            ('ros2_controllers_override', ros2_controllers_override),
+        ],
+    )
+
     ocs2_wbc_controller_spawner = Node(
         package='controller_manager',
         executable='spawner',
-        arguments=['ocs2_wbc_controller'],
-        output='screen',
-        parameters=[
-            wrap_spawner_controller_params('ocs2_wbc_controller', planning_urdf_params),
-            {'use_sim_time': use_sim_time},
+        arguments=[
+            'ocs2_wbc_controller',
+            '-p',
+            ocs2_spawner_param_file,
         ],
+        output='screen',
     )
 
     # Detect hand controllers using robot_common_launch (only if gripper is enabled)
@@ -173,6 +187,8 @@ def launch_setup(context, *args, **kwargs):
             robot_description=robot_description,
             control_left=control_left,
             control_right=control_right,
+            control_patch=control_patch,
+            ros2_control_config=config,
         )
         hand_controller_spawners = create_controller_spawners(hand_controllers, use_sim_time)
 
@@ -189,6 +205,8 @@ def launch_setup(context, *args, **kwargs):
             ['head'],
             control_left=control_left,
             control_right=control_right,
+            control_patch=control_patch,
+            ros2_control_config=config,
         )
         if head_controllers:
             body_controller_spawners.extend(create_controller_spawners(head_controllers, use_sim_time))
@@ -322,7 +340,6 @@ def launch_setup(context, *args, **kwargs):
         rviz_node = Node(
             package="rviz2",
             executable="rviz2",
-            name="rviz2",
             output="log",
             arguments=["-d", rviz_config_path],
             parameters=rviz_parameters,

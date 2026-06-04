@@ -96,12 +96,6 @@ namespace arms_controller_common
                         RCLCPP_WARN(node_->get_logger(),
                                     "No home configurations found (home_1, home_2, etc.)");
                     }
-                    else
-                    {
-                        RCLCPP_INFO(node_->get_logger(),
-                                    "Found %zu home configuration(s) (home_1 to home_%d)",
-                                    home_configs_.size(), i - 1);
-                    }
                     break;
                 }
 
@@ -132,8 +126,8 @@ namespace arms_controller_common
                 auto_declare_func(param_name, config);
 
                 home_configs_.push_back(config);
-                RCLCPP_INFO(node_->get_logger(),
-                            "Found home configuration %d with %zu joints", i, config.size());
+                RCLCPP_DEBUG(node_->get_logger(),
+                             "Found home configuration %d with %zu joints", i, config.size());
             }
 
             bool configs_loaded = !home_configs_.empty();
@@ -143,8 +137,8 @@ namespace arms_controller_common
                 current_config_index_ = 0;
                 has_multiple_configs_ = home_configs_.size() > 1;
                 RCLCPP_INFO(node_->get_logger(),
-                            "StateHome initialized with %zu configuration(s)",
-                            home_configs_.size());
+                            "Found %zu home configuration(s) (home_1 to home_%zu)",
+                            home_configs_.size(), home_configs_.size());
             }
             return configs_loaded;
         }

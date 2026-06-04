@@ -13,7 +13,8 @@ namespace arms_controller_common
     }
 
     size_t JointLimitsManager::parseFromURDF(const std::string& robot_description, 
-                                             const std::vector<std::string>& joint_names)
+                                             const std::vector<std::string>& joint_names,
+                                             bool log_summary)
     {
         size_t initialized_count = 0;
 
@@ -47,8 +48,7 @@ namespace arms_controller_common
                        "Please provide joint names for accurate parsing.");
         }
 
-        // Log summary
-        if (!joint_names.empty())
+        if (log_summary && !joint_names.empty())
         {
             RCLCPP_INFO(logger_, 
                        "Loaded joint limits for %zu/%zu joints from URDF", 
@@ -156,10 +156,10 @@ namespace arms_controller_common
                         joint_limits_[joint_name].upper != std::numeric_limits<double>::max())
                     {
                         joint_limits_[joint_name].initialized = true;
-                        RCLCPP_INFO(logger_,
-                                    "Loaded joint limits for %s: lower=%.6f, upper=%.6f",
-                                    joint_name.c_str(), joint_limits_[joint_name].lower, 
-                                    joint_limits_[joint_name].upper);
+                        RCLCPP_DEBUG(logger_,
+                                     "Loaded joint limits for %s: lower=%.6f, upper=%.6f",
+                                     joint_name.c_str(), joint_limits_[joint_name].lower,
+                                     joint_limits_[joint_name].upper);
                         return true;
                     }
                 }
@@ -189,10 +189,10 @@ namespace arms_controller_common
                         joint_limits_[joint_name].lower = std::stod(lower_str);
                         joint_limits_[joint_name].initialized = true;
 
-                        RCLCPP_INFO(logger_,
-                                    "Loaded joint limits for %s: lower=%.6f, upper=%.6f",
-                                    joint_name.c_str(), joint_limits_[joint_name].lower, 
-                                    joint_limits_[joint_name].upper);
+                        RCLCPP_DEBUG(logger_,
+                                     "Loaded joint limits for %s: lower=%.6f, upper=%.6f",
+                                     joint_name.c_str(), joint_limits_[joint_name].lower,
+                                     joint_limits_[joint_name].upper);
                         return true;
                     }
                     catch (const std::exception& e)

@@ -55,10 +55,12 @@ namespace arms_controller_common
          * @param robot_description URDF XML string
          * @param joint_names List of joint names to parse limits for
          *                     If empty, will try to parse all joints found in URDF
+         * @param log_summary If true, emit one INFO summary after parsing (disable for RViz etc.)
          * @return Number of joints with successfully parsed limits
          */
         size_t parseFromURDF(const std::string& robot_description, 
-                            const std::vector<std::string>& joint_names = {});
+                            const std::vector<std::string>& joint_names = {},
+                            bool log_summary = true);
 
         /**
          * @brief Set joint limits manually
