@@ -6,46 +6,30 @@
 #include <cctype>
 
 #include <QHBoxLayout>
+#include <QVBoxLayout>
+#include <QGridLayout>
 #include <QGroupBox>
+#include <QSizePolicy>
+#include <QDoubleSpinBox>
+#include <QString>
+#include <cmath>
 
 namespace arms_rviz_control_plugin
 {
     GripperControlPanel::GripperControlPanel(QWidget* parent)
         : Panel(parent)
     {
-        // Create UI layout
         auto* main_layout = new QVBoxLayout(this);
 
-        // Create gripper control UI
-        auto* gripper_group = new QGroupBox();
-        auto* gripper_layout = new QHBoxLayout(gripper_group);
-
-        // Left arm button (disabled by default)
-        left_gripper_btn_ = std::make_unique<QPushButton>("Open Left Gripper", this);
-        left_gripper_btn_->setVisible(false);
-        left_gripper_btn_->setStyleSheet(
-            "QPushButton { background-color: #4CAF50; color: white; font-weight: bold; padding: 10px; }");
-        gripper_layout->addWidget(left_gripper_btn_.get());
-
-        // Right arm button (disabled by default)
-        right_gripper_btn_ = std::make_unique<QPushButton>("Open Right Gripper", this);
-        right_gripper_btn_->setVisible(false);
-        right_gripper_btn_->setStyleSheet(
-            "QPushButton { background-color: #4CAF50; color: white; font-weight: bold; padding: 10px; }");
-        gripper_layout->addWidget(right_gripper_btn_.get());
-
-        // No controller label
         no_controller_label_ = std::make_unique<QLabel>("No gripper controller", this);
         no_controller_label_->setStyleSheet(
             "QLabel { color: #666666; font-style: italic; padding: 10px; }");
         no_controller_label_->setAlignment(Qt::AlignCenter);
-        gripper_layout->addWidget(no_controller_label_.get());
+        main_layout->addWidget(no_controller_label_.get());
 
-        main_layout->addWidget(gripper_group);
-
-        // Connect signals
-        connect(left_gripper_btn_.get(), &QPushButton::clicked, this, &GripperControlPanel::onLeftGripperToggle);
-        connect(right_gripper_btn_.get(), &QPushButton::clicked, this, &GripperControlPanel::onRightGripperToggle);
+        tool_control_group_ = new QGroupBox(QStringLiteral("位置 (0~1)"), this);
+        tool_control_group_->setVisible(false);
+        main_layout->addWidget(tool_control_group_);
     }
 
     GripperControlPanel::~GripperControlPanel() = default;
@@ -57,45 +41,32 @@ namespace arms_rviz_control_plugin
 
         // Declare parameter with empty default
         node_->declare_parameter("hand_controllers", std::vector<std::string>());
-
-        // Get hand controllers from parameters
         hand_controllers_ = node_->get_parameter("hand_controllers").as_string_array();
 
-        // First check if we have any controllers
         if (hand_controllers_.empty())
         {
             RCLCPP_INFO(node_->get_logger(), "No gripper controllers detected");
-            is_dual_arm_mode_ = false; // Not relevant when no controllers
+            is_dual_arm_mode_ = false;
+            updateButtonVisibility();
         }
         else
         {
-            // Detect if this is a dual-arm robot using controller information
-            is_dual_arm_mode_ = hand_controllers_.size() > 1;
-            RCLCPP_INFO(node_->get_logger(), "Detected mode: %s",
-                        is_dual_arm_mode_ ? "DUAL-ARM" : "SINGLE-ARM");
-        }
-
-        // Update button visibility based on mode
-        updateButtonVisibility();
-
-        // Only create publishers and subscribers if we have controllers
-        if (!hand_controllers_.empty())
-        {
-            // Determine controller mapping (left/right)
             determineControllerMapping();
+            is_dual_arm_mode_ = !left_controller_name_.empty() && !right_controller_name_.empty();
+            RCLCPP_INFO(node_->get_logger(), "Detected mode: %s (controllers=%zu)",
+                        is_dual_arm_mode_ ? "DUAL-ARM" : "SINGLE-SIDE",
+                        hand_controllers_.size());
+            updateButtonVisibility();
 
             // Create target_command publishers
             createTargetCommandPublishers();
 
             // Create target_command subscriptions for state synchronization
             createTargetCommandSubscriptions();
+            createToolControlUi();
 
             RCLCPP_INFO(node_->get_logger(), "Gripper Control Panel initialized with %zu controllers",
                         hand_controllers_.size());
-        }
-        else
-        {
-            RCLCPP_INFO(node_->get_logger(), "Gripper Control Panel initialized (no controllers)");
         }
     }
 
@@ -125,30 +96,6 @@ namespace arms_rviz_control_plugin
         config.mapSetValue("right_gripper_open", right_gripper_open_);
     }
 
-
-    void GripperControlPanel::onLeftGripperToggle()
-    {
-        if (left_controller_name_.empty())
-        {
-            RCLCPP_WARN(node_->get_logger(), "Left controller not found");
-            return;
-        }
-        // Toggle based on current state
-        bool should_open = !left_gripper_open_;
-        publishGripperCommand(should_open, left_controller_name_);
-    }
-
-    void GripperControlPanel::onRightGripperToggle()
-    {
-        if (right_controller_name_.empty())
-        {
-            RCLCPP_WARN(node_->get_logger(), "Right controller not found");
-            return;
-        }
-        // Toggle based on current state
-        bool should_open = !right_gripper_open_;
-        publishGripperCommand(should_open, right_controller_name_);
-    }
 
     void GripperControlPanel::onTargetCommandReceived(const std::string& controller_name,
                                                       const std_msgs::msg::Int32::SharedPtr msg)
@@ -200,74 +147,33 @@ namespace arms_rviz_control_plugin
 
     void GripperControlPanel::updateGripperDisplay()
     {
-        // Update left arm button
-        if (left_gripper_btn_ && !left_display_name_.empty())
-        {
-            if (left_gripper_open_)
-            {
-                left_gripper_btn_->setText(("Close " + left_display_name_).c_str());
-                left_gripper_btn_->setStyleSheet(
-                    "QPushButton { background-color: #F44336; color: white; font-weight: bold; padding: 10px; }");
-            }
-            else
-            {
-                left_gripper_btn_->setText(("Open " + left_display_name_).c_str());
-                left_gripper_btn_->setStyleSheet(
-                    "QPushButton { background-color: #4CAF50; color: white; font-weight: bold; padding: 10px; }");
-            }
-        }
+        const char* open_style =
+            "QPushButton { background-color: #4CAF50; color: white; font-weight: bold; padding: 8px; }";
+        const char* close_style =
+            "QPushButton { background-color: #F44336; color: white; font-weight: bold; padding: 8px; }";
 
-        // Update right arm button (only in dual arm mode)
-        if (right_gripper_btn_ && is_dual_arm_mode_ && !right_display_name_.empty())
+        for (const auto& [controller_name, btn] : toggle_btn_by_controller_)
         {
-            if (right_gripper_open_)
+            auto state_it = controller_to_state_.find(controller_name);
+            if (state_it == controller_to_state_.end() || !btn)
             {
-                right_gripper_btn_->setText(("Close " + right_display_name_).c_str());
-                right_gripper_btn_->setStyleSheet(
-                    "QPushButton { background-color: #F44336; color: white; font-weight: bold; padding: 10px; }");
+                continue;
             }
-            else
-            {
-                right_gripper_btn_->setText(("Open " + right_display_name_).c_str());
-                right_gripper_btn_->setStyleSheet(
-                    "QPushButton { background-color: #4CAF50; color: white; font-weight: bold; padding: 10px; }");
-            }
+            const bool is_open = *state_it->second;
+            const std::string display = getDisplayNameFromControllerName(controller_name);
+            btn->setText(is_open ? QString("Close %1").arg(QString::fromStdString(display))
+                                 : QString("Open %1").arg(QString::fromStdString(display)));
+            btn->setStyleSheet(is_open ? close_style : open_style);
         }
     }
 
     void GripperControlPanel::updateButtonVisibility()
     {
-        // Use the hand_controllers_ member variable that was set in onInitialize()
-        if (hand_controllers_.empty())
+        const bool has_controllers = !hand_controllers_.empty();
+        no_controller_label_->setVisible(!has_controllers);
+        if (tool_control_group_)
         {
-            // No controllers: show label, hide and disable buttons
-            left_gripper_btn_->setVisible(false);
-            left_gripper_btn_->setEnabled(false);
-            right_gripper_btn_->setVisible(false);
-            right_gripper_btn_->setEnabled(false);
-            no_controller_label_->setVisible(true);
-        }
-        else if (is_dual_arm_mode_)
-        {
-            // Dual arm mode: show and enable both buttons, hide label
-            left_gripper_btn_->setVisible(true);
-            left_gripper_btn_->setEnabled(true);
-            right_gripper_btn_->setVisible(true);
-            right_gripper_btn_->setEnabled(true);
-            no_controller_label_->setVisible(false);
-        }
-        else
-        {
-            // Single arm mode: show and enable left button, hide and disable right button
-            left_gripper_btn_->setVisible(true);
-            left_gripper_btn_->setEnabled(true);
-            if (!left_display_name_.empty())
-            {
-                left_gripper_btn_->setText(("Open " + left_display_name_).c_str());
-            }
-            right_gripper_btn_->setVisible(false);
-            right_gripper_btn_->setEnabled(false);
-            no_controller_label_->setVisible(false);
+            tool_control_group_->setVisible(has_controllers);
         }
     }
 
@@ -361,12 +267,18 @@ namespace arms_rviz_control_plugin
             }
             else
             {
-                // Default to left arm for single-arm robots
+                // Single-side / diff-eef: first unnamed controller maps to left slot
                 if (left_controller_name_.empty())
                 {
                     left_controller_name_ = controller_name;
                     left_display_name_ = getDisplayNameFromControllerName(controller_name);
                     controller_to_state_[controller_name] = &left_gripper_open_;
+                }
+                else
+                {
+                    RCLCPP_WARN(node_->get_logger(),
+                                "Hand controller '%s' has no left/right in name; ignored",
+                                controller_name.c_str());
                 }
             }
         }
@@ -380,6 +292,7 @@ namespace arms_rviz_control_plugin
     void GripperControlPanel::createTargetCommandPublishers()
     {
         target_command_publishers_.clear();
+        target_percent_publishers_.clear();
 
         for (const auto& controller_name : hand_controllers_)
         {
@@ -390,6 +303,8 @@ namespace arms_rviz_control_plugin
                 topic_name, rclcpp::QoS(10));
 
             target_command_publishers_[controller_name] = publisher;
+            target_percent_publishers_[controller_name] = node_->create_publisher<std_msgs::msg::Float64>(
+                "/" + controller_name + "/target_percent", rclcpp::QoS(10));
 
             RCLCPP_INFO(node_->get_logger(),
                         "Created target_command publisher: %s",
@@ -420,6 +335,124 @@ namespace arms_rviz_control_plugin
             RCLCPP_INFO(node_->get_logger(),
                         "Created target_command subscription: %s (QoS: KeepLast(10))",
                         topic_name.c_str());
+        }
+    }
+
+    void GripperControlPanel::createToolControlUi()
+    {
+        if (!tool_control_group_ || hand_controllers_.empty())
+        {
+            return;
+        }
+
+        if (QLayout* old = tool_control_group_->layout())
+        {
+            QLayoutItem* item;
+            while ((item = old->takeAt(0)) != nullptr)
+            {
+                if (item->widget())
+                {
+                    delete item->widget();
+                }
+                delete item;
+            }
+            delete old;
+        }
+
+        toggle_btn_by_controller_.clear();
+        pos_spin_by_controller_.clear();
+
+        std::vector<std::string> ordered;
+        if (!left_controller_name_.empty())
+        {
+            ordered.push_back(left_controller_name_);
+        }
+        if (!right_controller_name_.empty())
+        {
+            ordered.push_back(right_controller_name_);
+        }
+        for (const auto& name : hand_controllers_)
+        {
+            if (name != left_controller_name_ && name != right_controller_name_)
+            {
+                ordered.push_back(name);
+            }
+        }
+
+        auto* grid = new QGridLayout(tool_control_group_);
+        grid->setHorizontalSpacing(8);
+        grid->setVerticalSpacing(6);
+        constexpr int kPosSpinWidth = 80;
+        constexpr int kToggleBtnWidth = 156;
+
+        const char* open_style =
+            "QPushButton { background-color: #4CAF50; color: white; font-weight: bold; padding: 8px; }";
+
+        int row_idx = 0;
+        for (const auto& name : ordered)
+        {
+            auto* pos_label = new QLabel(QStringLiteral("位置"), tool_control_group_);
+            pos_label->setAlignment(Qt::AlignRight | Qt::AlignVCenter);
+            grid->addWidget(pos_label, row_idx, 0);
+
+            auto* pos = new QDoubleSpinBox(tool_control_group_);
+            pos->setRange(0.0, 1.0);
+            pos->setDecimals(3);
+            pos->setSingleStep(0.05);
+            pos->setFixedWidth(kPosSpinWidth);
+            pos->setValue(0.0);
+            grid->addWidget(pos, row_idx, 1, Qt::AlignLeft | Qt::AlignVCenter);
+            pos_spin_by_controller_[name] = pos;
+
+            auto* toggle_btn = new QPushButton(tool_control_group_);
+            toggle_btn->setStyleSheet(open_style);
+            toggle_btn->setFixedWidth(kToggleBtnWidth);
+            toggle_btn->setSizePolicy(QSizePolicy::Fixed, QSizePolicy::Fixed);
+            toggle_btn_by_controller_[name] = toggle_btn;
+            connect(toggle_btn, &QPushButton::clicked, this,
+                    [this, name]()
+                    {
+                        auto state_it = controller_to_state_.find(name);
+                        if (state_it != controller_to_state_.end())
+                        {
+                            publishGripperCommand(!*state_it->second, name);
+                        }
+                    });
+            grid->addWidget(toggle_btn, row_idx, 2, Qt::AlignLeft | Qt::AlignVCenter);
+            ++row_idx;
+        }
+
+        grid->setColumnMinimumWidth(1, kPosSpinWidth);
+        grid->setColumnMinimumWidth(2, kToggleBtnWidth);
+
+        tool_control_send_btn_ = new QPushButton(QStringLiteral("发送位置"), tool_control_group_);
+        connect(tool_control_send_btn_, &QPushButton::clicked, this,
+                &GripperControlPanel::onPublishToolControlClicked);
+        grid->addWidget(tool_control_send_btn_, row_idx, 0, 1, 3);
+
+        updateGripperDisplay();
+        updateButtonVisibility();
+    }
+
+    void GripperControlPanel::onPublishToolControlClicked()
+    {
+        for (const auto& name : hand_controllers_)
+        {
+            auto p = pos_spin_by_controller_.find(name);
+            if (p == pos_spin_by_controller_.end())
+            {
+                continue;
+            }
+            const double pos = std::clamp(p->second->value(), 0.0, 1.0);
+            auto pub = target_percent_publishers_.find(name);
+            if (pub == target_percent_publishers_.end())
+            {
+                continue;
+            }
+            std_msgs::msg::Float64 msg;
+            msg.data = pos;
+            pub->second->publish(msg);
+            RCLCPP_INFO(node_->get_logger(), "[%s] target_percent=%.3f", name.c_str(), pos);
         }
     }
 } // namespace arms_rviz_control_plugin

@@ -290,30 +290,23 @@ namespace ocs2::mobile_manipulator
         pose_reference_manager_->resetTargetStateCache();
     }
 
-    std::string CtrlComponent::generateUrdfPath(const std::string& robot_name,
-                                                const std::string& robot_type,
-                                                const std::string& config_path) const
+    std::string CtrlComponent::resolvePlanningUrdfPath() const
     {
-        const std::string urdf_dir = config_path + "/urdf/";
-
-        // If robot type is specified, try to use type-specific URDF
-        if (!robot_type.empty())
+        if (planning_urdf_variant_ != "xacro" || planning_urdf_path_.empty())
         {
-            const std::string type_specific_urdf = urdf_dir + robot_name + "_" + robot_type + ".urdf";
-
-            if (std::filesystem::exists(type_specific_urdf))
-            {
-                RCLCPP_INFO(node_->get_logger(), "Using type-specific URDF: %s", type_specific_urdf.c_str());
-                return type_specific_urdf;
-            }
-            RCLCPP_WARN(node_->get_logger(),
-                        "Type-specific URDF not found: %s, falling back to default", type_specific_urdf.c_str());
+            throw std::runtime_error(
+                "OCS2 planning URDF must come from xacro (planning_urdf_variant:=xacro, "
+                "planning_urdf_path set by robot_common_launch). Static urdf/ lookup was removed.");
         }
-
-        // Use default URDF
-        const std::string default_urdf = urdf_dir + robot_name + ".urdf";
-        RCLCPP_INFO(node_->get_logger(), "Using default URDF: %s", default_urdf.c_str());
-        return default_urdf;
+        if (!std::filesystem::exists(planning_urdf_path_))
+        {
+            throw std::runtime_error(
+                "planning_urdf_path does not exist: " + planning_urdf_path_);
+        }
+        RCLCPP_INFO(node_->get_logger(),
+                    "Using xacro-generated planning URDF: %s",
+                    planning_urdf_path_.c_str());
+        return planning_urdf_path_;
     }
 
     vector_t CtrlComponent::calculateStaticTorques() const

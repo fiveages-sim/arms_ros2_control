@@ -115,6 +115,7 @@ namespace basic_joint_controller
             });
 
             // HOLD state
+            auto_declare<double>("hold_first_check_position_threshold", 0.1);
             auto_declare<double>("hold_position_threshold", 0.1);
             state_list_.hold = std::make_shared<StateHold>(
                 ctrl_interfaces_, get_node());
@@ -346,9 +347,9 @@ namespace basic_joint_controller
                                      "Target command received but ignored (current state is not MOVEJ)");
                     }
                 });
-            RCLCPP_INFO(get_node()->get_logger(),
-                        "Subscribed to target_command topic: %s (close_config=%d, open_config=%d)",
-                        target_command_topic.c_str(), target_command_close_config_, target_command_open_config_);
+            RCLCPP_DEBUG(get_node()->get_logger(),
+                         "Subscribed to target_command topic: %s (close_config=%d, open_config=%d)",
+                         target_command_topic.c_str(), target_command_close_config_, target_command_open_config_);
 
             // 百分比控制：在关闭配置和打开配置之间按比例插值
             // 0.0 = 完全关闭（close_config），1.0 = 完全打开（open_config）
@@ -413,9 +414,9 @@ namespace basic_joint_controller
                                 percent * 100.0, target.size());
                 });
 
-            RCLCPP_INFO(get_node()->get_logger(),
-                        "Subscribed to target_percent topic: %s (0.0=close_config[%d], 1.0=open_config[%d])",
-                        target_percent_topic.c_str(), target_command_close_config_, target_command_open_config_);
+            RCLCPP_DEBUG(get_node()->get_logger(),
+                         "Subscribed to target_percent topic: %s (0.0=close_config[%d], 1.0=open_config[%d])",
+                         target_percent_topic.c_str(), target_command_close_config_, target_command_open_config_);
         }
         else
         {

@@ -366,6 +366,7 @@ namespace arms_controller_common
         // Waist lifting support
         std::shared_ptr<arms_controller_common::WaistLiftingPlaner> waist_lifting_planer_;
         bool waist_lifting_active_{false};
+        bool waist_lifting_debug_print_active_{false};
         std::shared_ptr<arms_controller_common::WaistLiftingPlaner> waist_turning_planer_;
         bool waist_turning_active_{false};
         double waist_lifting_duration_{3.0};

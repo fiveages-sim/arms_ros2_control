@@ -12,14 +12,24 @@ from launch_ros.actions import Node
 # Import robot_common_launch utilities
 from robot_common_launch import (
     get_robot_package_path,
-    get_info_file_name,
+    extract_info_file_name_from_config,
     detect_controllers,
     create_controller_spawners,
     load_robot_config,
     get_ros2_control_robot_description,
     prepare_arms_target_manager_parameters,
+    parse_task_info,
     parse_launch_mode,
     create_launch_mode_arguments,
+    forward_robot_launch_args,
+    create_robot_profile_launch_arguments,
+    resolve_profile_path,
+    resolve_control_sides,
+    resolve_control_patch,
+    load_robot_profile,
+    build_planning_urdf_launch_params,
+    write_spawner_controller_param_file,
+    prepare_ros2_controllers_override_path,
 )
 
 
@@ -44,7 +54,19 @@ def launch_setup(context, *args, **kwargs):
     #    - If type is specified, try {type}.yaml first (e.g., dual.yaml), fallback to ros2_controllers.yaml
     # 2. If yaml specifies different robot_name or robot_type, use those values to look up URDF
     # This is needed when full_body mode uses different robot description or type
-    config, _ = load_robot_config(robot_name, "ros2_control", robot_type)
+    profile_path = resolve_profile_path(context.launch_configurations)
+    profile = load_robot_profile(profile_path) if profile_path else {}
+    control_left, control_right = resolve_control_sides(context.launch_configurations, profile)
+    control_patch = resolve_control_patch(profile)
+
+    config, _ = load_robot_config(
+        robot_name,
+        "ros2_control",
+        robot_type,
+        control_left=control_left,
+        control_right=control_right,
+        control_patch=control_patch,
+    )
     planning_robot_name = robot_name
     planning_robot_type = robot_type
     if config is not None:
@@ -79,33 +101,65 @@ def launch_setup(context, *args, **kwargs):
         except Exception as e:
             print(f"[WARN] Failed to parse ocs2_wbc_controller.type from config: {e}")
 
-    # Planning URDF path is now handled by Visualizer in ocs2_arm_controller
-    # The Visualizer will publish /ocs2_robot_description after loading the interface
+    planning_urdf_params = build_planning_urdf_launch_params(
+        planning_robot_name,
+        context.launch_configurations,
+        hardware,
+        profile_path or None,
+        planning_scope="full",
+    )
+    _plan_path = (planning_urdf_params.get("planning_urdf_path") or "").strip()
+    if (
+        planning_urdf_params.get("planning_urdf_variant") != "xacro"
+        or not _plan_path
+        or not os.path.isfile(_plan_path)
+    ):
+        print(
+            f"[ERROR] OCS2 requires xacro planning URDF for '{planning_robot_name}' "
+            f"(scope=full). variant={planning_urdf_params.get('planning_urdf_variant')!r} "
+            f"path={_plan_path!r}"
+        )
+        return []
 
-    # 使用通用的 controller manager launch 文件 (包含 Gazebo 支持、robot_state_publisher 和机器人描述生成)
+    ros2_controllers_override = prepare_ros2_controllers_override_path(
+        config, control_left, control_right, control_patch
+    )
+    if ros2_controllers_override:
+        print(f"[INFO] Preloaded ros2_control config: {ros2_controllers_override}")
+
+    ocs2_planning_param_file = write_spawner_controller_param_file(
+        'ocs2_wbc_controller', planning_urdf_params, quiet=True
+    )
+    print(
+        f"[INFO] OCS2 planning URDF: {_plan_path} "
+        f"(params: {ocs2_planning_param_file})"
+    )
+    ocs2_spawner_param_file = ocs2_planning_param_file
+
+    forward_args = forward_robot_launch_args(context)
+
     controller_manager_launch = IncludeLaunchDescription(
         PythonLaunchDescriptionSource([
             os.path.join(get_package_share_directory('robot_common_launch'), 'launch'),
             '/controller_manager.launch.py',
         ]),
-        launch_arguments=[
-            ('robot', robot_name),
-            ('type', robot_type),
+        launch_arguments=forward_args + [
             ('use_sim_time', str(use_sim_time)),
             ('world', world),
-            ('hardware', hardware),  # 传递硬件类型，controller_manager 会根据此参数自动判断是否使用 Gazebo
+            ('ocs2_planning_param_file', ocs2_planning_param_file),
+            ('ros2_controllers_override', ros2_controllers_override),
         ],
     )
 
-    # OCS2 Arm Controller spawner
     ocs2_wbc_controller_spawner = Node(
         package='controller_manager',
         executable='spawner',
-        arguments=['ocs2_wbc_controller'],
-        output='screen',
-        parameters=[
-            {'use_sim_time': use_sim_time},
+        arguments=[
+            'ocs2_wbc_controller',
+            '-p',
+            ocs2_spawner_param_file,
         ],
+        output='screen',
     )
 
     # Detect hand controllers using robot_common_launch (only if gripper is enabled)
@@ -116,11 +170,26 @@ def launch_setup(context, *args, **kwargs):
     if enable_gripper:
         # Get ros2_control robot_description to verify joints exist in xacro
         # This uses the same logic as controller_manager.launch.py
-        robot_description = get_ros2_control_robot_description(robot_name, robot_type, hardware)
+        robot_description = get_ros2_control_robot_description(
+            robot_name,
+            robot_type=robot_type,
+            hardware=hardware,
+            launch_configurations=context.launch_configurations,
+            robot_profile=profile_path or None,
+        )
         
         # Detect controllers matching hand/gripper patterns
         # Pass robot_description to verify joints exist in xacro
-        hand_controllers = detect_controllers(robot_name, robot_type, ['hand', 'gripper'], robot_description=robot_description)
+        hand_controllers = detect_controllers(
+            robot_name,
+            robot_type,
+            ['hand', 'gripper'],
+            robot_description=robot_description,
+            control_left=control_left,
+            control_right=control_right,
+            control_patch=control_patch,
+            ros2_control_config=config,
+        )
         hand_controller_spawners = create_controller_spawners(hand_controllers, use_sim_time)
 
     body_controller_spawners = []
@@ -130,7 +199,15 @@ def launch_setup(context, *args, **kwargs):
     # spawn head controller additionally for head joint control.
     is_arm_controller_type = (wbc_controller_type == 'ocs2_arm_controller/Ocs2ArmController')
     if is_arm_controller_type:
-        head_controllers = detect_controllers(robot_name, robot_type, ['head'])
+        head_controllers = detect_controllers(
+            robot_name,
+            robot_type,
+            ['head'],
+            control_left=control_left,
+            control_right=control_right,
+            control_patch=control_patch,
+            ros2_control_config=config,
+        )
         if head_controllers:
             body_controller_spawners.extend(create_controller_spawners(head_controllers, use_sim_time))
             joint_controller_names.extend([c['name'] for c in head_controllers])
@@ -139,16 +216,7 @@ def launch_setup(context, *args, **kwargs):
             print("[WARN] ARM type detected in full_body but no head controller found to spawn")
 
 
-    # Get info file name from ocs2_wbc_controller configuration
-    # Use the config already loaded above
-    info_file_name = 'task'  # default
-    if config is not None:
-        try:
-            # Extract info_file_name from ocs2_wbc_controller parameters
-            wbc_params = config.get('ocs2_wbc_controller', {}).get('ros__parameters', {})
-            info_file_name = wbc_params.get('info_file_name', 'task')
-        except KeyError:
-            pass
+    info_file_name = extract_info_file_name_from_config(config, launch_mode="full_body")
 
     # Use the same robot_name from config for task file (already loaded above)
     task_robot_name = planning_robot_name
@@ -173,17 +241,25 @@ def launch_setup(context, *args, **kwargs):
     if enable_gripper and hand_controllers:
         hand_controller_names_for_target_manager = [c['name'] for c in hand_controllers]
 
-    # Choose marker fixed frame based on actual controller type from YAML:
-    # - WBC controller: use world frame
-    # - ARM controller (running in full_body launch): use base_footprint frame
-    marker_fixed_frame = 'world' if wbc_available else 'base_footprint'
-    print(f"[INFO] marker_fixed_frame selected by controller type: {marker_fixed_frame} (wbc_available={wbc_available})")
+    # Marker / control frames from task.info (eeFrame1 => dual arm; baseFrame => control_base_frame)
+    _dual_arm, _control_base_frame, _auto_marker_frame = parse_task_info(task_file_path)
 
-    # Prepare parameters using robot_common_launch utility function
-    # enable_head_control is now configured via YAML config file, not via launch argument
+    # WBC: world; Ocs2ArmController: use baseFrame from task.info (e.g. base_link on astribot_s1).
+    # Do not hardcode base_footprint — many description packages only define base_link.
+    if wbc_available:
+        marker_fixed_frame = 'world'
+    elif _auto_marker_frame:
+        marker_fixed_frame = _auto_marker_frame
+    else:
+        marker_fixed_frame = _control_base_frame
+    print(
+        f"[INFO] marker_fixed_frame={marker_fixed_frame} "
+        f"(wbc={wbc_available}, control_base_frame={_control_base_frame})"
+    )
+
     arms_target_manager_parameters = prepare_arms_target_manager_parameters(
         task_file_path=task_file_path,
-        config_file_path=None,  # Will auto-detect from task file directory
+        config_file_path=None,  # Will auto-detect config/ocs2/target_manager.yaml
         hand_controllers=hand_controller_names_for_target_manager if hand_controller_names_for_target_manager else None,
         marker_fixed_frame=marker_fixed_frame,
     )
@@ -225,18 +301,22 @@ def launch_setup(context, *args, **kwargs):
             rviz_config_path = os.path.join(rviz_base, "demo.rviz")
             print(f"[INFO] Using default rviz config: {rviz_config_path}")
 
-        # For ARM-controller type in full_body launch, force RViz Fixed Frame to base_footprint.
-        if is_arm_controller_type:
+        # Ocs2ArmController: align RViz Fixed Frame with interactive marker frame (task.info baseFrame).
+        if is_arm_controller_type and marker_fixed_frame:
             try:
                 with open(rviz_config_path, "r", encoding="utf-8") as f:
                     rviz_content = f.read()
-                patched_content = rviz_content.replace("Fixed Frame: world", "Fixed Frame: base_footprint")
+                patched_content = rviz_content.replace(
+                    "Fixed Frame: world", f"Fixed Frame: {marker_fixed_frame}"
+                )
                 tmp_name = f"full_body_{robot_name}_{robot_type or 'default'}_arm_fixedframe.rviz"
                 tmp_rviz_config_path = os.path.join(tempfile.gettempdir(), tmp_name)
                 with open(tmp_rviz_config_path, "w", encoding="utf-8") as f:
                     f.write(patched_content)
                 rviz_config_path = tmp_rviz_config_path
-                print(f"[INFO] ARM type detected: using RViz config with Fixed Frame=base_footprint: {rviz_config_path}")
+                print(
+                    f"[INFO] ARM type: RViz Fixed Frame={marker_fixed_frame}: {rviz_config_path}"
+                )
             except Exception as e:
                 print(f"[WARN] Failed to patch RViz Fixed Frame for ARM type: {e}")
 
@@ -260,7 +340,6 @@ def launch_setup(context, *args, **kwargs):
         rviz_node = Node(
             package="rviz2",
             executable="rviz2",
-            name="rviz2",
             output="log",
             arguments=["-d", rviz_config_path],
             parameters=rviz_parameters,
@@ -346,6 +425,7 @@ def generate_launch_description():
         world_arg,
         enable_arms_target_manager_arg,
         enable_gripper_arg,
-        *launch_mode_args,  # Unpack the list of arguments
+        *launch_mode_args,
+    ] + create_robot_profile_launch_arguments() + [
         OpaqueFunction(function=launch_setup),
     ])

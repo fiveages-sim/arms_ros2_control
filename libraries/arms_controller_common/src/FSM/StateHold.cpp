@@ -19,7 +19,8 @@ namespace arms_controller_common
 
     void StateHold::updateParam()
     {
-        joint_position_threshold_ = node_->get_parameter("hold_position_threshold").as_double();
+        first_check_position_threshold_ = node_->get_parameter("hold_first_check_position_threshold").as_double();
+        joint_position_diff_threshold_ = node_->get_parameter("hold_position_threshold").as_double();
     }
 
     void StateHold::enter()
@@ -41,10 +42,11 @@ namespace arms_controller_common
     void StateHold::run(const rclcpp::Time& time, const rclcpp::Duration& /* period */)
     {
         updateParam();
-        if (joint_position_threshold_ > 0.0)
+        if (first_check_position_threshold_ > 0.0 || joint_position_diff_threshold_ > 0.0)
         {
             double max_diff = 0.0;
-            bool exceeds_threshold = false;
+            bool exceeds_first_check_threshold = false;
+            bool exceeds_diff_threshold = false;
 
             for (size_t i = 0; i < ctrl_interfaces_.joint_position_state_interface_.size() && 
                  i < hold_positions_.size(); ++i)
@@ -58,33 +60,46 @@ namespace arms_controller_common
                     max_diff = diff;
                 }
 
-                if (diff > joint_position_threshold_)
+                if (first_check_position_threshold_ > 0.0 && diff > first_check_position_threshold_)
                 {
-                    exceeds_threshold = true;
+                    exceeds_first_check_threshold = true;
+                }
+
+                if (joint_position_diff_threshold_ > 0.0 && diff > joint_position_diff_threshold_)
+                {
+                    exceeds_diff_threshold = true;
                 }
             }
 
             if (!first_threshold_check_passed_)
             {
-                if (!exceeds_threshold)
+                if (first_check_position_threshold_ <= 0.0)
                 {
                     first_threshold_check_passed_ = true;
                     RCLCPP_INFO(node_->get_logger(),
-                               "HOLD state: first threshold check passed (max diff: %.4f rad <= threshold: %.4f rad). "
-                               "Automatic adjustment enabled.",
-                               max_diff, joint_position_threshold_);
+                               "HOLD state: first threshold check disabled. Automatic adjustment %s.",
+                               joint_position_diff_threshold_ > 0.0 ? "enabled" : "disabled");
+                }
+                else if (!exceeds_first_check_threshold)
+                {
+                    first_threshold_check_passed_ = true;
+                    RCLCPP_INFO(node_->get_logger(),
+                               "HOLD state: first threshold check passed (max diff: %.4f rad <= first check threshold: %.4f rad). "
+                               "Automatic adjustment %s.",
+                               max_diff, first_check_position_threshold_,
+                               joint_position_diff_threshold_ > 0.0 ? "enabled" : "disabled");
                 }
                 else
                 {
                     RCLCPP_WARN_THROTTLE(node_->get_logger(), *node_->get_clock(), 1000,
-                                       "HOLD state: first threshold check failed (max diff: %.4f rad > threshold: %.4f rad). "
+                                       "HOLD state: first threshold check failed (max diff: %.4f rad > first check threshold: %.4f rad). "
                                        "Waiting for threshold to be satisfied before enabling automatic adjustment.",
-                                       max_diff, joint_position_threshold_);
+                                       max_diff, first_check_position_threshold_);
                 }
             }
             else
             {
-                if (exceeds_threshold)
+                if (exceeds_diff_threshold)
                 {
                     size_t num_joints = ctrl_interfaces_.joint_position_state_interface_.size();
                     hold_positions_.resize(num_joints);
@@ -104,7 +119,7 @@ namespace arms_controller_common
                         RCLCPP_WARN(node_->get_logger(),
                                    "HOLD state: position difference (max: %.4f rad) exceeds threshold (%.4f rad). "
                                    "Updating hold positions to current positions for safety.",
-                                   max_diff, joint_position_threshold_);
+                                   max_diff, joint_position_diff_threshold_);
                         last_warn_time = time;
                         first_warn = false;
                     }
@@ -177,4 +192,3 @@ namespace arms_controller_common
         }
     }
 } // namespace arms_controller_common
-
