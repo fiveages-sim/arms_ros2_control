@@ -194,11 +194,11 @@ namespace arms_ros2_control::command
                 right_gripper_controller_name_ = controller_name;
                 RCLCPP_DEBUG(node_->get_logger(), "🕹️🕶️🕹️ Detected right gripper controller: %s", controller_name.c_str());
             }
-            // 单臂模式：如果只有一个控制器且名称中没有left/right，假设是左控制器
-            else if (hand_controllers.size() == 1 && left_gripper_controller_name_.empty())
+            else
             {
-                left_gripper_controller_name_ = controller_name;
-                RCLCPP_DEBUG(node_->get_logger(), "🕹️🕶️🕹️ Detected single-arm gripper controller (assumed left): %s", controller_name.c_str());
+                RCLCPP_WARN(node_->get_logger(),
+                            "🕹️ Hand controller '%s' has no left/right in name; VR gripper mapping skipped",
+                            controller_name.c_str());
             }
         }
     }

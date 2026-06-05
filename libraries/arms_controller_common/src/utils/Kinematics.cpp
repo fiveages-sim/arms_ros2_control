@@ -51,20 +51,6 @@ namespace arms_controller_common
         leftArmJointCount_ = leftArmJointNames_.size();
         rightArmJointCount_ = rightArmJointNames_.size();
 
-        std::cout << "Left joint names: ";
-        for (const auto& name : leftArmJointNames_)
-        {
-            std::cout << name << " ";
-        }
-        std::cout << std::endl;
-
-        std::cout << "Right joint names: ";
-        for (const auto& name : rightArmJointNames_)
-        {
-            std::cout << name << " ";
-        }
-        std::cout << std::endl;
-
         extractJointLimits();
     }
 
@@ -488,7 +474,6 @@ namespace arms_controller_common
 
         for (size_t i = 0; i < leftArmJointNames_.size(); ++i)
         {
-            const std::string& jointName = leftArmJointNames_[i];
             pinocchio::JointIndex jointId = model_.getJointId(leftArmJointNames_[i]);
             if (jointId < model_.joints.size())
             {
@@ -498,10 +483,6 @@ namespace arms_controller_common
                 {
                     leftLowerLimits_[i] = model_.lowerPositionLimit[idx_q];
                     leftUpperLimits_[i] = model_.upperPositionLimit[idx_q];
-                    std::cout << "Left joint " << jointName
-                        << " (jointId=" << jointId << ", idx_q=" << idx_q
-                        << "): [" << leftLowerLimits_[i] << ", "
-                        << leftUpperLimits_[i] << "]" << std::endl;
                 }
                 else
                 {
@@ -518,7 +499,6 @@ namespace arms_controller_common
 
         for (size_t i = 0; i < rightArmJointNames_.size(); ++i)
         {
-            const std::string& jointName = rightArmJointNames_[i];
             pinocchio::JointIndex jointId = model_.getJointId(rightArmJointNames_[i]);
             if (jointId < model_.joints.size())
             {
@@ -528,10 +508,6 @@ namespace arms_controller_common
                 {
                     rightLowerLimits_[i] = model_.lowerPositionLimit[idx_q];
                     rightUpperLimits_[i] = model_.upperPositionLimit[idx_q];
-                    std::cout << "Right joint " << jointName
-                        << " (jointId=" << jointId << ", idx_q=" << idx_q
-                        << "): [" << rightLowerLimits_[i] << ", "
-                        << rightUpperLimits_[i] << "]" << std::endl;
                 }
                 else
                 {

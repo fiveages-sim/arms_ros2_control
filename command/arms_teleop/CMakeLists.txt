@@ -16,6 +16,7 @@ find_package(geometry_msgs REQUIRED)
 find_package(arms_ros2_control_msgs REQUIRED)
 find_package(control_msgs REQUIRED)
 find_package(rclcpp_action REQUIRED)
+find_package(rcutils REQUIRED)
 
 # Joystick teleop node
 add_executable(joystick_teleop src/joystick_teleop.cpp)
@@ -33,8 +34,22 @@ target_link_libraries(joystick_teleop PUBLIC
         ${rclcpp_action_TARGETS}
 )
 
+add_executable(keyboard_teleop src/keyboard_teleop.cpp)
+target_include_directories(keyboard_teleop
+        PUBLIC
+        "$<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>"
+        "$<INSTALL_INTERFACE:include/${PROJECT_NAME}>")
+target_link_libraries(keyboard_teleop PUBLIC
+        ${rclcpp_TARGETS}
+        ${std_msgs_TARGETS}
+        ${geometry_msgs_TARGETS}
+        ${arms_ros2_control_msgs_TARGETS}
+        ${rcutils_TARGETS}
+)
+
 install(TARGETS
         joystick_teleop
+        keyboard_teleop
         DESTINATION lib/${PROJECT_NAME})
 
 install(

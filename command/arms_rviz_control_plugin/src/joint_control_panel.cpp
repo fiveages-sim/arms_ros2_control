@@ -7,7 +7,120 @@
 #include <algorithm>
 #include <cmath>
 #include <cctype>
+#include <map>
 #include <arms_controller_common/utils/FSMStateTransitionValidator.h>
+
+namespace
+{
+    // joint_states 名称常为字母序，与 linkerhand ros2_control 中关节顺序不一致；与硬件/控制器约定对齐。
+    int dexterousLinkerHandSortKey(const std::string& joint_name)
+    {
+        std::string n = joint_name;
+        std::transform(n.begin(), n.end(), n.begin(), ::tolower);
+        if (n.find("thumb_joint1") != std::string::npos)
+        {
+            return 0;
+        }
+        if (n.find("thumb_joint2") != std::string::npos)
+        {
+            return 1;
+        }
+        if (n.find("thumb_joint3") != std::string::npos)
+        {
+            return 2;
+        }
+        if (n.find("index_joint") != std::string::npos)
+        {
+            return 3;
+        }
+        if (n.find("middle_joint") != std::string::npos)
+        {
+            return 4;
+        }
+        if (n.find("ring_joint") != std::string::npos)
+        {
+            return 5;
+        }
+        if (n.find("pinky_joint") != std::string::npos)
+        {
+            return 6;
+        }
+        return 100;
+    }
+
+    bool dexterousLinkerHandJointLess(const std::string& a, const std::string& b)
+    {
+        const int ka = dexterousLinkerHandSortKey(a);
+        const int kb = dexterousLinkerHandSortKey(b);
+        if (ka != kb)
+        {
+            return ka < kb;
+        }
+        return a < b;
+    }
+
+    std::vector<std::string> reorderJointsWithSortedDexterousHands(
+        const std::vector<std::string>& old_order,
+        const std::map<std::string, std::string>& joint_to_category)
+    {
+        std::vector<std::string> left_hand;
+        std::vector<std::string> right_hand;
+        for (const auto& n : old_order)
+        {
+            auto it = joint_to_category.find(n);
+            if (it == joint_to_category.end())
+            {
+                continue;
+            }
+            if (it->second == "left_hand")
+            {
+                left_hand.push_back(n);
+            }
+            else if (it->second == "right_hand")
+            {
+                right_hand.push_back(n);
+            }
+        }
+        std::sort(left_hand.begin(), left_hand.end(), dexterousLinkerHandJointLess);
+        std::sort(right_hand.begin(), right_hand.end(), dexterousLinkerHandJointLess);
+
+        std::vector<std::string> result;
+        result.reserve(old_order.size());
+        bool left_block_written = false;
+        bool right_block_written = false;
+        for (const auto& n : old_order)
+        {
+            auto it = joint_to_category.find(n);
+            const std::string cat = (it != joint_to_category.end()) ? it->second : std::string();
+            if (cat == "left_hand")
+            {
+                if (!left_block_written)
+                {
+                    for (const auto& h : left_hand)
+                    {
+                        result.push_back(h);
+                    }
+                    left_block_written = true;
+                }
+                continue;
+            }
+            if (cat == "right_hand")
+            {
+                if (!right_block_written)
+                {
+                    for (const auto& h : right_hand)
+                    {
+                        result.push_back(h);
+                    }
+                    right_block_written = true;
+                }
+                continue;
+            }
+            result.push_back(n);
+        }
+        return result;
+    }
+} // namespace
 
 namespace arms_rviz_control_plugin
 {
@@ -203,7 +316,7 @@ namespace arms_rviz_control_plugin
                 // If joints are already initialized, parse limits immediately
                 if (joint_limits_manager_ && joints_initialized_ && !joint_names_.empty())
                 {
-                    joint_limits_manager_->parseFromURDF(msg->data, joint_names_);
+                    joint_limits_manager_->parseFromURDF(msg->data, joint_names_, false);
                     // Update spinbox ranges after parsing limits
                     updateSpinboxRanges();
                     RCLCPP_INFO(node_->get_logger(),
@@ -1578,7 +1691,8 @@ namespace arms_rviz_control_plugin
         if (robot_description_received_ && !robot_description_cache_.empty() &&
             joint_limits_manager_ && joints_initialized_ && !joint_names_.empty())
         {
-            size_t parsed_count = joint_limits_manager_->parseFromURDF(robot_description_cache_, joint_names_);
+            size_t parsed_count = joint_limits_manager_->parseFromURDF(
+                robot_description_cache_, joint_names_, false);
             if (parsed_count > 0)
             {
                 // Update spinbox ranges after parsing limits
@@ -1622,7 +1736,6 @@ namespace arms_rviz_control_plugin
                 break;
             }
         }
-
         // Filter out gripper joints and classify joints
         for (size_t i = 0; i < joint_names_source.size(); ++i)
         {
@@ -1662,6 +1775,21 @@ namespace arms_rviz_control_plugin
                 joint_to_category_[joint_name] = category;
                 category_to_joints_[category].push_back(joint_index);
             }
+        }
+
+        // joint_states 顺序常为字母序，导致灵巧手 UI 与 Float64MultiArray 与 ros2_control 关节序不一致
+        const auto joint_categories_snapshot = joint_to_category_;
+        joint_names_ = reorderJointsWithSortedDexterousHands(joint_names_, joint_categories_snapshot);
+        joint_name_to_index_.clear();
+        joint_to_category_.clear();
+        category_to_joints_.clear();
+        for (size_t i = 0; i < joint_names_.size(); ++i)
+        {
+            const std::string& joint_name = joint_names_[i];
+            joint_name_to_index_[joint_name] = i;
+            const std::string category = classifyJoint(joint_name);
+            joint_to_category_[joint_name] = category;
+            category_to_joints_[category].push_back(i);
         }
 
         if (joint_names_.empty())
