@@ -166,7 +166,35 @@ ros2 topic pub --once /left_hand_controller/target_percent \
 ros2 topic pub --once /body_controller/waist_lifting std_msgs/msg/Float64 "data: 0.05"
 ```
 
-### 5.6 腰部升降 — 速度系数
+### 5.6 腰部升降 — 局部 x/z/phi 相对移动
+
+**话题：** `/{controller_name}/waist_lifting_pose_relative`  
+**消息类型：** `std_msgs/Float64MultiArray`  
+**前提：** `waist_lifting_enabled: true`，当前状态 MOVEJ
+
+语义：`data: [dx, dz, dphi]`，单位与腰部机构 FK 的局部坐标一致（`dphi` 为 rad）。  
+该命令只在腰部机构局部坐标系中生效，不做 world/ground 坐标变换。
+
+```bash
+ros2 topic pub --once /body_controller/waist_lifting_pose_relative \
+  std_msgs/msg/Float64MultiArray "{data: [0.02, 0.05, 0.10]}"
+```
+
+### 5.7 腰部升降 — x/z/phi 绝对目标
+
+**话题：** `/{controller_name}/waist_lifting_pose_absolute`
+**消息类型：** `std_msgs/Float64MultiArray`
+**前提：** `waist_lifting_enabled: true`，当前状态 MOVEJ
+
+语义：`data: [x, z, phi]`，表示位置 `(x, z)` 在 `base_footprint` 坐标系下，`phi` 为 `body_base` 平面角，单位 rad。  
+控制器会先将位置点变换到 `body_base` 坐标系，再在实际执行前读取当前腰部 `(x, z, phi)` 计算相对位移并复用现有规划逻辑。
+
+```bash
+ros2 topic pub --once /body_controller/waist_lifting_pose_absolute \
+  std_msgs/msg/Float64MultiArray "{data: [0.12, 0.45, 0.20]}"
+```
+
+### 5.8 腰部升降 — 速度系数
 
 **话题：** `/{controller_name}/waist_lifting_command`  
 **消息类型：** `std_msgs/Float64`（系数范围：`[-1.0, 1.0]`）  
@@ -179,7 +207,7 @@ ros2 topic pub /body_controller/waist_lifting_command std_msgs/msg/Float64 "data
 ros2 topic pub --once /body_controller/waist_lifting_command std_msgs/msg/Float64 "data: 0.0"  # 停止
 ```
 
-### 5.7 腰部转向 — 速度系数
+### 5.9 腰部转向 — 速度系数
 
 **话题：** `/{controller_name}/waist_turning_command`  
 **消息类型：** `std_msgs/Float64`（系数范围：`[-1.0, 1.0]`）  
@@ -205,6 +233,8 @@ ros2 topic pub /body_controller/waist_turning_command std_msgs/msg/Float64 "data
 | `/my_controller/target_command` | `Int32` (0/1) | MOVEJ | 灵巧手开关控制 |
 | `/my_controller/target_percent` | `Float64` (0~1) | MOVEJ | 灵巧手比例控制 |
 | `/my_controller/waist_lifting` | `Float64` | MOVEJ | 腰部升降距离 |
+| `/my_controller/waist_lifting_pose_relative` | `Float64MultiArray` | MOVEJ | 腰部局部相对位移 `[dx, dz, dphi]` |
+| `/my_controller/waist_lifting_pose_absolute` | `Float64MultiArray` | MOVEJ | 腰部绝对目标 `[x, z, phi]` |
 | `/my_controller/waist_lifting_command` | `Float64` | MOVEJ | 腰部升降速度系数 |
 | `/my_controller/waist_turning_command` | `Float64` | MOVEJ | 腰部转向速度系数 |
 
