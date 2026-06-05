@@ -74,8 +74,18 @@ def _detect_config_name(config_value, config_dir, joy_dev):
         match_sources.append(joystick_name)
     match_sources.extend(_find_joystick_aliases(joy_dev))
 
+    device_config_aliases = {
+        'sony interactive entertainment wireless controller': 'gamesir_two',
+    }
+
     for source in match_sources:
         lowered = source.lower()
+        for device_name, config_name in device_config_aliases.items():
+            config_path = os.path.join(config_dir, f'{config_name}.yaml')
+            if device_name in lowered and os.path.exists(config_path):
+                print(f"[INFO] Auto-selected joystick config '{config_name}' for device '{source}'")
+                return config_name
+
         for config_name in sorted(
             (name for name in available_configs if name != 'default'),
             key=len,

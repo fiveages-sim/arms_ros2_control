@@ -141,8 +141,10 @@ namespace gripper_hardware_common
          * - O6 (6-DOF)
          * - L6 (6-DOF)
          * 
-         * All models use the same Modbus register layout and function codes.
-         * Only Modbus protocol-related addresses and function codes are defined here.
+         * O7 (FC16/FC04): position 0-6, torque 7-13, speed 14-20.
+         * O6/L6: position 0-5, torque 6-11, speed 12-17.
+         * Per-model start addresses are in modbus_ros2_control DexterousHandProductTraits.
+         * Constants below (THUMB_PITCH_TORQUE_REG=7, etc.) are the O7 layout for legacy APIs.
          * Joint limits should be defined in URDF/Xacro or separate configuration files.
          */
         namespace LinkerHand
