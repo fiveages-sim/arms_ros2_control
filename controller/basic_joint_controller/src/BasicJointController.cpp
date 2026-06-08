@@ -10,7 +10,9 @@
 
 #include <std_msgs/msg/float64_multi_array.hpp>
 #include <string>
+#include <cmath>
 #include <boost/log/attributes/constant.hpp>
+#include <tf2/exceptions.h>
 
 namespace basic_joint_controller
 {
@@ -197,6 +199,9 @@ namespace basic_joint_controller
         // 创建腰部升降规划器并传递给 StateMoveJ
         if (waist_lifting_enabled_)
         {
+            tf_buffer_ = std::make_shared<tf2_ros::Buffer>(get_node()->get_clock());
+            tf_listener_ = std::make_shared<tf2_ros::TransformListener>(*tf_buffer_);
+
             // 订阅腰部升降话题
             std::string waist_lifting_topic = "/" + controller_name_ + "/waist_lifting";
 
@@ -214,7 +219,7 @@ namespace basic_joint_controller
                     if (state_list_.movej)
                     {
                         bool success = state_list_.movej->moveWaistLifting(
-                            msg->data); //腰部升降距离
+                            Eigen::Vector3d(0.0, msg->data, 0.0)); //兼容旧接口：仅dz
 
                         if (success)
                         {
@@ -229,6 +234,104 @@ namespace basic_joint_controller
                         }
                     }
                 });
+            std::string waist_lifting_pose_relative_topic =
+                "/" + controller_name_ + "/waist_lifting_pose_relative";
+            waist_lifting_pose_relative_subscription_ =
+                get_node()->create_subscription<std_msgs::msg::Float64MultiArray>(
+                waist_lifting_pose_relative_topic, 10,
+                [this](const std_msgs::msg::Float64MultiArray::SharedPtr msg)
+                {
+                    if (!current_state_ || current_state_->state_name != FSMStateName::MOVEJ)
+                    {
+                        return;
+                    }
+                    if (!state_list_.movej)
+                    {
+                        return;
+                    }
+                    if (msg->data.size() < 3)
+                    {
+                        RCLCPP_WARN(get_node()->get_logger(),
+                                    "waist_lifting_pose_relative expects [dx, dz, dphi], got %zu values",
+                                    msg->data.size());
+                        return;
+                    }
+
+                    const Eigen::Vector3d lifting_delta(msg->data[0], msg->data[1], msg->data[2]);
+                    bool success = state_list_.movej->moveWaistLifting(lifting_delta);
+                    if (!success)
+                    {
+                        RCLCPP_WARN(get_node()->get_logger(), "waist lifting x/z/phi delta command failed");
+                    }
+                });
+            std::string waist_lifting_pose_absolute_topic =
+                "/" + controller_name_ + "/waist_lifting_pose_absolute";
+            waist_lifting_pose_absolute_subscription_ =
+                get_node()->create_subscription<std_msgs::msg::Float64MultiArray>(
+                    waist_lifting_pose_absolute_topic, 10,
+                    [this](const std_msgs::msg::Float64MultiArray::SharedPtr msg)
+                    {
+                        if (!current_state_ || current_state_->state_name != FSMStateName::MOVEJ)
+                        {
+                            return;
+                        }
+                        if (!state_list_.movej)
+                        {
+                            return;
+                        }
+                        if (msg->data.size() < 3)
+                        {
+                            RCLCPP_WARN(get_node()->get_logger(),
+                                        "waist_lifting_pose_absolute expects [x, z, phi], got %zu values",
+                                        msg->data.size());
+                            return;
+                        }
+                        if (!tf_buffer_)
+                        {
+                            RCLCPP_WARN(get_node()->get_logger(), "TF buffer is not initialized");
+                            return;
+                        }
+
+                        geometry_msgs::msg::PointStamped target_base;
+                        target_base.header.frame_id = waist_absolute_source_frame_;
+                        target_base.header.stamp = rclcpp::Time(0);
+                        target_base.point.x = msg->data[0];
+                        target_base.point.y = 0.0;
+                        target_base.point.z = msg->data[1];
+
+                        try
+                        {
+                            const auto transform = tf_buffer_->lookupTransform(
+                                waist_absolute_target_frame_,
+                                waist_absolute_source_frame_,
+                                tf2::TimePointZero);
+
+                            geometry_msgs::msg::PointStamped target_body;
+                            tf2::doTransform(target_base, target_body, transform);
+                            if (std::abs(target_body.point.y) > 1.0e-4)
+                            {
+                                RCLCPP_WARN(get_node()->get_logger(),
+                                            "Transformed waist absolute target has non-zero y in %s: %.6f; using x/z only",
+                                            waist_absolute_target_frame_.c_str(), target_body.point.y);
+                            }
+
+                            const Eigen::Vector3d target_xz_phi(
+                                target_body.point.x, target_body.point.z, msg->data[2]);
+                            if (!state_list_.movej->moveWaistLiftingToBodyBaseXz(target_xz_phi))
+                            {
+                                RCLCPP_WARN(get_node()->get_logger(),
+                                            "waist absolute x/z/phi command failed");
+                            }
+                        }
+                        catch (const tf2::TransformException& ex)
+                        {
+                            RCLCPP_WARN(get_node()->get_logger(),
+                                        "Failed to transform waist absolute target from %s to %s: %s",
+                                        waist_absolute_source_frame_.c_str(),
+                                        waist_absolute_target_frame_.c_str(),
+                                        ex.what());
+                        }
+                    });
             // 订阅腰部升降speedj 指令
             std::string waist_lifting_command_topic = "/" + controller_name_ + "/waist_lifting_command";
 
