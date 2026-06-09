@@ -23,6 +23,7 @@ JoystickTeleop::JoystickTeleop() : Node("joystick_teleop_node") {
     
     // Initialize state
     enabled_ = false;
+    waiting_for_neutral_axes_ = false;
     lastUpdateTime_ = now();
     currentTarget_ = 1; // Start with left arm
     current_mode_ = ARM_MODE; // Start with arm control mode
@@ -186,6 +187,16 @@ void JoystickTeleop::joy_callback(sensor_msgs::msg::Joy::SharedPtr msg) {
 
     // Only process axes if joystick is enabled and not in FSM mode
     if (enabled_) {
+        if (waiting_for_neutral_axes_) {
+            publishZeroCommands();
+            if (!areControlAxesNeutral(msg)) {
+                return;
+            }
+            waiting_for_neutral_axes_ = false;
+            RCLCPP_INFO(get_logger(), "🎮 Control axes are neutral, joystick motion enabled.");
+            return;
+        }
+
         // Check if LB is pressed (FSM mode - only for arm control)
         bool lb_pressed = (static_cast<size_t>(button_map_.lb_button) < msg->buttons.size()) ? 
                          msg->buttons[button_map_.lb_button] : false;
@@ -255,24 +266,14 @@ void JoystickTeleop::processButtons(const sensor_msgs::msg::Joy::SharedPtr msg) 
     if (right_stick_just_pressed) {
         enabled_ = !enabled_;
         if (enabled_) {
+            waiting_for_neutral_axes_ = true;
+            publishZeroCommands();
             RCLCPP_INFO(get_logger(), "🎮 Joystick control ENABLED!");
+            RCLCPP_INFO(get_logger(), "🎮 Waiting for control axes to return to neutral.");
         } else {
+            waiting_for_neutral_axes_ = false;
             RCLCPP_INFO(get_logger(), "🎮 Joystick control DISABLED!");
-            // Reset commands when disabling
-            if (current_mode_ == ARM_MODE) {
-                inputs_.x = 0.0;
-                inputs_.y = 0.0;
-                inputs_.z = 0.0;
-                inputs_.roll = 0.0;
-                inputs_.pitch = 0.0;
-                inputs_.yaw = 0.0;
-                publisher_->publish(inputs_);
-            } else {
-                chassis_cmd_.linear.x = 0.0;
-                chassis_cmd_.linear.y = 0.0;
-                chassis_cmd_.angular.z = 0.0;
-                chassis_publisher_->publish(chassis_cmd_);
-            }
+            publishZeroCommands();
         }
     }
     
@@ -475,6 +476,54 @@ double JoystickTeleop::applyDeadzone(double value, double deadzone) const {
         return 0.0;
     }
     return value;
+}
+
+bool JoystickTeleop::areControlAxesNeutral(const sensor_msgs::msg::Joy::SharedPtr msg) const {
+    size_t max_axis_index = std::max({
+        axes_map_.left_stick_x, axes_map_.left_stick_y,
+        axes_map_.right_stick_x, axes_map_.right_stick_y,
+        axes_map_.dpad_x, axes_map_.dpad_y
+    });
+
+    if (msg->axes.size() <= max_axis_index) {
+        return false;
+    }
+
+    const double left_stick_x = applyDeadzone(msg->axes[axes_map_.left_stick_x], axes_map_.deadzone);
+    const double left_stick_y = applyDeadzone(msg->axes[axes_map_.left_stick_y], axes_map_.deadzone);
+    const double right_stick_x = applyDeadzone(msg->axes[axes_map_.right_stick_x], axes_map_.deadzone);
+    const double right_stick_y = applyDeadzone(msg->axes[axes_map_.right_stick_y], axes_map_.deadzone);
+    const double dpad_x = applyDeadzone(msg->axes[axes_map_.dpad_x], axes_map_.dpad_deadzone);
+    const double dpad_y = applyDeadzone(msg->axes[axes_map_.dpad_y], axes_map_.dpad_deadzone);
+
+    return left_stick_x == 0.0 && left_stick_y == 0.0 &&
+           right_stick_x == 0.0 && right_stick_y == 0.0 &&
+           dpad_x == 0.0 && dpad_y == 0.0;
+}
+
+void JoystickTeleop::publishZeroCommands() {
+    inputs_.x = 0.0;
+    inputs_.y = 0.0;
+    inputs_.z = 0.0;
+    inputs_.roll = 0.0;
+    inputs_.pitch = 0.0;
+    inputs_.yaw = 0.0;
+    publisher_->publish(inputs_);
+
+    chassis_cmd_.linear.x = 0.0;
+    chassis_cmd_.linear.y = 0.0;
+    chassis_cmd_.linear.z = 0.0;
+    chassis_cmd_.angular.x = 0.0;
+    chassis_cmd_.angular.y = 0.0;
+    chassis_cmd_.angular.z = 0.0;
+    chassis_publisher_->publish(chassis_cmd_);
+
+    auto waist_cmd = std_msgs::msg::Float64();
+    auto waist_turn_cmd = std_msgs::msg::Float64();
+    waist_cmd.data = 0.0;
+    waist_turn_cmd.data = 0.0;
+    waist_lifting_publisher_->publish(waist_cmd);
+    waist_turning_publisher_->publish(waist_turn_cmd);
 }
 
 void JoystickTeleop::processChassisAxes(const sensor_msgs::msg::Joy::SharedPtr msg) {
