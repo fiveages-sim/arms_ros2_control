@@ -1,6 +1,6 @@
 # Sole release path for arms_ros2_control. See README.deb.md.
-#   ros-jazzy-arms-ros2-control       — WBC stack (amd64 + arm64)
-#   ros-jazzy-arms-ros2-control-full  — WBC + gripper_hardware_common + marvin + modbus + juxie + rokae (amd64 + arm64)
+#   ros-jazzy-arms-ros2-control       — WBC stack + topic_based_ros2_control (amd64 + arm64)
+#   ros-jazzy-arms-ros2-control-full  — WBC + topic_based_ros2_control + gripper_hardware_common + marvin + modbus + juxie + rokae (amd64 + arm64)
 # Retired: standalone gripper / per-hardware debs / arms-ros2-control-jazzy-wbc.
 # Requires PRIVATE_SUBMODULES_TOKEN (selective submodule init; never submodules: recursive). Debs: install only, no .cpp.
 
@@ -579,6 +579,7 @@ jobs:
           rsync -a "${ws}/libraries/ocs2_controller_common/" "${source_root}/ocs2_controller_common/"
           rsync -a "${ws}/libraries/lina_planning/" "${source_root}/lina_planning/"
           rsync -a "${ws}/libraries/ocs2_humanoid/" "${source_root}/ocs2_humanoid/"
+          rsync -a "${ws}/hardwares/topic_based_ros2_control/" "${source_root}/topic_based_ros2_control/"
 
           if [[ "${BUNDLE}" == "full" ]]; then
             rsync -a "${ws}/libraries/gripper_hardware_common/" "${source_root}/gripper_hardware_common/"
@@ -668,6 +669,10 @@ jobs:
             echo "lina_planning was not installed into the package root." >&2
             exit 1
           fi
+          if [[ ! -d "${install_root}/share/topic_based_ros2_control" ]]; then
+            echo "topic_based_ros2_control was not installed into the package root." >&2
+            exit 1
+          fi
           if [[ "${{ matrix.bundle }}" == "full" ]]; then
             for pkg in gripper_hardware_common marvin_ros2_control modbus_ros2_control juxie_ros2_control rokae_ros2_control; do
               if [[ ! -d "${install_root}/share/${pkg}" ]]; then
@@ -698,10 +703,10 @@ jobs:
 
           if [[ "${BUNDLE}" == "full" ]]; then
             deb_description="Prebuilt arms_ros2_control full bundle for ROS 2 ${ROS_DISTRO}
-             Includes WBC stack (lina_planning, ocs2_humanoid, ocs2_wbc_controller) plus gripper_hardware_common, marvin_ros2_control, modbus_ros2_control, juxie_ros2_control, rokae_ros2_control. Installed into ${INSTALL_PREFIX} without shared prefix setup files."
+             Includes WBC stack (lina_planning, ocs2_humanoid, ocs2_wbc_controller), topic_based_ros2_control, plus gripper_hardware_common, marvin_ros2_control, modbus_ros2_control, juxie_ros2_control, rokae_ros2_control. Installed into ${INSTALL_PREFIX} without shared prefix setup files."
           else
             deb_description="Prebuilt arms_ros2_control WBC bundle for ROS 2 ${ROS_DISTRO}
-             Includes command, controllers, arms_controller_common, ocs2_controller_common, lina_planning, ocs2_humanoid, ocs2_wbc_controller. Installed into ${INSTALL_PREFIX} without shared prefix setup files."
+             Includes command, controllers, arms_controller_common, ocs2_controller_common, lina_planning, ocs2_humanoid, ocs2_wbc_controller, topic_based_ros2_control. Installed into ${INSTALL_PREFIX} without shared prefix setup files."
           fi
 
           # Omit Provides on its own line when empty — a blank line splits control stanzas.
@@ -1094,6 +1099,7 @@ jobs:
               "ocs2_arm_controller",
               "ocs2_wbc_controller",
               "lina_planning",
+              "topic_based_ros2_control",
           ]
           if bundle == "full":
               packages.extend([
@@ -1138,6 +1144,7 @@ jobs:
           find_package(ocs2_arm_controller REQUIRED)
           find_package(ocs2_wbc_controller REQUIRED)
           find_package(lina_planning REQUIRED)
+          find_package(topic_based_ros2_control REQUIRED)
           EOF
 
           if [[ "${VERIFY_BUNDLE}" == "full" ]]; then
