@@ -23,8 +23,12 @@ private:
     void processButtons(const sensor_msgs::msg::Joy::SharedPtr msg);
     void processAxes(const sensor_msgs::msg::Joy::SharedPtr msg);
     void processChassisAxes(const sensor_msgs::msg::Joy::SharedPtr msg);
+    void processGripperTriggers(const sensor_msgs::msg::Joy::SharedPtr msg);
     double applyDeadzone(double value, double deadzone = 0.1) const;
-    void loadButtonMapping();
+    double readTriggerAxis(const sensor_msgs::msg::Joy::SharedPtr msg, int axis_index) const;
+    bool isButtonPressed(const sensor_msgs::msg::Joy::SharedPtr msg, int index) const;
+    std::pair<double, double> readDpad(const sensor_msgs::msg::Joy::SharedPtr msg) const;
+    void loadParameters();
     void printButtonMapping();
 
     arms_ros2_control_msgs::msg::Inputs inputs_;
@@ -67,9 +71,9 @@ private:
 
     // Gripper command state tracking (removed - using target_command subscriptions instead)
 
-    // Separate gripper states for left and right arms (like task3)
-    bool left_gripper_open_;   // Left arm gripper state
-    bool right_gripper_open_;  // Right arm gripper state
+    double left_gripper_ratio_;
+    double right_gripper_ratio_;
+    double gripper_step_per_tick_;
     
     // Button mapping configuration
     struct ButtonMapping {
@@ -83,6 +87,10 @@ private:
         int start_button;
         int left_stick_button;
         int right_stick_button;
+        int dpad_up;
+        int dpad_down;
+        int dpad_left;
+        int dpad_right;
     } button_map_;
     
     // Axes mapping configuration
@@ -93,8 +101,11 @@ private:
         int right_stick_y;
         int dpad_x;
         int dpad_y;
+        int left_trigger;
+        int right_trigger;
         double deadzone;
         double dpad_deadzone;
+        double trigger_deadzone;
     } axes_map_;
     
     // Mirror movement configuration

@@ -1,5 +1,5 @@
-# 手柄按键和摇杆映射配置
-# 适用于 Xbox 控制器 (默认配置)
+# joy_node 回退映射（厂商原始 /joy 下标，非 SDL game_controller 标准布局）
+# Mapped 手柄请用 game_controller_node + generic_gamepad.yaml
 
 /**:
   ros__parameters:
@@ -27,10 +27,17 @@
       right_stick_x: 2     # 右摇杆 X 轴 - 控制 Yaw 旋转    2
       right_stick_y: 3     # 右摇杆 Y 轴 - 控制 Z 方向移动   3
       dpad_x: 4            # D-Pad X 轴 - 控制 Pitch 旋转   5
-      dpad_y: 5           # D-Pad Y 轴 - 控制 Roll 旋转 如果是底盘模式的话，就是控制腰部升降，1是腰部上升，-1是腰部下降，0是停止
+      dpad_y: 5           # D-Pad Y：ARM 模式 pitch；CHASSIS 模式腰部升降（正=上升，负=下降）
       deadzone: 0.1        # 摇杆死区
       dpad_deadzone: 0.5   # D-Pad 死区
-    
+      left_trigger: 2      # LT - 夹爪关小（累减开合比例）
+      right_trigger: 5     # RT - 夹爪开大（累加开合比例）
+      trigger_deadzone: 0.05
+      arm_activation_threshold: 0.5
+
+    gripper:
+      step_per_tick: 0.05
+
     # 镜像移动配置 (Mirror Movement)
     # 当启用时，左摇杆的 X 和 Y 方向都会取反（镜像）
     mirror_movement: true  # 默认开启镜像移动

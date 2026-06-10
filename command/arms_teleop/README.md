@@ -19,11 +19,19 @@ colcon build --packages-up-to arms_teleop --symlink-install
 
 ### Joystick teleop
 
-Launch the joystick teleop stack (`joy_node` + `joystick_teleop`):
+Launch the joystick teleop stack (`game_controller_node` or `joy_node` + `joystick_teleop`):
 
 ```bash
 source ~/ros2_ws/install/setup.bash
 ros2 launch arms_teleop joystick_teleop.launch.py
+```
+
+By default `joy_driver:=auto` uses [`game_controller_node`](https://docs.ros.org/en/ros2_packages/jazzy/api/joy/index.html) when `joy_enumerate_devices` reports `Mapped: true`, with [`config/joy_mapping/generic_gamepad.yaml`](config/joy_mapping/generic_gamepad.yaml) (SDL standard layout). Most gamepads (F710, PS4, Xbox, Switch Pro, GameSir, etc.) take this path. Unmapped devices fall back to `joy_node` + `default.yaml`.
+
+Force raw joystick driver:
+
+```bash
+ros2 launch arms_teleop joystick_teleop.launch.py joy_driver:=joy
 ```
 
 Use a different joystick device (default is `/dev/input/js0`):
@@ -32,6 +40,40 @@ Use a different joystick device (default is `/dev/input/js0`):
 source ~/ros2_ws/install/setup.bash
 ros2 launch arms_teleop joystick_teleop.launch.py joy_dev:=/dev/input/js1
 ```
+
+List connected controllers (ID, GUID, GamePad, Mapped, name):
+
+```bash
+ros2 run joy joy_enumerate_devices
+```
+
+When multiple controllers are connected, pass `joy_dev` only; launch re-enumerates by device ID:
+
+```bash
+ros2 launch arms_teleop joystick_teleop.launch.py joy_dev:=/dev/input/js1
+```
+
+#### Mapping files (`config/joy_mapping/`)
+
+| File | When used |
+|------|-----------|
+| `generic_gamepad.yaml` | `game_controller_node` + `config:=auto`（Mapped 手柄） |
+| `default.yaml` | `joy_node` + `config:=auto`（未 Mapped 设备） |
+
+`config:=auto`：`Mapped: true` → `generic_gamepad`；否则 `default`。
+
+Override:
+
+```bash
+ros2 launch arms_teleop joystick_teleop.launch.py config:=default joy_driver:=joy
+```
+
+#### 新设备校准（仅未 Mapped 设备或强制 `joy_driver:=joy`）
+
+1. `ros2 topic echo /joy` 记录按键/摇杆下标。
+2. 在 `config/joy_mapping/` 新建或修改 yaml，并用 `config:=<name>` 指定。
+
+**F710 X/D：** 默认 `game_controller_node` 下 X/D 共用 `generic_gamepad.yaml`；若强制 `joy_driver:=joy`，用 `default.yaml` 并需在切换模式后重启 launch。
 
 ### Keyboard teleop
 
@@ -99,7 +141,13 @@ The joystick stack also publishes `/fsm_command` (`std_msgs/msg/Int32`). The key
 
 ## Parameters (joystick launch)
 
-- `joy_dev` (string, default: `/dev/input/js0`): Joystick device path
+| Parameter | Default | Description |
+|-----------|---------|-------------|
+| `joy_driver` | `auto` | `auto` / `game_controller` / `joy` — input node selection |
+| `joy_dev` | `/dev/input/js0` | Joystick device path (`/dev/input/jsN`) |
+| `config` | `auto` | Mapping YAML stem under `config/joy_mapping/`, or `auto` |
+
+`quick_start.sh`：仅 1 个手柄时自动启动；多个时选手柄 ID，只传 `joy_dev`。
 
 ## Dependencies
 
