@@ -24,6 +24,8 @@ private:
     void processAxes(const sensor_msgs::msg::Joy::SharedPtr msg);
     void processChassisAxes(const sensor_msgs::msg::Joy::SharedPtr msg);
     double applyDeadzone(double value, double deadzone = 0.1) const;
+    bool areControlAxesNeutral(const sensor_msgs::msg::Joy::SharedPtr msg) const;
+    void publishZeroCommands();
     void loadButtonMapping();
     void printButtonMapping();
 
@@ -41,6 +43,7 @@ private:
     
     // State management
     bool enabled_;
+    bool waiting_for_neutral_axes_;
     rclcpp::Time lastUpdateTime_;
     
     // Control mode (ARM_MODE or CHASSIS_MODE)
