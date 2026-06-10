@@ -184,10 +184,25 @@ def _ps4_mapping_config_name_from_device_name(name):
     normalized = _normalize_device_name(name)
     device_configs = {
         'sony interactive entertainment wireless controller': SONY_DUALSHOCK4_CONFIG,
+        'ps4': GENERIC_PS4_CONTROLLER_CONFIG,
         'ps4 controller': _ps4_controller_config_name(),
     }
 
     return device_configs.get(normalized, '')
+
+
+def _exact_device_config_name_from_sources(sources):
+    device_configs = {
+        'sony interactive entertainment wireless controller': SONY_DUALSHOCK4_CONFIG,
+        'ps4': GENERIC_PS4_CONTROLLER_CONFIG,
+    }
+
+    for source in sources:
+        config_name = device_configs.get(_normalize_device_name(source))
+        if config_name:
+            return config_name, source
+
+    return '', ''
 
 
 def _find_known_joystick_names_from_proc(known_device_names):
@@ -238,6 +253,7 @@ def _detect_config_name(config_value, config_dir, joy_dev):
         'logitech logitech cordless rumblepad 2': 'default',
         'logitech f710 gamepad': 'default',
         'logitech': 'default',
+        'ps4': GENERIC_PS4_CONTROLLER_CONFIG,
         'ps4 controller': _ps4_controller_config_name(),
         'sony interactive entertainment wireless controller': SONY_DUALSHOCK4_CONFIG,
     }
@@ -264,6 +280,13 @@ def _detect_config_name(config_value, config_dir, joy_dev):
             )
 
     match_sources.extend(_find_joystick_aliases(joy_dev, allow_event_alias_fallback))
+
+    exact_config_name, exact_source = _exact_device_config_name_from_sources(match_sources)
+    if exact_config_name:
+        config_path = os.path.join(config_dir, f'{exact_config_name}.yaml')
+        if os.path.exists(config_path):
+            print(f"[INFO] Auto-selected joystick config '{exact_config_name}' for device '{exact_source}'")
+            return exact_config_name
 
     for source in match_sources:
         lowered = source.lower()
