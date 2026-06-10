@@ -1,5 +1,7 @@
 #!/usr/bin/env python3
 
+import ctypes
+import ctypes.util
 import os
 import platform
 import re
@@ -71,6 +73,44 @@ def _read_joystick_name_from_joy_enumerate(joy_dev):
     device_id = _extract_device_id(joy_dev)
     devices = _enumerate_joy_devices()
     return devices.get(device_id, '')
+
+
+def _read_joystick_name_from_sdl_joystick(joy_dev):
+    device_id = _extract_device_id(joy_dev)
+    lib_name = ctypes.util.find_library('SDL2') or ctypes.util.find_library('SDL2-2.0')
+    if not lib_name:
+        lib_name = 'libSDL2-2.0.so.0'
+
+    try:
+        sdl = ctypes.CDLL(lib_name)
+        sdl.SDL_InitSubSystem.argtypes = [ctypes.c_uint32]
+        sdl.SDL_InitSubSystem.restype = ctypes.c_int
+        sdl.SDL_JoystickOpen.argtypes = [ctypes.c_int]
+        sdl.SDL_JoystickOpen.restype = ctypes.c_void_p
+        sdl.SDL_JoystickName.argtypes = [ctypes.c_void_p]
+        sdl.SDL_JoystickName.restype = ctypes.c_char_p
+        sdl.SDL_JoystickClose.argtypes = [ctypes.c_void_p]
+        sdl.SDL_QuitSubSystem.argtypes = [ctypes.c_uint32]
+    except (AttributeError, OSError):
+        return ''
+
+    sdl_init_joystick = 0x00000200
+    try:
+        if sdl.SDL_InitSubSystem(sdl_init_joystick) != 0:
+            return ''
+        joystick = sdl.SDL_JoystickOpen(device_id)
+        if not joystick:
+            return ''
+        try:
+            name = sdl.SDL_JoystickName(joystick)
+            return name.decode('utf-8', errors='replace').strip() if name else ''
+        finally:
+            sdl.SDL_JoystickClose(joystick)
+    finally:
+        try:
+            sdl.SDL_QuitSubSystem(sdl_init_joystick)
+        except Exception:
+            pass
 
 
 def _list_js_devices():
@@ -184,25 +224,19 @@ def _ps4_mapping_config_name_from_device_name(name):
     normalized = _normalize_device_name(name)
     device_configs = {
         'sony interactive entertainment wireless controller': SONY_DUALSHOCK4_CONFIG,
-        'ps4': GENERIC_PS4_CONTROLLER_CONFIG,
         'ps4 controller': _ps4_controller_config_name(),
     }
 
     return device_configs.get(normalized, '')
 
 
-def _exact_device_config_name_from_sources(sources):
+def _raw_joystick_config_name_from_device_name(name):
     device_configs = {
         'sony interactive entertainment wireless controller': SONY_DUALSHOCK4_CONFIG,
-        'ps4': GENERIC_PS4_CONTROLLER_CONFIG,
+        'ps4 controller': GENERIC_PS4_CONTROLLER_CONFIG,
     }
 
-    for source in sources:
-        config_name = device_configs.get(_normalize_device_name(source))
-        if config_name:
-            return config_name, source
-
-    return '', ''
+    return device_configs.get(_normalize_device_name(name), '')
 
 
 def _find_known_joystick_names_from_proc(known_device_names):
@@ -253,10 +287,17 @@ def _detect_config_name(config_value, config_dir, joy_dev):
         'logitech logitech cordless rumblepad 2': 'default',
         'logitech f710 gamepad': 'default',
         'logitech': 'default',
-        'ps4': GENERIC_PS4_CONTROLLER_CONFIG,
         'ps4 controller': _ps4_controller_config_name(),
         'sony interactive entertainment wireless controller': SONY_DUALSHOCK4_CONFIG,
     }
+
+    raw_joystick_name = _read_joystick_name_from_sdl_joystick(joy_dev)
+    raw_config_name = _raw_joystick_config_name_from_device_name(raw_joystick_name)
+    if raw_config_name:
+        config_path = os.path.join(config_dir, f'{raw_config_name}.yaml')
+        if os.path.exists(config_path):
+            print(f"[INFO] Auto-selected joystick config '{raw_config_name}' for raw joystick '{raw_joystick_name}'")
+            return raw_config_name
 
     joystick_name = _read_joystick_name(joy_dev)
     enumerated_name = _read_joystick_name_from_joy_enumerate(joy_dev)
@@ -280,13 +321,6 @@ def _detect_config_name(config_value, config_dir, joy_dev):
             )
 
     match_sources.extend(_find_joystick_aliases(joy_dev, allow_event_alias_fallback))
-
-    exact_config_name, exact_source = _exact_device_config_name_from_sources(match_sources)
-    if exact_config_name:
-        config_path = os.path.join(config_dir, f'{exact_config_name}.yaml')
-        if os.path.exists(config_path):
-            print(f"[INFO] Auto-selected joystick config '{exact_config_name}' for device '{exact_source}'")
-            return exact_config_name
 
     for source in match_sources:
         lowered = source.lower()
