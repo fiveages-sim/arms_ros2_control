@@ -1,5 +1,5 @@
 # 手柄按键和摇杆映射配置
-# 适用于 Sony Interactive Entertainment Wireless Controller（临时沿用 default 配置）
+# 适用于 PS4 Controller 通用 HID 映射
 
 /**:
   ros__parameters:
@@ -19,28 +19,27 @@
       right_stick_button: 11 # 右摇杆按下 - 启用/禁用控制
 
     # 摇杆和 D-Pad 映射 (Axes Mapping)
-    # Xbox 控制器轴索引:
-    # 0=LS_X, 1=LS_Y, 2=LT, 3=RS_X, 4=RS_Y, 5=RT, 6=DPad_X, 7=DPad_Y
+    # 该映射下 PS4 Controller 的右摇杆 Y 轴为 3
     axes_mapping:
       left_stick_x: 0      # 左摇杆 X 轴 - 控制 Y 方向移动
       left_stick_y: 1      # 左摇杆 Y 轴 - 控制 X 方向移动
       right_stick_x: 2     # 右摇杆 X 轴 - 控制 Yaw 旋转
-      right_stick_y: 5     # 右摇杆 Y 轴 - 控制 Z 方向移动
+      right_stick_y: 3     # 右摇杆 Y 轴 - 控制 Z 方向移动
       dpad_x: 6            # D-Pad X 轴 - 控制 Pitch 旋转
       dpad_y: 7            # D-Pad Y 轴 - 控制 Roll 旋转 如果是底盘模式的话，就是控制腰部升降，1是腰部上升，-1是腰部下降，0是停止
       deadzone: 0.1        # 摇杆死区
       dpad_deadzone: 0.5   # D-Pad 死区
-    
+
     # 镜像移动配置 (Mirror Movement)
     # 当启用时，左摇杆的 X 和 Y 方向都会取反（镜像）
     mirror_movement: true  # 默认开启镜像移动
-    
+
     # 速度模式配置 (Speed Mode)
     # 通过按下左摇杆按钮可以在高速和低速模式之间切换
     speed:
       low_scale: 0.3   # 低速模式缩放因子 (30% 速度)
       high_scale: 1.0  # 高速模式缩放因子 (100% 速度)
-    
+
     # 底盘速度配置 (Chassis Speed)
     # 底盘控制的线速度和角速度缩放因子
     chassis:
