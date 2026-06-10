@@ -37,6 +37,7 @@ def _find_joystick_aliases(joy_dev):
     resolved_path = _resolve_js_device(joy_dev)
     by_id_dir = '/dev/input/by-id'
     aliases = []
+    joystick_event_aliases = []
 
     if not os.path.isdir(by_id_dir):
         return aliases
@@ -46,10 +47,21 @@ def _find_joystick_aliases(joy_dev):
         try:
             if os.path.realpath(full_path) == resolved_path:
                 aliases.append(entry)
+            elif 'joystick' in entry.lower():
+                joystick_event_aliases.append(entry)
         except OSError:
             continue
 
+    # Some containers expose /dev/input/js* but only provide by-id aliases for
+    # the event joystick node. Use that as a fallback for device-name matching.
+    if not aliases and len(joystick_event_aliases) == 1:
+        aliases.extend(joystick_event_aliases)
+
     return aliases
+
+
+def _normalize_device_name(name):
+    return re.sub(r'[^a-z0-9]+', ' ', name.lower()).strip()
 
 
 def _detect_config_name(config_value, config_dir, joy_dev):
@@ -75,14 +87,20 @@ def _detect_config_name(config_value, config_dir, joy_dev):
     match_sources.extend(_find_joystick_aliases(joy_dev))
 
     device_config_aliases = {
+        'gamesir-dongle': 'gamesir',
+        'gamesir': 'gamesir',
         'sony interactive entertainment wireless controller': 'gamesir_two',
     }
 
     for source in match_sources:
         lowered = source.lower()
+        normalized = _normalize_device_name(source)
         for device_name, config_name in device_config_aliases.items():
             config_path = os.path.join(config_dir, f'{config_name}.yaml')
-            if device_name in lowered and os.path.exists(config_path):
+            if (
+                (device_name in lowered or _normalize_device_name(device_name) in normalized)
+                and os.path.exists(config_path)
+            ):
                 print(f"[INFO] Auto-selected joystick config '{config_name}' for device '{source}'")
                 return config_name
 
@@ -91,7 +109,7 @@ def _detect_config_name(config_value, config_dir, joy_dev):
             key=len,
             reverse=True,
         ):
-            if config_name.lower() in lowered:
+            if config_name.lower() in lowered or _normalize_device_name(config_name) in normalized:
                 print(f"[INFO] Auto-selected joystick config '{config_name}' for device '{source}'")
                 return config_name
 
