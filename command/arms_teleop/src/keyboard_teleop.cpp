@@ -11,6 +11,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <limits>
 #include <cstdio>
 #include <cstring>
 #include <vector>
@@ -19,6 +20,8 @@
 #include <rcutils/logging.h>
 
 namespace {
+
+constexpr float kNoHandCommand = std::numeric_limits<float>::quiet_NaN();
 
 constexpr std::uint16_t kArrowUp = 0xE001;
 constexpr std::uint16_t kArrowDown = 0xE002;
@@ -78,7 +81,7 @@ KeyboardTeleop::KeyboardTeleop() : Node("keyboard_teleop_node")
     mirror_movement_ = get_parameter("mirror_movement").as_bool();
 
     inputs_.target = target_arm_;
-    inputs_.hand_command = -1;
+    inputs_.hand_command = kNoHandCommand;
 
     const auto period = std::chrono::duration<double>(1.0 / update_hz_);
     timer_ = create_wall_timer(
@@ -385,7 +388,7 @@ void KeyboardTeleop::timerCallback()
     if (mode_ == ControlMode::Arm && prev_active_enter_ && !aenter) {
         const bool open_now = (target_arm_ == 1) ? left_gripper_open_ : right_gripper_open_;
         const bool should_open = !open_now;
-        inputs_.hand_command = should_open ? 1 : 0;
+        inputs_.hand_command = should_open ? 1.0f : 0.0f;
         if (target_arm_ == 1) {
             left_gripper_open_ = should_open;
         } else {
@@ -452,8 +455,8 @@ void KeyboardTeleop::timerCallback()
         chassis_pub_->publish(chassis_cmd_);
 
         inputs_pub_->publish(inputs_);
-        if (inputs_.hand_command != -1) {
-            inputs_.hand_command = -1;
+        if (std::isfinite(inputs_.hand_command)) {
+            inputs_.hand_command = kNoHandCommand;
         }
 
     } else {
