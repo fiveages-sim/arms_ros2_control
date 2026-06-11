@@ -220,6 +220,7 @@ namespace ocs2::mobile_manipulator
                 auto_declare<double>("waist_lifting_duration", 3.0);
                 auto_declare<std::vector<double>>("waist_lifting_default_parameter", {0.25, 1.0, 5.0});
                 auto_declare<std::vector<double>>("waist_turning_default_parameter", {0.25, 1.0, 5.0});
+                auto_declare<std::vector<double>>("waist_phi_default_parameter", {0.2, 0.5, 1.0});
                 std::string waist_lifting_type = auto_declare<std::string>("waist_lifting_type", "three_joint");
                 if (waist_lifting_type == "three_joint")
                 {
@@ -389,6 +390,27 @@ namespace ocs2::mobile_manipulator
                         {
                             RCLCPP_WARN(get_node()->get_logger(),
                                         "waist turning command failed");
+                        }
+                    }
+                });
+
+            std::string waist_phi_command_topic = "/" + controller_name_ + "/waist_phi_command";
+            waist_phi_command_subscription_ = get_node()->create_subscription<std_msgs::msg::Float64>(
+                waist_phi_command_topic, 10,
+                [this](const std_msgs::msg::Float64::SharedPtr msg)
+                {
+                    if (!current_state_ || current_state_->state_name != FSMStateName::MOVEJ)
+                    {
+                        return;
+                    }
+
+                    if (state_list_.movej)
+                    {
+                        bool success = state_list_.movej->setWaistPhiFactor(msg->data);
+                        if (!success)
+                        {
+                            RCLCPP_WARN(get_node()->get_logger(),
+                                        "waist phi command failed");
                         }
                     }
                 });
