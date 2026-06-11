@@ -126,5 +126,6 @@ namespace basic_joint_controller
 
         rclcpp::Subscription<std_msgs::msg::Float64>::SharedPtr waist_lifting_command_subscription_;
         rclcpp::Subscription<std_msgs::msg::Float64>::SharedPtr waist_turning_command_subscription_;
+        rclcpp::Subscription<std_msgs::msg::Float64>::SharedPtr waist_phi_command_subscription_;
     };
 }

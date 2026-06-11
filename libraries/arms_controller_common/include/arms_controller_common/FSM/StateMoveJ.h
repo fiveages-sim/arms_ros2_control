@@ -178,6 +178,11 @@ namespace arms_controller_common
          */
         bool setWaistTurningFactor(double factor);
 
+        /**
+         * @brief 控制 body_joint3 的 phi 速度系数，factor取值建议[-1, 1]
+         * 实际目标速度 = factor * default_waist_phi_para_[0]
+         */
+        bool setWaistPhiFactor(double factor);
 
         /**
          * @brief Setup joint trajectory service
@@ -248,6 +253,7 @@ namespace arms_controller_common
         bool moveWaistLiftingToBodyBaseXzImpl(const Eigen::Vector3d& target_xz_phi);
         bool setWaistLiftingFactorImpl(double factor);
         bool setWaistTurningFactorImpl(double factor);
+        bool setWaistPhiFactorImpl(double factor);
         bool startJointTrajectoryRequestImpl(
             const std::vector<std::string>& request_joint_names,
             const std::vector<arms_ros2_control_msgs::msg::JointWaypoint>& request_waypoints,
@@ -374,15 +380,20 @@ namespace arms_controller_common
         bool waist_lifting_debug_print_active_{false};
         std::shared_ptr<arms_controller_common::WaistLiftingPlaner> waist_turning_planer_;
         bool waist_turning_active_{false};
+        std::shared_ptr<arms_controller_common::WaistLiftingPlaner> waist_phi_planer_;
+        bool waist_phi_active_{false};
         double waist_lifting_duration_{3.0};
         Eigen::Vector3d default_waist_lifting_para_;
         Eigen::Vector3d default_waist_turning_para_;
+        Eigen::Vector3d default_waist_phi_para_;
         void updateWaistParam();
 
         double last_waist_factor_{0.0};
         double last_waist_turning_factor_{0.0};
+        double last_waist_phi_factor_{0.0};
         static constexpr double waist_factor_epsilon_{1e-6};
         size_t waist_turning_joint_index_{0};
+        size_t waist_phi_joint_index_{2};
 
         std::vector<std::string> waist_joint_names_; // 腰部关节名称（前三个关节）
         void setWaistLiftingPlaner();

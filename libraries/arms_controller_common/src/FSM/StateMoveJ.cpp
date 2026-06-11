@@ -446,6 +446,57 @@ namespace arms_controller_common
             return;
         }
 
+        // 其次处理 body_joint3 phi 控制（单关节 speedj，只改变 phi，不改变 x/z）
+        if (waist_phi_active_ && waist_phi_planer_)
+        {
+            std::vector<double> next_phi_pos;
+            if (waist_phi_planer_->calNextPoint(next_phi_pos) && !next_phi_pos.empty())
+            {
+                size_t cmd_size = ctrl_interfaces_.joint_position_command_interface_.size();
+                size_t target_idx = std::min(waist_phi_joint_index_, (cmd_size > 0 ? cmd_size - 1 : 0));
+                for (size_t i = 0; i < cmd_size; ++i)
+                {
+                    if (i == target_idx)
+                    {
+                        ctrl_interfaces_.setJointPositionCommand(i, next_phi_pos[0]);
+                    }
+                    else
+                    {
+                        ctrl_interfaces_.setJointPositionCommand(i, ctrl_interfaces_.last_sent_joint_positions_[i]);
+                    }
+                }
+
+                target_pos_ = ctrl_interfaces_.last_sent_joint_positions_;
+                has_target_ = false;
+                start_pos_ = target_pos_;
+                publishCurrentTargetJoint(target_pos_);
+
+                if (waist_phi_planer_->isMotionOver())
+                {
+                    if (pending_waist_motion_)
+                    {
+                        auto apply = std::move(pending_waist_motion_);
+                        pending_waist_motion_ = nullptr;
+                        apply();
+                        return;
+                    }
+                    refreshHoldPositions();
+                    waist_phi_active_ = false;
+                    motion_mode_ = MotionMode::MOVEJ;
+                }
+            }
+            else
+            {
+                refreshHoldPositions();
+                last_waist_phi_factor_ = 0.0;
+                waist_phi_active_ = false;
+                waist_phi_planer_->setCurrentVelToZero();
+                motion_mode_ = MotionMode::MOVEJ;
+                RCLCPP_WARN(node_->get_logger(), "Failed to calculate next waist phi point");
+            }
+            return;
+        }
+
         // 其次处理腰部转向（单关节 speedj）
         if (waist_turning_active_ && waist_turning_planer_)
         {
@@ -839,13 +890,16 @@ namespace arms_controller_common
 
         last_waist_factor_ = 0.0;
         last_waist_turning_factor_ = 0.0;
+        last_waist_phi_factor_ = 0.0;
         waist_lifting_active_ = false;
         waist_turning_active_ = false;
+        waist_phi_active_ = false;
         clearPendingMotion();
         stop_to_zero_active_ = false;
         speed_stop_planner_.reset();
         waist_lifting_planer_.reset();
         waist_turning_planer_.reset();
+        waist_phi_planer_.reset();
         RCLCPP_DEBUG(node_->get_logger(), "StateMoveJ exited, all state variables reset");
     }
 
@@ -873,7 +927,7 @@ namespace arms_controller_common
 
     bool StateMoveJ::isMotionBusy() const
     {
-        if (waist_lifting_active_ || waist_turning_active_)
+        if (waist_lifting_active_ || waist_phi_active_ || waist_turning_active_)
         {
             return true;
         }
@@ -888,6 +942,12 @@ namespace arms_controller_common
             RCLCPP_INFO(node_->get_logger(), "Waist turning speedj stop-to-zero before pending motion");
             return;
         }
+        if (waist_phi_active_)
+        {
+            setWaistPhiFactorImpl(0.0);
+            RCLCPP_INFO(node_->get_logger(), "Waist phi speedj stop-to-zero before pending motion");
+            return;
+        }
         if (waist_lifting_active_)
         {
             setWaistLiftingFactorImpl(0.0);
@@ -897,7 +957,7 @@ namespace arms_controller_common
 
     void StateMoveJ::requestWaistOnlyMotionOrDefer(std::function<void()> apply_motion)
     {
-        if (waist_lifting_active_ || waist_turning_active_)
+        if (waist_lifting_active_ || waist_phi_active_ || waist_turning_active_)
         {
             const bool already_stopping = static_cast<bool>(pending_waist_motion_);
             pending_waist_motion_ = std::move(apply_motion);
@@ -955,8 +1015,10 @@ namespace arms_controller_common
 
         waist_lifting_active_ = false;
         waist_turning_active_ = false;
+        waist_phi_active_ = false;
         last_waist_factor_ = 0.0;
         last_waist_turning_factor_ = 0.0;
+        last_waist_phi_factor_ = 0.0;
         if (waist_lifting_planer_)
         {
             waist_lifting_planer_->setCurrentVelToZero();
@@ -964,6 +1026,10 @@ namespace arms_controller_common
         if (waist_turning_planer_)
         {
             waist_turning_planer_->setCurrentVelToZero();
+        }
+        if (waist_phi_planer_)
+        {
+            waist_phi_planer_->setCurrentVelToZero();
         }
         motion_mode_ = MotionMode::MOVEJ;
 
@@ -1969,12 +2035,18 @@ namespace arms_controller_common
         interpolation_active_ = false;
         has_target_ = false;
         target_pos_.clear();
-        // Controller-side mutual exclusion: lifting preempts turning.
+        // Controller-side mutual exclusion: lifting preempts turning and phi.
         waist_turning_active_ = false;
         last_waist_turning_factor_ = 0.0;
         if (waist_turning_planer_)
         {
             waist_turning_planer_->setCurrentVelToZero();
+        }
+        waist_phi_active_ = false;
+        last_waist_phi_factor_ = 0.0;
+        if (waist_phi_planer_)
+        {
+            waist_phi_planer_->setCurrentVelToZero();
         }
         waist_lifting_active_ = true;
         motion_mode_ = MotionMode::WAIST_CONTROL;
@@ -2111,6 +2183,12 @@ namespace arms_controller_common
         {
             waist_turning_planer_->setCurrentVelToZero();
         }
+        waist_phi_active_ = false;
+        last_waist_phi_factor_ = 0.0;
+        if (waist_phi_planer_)
+        {
+            waist_phi_planer_->setCurrentVelToZero();
+        }
 
         if (std::fabs(clamped_factor) < waist_factor_epsilon_)
         {
@@ -2227,16 +2305,135 @@ namespace arms_controller_common
         interpolation_active_ = false;
         has_target_ = false;
         target_pos_.clear();
-        // Controller-side mutual exclusion: turning preempts lifting.
+        // Controller-side mutual exclusion: turning preempts lifting and phi.
         waist_lifting_active_ = false;
         last_waist_factor_ = 0.0;
         if (waist_lifting_planer_)
         {
             waist_lifting_planer_->setCurrentVelToZero();
         }
+        waist_phi_active_ = false;
+        last_waist_phi_factor_ = 0.0;
+        if (waist_phi_planer_)
+        {
+            waist_phi_planer_->setCurrentVelToZero();
+        }
         waist_turning_active_ = true;
         motion_mode_ = MotionMode::WAIST_CONTROL;
         last_waist_turning_factor_ = clamped_factor;
+        return true;
+    }
+
+    bool StateMoveJ::setWaistPhiFactor(double factor)
+    {
+        if (std::fabs(factor - last_waist_phi_factor_) < waist_factor_epsilon_)
+        {
+            return true;
+        }
+
+        std::lock_guard lock(target_mutex_);
+
+        if (std::fabs(factor) < waist_factor_epsilon_)
+        {
+            pending_waist_motion_ = nullptr;
+            return setWaistPhiFactorImpl(factor);
+        }
+
+        if (!isNonWaistMotionBusy() && !stop_to_zero_active_)
+        {
+            const double captured_factor = factor;
+            requestWaistOnlyMotionOrDefer(
+                [this, captured_factor]() { setWaistPhiFactorImpl(captured_factor); });
+            return true;
+        }
+
+        const double captured_factor = factor;
+        requestWaistMotionOrDefer([this, captured_factor]() { setWaistPhiFactorImpl(captured_factor); });
+        return true;
+    }
+
+    bool StateMoveJ::setWaistPhiFactorImpl(double factor)
+    {
+        if (waist_joint_names_.empty())
+        {
+            setWaistLiftingPlaner();
+        }
+        if (joint_names_.size() <= waist_phi_joint_index_)
+        {
+            RCLCPP_WARN(node_->get_logger(),
+                        "Waist phi planner not initialized: joint index %zu is out of range for %zu joints",
+                        waist_phi_joint_index_, joint_names_.size());
+            return false;
+        }
+
+        if (!waist_phi_planer_)
+        {
+            waist_phi_planer_ = std::make_shared<arms_controller_common::WaistLiftingPlaner>();
+            waist_phi_planer_->setBodyJointThreeJointType(false);
+        }
+
+        if (joint_limits_manager_ && waist_phi_joint_index_ < joint_names_.size())
+        {
+            const std::string& phi_joint_name = joint_names_[waist_phi_joint_index_];
+            if (joint_limits_manager_->hasLimits(phi_joint_name))
+            {
+                JointLimits limits = joint_limits_manager_->getJointLimits(phi_joint_name);
+                waist_phi_planer_->setSingleJointLimit(limits.lower, limits.upper);
+            }
+        }
+
+        Eigen::Vector3d angles3d = Eigen::Vector3d::Zero();
+        if (waist_phi_active_ &&
+            waist_phi_joint_index_ < ctrl_interfaces_.last_sent_joint_positions_.size())
+        {
+            angles3d(0) = ctrl_interfaces_.last_sent_joint_positions_[waist_phi_joint_index_];
+        }
+        else if (waist_phi_joint_index_ < ctrl_interfaces_.joint_position_state_interface_.size())
+        {
+            auto value = ctrl_interfaces_.joint_position_state_interface_[waist_phi_joint_index_].get().
+                get_optional();
+            angles3d(0) = value.value_or(0.0);
+        }
+
+        double clamped_factor = std::clamp(factor, -1.0, 1.0);
+        double speedj_time = 100000000.0;
+        double target_speed = clamped_factor * default_waist_phi_para_(0);
+        if (std::fabs(clamped_factor) < waist_factor_epsilon_)
+        {
+            speedj_time = 0.0;
+            target_speed = 0.0;
+        }
+
+        if (!waist_phi_planer_->initTargetLiftingSpeed(angles3d, target_speed, default_waist_phi_para_(1),
+                                                       default_waist_phi_para_(2), speedj_time,
+                                                       1.0 / ctrl_interfaces_.frequency_))
+        {
+            waist_phi_planer_->setCurrentVelToZero();
+            return false;
+        }
+
+        trajectory_manager_.reset();
+        interpolation_active_ = false;
+        has_target_ = false;
+        target_pos_.clear();
+
+        waist_lifting_active_ = false;
+        last_waist_factor_ = 0.0;
+        if (waist_lifting_planer_)
+        {
+            waist_lifting_planer_->setCurrentVelToZero();
+        }
+
+        waist_turning_active_ = false;
+        last_waist_turning_factor_ = 0.0;
+        if (waist_turning_planer_)
+        {
+            waist_turning_planer_->setCurrentVelToZero();
+        }
+
+        waist_phi_active_ = true;
+        motion_mode_ = MotionMode::WAIST_CONTROL;
+        last_waist_phi_factor_ = clamped_factor;
         return true;
     }
 
@@ -2252,8 +2449,11 @@ namespace arms_controller_common
                 node_->get_parameter("waist_lifting_default_parameter").as_double_array();
             std::vector<double> waist_turning_para =
                 node_->get_parameter("waist_turning_default_parameter").as_double_array();
+            std::vector<double> waist_phi_para =
+                node_->get_parameter("waist_phi_default_parameter").as_double_array();
             default_waist_lifting_para_ << waist_lifting_para[0], waist_lifting_para[1], waist_lifting_para[2];
             default_waist_turning_para_ << waist_turning_para[0], waist_turning_para[1], waist_turning_para[2];
+            default_waist_phi_para_ << waist_phi_para[0], waist_phi_para[1], waist_phi_para[2];
             RCLCPP_INFO(node_->get_logger(), "Waist lifting type: %s", waist_lifting_type_.c_str());
             if (waist_lifting_type_ == "three_joint")
             {
@@ -2309,6 +2509,14 @@ namespace arms_controller_common
         else
         {
             waist_turning_joint_index_ = 0;
+        }
+        if (joint_names_.size() > 2)
+        {
+            waist_phi_joint_index_ = 2;
+        }
+        else
+        {
+            waist_phi_joint_index_ = 0;
         }
         // 如果有joint_limits_manager，立即更新限制
         updateWaistLiftingLimits();
@@ -3732,6 +3940,7 @@ namespace arms_controller_common
             move_cartesian_active_ = false;
             waist_lifting_active_ = false;
             waist_turning_active_ = false;
+            waist_phi_active_ = false;
             motion_mode_ = MotionMode::MOVEJ;
             ctrl_interfaces_.fsm_command_ = 2;
             publishFsmCommand(2);
