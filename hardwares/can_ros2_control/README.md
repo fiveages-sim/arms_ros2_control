@@ -57,13 +57,14 @@ ros2 launch basic_joint_controller hand.launch.py hand:=freedom type:=freedom ha
 
 ## Inspire RH56
 
-Inspire RH56 uses the Inspire register protocol over CAN2.0 extended frames.
-Bring up the SocketCAN interface at 500 kbps before launch:
+Inspire RH56 uses the Inspire register protocol over CAN FD extended frames.
+Bring up the SocketCAN interface with 1 Mbps arbitration and 5 Mbps data phase
+before launch:
 
 ```bash
 source ~/ros2_ws/install/setup.bash
 sudo ip link set can0 down
-sudo ip link set can0 type can bitrate 500000
+sudo ip link set can0 type can bitrate 1000000 dbitrate 5000000 fd on
 sudo ip link set can0 up
 ```
 
@@ -78,5 +79,5 @@ source ~/ros2_ws/install/setup.bash
 ros2 launch basic_joint_controller hand.launch.py hand:=inspire type:=RH56E2 hardware:=real_can
 ```
 
-The implementation writes each 16-bit register in a separate classic CAN2.0
-extended frame, so it does not require CAN FD data frames.
+The implementation writes each 16-bit register in a separate CAN FD extended
+frame.

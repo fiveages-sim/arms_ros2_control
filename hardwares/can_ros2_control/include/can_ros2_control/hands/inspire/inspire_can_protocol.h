@@ -19,6 +19,9 @@ public:
   static constexpr uint16_t kForceActualRegister = 1070;
   static constexpr uint16_t kModeRegister = 1100;
 
+  static constexpr bool kUsesCanFdFrames = true;
+  static constexpr int kDefaultNominalBitrate = 1000000;
+  static constexpr int kDefaultDataBitrate = 5000000;
   static constexpr uint8_t kRegisterBytes = 2;
   static constexpr uint8_t kReadRequestBytes = 1;
   static constexpr uint8_t kWriteAckBytes = 1;

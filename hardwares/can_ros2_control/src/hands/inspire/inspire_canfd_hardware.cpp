@@ -42,9 +42,9 @@ int16_t to_signed(uint16_t value)
   return static_cast<int16_t>(value);
 }
 
-bool write_can_frame_with_retry(
+bool write_canfd_frame_with_retry(
   int socket_fd,
-  const struct can_frame& frame,
+  const struct canfd_frame& frame,
   int retry_count,
   int inter_frame_delay_us,
   const char* operation,
@@ -52,8 +52,8 @@ bool write_can_frame_with_retry(
 {
   for (int attempt = 0; attempt <= retry_count; ++attempt)
   {
-    const auto bytes_written = ::write(socket_fd, &frame, sizeof(frame));
-    if (bytes_written == static_cast<ssize_t>(sizeof(frame)))
+    const auto bytes_written = ::write(socket_fd, &frame, CANFD_MTU);
+    if (bytes_written == static_cast<ssize_t>(CANFD_MTU))
     {
       if (inter_frame_delay_us > 0)
       {
@@ -71,7 +71,7 @@ bool write_can_frame_with_retry(
 
     RCLCPP_ERROR(
       rclcpp::get_logger(kLoggerName),
-      "Failed to write Inspire CAN2.0 %s 0x%X: %s",
+      "Failed to write Inspire CAN FD %s 0x%X: %s",
       operation,
       address,
       std::strerror(errno));
@@ -80,7 +80,7 @@ bool write_can_frame_with_retry(
 
   RCLCPP_ERROR(
     rclcpp::get_logger(kLoggerName),
-    "Failed to write Inspire CAN2.0 %s 0x%X after %d retries: %s",
+    "Failed to write Inspire CAN FD %s 0x%X after %d retries: %s",
     operation,
     address,
     retry_count,
@@ -102,7 +102,7 @@ hardware_interface::CallbackReturn InspireCanfdHardware::on_init(
   {
     RCLCPP_ERROR(
       rclcpp::get_logger(kLoggerName),
-      "Inspire CAN2.0 hardware expects exactly %zu joints, got %zu",
+      "Inspire CAN FD hardware expects exactly %zu joints, got %zu",
       kJointCount,
       info_.joints.size());
     return hardware_interface::CallbackReturn::ERROR;
@@ -136,7 +136,7 @@ hardware_interface::CallbackReturn InspireCanfdHardware::on_init(
 
   RCLCPP_INFO(
     rclcpp::get_logger(kLoggerName),
-    "Configured Inspire CAN2.0 hardware: interface=%s, hand_id=%u, feedback=%s",
+    "Configured Inspire CAN FD hardware: interface=%s, hand_id=%u, feedback=%s",
     can_interface_.c_str(),
     hand_id_,
     read_feedback_enabled_ ? "true" : "false");
@@ -177,7 +177,7 @@ hardware_interface::CallbackReturn InspireCanfdHardware::on_activate(
 
   RCLCPP_INFO(
     rclcpp::get_logger(kLoggerName),
-    "Inspire CAN2.0 hardware activated on %s",
+    "Inspire CAN FD hardware activated on %s",
     can_interface_.c_str());
 
   return hardware_interface::CallbackReturn::SUCCESS;
@@ -187,7 +187,7 @@ hardware_interface::CallbackReturn InspireCanfdHardware::on_deactivate(
   const rclcpp_lifecycle::State& /* previous_state */)
 {
   close_socket();
-  RCLCPP_INFO(rclcpp::get_logger(kLoggerName), "Inspire CAN2.0 hardware deactivated");
+  RCLCPP_INFO(rclcpp::get_logger(kLoggerName), "Inspire CAN FD hardware deactivated");
   return hardware_interface::CallbackReturn::SUCCESS;
 }
 
@@ -255,7 +255,7 @@ hardware_interface::return_type InspireCanfdHardware::read(
         rclcpp::get_logger(kLoggerName),
         *get_node()->get_clock(),
         2000,
-        "No valid Inspire CAN2.0 feedback received from hand ID %u",
+        "No valid Inspire CAN FD feedback received from hand ID %u",
         hand_id_);
     }
   }
@@ -427,6 +427,23 @@ bool InspireCanfdHardware::open_socket()
     return false;
   }
 
+  const int enable_canfd = 1;
+  if (setsockopt(
+      socket_fd_,
+      SOL_CAN_RAW,
+      CAN_RAW_FD_FRAMES,
+      &enable_canfd,
+      sizeof(enable_canfd)) < 0)
+  {
+    RCLCPP_ERROR(
+      rclcpp::get_logger(kLoggerName),
+      "Failed to enable CAN FD frames on '%s': %s",
+      can_interface_.c_str(),
+      std::strerror(errno));
+    close_socket();
+    return false;
+  }
+
   struct ifreq ifr;
   std::memset(&ifr, 0, sizeof(ifr));
   std::strncpy(ifr.ifr_name, can_interface_.c_str(), IFNAMSIZ - 1);
@@ -460,7 +477,7 @@ bool InspireCanfdHardware::open_socket()
 
   RCLCPP_INFO(
     rclcpp::get_logger(kLoggerName),
-    "Opened SocketCAN interface %s for Inspire hand ID %u",
+    "Opened SocketCAN CAN FD interface %s for Inspire hand ID %u",
     can_interface_.c_str(),
     hand_id_);
 
@@ -488,21 +505,21 @@ bool InspireCanfdHardware::initialize_hand()
     {
       RCLCPP_WARN(
         rclcpp::get_logger(kLoggerName),
-        "Failed to set Inspire CAN2.0 mode register %u; continuing",
+        "Failed to set Inspire CAN FD mode register %u; continuing",
         mode_address);
     }
     if (!write_register(speed_address, default_speed_))
     {
       RCLCPP_WARN(
         rclcpp::get_logger(kLoggerName),
-        "Failed to set Inspire CAN2.0 speed register %u; continuing",
+        "Failed to set Inspire CAN FD speed register %u; continuing",
         speed_address);
     }
     if (!write_register(force_address, default_force_))
     {
       RCLCPP_WARN(
         rclcpp::get_logger(kLoggerName),
-        "Failed to set Inspire CAN2.0 force register %u; continuing",
+        "Failed to set Inspire CAN FD force register %u; continuing",
         force_address);
     }
   }
@@ -599,14 +616,14 @@ bool InspireCanfdHardware::read_register(uint16_t address, uint16_t& value)
 
 bool InspireCanfdHardware::send_read_request(uint16_t address, uint8_t byte_count)
 {
-  struct can_frame frame;
+  struct canfd_frame frame;
   std::memset(&frame, 0, sizeof(frame));
   frame.can_id = CAN_EFF_FLAG | InspireCanProtocol::make_id(
     false, hand_id_, address, InspireCanProtocol::kReadRequestBytes);
-  frame.can_dlc = InspireCanProtocol::kReadRequestBytes;
+  frame.len = InspireCanProtocol::kReadRequestBytes;
   frame.data[0] = byte_count;
 
-  return write_can_frame_with_retry(
+  return write_canfd_frame_with_retry(
     socket_fd_,
     frame,
     frame_tx_retries_,
@@ -617,14 +634,14 @@ bool InspireCanfdHardware::send_read_request(uint16_t address, uint8_t byte_coun
 
 bool InspireCanfdHardware::send_write_request(uint16_t address, uint16_t value)
 {
-  struct can_frame frame;
+  struct canfd_frame frame;
   std::memset(&frame, 0, sizeof(frame));
   frame.can_id = CAN_EFF_FLAG | InspireCanProtocol::make_id(
     true, hand_id_, address, InspireCanProtocol::kRegisterBytes);
-  frame.can_dlc = InspireCanProtocol::kRegisterBytes;
+  frame.len = InspireCanProtocol::kRegisterBytes;
   InspireCanProtocol::encode_u16_le(value, frame.data);
 
-  return write_can_frame_with_retry(
+  return write_canfd_frame_with_retry(
     socket_fd_,
     frame,
     frame_tx_retries_,
@@ -644,10 +661,10 @@ bool InspireCanfdHardware::receive_register_response(
 
   while (true)
   {
-    struct can_frame frame;
-    const auto bytes_read = ::read(socket_fd_, &frame, sizeof(frame));
+    struct canfd_frame frame;
+    const auto bytes_read = ::read(socket_fd_, &frame, CANFD_MTU);
 
-    if (bytes_read == static_cast<ssize_t>(sizeof(frame)))
+    if (bytes_read == static_cast<ssize_t>(CANFD_MTU))
     {
       if ((frame.can_id & CAN_EFF_FLAG) == 0)
       {
@@ -659,7 +676,7 @@ bool InspireCanfdHardware::receive_register_response(
           InspireCanProtocol::address(frame_id) == address &&
           InspireCanProtocol::is_write_id(frame_id) == write_response &&
           InspireCanProtocol::data_length(frame_id) == expected_length &&
-          frame.can_dlc >= expected_length)
+          frame.len >= expected_length)
       {
         std::copy(frame.data, frame.data + expected_length, data.begin());
         return true;
@@ -686,7 +703,7 @@ bool InspireCanfdHardware::receive_register_response(
     {
       RCLCPP_ERROR(
         rclcpp::get_logger(kLoggerName),
-        "Failed to read Inspire CAN2.0 frame: %s",
+        "Failed to read Inspire CAN FD frame: %s",
         std::strerror(errno));
       return false;
     }
@@ -702,12 +719,12 @@ InspireCanfdHardware::joints_to_actuators(
   const std::array<double, kJointCount>& joints) const
 {
   return {
-    joint_to_actuator_value(joints[5], 5),
-    joint_to_actuator_value(joints[4], 4),
-    joint_to_actuator_value(joints[3], 3),
-    joint_to_actuator_value(joints[2], 2),
+    joint_to_actuator_value(joints[0], 0),
     joint_to_actuator_value(joints[1], 1),
-    joint_to_actuator_value(joints[0], 0)};
+    joint_to_actuator_value(joints[2], 2),
+    joint_to_actuator_value(joints[3], 3),
+    joint_to_actuator_value(joints[4], 4),
+    joint_to_actuator_value(joints[5], 5)};
 }
 
 std::array<double, InspireCanfdHardware::kJointCount>
@@ -715,12 +732,12 @@ InspireCanfdHardware::actuators_to_joints(
   const std::array<uint16_t, kActuatorCount>& actuators) const
 {
   return {
-    actuator_value_to_joint(actuators[5], 0),
-    actuator_value_to_joint(actuators[4], 1),
-    actuator_value_to_joint(actuators[3], 2),
-    actuator_value_to_joint(actuators[2], 3),
-    actuator_value_to_joint(actuators[1], 4),
-    actuator_value_to_joint(actuators[0], 5)};
+    actuator_value_to_joint(actuators[0], 0),
+    actuator_value_to_joint(actuators[1], 1),
+    actuator_value_to_joint(actuators[2], 2),
+    actuator_value_to_joint(actuators[3], 3),
+    actuator_value_to_joint(actuators[4], 4),
+    actuator_value_to_joint(actuators[5], 5)};
 }
 
 uint16_t InspireCanfdHardware::joint_to_actuator_value(

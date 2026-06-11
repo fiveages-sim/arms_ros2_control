@@ -22,7 +22,7 @@
          base_class_type="hardware_interface::SystemInterface">
     <description>
       SocketCAN ros2_control hardware interface for Inspire RH56 series hands.
-      Uses Inspire register protocol over CAN2.0 extended frames at 500 kbps.
+      Uses Inspire register protocol over CAN FD extended frames.
     </description>
   </class>
 </library>
