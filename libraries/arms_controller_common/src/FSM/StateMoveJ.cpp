@@ -14,6 +14,29 @@
 // #include "lina_planning/planning/kinematics/fiveages_w2_fk.h"
 // #include "lina_planning/planning/kinematics/fiveages_w2_ik.h"
 
+namespace
+{
+    bool areJointPositionsSame(
+        const std::vector<double>& lhs,
+        const std::vector<double>& rhs,
+        double epsilon = 1.0e-9)
+    {
+        if (lhs.size() != rhs.size())
+        {
+            return false;
+        }
+
+        for (size_t i = 0; i < lhs.size(); ++i)
+        {
+            if (std::abs(lhs[i] - rhs[i]) > epsilon)
+            {
+                return false;
+            }
+        }
+
+        return true;
+    }
+}
 
 namespace arms_controller_common
 {
@@ -601,14 +624,34 @@ namespace arms_controller_common
             {
                 start_pos_.push_back(ctrl_interfaces_.last_sent_joint_positions_[i]);
             }
-            trajectory_manager_.initSingleNode(
-                start_pos_,
-                target_pos_,
-                duration_,
-                interpolation_type_,
-                ctrl_interfaces_.frequency_,
-                tanh_scale_
-            );
+
+            if (areJointPositionsSame(start_pos_, target_pos_))
+            {
+                RCLCPP_WARN(node_->get_logger(),
+                            "Target joint position matches the last sent joint position; no MOVEJ interpolation is needed. This can happen when the published waist joint target is already the current command. joint_count=%zu",
+                            target_pos_.size());
+                maintainCommandFromLastSent();
+                has_target_ = false;
+                interpolation_active_ = false;
+                return;
+            }
+
+            if (!trajectory_manager_.initSingleNode(
+                    start_pos_,
+                    target_pos_,
+                    duration_,
+                    interpolation_type_,
+                    ctrl_interfaces_.frequency_,
+                    tanh_scale_))
+            {
+                RCLCPP_WARN(node_->get_logger(),
+                            "Failed to initialize MOVEJ interpolation for target joint position; holding last sent joint position. joint_count=%zu, interpolation_type=%s",
+                            target_pos_.size(), toString(interpolation_type_));
+                maintainCommandFromLastSent();
+                has_target_ = false;
+                interpolation_active_ = false;
+                return;
+            }
 
             interpolation_active_ = true;
             RCLCPP_INFO(node_->get_logger(),
