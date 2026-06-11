@@ -27,7 +27,12 @@ private:
     double applyDeadzone(double value, double deadzone = 0.1) const;
     double readTriggerAxis(const sensor_msgs::msg::Joy::SharedPtr msg, int axis_index) const;
     bool isButtonPressed(const sensor_msgs::msg::Joy::SharedPtr msg, int index) const;
-    std::pair<double, double> readDpad(const sensor_msgs::msg::Joy::SharedPtr msg) const;
+
+    struct DpadAxes {
+        double x{0.0};
+        double y{0.0};
+    };
+    DpadAxes readDpad(const sensor_msgs::msg::Joy::SharedPtr msg) const;
     void loadParameters();
     void printButtonMapping();
 

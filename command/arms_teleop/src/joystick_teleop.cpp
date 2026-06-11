@@ -422,34 +422,36 @@ bool JoystickTeleop::isButtonPressed(const sensor_msgs::msg::Joy::SharedPtr msg,
            msg->buttons[static_cast<size_t>(index)] != 0;
 }
 
-std::pair<double, double> JoystickTeleop::readDpad(
+JoystickTeleop::DpadAxes JoystickTeleop::readDpad(
     const sensor_msgs::msg::Joy::SharedPtr msg) const
 {
     if (button_map_.dpad_up >= 0) {
-        double dpad_x = 0.0;
-        double dpad_y = 0.0;
+        DpadAxes dpad;
         if (isButtonPressed(msg, button_map_.dpad_left)) {
-            dpad_x -= 1.0;
+            dpad.x -= 1.0;
         }
         if (isButtonPressed(msg, button_map_.dpad_right)) {
-            dpad_x += 1.0;
+            dpad.x += 1.0;
         }
         if (isButtonPressed(msg, button_map_.dpad_up)) {
-            dpad_y -= 1.0;
+            dpad.y -= 1.0;
         }
         if (isButtonPressed(msg, button_map_.dpad_down)) {
-            dpad_y += 1.0;
+            dpad.y += 1.0;
         }
-        return {-dpad_x, -dpad_y};
+        dpad.x = -dpad.x;
+        dpad.y = -dpad.y;
+        return dpad;
     }
 
     if (msg->axes.size() <= static_cast<size_t>(std::max(axes_map_.dpad_x, axes_map_.dpad_y))) {
-        return {0.0, 0.0};
+        return {};
     }
 
-    const double dpad_x = applyDeadzone(msg->axes[axes_map_.dpad_x], axes_map_.dpad_deadzone);
-    const double dpad_y = applyDeadzone(msg->axes[axes_map_.dpad_y], axes_map_.dpad_deadzone);
-    return {dpad_x, dpad_y};
+    DpadAxes dpad;
+    dpad.x = applyDeadzone(msg->axes[axes_map_.dpad_x], axes_map_.dpad_deadzone);
+    dpad.y = applyDeadzone(msg->axes[axes_map_.dpad_y], axes_map_.dpad_deadzone);
+    return dpad;
 }
 
 void JoystickTeleop::processAxes(const sensor_msgs::msg::Joy::SharedPtr msg) {
@@ -480,7 +482,9 @@ void JoystickTeleop::processAxes(const sensor_msgs::msg::Joy::SharedPtr msg) {
         right_stick_x = -right_stick_x;
     }
 
-    auto [dpad_x, dpad_y] = readDpad(msg);
+    auto dpad = readDpad(msg);
+    double dpad_x = dpad.x;
+    double dpad_y = dpad.y;
 
     // Apply mirror movement to D-pad if enabled (invert both X and Y)
     if (!mirror_movement_) {
@@ -579,7 +583,9 @@ void JoystickTeleop::processChassisAxes(const sensor_msgs::msg::Joy::SharedPtr m
 
     // Right stick X: chassis rotation (angular.z)
     double right_stick_x = applyDeadzone(msg->axes[axes_map_.right_stick_x], axes_map_.deadzone);
-    auto [dpad_x, dpad_y] = readDpad(msg);
+    const auto dpad = readDpad(msg);
+    const double dpad_x = dpad.x;
+    const double dpad_y = dpad.y;
 
     auto waist_cmd = std_msgs::msg::Float64();
     auto waist_turn_cmd = std_msgs::msg::Float64();
