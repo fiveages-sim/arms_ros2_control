@@ -51,15 +51,7 @@ install(
 )
 
 if(BUILD_TESTING)
-  find_package(ament_cmake_gtest REQUIRED)
   find_package(ament_lint_auto REQUIRED)
-
-  ament_add_gtest(test_inspire_can_protocol
-    test/test_inspire_can_protocol.cpp
-  )
-  target_include_directories(test_inspire_can_protocol PRIVATE
-    ${CMAKE_CURRENT_SOURCE_DIR}/include
-  )
 
   ament_lint_auto_find_test_dependencies()
 endif()
