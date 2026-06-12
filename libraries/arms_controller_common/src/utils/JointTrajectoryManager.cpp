@@ -6,6 +6,30 @@
 #include <cmath>
 #include <utility>
 
+namespace
+{
+    bool areJointPositionsSame(
+        const std::vector<double>& start_pos,
+        const std::vector<double>& target_pos,
+        double epsilon = 1.0e-9)
+    {
+        if (start_pos.size() != target_pos.size())
+        {
+            return false;
+        }
+
+        for (size_t i = 0; i < start_pos.size(); ++i)
+        {
+            if (std::abs(start_pos[i] - target_pos[i]) > epsilon)
+            {
+                return false;
+            }
+        }
+
+        return true;
+    }
+}
+
 namespace arms_controller_common
 {
     JointTrajectoryManager::JointTrajectoryManager(rclcpp::Logger logger)
@@ -50,6 +74,15 @@ namespace arms_controller_common
         // Initialize based on interpolation type
         if (type == InterpolationType::DOUBLES)
         {
+            if (areJointPositionsSame(start_pos_, target_pos_))
+            {
+                RCLCPP_WARN(logger_,
+                            "Skipping DOUBLES moveJ interpolation because start and target joint positions are identical. This is a no-op target, not a planner failure. joint_count=%zu, duration=%.3f",
+                            start_pos_.size(), duration_);
+                reset();
+                return false;
+            }
+
             if (!isDoublesAvailable())
             {
                 RCLCPP_WARN(logger_,

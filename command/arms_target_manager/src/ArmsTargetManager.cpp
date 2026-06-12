@@ -954,6 +954,104 @@ namespace arms_ros2_control::command
                 "/ocs2_wbc_controller/current_state",
                 10,
                 std::bind(&ArmsTargetManager::wbcStateCallback, this, std::placeholders::_1));
+
+        if (!node_->has_parameter("body_controller_name"))
+        {
+            node_->declare_parameter("body_controller_name", body_controller_name_);
+        }
+        body_controller_name_ = node_->get_parameter("body_controller_name").as_string();
+
+        const std::string body_joint_target_topic =
+            "/" + body_controller_name_ + "/current_target_joint";
+        body_joint_target_subscriber_ =
+            node_->create_subscription<std_msgs::msg::Float64MultiArray>(
+                body_joint_target_topic, 10,
+                std::bind(&ArmsTargetManager::currentTargetJointCallback, this, std::placeholders::_1));
+
+        RCLCPP_INFO(node_->get_logger(),
+                    "Subscribed to body joint target topic: %s (waist teleop marker sync trigger)",
+                    body_joint_target_topic.c_str());
+    }
+
+    bool ArmsTargetManager::bodyJointTargetsChanged(
+        const std::vector<double>& previous,
+        const std::vector<double>& current,
+        const double threshold)
+    {
+        if (previous.empty())
+        {
+            return false;
+        }
+
+        if (previous.size() != current.size())
+        {
+            return !current.empty();
+        }
+
+        for (size_t i = 0; i < current.size(); ++i)
+        {
+            if (std::abs(current[i] - previous[i]) > threshold)
+            {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    void ArmsTargetManager::currentTargetJointCallback(
+        const std_msgs::msg::Float64MultiArray::ConstSharedPtr& msg)
+    {
+        if (!msg || !isStateDisabled(current_controller_state_))
+        {
+            return;
+        }
+
+        constexpr double kJointChangeThreshold = 1e-4;
+
+        if (!bodyJointTargetsChanged(last_body_joint_targets_, msg->data, kJointChangeThreshold))
+        {
+            if (last_body_joint_targets_.empty() && !msg->data.empty())
+            {
+                last_body_joint_targets_ = msg->data;
+            }
+            return;
+        }
+
+        last_body_joint_targets_ = msg->data;
+        refreshArmMarkersFromLatestCurrentPoses();
+    }
+
+    void ArmsTargetManager::refreshArmMarkersFromLatestCurrentPoses()
+    {
+        if (!server_)
+        {
+            return;
+        }
+
+        bool refreshed_any = false;
+
+        if (left_arm_marker_ && shouldShowLeftArmMarker())
+        {
+            if (left_arm_marker_->refreshFromLatestCurrentPose())
+            {
+                server_->setPose(left_arm_marker_->getMarkerName(), left_arm_marker_->getPose());
+                refreshed_any = true;
+            }
+        }
+
+        if (dual_arm_mode_ && right_arm_marker_ && shouldShowRightArmMarker())
+        {
+            if (right_arm_marker_->refreshFromLatestCurrentPose())
+            {
+                server_->setPose(right_arm_marker_->getMarkerName(), right_arm_marker_->getPose());
+                refreshed_any = true;
+            }
+        }
+
+        if (refreshed_any)
+        {
+            markPendingChanges();
+        }
     }
 
     void ArmsTargetManager::refreshArmMarkersFromLatestCurrentTargets()
