@@ -67,6 +67,12 @@ private:
     void leftPoseStampedCallback(geometry_msgs::msg::PoseStamped::SharedPtr msg);
     void rightPoseStampedCallback(geometry_msgs::msg::PoseStamped::SharedPtr msg);
     void dualTargetStampedCallback(nav_msgs::msg::Path::SharedPtr msg);
+    void dynamicDualTargetStampedCallback(nav_msgs::msg::Path::SharedPtr msg);
+    void refreshDynamicDualTargetTrajectory();
+    bool poseStampedToStateInBaseFrame(const geometry_msgs::msg::PoseStamped& pose_stamped,
+                                       const char* tag,
+                                       vector_t& out_state) const;
+    vector_t interpolatePose7(const vector_t& start, const vector_t& goal, double alpha) const;
     void bodyPoseStampedCallback(geometry_msgs::msg::PoseStamped::SharedPtr msg);
     void pathCallback(nav_msgs::msg::Path::SharedPtr msg);
     void runInterpolatedPathTrajectory(
@@ -109,6 +115,7 @@ private:
     rclcpp::Subscription<geometry_msgs::msg::PoseStamped>::SharedPtr left_pose_stamped_subscriber_;
     rclcpp::Subscription<geometry_msgs::msg::PoseStamped>::SharedPtr right_pose_stamped_subscriber_;
     rclcpp::Subscription<nav_msgs::msg::Path>::SharedPtr dual_target_stamped_subscriber_;
+    rclcpp::Subscription<nav_msgs::msg::Path>::SharedPtr dynamic_dual_target_stamped_subscriber_;
     rclcpp::Subscription<geometry_msgs::msg::PoseStamped>::SharedPtr body_pose_stamped_subscriber_;
     rclcpp::Subscription<nav_msgs::msg::Path>::SharedPtr path_subscriber_;
 
@@ -125,13 +132,25 @@ private:
     rclcpp_lifecycle::LifecycleNode::SharedPtr node_;
     rclcpp::Logger logger_{rclcpp::get_logger("PoseBasedReferenceManager")};
 
+    struct DynamicDualTargetState {
+        bool active{false};
+        double start_time{0.0};
+        double duration{0.0};
+        geometry_msgs::msg::PoseStamped left_source;
+        geometry_msgs::msg::PoseStamped right_source;
+        vector_t left_start_state;
+        vector_t right_start_state;
+    };
+
     SystemObservation current_observation_;
+    DynamicDualTargetState dynamic_dual_target_;
     vector_t left_target_state_;
     vector_t right_target_state_;
     vector_t body_pose_7_xyzw_;
 
     double trajectory_duration_{2.0};
     double moveL_duration_{2.0};
+    double dynamic_target_horizon_{0.3};
 
 #ifdef HAS_LINA_PLANNING
     std::shared_ptr<planning::CircularCurver> left_circle_curve_;

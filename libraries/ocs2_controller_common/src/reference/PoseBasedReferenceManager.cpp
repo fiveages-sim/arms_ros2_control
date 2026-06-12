@@ -189,6 +189,15 @@ namespace ocs2::controller_common
             dual_target_stamped_subscriber_ =
                 node->create_subscription<nav_msgs::msg::Path>(
                     "dual_target/stamped", 1, dualTargetStampedCallback);
+
+            auto dynamicDualTargetStampedCallback =
+                [this](const nav_msgs::msg::Path::SharedPtr msg)
+            {
+                this->dynamicDualTargetStampedCallback(msg);
+            };
+            dynamic_dual_target_stamped_subscriber_ =
+                node->create_subscription<nav_msgs::msg::Path>(
+                    "dual_target/dynamic_stamped", 1, dynamicDualTargetStampedCallback);
         }
 
         // Path订阅者（单臂和双臂机器人都支持）
@@ -306,6 +315,7 @@ namespace ocs2::controller_common
         const SystemObservation& observation)
     {
         current_observation_ = observation;
+        refreshDynamicDualTargetTrajectory();
     }
 
     void PoseBasedReferenceManager::updateTargetTrajectory()
@@ -614,6 +624,13 @@ namespace ocs2::controller_common
         trajectory_duration_ =
             node_->get_parameter("movel_trajectory_duration").as_double();
         moveL_duration_ = node_->get_parameter("movel_duration").as_double();
+
+        if (!node_->has_parameter("dynamic_target_horizon"))
+        {
+            node_->declare_parameter<double>("dynamic_target_horizon", dynamic_target_horizon_);
+        }
+        dynamic_target_horizon_ =
+            std::max(node_->get_parameter("dynamic_target_horizon").as_double(), 1e-3);
     }
 
     void PoseBasedReferenceManager::syncWheelHumanoidCoupledOppositeArmIfNeeded(bool left_target_was_updated)
@@ -824,6 +841,89 @@ namespace ocs2::controller_common
         updateBodyTrajectory(previous_body_target_state);
     }
 
+    bool PoseBasedReferenceManager::poseStampedToStateInBaseFrame(
+        const geometry_msgs::msg::PoseStamped& pose_stamped,
+        const char* tag,
+        vector_t& out_state) const
+    {
+        auto poseToState = [](const geometry_msgs::msg::Pose& pose) -> vector_t
+        {
+            vector_t state = vector_t::Zero(7);
+            state(0) = pose.position.x;
+            state(1) = pose.position.y;
+            state(2) = pose.position.z;
+            state(3) = pose.orientation.x;
+            state(4) = pose.orientation.y;
+            state(5) = pose.orientation.z;
+            state(6) = pose.orientation.w;
+            return state;
+        };
+
+        if (pose_stamped.header.frame_id == base_frame_)
+        {
+            out_state = poseToState(pose_stamped.pose);
+            return true;
+        }
+
+        try
+        {
+            geometry_msgs::msg::PoseStamped transformed_pose;
+            const geometry_msgs::msg::TransformStamped transform =
+                tf_buffer_->lookupTransform(base_frame_, pose_stamped.header.frame_id, tf2::TimePointZero);
+            tf2::doTransform(pose_stamped, transformed_pose, transform);
+            out_state = poseToState(transformed_pose.pose);
+            return true;
+        }
+        catch (const tf2::TransformException& ex)
+        {
+            RCLCPP_WARN(logger_, "无法将%s pose从 %s 转换到 %s: %s",
+                        tag, pose_stamped.header.frame_id.c_str(), base_frame_.c_str(), ex.what());
+            return false;
+        }
+    }
+
+    vector_t PoseBasedReferenceManager::interpolatePose7(
+        const vector_t& start,
+        const vector_t& goal,
+        double alpha) const
+    {
+        const double clamped_alpha = std::clamp(alpha, 0.0, 1.0);
+        vector_t out = vector_t::Zero(7);
+        out.segment<3>(0) =
+            (1.0 - clamped_alpha) * start.segment<3>(0) +
+            clamped_alpha * goal.segment<3>(0);
+
+        Eigen::Quaterniond q0(start(6), start(3), start(4), start(5));
+        Eigen::Quaterniond q1(goal(6), goal(3), goal(4), goal(5));
+        if (q0.norm() < 1e-9)
+        {
+            q0 = Eigen::Quaterniond::Identity();
+        }
+        else
+        {
+            q0.normalize();
+        }
+        if (q1.norm() < 1e-9)
+        {
+            q1 = q0;
+        }
+        else
+        {
+            q1.normalize();
+        }
+        if (q0.dot(q1) < 0.0)
+        {
+            q1.coeffs() *= -1.0;
+        }
+
+        const Eigen::Quaterniond q = q0.slerp(clamped_alpha, q1).normalized();
+        out(3) = q.x();
+        out(4) = q.y();
+        out(5) = q.z();
+        out(6) = q.w();
+        return out;
+    }
+
     void PoseBasedReferenceManager::processPoseStamped(
         const geometry_msgs::msg::PoseStamped::SharedPtr& msg,
         std::function<void(geometry_msgs::msg::Pose::SharedPtr)> callback)
@@ -889,6 +989,135 @@ namespace ocs2::controller_common
         {
             bodyPoseStampedPoseCallback(pose_msg);
         });
+    }
+
+    void PoseBasedReferenceManager::dynamicDualTargetStampedCallback(
+        const nav_msgs::msg::Path::SharedPtr msg)
+    {
+        updateParam();
+
+        if (!dual_arm_mode_)
+        {
+            RCLCPP_WARN(logger_, "Dynamic dual target callback called but dual arm mode is not enabled");
+            return;
+        }
+
+        if (msg->poses.size() != 2)
+        {
+            RCLCPP_WARN(logger_, "Dynamic dual target path must contain exactly 2 poses ([left,right]), got %zu",
+                        msg->poses.size());
+            return;
+        }
+
+        vector_t left_goal_now;
+        vector_t right_goal_now;
+        if (!poseStampedToStateInBaseFrame(msg->poses[0], "动态左臂", left_goal_now))
+        {
+            return;
+        }
+        if (!poseStampedToStateInBaseFrame(msg->poses[1], "动态右臂", right_goal_now))
+        {
+            return;
+        }
+
+        dynamic_dual_target_.active = true;
+        dynamic_dual_target_.start_time = current_observation_.time;
+        dynamic_dual_target_.duration = std::max(moveL_duration_, 1e-3);
+        dynamic_dual_target_.left_source = msg->poses[0];
+        dynamic_dual_target_.right_source = msg->poses[1];
+        dynamic_dual_target_.left_start_state = left_target_state_;
+        dynamic_dual_target_.right_start_state = right_target_state_;
+
+        // 立即生成第一版轨迹，避免等待下一次 observation 更新。
+        refreshDynamicDualTargetTrajectory();
+    }
+
+    void PoseBasedReferenceManager::refreshDynamicDualTargetTrajectory()
+    {
+        if (!dynamic_dual_target_.active)
+        {
+            return;
+        }
+
+        vector_t left_goal_now;
+        vector_t right_goal_now;
+        if (!poseStampedToStateInBaseFrame(dynamic_dual_target_.left_source, "动态左臂", left_goal_now))
+        {
+            return;
+        }
+        if (!poseStampedToStateInBaseFrame(dynamic_dual_target_.right_source, "动态右臂", right_goal_now))
+        {
+            return;
+        }
+
+        const double elapsed = current_observation_.time - dynamic_dual_target_.start_time;
+        const double duration = std::max(dynamic_dual_target_.duration, 1e-3);
+        const double alpha_now = std::clamp(elapsed / duration, 0.0, 1.0);
+        const double remaining_duration = std::max(duration - std::max(elapsed, 0.0), 0.0);
+        const double horizon_duration = std::min(dynamic_target_horizon_, remaining_duration);
+
+        const vector_t left_now_ref =
+            interpolatePose7(dynamic_dual_target_.left_start_state, left_goal_now, alpha_now);
+        const vector_t right_now_ref =
+            interpolatePose7(dynamic_dual_target_.right_start_state, right_goal_now, alpha_now);
+
+        left_target_state_ = left_now_ref;
+        right_target_state_ = right_now_ref;
+
+        if (alpha_now >= 1.0)
+        {
+            left_target_state_ = left_goal_now;
+            right_target_state_ = right_goal_now;
+
+            scalar_array_t time_trajectory = {current_observation_.time};
+            vector_array_t state_trajectory = {assembleDualArmReferenceState(left_goal_now, right_goal_now)};
+            vector_array_t input_trajectory(
+                1, vector_t::Zero(target_context_.input_dim));
+            TargetTrajectories target_trajectories(time_trajectory, state_trajectory, input_trajectory);
+            referenceManagerPtr_->setTargetTrajectories(std::move(target_trajectories));
+
+            dynamic_dual_target_.active = false;
+            publishCurrentTargets();
+            return;
+        }
+
+        constexpr double kSampleInterval = 0.04;
+        const size_t kNumSamples = std::max(
+            static_cast<size_t>(std::ceil(std::max(horizon_duration, kSampleInterval) / kSampleInterval)) + 1,
+            static_cast<size_t>(2));
+
+        scalar_array_t time_trajectory;
+        time_trajectory.reserve(kNumSamples);
+        vector_array_t state_trajectory;
+        state_trajectory.reserve(kNumSamples);
+
+        for (size_t i = 0; i < kNumSamples; ++i)
+        {
+            const double local_alpha = std::clamp(
+                static_cast<double>(i) / static_cast<double>(kNumSamples - 1), 0.0, 1.0);
+            const double horizon_alpha_span = horizon_duration / duration;
+            const double global_alpha =
+                std::clamp(alpha_now + horizon_alpha_span * local_alpha, 0.0, 1.0);
+            const double t = current_observation_.time + horizon_duration * local_alpha;
+
+            const vector_t left_i =
+                interpolatePose7(dynamic_dual_target_.left_start_state, left_goal_now, global_alpha);
+            const vector_t right_i =
+                interpolatePose7(dynamic_dual_target_.right_start_state, right_goal_now, global_alpha);
+
+            time_trajectory.push_back(t);
+            state_trajectory.push_back(assembleDualArmReferenceState(left_i, right_i));
+        }
+
+        // 确保第一个采样点与当前规划进度一致，避免 local_alpha 精度造成轻微跳动。
+        state_trajectory.front() = assembleDualArmReferenceState(left_now_ref, right_now_ref);
+
+        vector_array_t input_trajectory(
+            kNumSamples, vector_t::Zero(target_context_.input_dim));
+        TargetTrajectories target_trajectories(time_trajectory, state_trajectory, input_trajectory);
+        referenceManagerPtr_->setTargetTrajectories(std::move(target_trajectories));
+
+        publishCurrentTargets();
     }
 
     void PoseBasedReferenceManager::dualTargetStampedCallback(
