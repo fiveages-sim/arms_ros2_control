@@ -22,6 +22,7 @@ int main(int argc, char** argv)
     bool dual_arm_mode = node->declare_parameter("dual_arm_mode", false);
     std::string control_base_frame = node->declare_parameter("control_base_frame", "world");
     std::string marker_fixed_frame = node->declare_parameter("marker_fixed_frame", "base_link");
+    std::string body_controller_name = node->declare_parameter("body_controller_name", "body_joint_controller");
     double linear_scale = node->declare_parameter("linear_scale", 0.005);
     double angular_scale = node->declare_parameter("angular_scale", 0.05);
     double vr_thumbstick_linear_scale = node->declare_parameter("vr_thumbstick_linear_scale", 0.005);
@@ -72,10 +73,11 @@ int main(int argc, char** argv)
     }
 
     RCLCPP_INFO(node->get_logger(),
-                "Starting ArmsTargetManager with dual_arm_mode: %s, control_base_frame: %s, marker_fixed_frame: %s",
+                "Starting ArmsTargetManager with dual_arm_mode: %s, control_base_frame: %s, marker_fixed_frame: %s, body_controller: %s",
                 dual_arm_mode ? "true" : "false",
                 control_base_frame.c_str(),
-                marker_fixed_frame.c_str());
+                marker_fixed_frame.c_str(),
+                body_controller_name.c_str());
     RCLCPP_INFO(node->get_logger(),
                 "Joystick/keyboard scales: linear=%.3f, angular=%.3f (deadzone handled at input source)",
                 linear_scale, angular_scale);

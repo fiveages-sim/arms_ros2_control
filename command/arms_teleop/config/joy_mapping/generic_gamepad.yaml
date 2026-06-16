@@ -1,0 +1,47 @@
+# SDL game_controller_node standard layout (ROS joy package Jazzy)
+# https://docs.ros.org/en/ros2_packages/jazzy/api/joy/index.html
+# Buttons: 0=A 1=B 2=X 3=Y 4=Back 5=Guide 6=Start 7=LS 8=RS 9=LB 10=RB 11-14=D-Pad
+# Axes: 0=LS_X 1=LS_Y 2=RS_X 3=RS_Y 4=LT 5=RT
+# D-Pad is published as buttons (11=Up 12=Down 13=Left 14=Right), not axes.
+
+/**:
+  ros__parameters:
+    button_mapping:
+      a_button: 0
+      b_button: 1
+      x_button: 2
+      y_button: 3
+      lb_button: 9
+      rb_button: 10
+      back_button: 4
+      start_button: 6
+      left_stick_button: 7
+      right_stick_button: 8
+      dpad_up_button: 11
+      dpad_down_button: 12
+      dpad_left_button: 13
+      dpad_right_button: 14
+
+    axes_mapping:
+      left_stick_x: 0
+      left_stick_y: 1
+      right_stick_x: 2
+      right_stick_y: 3
+      left_trigger: 4
+      right_trigger: 5
+      deadzone: 0.1
+      trigger_deadzone: 0.05
+      arm_activation_threshold: 0.5
+
+    gripper:
+      step_per_tick: 0.05
+
+    mirror_movement: true
+
+    speed:
+      low_scale: 0.3
+      high_scale: 1.0
+
+    chassis:
+      linear_scale: 0.35
+      angular_scale: 0.5
