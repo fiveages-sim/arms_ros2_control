@@ -17,8 +17,9 @@ namespace gripper_hardware_common
         /// Perform hardware initialization/configuration.
         virtual bool initialize() = 0;
 
-        /// Move the gripper with the given torque, velocity, and normalized position (0.0=closed, 1.0=open).
-        virtual bool move_gripper(int torque, int velocity, double position) = 0;
+        /// Move the gripper: normalized torque and velocity in [0,1]; position 0=closed, 1=open.
+        /// Velocity maps linearly to device byte 0–255 (see JD / Changingtek implementations).
+        virtual bool move_gripper(double normalized_torque, double normalized_velocity, double position) = 0;
 
         /// Send async read request for current status (status updated by recv_thread_func).
         virtual bool getStatus() = 0;

@@ -1,0 +1,56 @@
+# joy_node 回退映射（厂商原始 /joy 下标，非 SDL game_controller 标准布局）
+# Mapped 手柄请用 game_controller_node + generic_gamepad.yaml
+
+/**:
+  ros__parameters:
+    # 按键映射 (Button Mapping)
+    # Xbox 控制器按键索引:
+    # 0=A, 1=B, 2=X, 3=Y, 4=LB, 5=RB, 6=Back, 7=Start, 8=Guide, 9=LS, 10=RS
+    button_mapping:                             # Arm 64
+      a_button: 1          # A 按钮 - 切换目标手臂     1
+      b_button: 2          # B 按钮 - 发送命令        2
+      x_button: 0          # X 按钮 - 开关夹爪        0
+      y_button: 3          # Y 按钮 - 预留            3
+      lb_button: 4         # 左肩键 - 组合键          4
+      rb_button: 5         # 右肩键 - 切换控制模式（ARM/CHASSIS）5
+      back_button: 8       # Back 按钮 - 切换镜像移动模式    8
+      start_button: 9      # Start 按钮 - 特殊命令         9
+      left_stick_button: 10 # 左摇杆按下 - 切换高速/低速模式  10
+      right_stick_button: 11 # 右摇杆按下 - 启用/禁用控制   11
+
+    # 摇杆和 D-Pad 映射 (Axes Mapping)
+    # Xbox 控制器轴索引:
+    # 0=LS_X, 1=LS_Y, 2=LT, 3=RS_X, 4=RS_Y, 5=RT, 6=DPad_X, 7=DPad_Y
+    axes_mapping:
+      left_stick_x: 0      # 左摇杆 X 轴 - 控制 Y 方向移动
+      left_stick_y: 1      # 左摇杆 Y 轴 - 控制 X 方向移动
+      right_stick_x: 2     # 右摇杆 X 轴 - 控制 Yaw 旋转    2
+      right_stick_y: 3     # 右摇杆 Y 轴 - 控制 Z 方向移动   3
+      dpad_x: 4            # D-Pad X 轴 - 控制 Pitch 旋转   5
+      dpad_y: 5           # D-Pad Y：ARM 模式 pitch；CHASSIS 模式腰部升降（正=上升，负=下降）
+      deadzone: 0.1        # 摇杆死区
+      dpad_deadzone: 0.5   # D-Pad 死区
+      left_trigger: 2      # LT - 夹爪关小（累减开合比例）
+      right_trigger: 5     # RT - 夹爪开大（累加开合比例）
+      trigger_deadzone: 0.05
+      arm_activation_threshold: 0.5
+
+    gripper:
+      step_per_tick: 0.05
+
+    # 镜像移动配置 (Mirror Movement)
+    # 当启用时，左摇杆的 X 和 Y 方向都会取反（镜像）
+    mirror_movement: true  # 默认开启镜像移动
+    
+    # 速度模式配置 (Speed Mode)
+    # 通过按下左摇杆按钮可以在高速和低速模式之间切换
+    speed:
+      low_scale: 0.3   # 低速模式缩放因子 (30% 速度)
+      high_scale: 1.0  # 高速模式缩放因子 (100% 速度)
+    
+    # 底盘速度配置 (Chassis Speed)
+    # 底盘控制的线速度和角速度缩放因子
+    chassis:
+      linear_scale: 0.35   # 线速度缩放因子 (m/s)
+      angular_scale: 0.5   # 角速度缩放因子 (rad/s)
+

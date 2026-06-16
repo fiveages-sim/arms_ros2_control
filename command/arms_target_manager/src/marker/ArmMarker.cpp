@@ -53,6 +53,9 @@ namespace arms_ros2_control::command
             current_pose_topic, 10,
             [this](const geometry_msgs::msg::PoseStamped::ConstSharedPtr msg)
             {
+                latest_current_pose_ = *msg;
+                has_latest_current_pose_ = true;
+
                 // 先通知外部收到原始消息（如 VRInputHandler）
                 if (current_pose_callback_)
                 {
@@ -123,6 +126,30 @@ namespace arms_ros2_control::command
 
         geometry_msgs::msg::Pose transformed_pose = transformPose(
             latest_current_target_pose_.pose, source_frame_id, frame_id_);
+        pose_ = transformed_pose;
+
+        if (update_callback_)
+        {
+            update_callback_(getMarkerName(), pose_);
+        }
+        return true;
+    }
+
+    bool ArmMarker::refreshFromLatestCurrentPose()
+    {
+        if (!has_latest_current_pose_)
+        {
+            return false;
+        }
+
+        const std::string& source_frame_id = latest_current_pose_.header.frame_id;
+        if (source_frame_id.empty())
+        {
+            return false;
+        }
+
+        geometry_msgs::msg::Pose transformed_pose = transformPose(
+            latest_current_pose_.pose, source_frame_id, frame_id_);
         pose_ = transformed_pose;
 
         if (update_callback_)

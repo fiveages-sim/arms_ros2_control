@@ -6,11 +6,13 @@
 // - Modbus configuration constants
 // - Command change detection
 // - Read frequency control
-// - Command builder
+// - Torque / velocity conversion (normalized -> device)
 //
 #pragma once
 
 #include "gripper_hardware_common/utils/PositionConverter.h"
+#include "gripper_hardware_common/utils/TorqueConverter.h"
+#include "gripper_hardware_common/utils/VelocityConverter.h"
 #include "gripper_hardware_common/utils/ModbusConfig.h"
 #include "gripper_hardware_common/utils/CommandChangeDetector.h"
 #include "gripper_hardware_common/utils/ReadFrequencyController.h"

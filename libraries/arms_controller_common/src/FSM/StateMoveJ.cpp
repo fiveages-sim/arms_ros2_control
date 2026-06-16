@@ -14,6 +14,29 @@
 // #include "lina_planning/planning/kinematics/fiveages_w2_fk.h"
 // #include "lina_planning/planning/kinematics/fiveages_w2_ik.h"
 
+namespace
+{
+    bool areJointPositionsSame(
+        const std::vector<double>& lhs,
+        const std::vector<double>& rhs,
+        double epsilon = 1.0e-9)
+    {
+        if (lhs.size() != rhs.size())
+        {
+            return false;
+        }
+
+        for (size_t i = 0; i < lhs.size(); ++i)
+        {
+            if (std::abs(lhs[i] - rhs[i]) > epsilon)
+            {
+                return false;
+            }
+        }
+
+        return true;
+    }
+}
 
 namespace arms_controller_common
 {
@@ -367,7 +390,7 @@ namespace arms_controller_common
                         RCLCPP_INFO(node_->get_logger(), "%s", oss.str().c_str());
 
                     }
-
+                    // 仅让腰部关节参与本次升降，其他关节保持上一周期已下发命令，防止被旧轨迹/插值意外改写。
                     for (size_t i = waist_joint_count_;
                          i < ctrl_interfaces_.joint_position_command_interface_.size(); i++)
                     {
@@ -601,14 +624,34 @@ namespace arms_controller_common
             {
                 start_pos_.push_back(ctrl_interfaces_.last_sent_joint_positions_[i]);
             }
-            trajectory_manager_.initSingleNode(
-                start_pos_,
-                target_pos_,
-                duration_,
-                interpolation_type_,
-                ctrl_interfaces_.frequency_,
-                tanh_scale_
-            );
+
+            if (areJointPositionsSame(start_pos_, target_pos_))
+            {
+                RCLCPP_WARN(node_->get_logger(),
+                            "Target joint position matches the last sent joint position; no MOVEJ interpolation is needed. This can happen when the published waist joint target is already the current command. joint_count=%zu",
+                            target_pos_.size());
+                maintainCommandFromLastSent();
+                has_target_ = false;
+                interpolation_active_ = false;
+                return;
+            }
+
+            if (!trajectory_manager_.initSingleNode(
+                    start_pos_,
+                    target_pos_,
+                    duration_,
+                    interpolation_type_,
+                    ctrl_interfaces_.frequency_,
+                    tanh_scale_))
+            {
+                RCLCPP_WARN(node_->get_logger(),
+                            "Failed to initialize MOVEJ interpolation for target joint position; holding last sent joint position. joint_count=%zu, interpolation_type=%s",
+                            target_pos_.size(), toString(interpolation_type_));
+                maintainCommandFromLastSent();
+                has_target_ = false;
+                interpolation_active_ = false;
+                return;
+            }
 
             interpolation_active_ = true;
             RCLCPP_INFO(node_->get_logger(),
@@ -1258,7 +1301,7 @@ namespace arms_controller_common
                     setTargetPosition(target_pos);
                 }
             });
-        RCLCPP_INFO(node_->get_logger(), "Subscribed to %s for all joints", base_topic.c_str());
+        RCLCPP_DEBUG(node_->get_logger(), "Subscribed to %s for all joints", base_topic.c_str());
 
         // Only create prefix-based topics if enabled
         if (!enable_prefix_topics)
@@ -1310,7 +1353,7 @@ namespace arms_controller_common
                         setTargetPosition("left", target_pos);
                     }
                 });
-            RCLCPP_INFO(node_->get_logger(), "Subscribed to %s/left for left-prefixed joints", base_topic.c_str());
+            RCLCPP_DEBUG(node_->get_logger(), "Subscribed to %s/left for left-prefixed joints", base_topic.c_str());
         }
 
         // Subscribe to right prefix topic if right joints exist
@@ -1330,7 +1373,7 @@ namespace arms_controller_common
                         setTargetPosition("right", target_pos);
                     }
                 });
-            RCLCPP_INFO(node_->get_logger(), "Subscribed to %s/right for right-prefixed joints", base_topic.c_str());
+            RCLCPP_DEBUG(node_->get_logger(), "Subscribed to %s/right for right-prefixed joints", base_topic.c_str());
         }
 
         // Subscribe to body prefix topic if body joints exist
@@ -1350,7 +1393,7 @@ namespace arms_controller_common
                         setTargetPosition("body", target_pos);
                     }
                 });
-            RCLCPP_INFO(node_->get_logger(), "Subscribed to %s/body for body-prefixed joints", base_topic.c_str());
+            RCLCPP_DEBUG(node_->get_logger(), "Subscribed to %s/body for body-prefixed joints", base_topic.c_str());
         }
 
         // Subscribe to head prefix topic if head joints exist
@@ -1370,7 +1413,7 @@ namespace arms_controller_common
                         setTargetPosition("head", target_pos);
                     }
                 });
-            RCLCPP_INFO(node_->get_logger(), "Subscribed to %s/head for head-prefixed joints", base_topic.c_str());
+            RCLCPP_DEBUG(node_->get_logger(), "Subscribed to %s/head for head-prefixed joints", base_topic.c_str());
         }
 
         // Log summary
@@ -1747,7 +1790,7 @@ namespace arms_controller_common
                 }
             });
 
-        RCLCPP_INFO(node_->get_logger(), "Subscribed to trajectory topic: %s", full_topic.c_str());
+        RCLCPP_DEBUG(node_->get_logger(), "Subscribed to trajectory topic: %s", full_topic.c_str());
     }
 
     void StateMoveJ::updateWaistParam()
@@ -1755,28 +1798,91 @@ namespace arms_controller_common
         waist_lifting_duration_ = node_->get_parameter("waist_lifting_duration").as_double();
     }
 
-    bool StateMoveJ::moveWaistLifting(double lifting_distance)
+    bool StateMoveJ::moveWaistLifting(const Eigen::Vector3d& lifting_delta)
     {
         if (!waist_lifting_planer_)
         {
             setWaistLiftingPlaner();
         }
+
         std::lock_guard lock(target_mutex_);
 
+        const Eigen::Vector3d captured_delta = lifting_delta;
         if (!isNonWaistMotionBusy() && !stop_to_zero_active_)
         {
-            const double captured_distance = lifting_distance;
             requestWaistOnlyMotionOrDefer(
-                [this, captured_distance]() { moveWaistLiftingImpl(captured_distance); });
+                [this, captured_delta]() { moveWaistLiftingImpl(captured_delta); });
             return true;
         }
 
-        const double captured_distance = lifting_distance;
-        requestWaistMotionOrDefer([this, captured_distance]() { moveWaistLiftingImpl(captured_distance); });
+        requestWaistMotionOrDefer([this, captured_delta]() { moveWaistLiftingImpl(captured_delta); });
         return true;
     }
 
-    bool StateMoveJ::moveWaistLiftingImpl(double lifting_distance)
+    bool StateMoveJ::moveWaistLiftingToBodyBaseXz(const Eigen::Vector3d& target_xz_phi)
+    {
+        if (!waist_lifting_planer_)
+        {
+            setWaistLiftingPlaner();
+        }
+
+        std::lock_guard lock(target_mutex_);
+
+        const Eigen::Vector3d captured_target = target_xz_phi;
+        if (!isNonWaistMotionBusy() && !stop_to_zero_active_)
+        {
+            requestWaistOnlyMotionOrDefer(
+                [this, captured_target]() { moveWaistLiftingToBodyBaseXzImpl(captured_target); });
+            return true;
+        }
+
+        requestWaistMotionOrDefer(
+            [this, captured_target]() { moveWaistLiftingToBodyBaseXzImpl(captured_target); });
+        return true;
+    }
+
+    bool StateMoveJ::moveWaistLiftingToBodyBaseXzImpl(const Eigen::Vector3d& target_xz_phi)
+    {
+        if (!waist_lifting_planer_)
+        {
+            RCLCPP_WARN(node_->get_logger(), "Waist lifting planner not initialized");
+            return false;
+        }
+        if (!waist_lifting_planer_->isBodyThreeJoint())
+        {
+            RCLCPP_WARN(node_->get_logger(),
+                        "Absolute waist x/z/phi target is only supported for THREE_JOINT waist lifting");
+            return false;
+        }
+
+        Eigen::VectorXd current_angles = getCurrentWaistAngles();
+        if (current_angles.size() < 3)
+        {
+            RCLCPP_WARN(node_->get_logger(),
+                        "Cannot compute current waist x/z/phi: expected at least 3 waist joints, got %ld",
+                        current_angles.size());
+            return false;
+        }
+
+        Eigen::Vector3d angles3d(current_angles(0), current_angles(1), current_angles(2));
+        Eigen::Vector3d current_pose;
+        if (!waist_lifting_planer_->calculateThreeJointEndpointXzPhi(angles3d, current_pose))
+        {
+            RCLCPP_WARN(node_->get_logger(), "Failed to calculate current waist x/z/phi in body_base");
+            return false;
+        }
+
+        const Eigen::Vector3d lifting_delta = target_xz_phi - current_pose;
+        RCLCPP_INFO(node_->get_logger(),
+                    "Waist absolute target in body_base: target=(%.4f, %.4f, %.4f), current=(%.4f, %.4f, %.4f), delta=(%.4f, %.4f, %.4f)",
+                    target_xz_phi(0), target_xz_phi(1), target_xz_phi(2),
+                    current_pose(0), current_pose(1), current_pose(2),
+                    lifting_delta(0), lifting_delta(1), lifting_delta(2));
+
+        return moveWaistLiftingImpl(lifting_delta);
+    }
+
+    bool StateMoveJ::moveWaistLiftingImpl(const Eigen::Vector3d& lifting_delta)
     {
         if (!waist_lifting_planer_)
         {
@@ -1794,12 +1900,17 @@ namespace arms_controller_common
         {
             Eigen::Vector3d angles3d(current_angles(0), current_angles(1), current_angles(2));
 
+            // initTargetLiftingLength 内部关键判断：
+            // 1) 模式分支：按 three_joint / single_joint 走不同规划路径；
+            // 2) 可达性与限位：three_joint 会先尝试终点 IK，不可达则二分裁剪到可达终点；
+            //    single_joint 会对目标角做上下限 clamp；
+            // 3) 轨迹初始化：初始化 moveJ（或 fallback 轨迹状态），初始化失败则返回 false。
             if (!waist_lifting_planer_->initTargetLiftingLength(
-                angles3d, lifting_distance, waist_lifting_duration_, waist_control_period))
+                angles3d, lifting_delta, waist_lifting_duration_, waist_control_period))
             {
                 RCLCPP_WARN(node_->get_logger(),
-                            "Failed to initialize THREE_JOINT waist lifting plan for distance %.3f",
-                            lifting_distance);
+                            "Failed to initialize THREE_JOINT waist lifting plan for delta (%.3f, %.3f, %.3f)",
+                            lifting_delta(0), lifting_delta(1), lifting_delta(2));
                 return false;
             }
             planned_lifting_distance = waist_lifting_planer_->getLastPlannedLiftingLength();
@@ -1809,11 +1920,11 @@ namespace arms_controller_common
             Eigen::Vector3d angles3d(current_angles(0), 0.0, 0.0);
 
             if (!waist_lifting_planer_->initTargetLiftingLength(
-                angles3d, lifting_distance, waist_lifting_duration_, waist_control_period))
+                angles3d, lifting_delta, waist_lifting_duration_, waist_control_period))
             {
                 RCLCPP_WARN(node_->get_logger(),
-                            "Failed to initialize SINGLE_JOINT waist lifting plan for distance %.3f",
-                            lifting_distance);
+                            "Failed to initialize SINGLE_JOINT waist lifting plan for delta dz (%.3f)",
+                            lifting_delta(1));
                 return false;
             }
             planned_lifting_distance = waist_lifting_planer_->getLastPlannedLiftingLength();
@@ -1825,26 +1936,31 @@ namespace arms_controller_common
             return false;
         }
 
+        // 对比“请求位移大小”和“实际规划位移大小”：
+        // 若二者差异明显，说明请求被 IK/关节限位裁剪；否则记录正常规划结果。
+        const double requested_norm = waist_lifting_planer_->isBodyThreeJoint()
+            ? lifting_delta.norm()
+            : std::abs(lifting_delta(1));
         constexpr double kPlannedDistanceEpsilon = 1.0e-4;
-        if (std::abs(planned_lifting_distance - lifting_distance) > kPlannedDistanceEpsilon)
+        if (std::abs(planned_lifting_distance - requested_norm) > kPlannedDistanceEpsilon)
         {
             RCLCPP_WARN(node_->get_logger(),
-                        "Waist lifting distance clamped by end-point IK/limits: requested=%.4f, planned=%.4f",
-                        lifting_distance, planned_lifting_distance);
+                        "Waist lifting distance clamped by end-point IK/limits: requested=(%.4f, %.4f, %.4f), planned_norm=%.4f",
+                        lifting_delta(0), lifting_delta(1), lifting_delta(2), planned_lifting_distance);
         }
         else
         {
             RCLCPP_INFO(node_->get_logger(),
-                        "Waist lifting planned distance: requested=%.4f, planned=%.4f",
-                        lifting_distance, planned_lifting_distance);
+                        "Waist lifting planned delta: requested=(%.4f, %.4f, %.4f), planned_norm=%.4f",
+                        lifting_delta(0), lifting_delta(1), lifting_delta(2), planned_lifting_distance);
         }
 
         if (std::abs(planned_lifting_distance) <= kPlannedDistanceEpsilon &&
-            std::abs(lifting_distance) > kPlannedDistanceEpsilon)
+            requested_norm > kPlannedDistanceEpsilon)
         {
             RCLCPP_WARN(node_->get_logger(),
-                        "Waist lifting already at limit, no motion planned (requested=%.4f)",
-                        lifting_distance);
+                        "Waist lifting already at limit, no motion planned (requested=(%.4f, %.4f, %.4f))",
+                        lifting_delta(0), lifting_delta(1), lifting_delta(2));
             return false;
         }
         // Entering waist lifting should cancel any stale MOVEJ trajectory state,
@@ -1863,9 +1979,10 @@ namespace arms_controller_common
         waist_lifting_active_ = true;
         motion_mode_ = MotionMode::WAIST_CONTROL;
         RCLCPP_INFO(node_->get_logger(),
-                    "Waist lifting started: type=%s, requested=%.4f, planned=%.4f, duration=%.3f, using %zu joints",
+                    "Waist lifting started: type=%s, requested=(%.4f, %.4f), planned_norm=%.4f, duration=%.3f, using %zu joints",
                     (waist_lifting_planer_->isBodyThreeJoint()? "THREE_JOINT" : "SINGLE_JOINT"),
-                    lifting_distance, planned_lifting_distance, waist_lifting_duration_, waist_joint_count_);
+                    lifting_delta(0), lifting_delta(1), planned_lifting_distance,
+                    waist_lifting_duration_, waist_joint_count_);
 
         return true;
     };
@@ -2309,8 +2426,8 @@ namespace arms_controller_common
             std::bind(&StateMoveJ::handleJointTrajectory, this,
                       std::placeholders::_1, std::placeholders::_2, std::placeholders::_3));
 
-        RCLCPP_INFO(node_->get_logger(), "Created joint trajectory service at %s",
-                    full_service_name.c_str());
+        RCLCPP_DEBUG(node_->get_logger(), "Created joint trajectory service at %s",
+                     full_service_name.c_str());
     }
 
     void StateMoveJ::setupJointTrajectoryAction(const std::string& action_name)
@@ -2324,8 +2441,8 @@ namespace arms_controller_common
             std::bind(&StateMoveJ::handleJointTrajectoryCancel, this, std::placeholders::_1),
             std::bind(&StateMoveJ::handleJointTrajectoryAccepted, this, std::placeholders::_1));
 
-        RCLCPP_INFO(node_->get_logger(), "Created joint trajectory action at %s",
-                    full_action_name.c_str());
+        RCLCPP_DEBUG(node_->get_logger(), "Created joint trajectory action at %s",
+                     full_action_name.c_str());
     }
 
     rclcpp_action::GoalResponse StateMoveJ::handleJointTrajectoryGoal(
@@ -2764,8 +2881,8 @@ namespace arms_controller_common
             std::bind(&StateMoveJ::handleLinearTrajectory, this,
                       std::placeholders::_1, std::placeholders::_2, std::placeholders::_3));
 
-        RCLCPP_INFO(node_->get_logger(), "Created linear trajectory service at %s",
-                    full_service_name.c_str());
+        RCLCPP_DEBUG(node_->get_logger(), "Created linear trajectory service at %s",
+                     full_service_name.c_str());
     }
 
     void StateMoveJ::setupLinearTrajectoryAction(const std::string& action_name)
@@ -2779,8 +2896,8 @@ namespace arms_controller_common
             std::bind(&StateMoveJ::handleLinearCancel, this, std::placeholders::_1),
             std::bind(&StateMoveJ::handleLinearAccepted, this, std::placeholders::_1));
 
-        RCLCPP_INFO(node_->get_logger(), "Created linear trajectory action at %s",
-                    full_action_name.c_str());
+        RCLCPP_DEBUG(node_->get_logger(), "Created linear trajectory action at %s",
+                     full_action_name.c_str());
     }
 
     rclcpp_action::GoalResponse StateMoveJ::handleLinearGoal(
@@ -3170,8 +3287,8 @@ namespace arms_controller_common
             std::bind(&StateMoveJ::handleCircleTrajectory, this,
                       std::placeholders::_1, std::placeholders::_2, std::placeholders::_3));
 
-        RCLCPP_INFO(node_->get_logger(), "Created circle trajectory service at %s",
-                    full_service_name.c_str());
+        RCLCPP_DEBUG(node_->get_logger(), "Created circle trajectory service at %s",
+                     full_service_name.c_str());
     }
 
     void StateMoveJ::setupCircleTrajectoryAction(const std::string& action_name)
@@ -3185,8 +3302,8 @@ namespace arms_controller_common
             std::bind(&StateMoveJ::handleCircleCancel, this, std::placeholders::_1),
             std::bind(&StateMoveJ::handleCircleAccepted, this, std::placeholders::_1));
 
-        RCLCPP_INFO(node_->get_logger(), "Created circle trajectory action at %s",
-                    full_action_name.c_str());
+        RCLCPP_DEBUG(node_->get_logger(), "Created circle trajectory action at %s",
+                     full_action_name.c_str());
     }
 
     rclcpp_action::GoalResponse StateMoveJ::handleCircleGoal(

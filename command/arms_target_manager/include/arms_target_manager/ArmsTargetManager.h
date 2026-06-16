@@ -130,6 +130,12 @@ namespace arms_ros2_control::command
 
         void updateBodyMarkerVisibility();
         void refreshArmMarkersFromLatestCurrentTargets();
+        void refreshArmMarkersFromLatestCurrentPoses();
+
+        static bool bodyJointTargetsChanged(
+            const std::vector<double>& previous,
+            const std::vector<double>& current,
+            double threshold);
 
         geometry_msgs::msg::Pose transformPose(
             const geometry_msgs::msg::Pose& pose,
@@ -144,6 +150,7 @@ namespace arms_ros2_control::command
         rclcpp::Subscription<arms_ros2_control_msgs::msg::Inputs>::SharedPtr control_input_subscription_;
         rclcpp::Subscription<sensor_msgs::msg::JointState>::SharedPtr head_joint_state_subscription_;
         rclcpp::Subscription<arms_ros2_control_msgs::msg::WbcCurrentState>::SharedPtr wbc_state_subscriber_;
+        rclcpp::Subscription<std_msgs::msg::Float64MultiArray>::SharedPtr body_joint_target_subscriber_;
 
         rclcpp::Publisher<nav_msgs::msg::Path>::SharedPtr dual_target_stamped_publisher_;
         rclcpp::Publisher<geometry_msgs::msg::Pose>::SharedPtr body_target_publisher_;
@@ -168,6 +175,8 @@ namespace arms_ros2_control::command
         bool dual_arm_mode_;
         std::string control_base_frame_;
         std::string marker_fixed_frame_;
+        std::string body_controller_name_{"body_joint_controller"};
+        std::vector<double> last_body_joint_targets_;
         double publish_rate_;
 
         std::shared_ptr<tf2_ros::Buffer> tf_buffer_;

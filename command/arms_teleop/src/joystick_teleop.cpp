@@ -4,7 +4,35 @@
 
 #include "arms_teleop/joystick_teleop.h"
 
+#include <algorithm>
+#include <cmath>
+#include <limits>
+
 using std::placeholders::_1;
+
+namespace {
+
+constexpr float kNoHandCommand = std::numeric_limits<float>::quiet_NaN();
+
+int param_int(rclcpp::Node * node, const char * name, int default_value)
+{
+    node->declare_parameter(name, default_value);
+    return node->get_parameter(name).as_int();
+}
+
+double param_double(rclcpp::Node * node, const char * name, double default_value)
+{
+    node->declare_parameter(name, default_value);
+    return node->get_parameter(name).as_double();
+}
+
+bool param_bool(rclcpp::Node * node, const char * name, bool default_value)
+{
+    node->declare_parameter(name, default_value);
+    return node->get_parameter(name).as_bool();
+}
+
+}  // namespace
 
 JoystickTeleop::JoystickTeleop() : Node("joystick_teleop_node") {
     publisher_ = create_publisher<arms_ros2_control_msgs::msg::Inputs>("control_input", 10);
@@ -15,10 +43,8 @@ JoystickTeleop::JoystickTeleop() : Node("joystick_teleop_node") {
     waist_lifting_publisher_ = create_publisher<std_msgs::msg::Float64>("/body_joint_controller/waist_lifting_command", 10);
     waist_turning_publisher_ = create_publisher<std_msgs::msg::Float64>("/body_joint_controller/waist_turning_command", 10);
     
-    // Load button and axes mapping from parameters
-    loadButtonMapping();
-    
-    // Initialize control parameters
+    loadParameters();
+
     updateRate_ = 20.0;
     
     // Initialize state
@@ -39,28 +65,15 @@ JoystickTeleop::JoystickTeleop() : Node("joystick_teleop_node") {
     last_left_stick_pressed_ = false;
     last_right_stick_pressed_ = false;
 
-    // Initialize separate gripper states for left and right arms (for display purposes only)
-    left_gripper_open_ = false;   // Left arm gripper initially closed
-    right_gripper_open_ = false;  // Right arm gripper initially closed
+    left_gripper_ratio_ = 0.0;
+    right_gripper_ratio_ = 0.0;
     
     // Initialize speed mode (start with low speed)
     high_speed_mode_ = false;
     
     // Initialize last FSM command
     last_fsm_command_ = 0;
-    
-    // Load speed scaling parameters
-    this->declare_parameter("speed.low_scale", 0.3);
-    this->declare_parameter("speed.high_scale", 1.0);
-    low_speed_scale_ = this->get_parameter("speed.low_scale").as_double();
-    high_speed_scale_ = this->get_parameter("speed.high_scale").as_double();
-    
-    // Load chassis speed scaling parameters
-    this->declare_parameter("chassis.linear_scale", 0.25);
-    this->declare_parameter("chassis.angular_scale", 0.5);
-    chassis_linear_scale_ = this->get_parameter("chassis.linear_scale").as_double();
-    chassis_angular_scale_ = this->get_parameter("chassis.angular_scale").as_double();
-    
+
     // Initialize inputs message (only for incremental control)
     inputs_.x = 0.0;
     inputs_.y = 0.0;
@@ -69,7 +82,7 @@ JoystickTeleop::JoystickTeleop() : Node("joystick_teleop_node") {
     inputs_.pitch = 0.0;
     inputs_.yaw = 0.0;
     inputs_.target = currentTarget_;
-    inputs_.hand_command = -1;  // -1 means no hand command (will be set when X button is pressed)
+    inputs_.hand_command = kNoHandCommand;
     
     // Initialize chassis command
     chassis_cmd_.linear.x = 0.0;
@@ -83,7 +96,7 @@ JoystickTeleop::JoystickTeleop() : Node("joystick_teleop_node") {
     RCLCPP_INFO(get_logger(), "🎮 Joystick control is DISABLED by default. Press right stick to enable.");
     RCLCPP_INFO(get_logger(), "🎮 Control Mode: RB=switch between ARM and CHASSIS (Current: %s)", 
                 current_mode_ == ARM_MODE ? "ARM" : "CHASSIS");
-    RCLCPP_INFO(get_logger(), "🎮 Normal Mode: A=switch arm, X=toggle gripper, Left stick=switch speed");
+    RCLCPP_INFO(get_logger(), "🎮 Normal Mode: A=switch arm, X=toggle gripper, LT/RT=gripper ratio, Left stick=switch speed");
     RCLCPP_INFO(get_logger(), "🎮 FSM Mode (LB pressed): LB+A=HOME, LB+B=HOLD, LB+Y=MOVEJ, LB+START=OCS2");
     RCLCPP_INFO(get_logger(), "🎮 Speed mode: Left stick button=toggle high/low speed (Current: %s)", 
                 high_speed_mode_ ? "HIGH" : "LOW");
@@ -94,55 +107,52 @@ JoystickTeleop::JoystickTeleop() : Node("joystick_teleop_node") {
     printButtonMapping();
 }
 
-void JoystickTeleop::loadButtonMapping() {
-    // Declare and get button mapping parameters with Xbox controller defaults
-    this->declare_parameter("button_mapping.x_button", 2);
-    this->declare_parameter("button_mapping.a_button", 0);
-    this->declare_parameter("button_mapping.b_button", 1);
-    this->declare_parameter("button_mapping.y_button", 3);
-    this->declare_parameter("button_mapping.lb_button", 4);
-    this->declare_parameter("button_mapping.rb_button", 5);
-    this->declare_parameter("button_mapping.back_button", 6);
-    this->declare_parameter("button_mapping.start_button", 7);
-    this->declare_parameter("button_mapping.left_stick_button", 9);
-    this->declare_parameter("button_mapping.right_stick_button", 10);
-    
-    button_map_.x_button = this->get_parameter("button_mapping.x_button").as_int();
-    button_map_.a_button = this->get_parameter("button_mapping.a_button").as_int();
-    button_map_.b_button = this->get_parameter("button_mapping.b_button").as_int();
-    button_map_.y_button = this->get_parameter("button_mapping.y_button").as_int();
-    button_map_.lb_button = this->get_parameter("button_mapping.lb_button").as_int();
-    button_map_.rb_button = this->get_parameter("button_mapping.rb_button").as_int();
-    button_map_.back_button = this->get_parameter("button_mapping.back_button").as_int();
-    button_map_.start_button = this->get_parameter("button_mapping.start_button").as_int();
-    button_map_.left_stick_button = this->get_parameter("button_mapping.left_stick_button").as_int();
-    button_map_.right_stick_button = this->get_parameter("button_mapping.right_stick_button").as_int();
-    
-    // Declare and get axes mapping parameters with Xbox controller defaults
-    this->declare_parameter("axes_mapping.left_stick_x", 0);
-    this->declare_parameter("axes_mapping.left_stick_y", 1);
-    this->declare_parameter("axes_mapping.right_stick_x", 3);
-    this->declare_parameter("axes_mapping.right_stick_y", 4);
-    this->declare_parameter("axes_mapping.dpad_x", 6);
-    this->declare_parameter("axes_mapping.dpad_y", 7);
-    this->declare_parameter("axes_mapping.deadzone", 0.1);
-    this->declare_parameter("axes_mapping.dpad_deadzone", 0.5);
-    this->declare_parameter("axes_mapping.arm_activation_threshold", 0.5);
-    
-    axes_map_.left_stick_x = this->get_parameter("axes_mapping.left_stick_x").as_int();
-    axes_map_.left_stick_y = this->get_parameter("axes_mapping.left_stick_y").as_int();
-    axes_map_.right_stick_x = this->get_parameter("axes_mapping.right_stick_x").as_int();
-    axes_map_.right_stick_y = this->get_parameter("axes_mapping.right_stick_y").as_int();
-    axes_map_.dpad_x = this->get_parameter("axes_mapping.dpad_x").as_int();
-    axes_map_.dpad_y = this->get_parameter("axes_mapping.dpad_y").as_int();
-    axes_map_.deadzone = this->get_parameter("axes_mapping.deadzone").as_double();
-    axes_map_.dpad_deadzone = this->get_parameter("axes_mapping.dpad_deadzone").as_double();
+void JoystickTeleop::loadParameters() {
+    // Mapping defaults are fallbacks only; launch loads config/joy_mapping/*.yaml.
+
+    button_map_.x_button = param_int(this, "button_mapping.x_button", 0);
+    button_map_.a_button = param_int(this, "button_mapping.a_button", 0);
+    button_map_.b_button = param_int(this, "button_mapping.b_button", 0);
+    button_map_.y_button = param_int(this, "button_mapping.y_button", 0);
+    button_map_.lb_button = param_int(this, "button_mapping.lb_button", 0);
+    button_map_.rb_button = param_int(this, "button_mapping.rb_button", 0);
+    button_map_.back_button = param_int(this, "button_mapping.back_button", 0);
+    button_map_.start_button = param_int(this, "button_mapping.start_button", 0);
+    button_map_.left_stick_button = param_int(this, "button_mapping.left_stick_button", 0);
+    button_map_.right_stick_button = param_int(this, "button_mapping.right_stick_button", 0);
+    button_map_.dpad_up = param_int(this, "button_mapping.dpad_up_button", -1);
+    button_map_.dpad_down = param_int(this, "button_mapping.dpad_down_button", -1);
+    button_map_.dpad_left = param_int(this, "button_mapping.dpad_left_button", -1);
+    button_map_.dpad_right = param_int(this, "button_mapping.dpad_right_button", -1);
+
+    axes_map_.left_stick_x = param_int(this, "axes_mapping.left_stick_x", 0);
+    axes_map_.left_stick_y = param_int(this, "axes_mapping.left_stick_y", 1);
+    axes_map_.right_stick_x = param_int(this, "axes_mapping.right_stick_x", 2);
+    axes_map_.right_stick_y = param_int(this, "axes_mapping.right_stick_y", 3);
+    axes_map_.deadzone = param_double(this, "axes_mapping.deadzone", 0.1);
     arm_axes_activation_threshold_ =
-        this->get_parameter("axes_mapping.arm_activation_threshold").as_double();
-    
-    // Declare and get mirror movement parameter
-    this->declare_parameter("mirror_movement", true);
-    mirror_movement_ = this->get_parameter("mirror_movement").as_bool();
+        param_double(this, "axes_mapping.arm_activation_threshold", 0.5);
+
+    if (button_map_.dpad_up >= 0) {
+        axes_map_.dpad_x = 0;
+        axes_map_.dpad_y = 0;
+        axes_map_.dpad_deadzone = 0.0;
+    } else {
+        axes_map_.dpad_x = param_int(this, "axes_mapping.dpad_x", 0);
+        axes_map_.dpad_y = param_int(this, "axes_mapping.dpad_y", 0);
+        axes_map_.dpad_deadzone = param_double(this, "axes_mapping.dpad_deadzone", 0.5);
+    }
+
+    axes_map_.left_trigger = param_int(this, "axes_mapping.left_trigger", -1);
+    axes_map_.right_trigger = param_int(this, "axes_mapping.right_trigger", -1);
+    axes_map_.trigger_deadzone = param_double(this, "axes_mapping.trigger_deadzone", 0.05);
+    gripper_step_per_tick_ = param_double(this, "gripper.step_per_tick", 0.05);
+
+    mirror_movement_ = param_bool(this, "mirror_movement", true);
+    low_speed_scale_ = param_double(this, "speed.low_scale", 0.3);
+    high_speed_scale_ = param_double(this, "speed.high_scale", 1.0);
+    chassis_linear_scale_ = param_double(this, "chassis.linear_scale", 0.25);
+    chassis_angular_scale_ = param_double(this, "chassis.angular_scale", 0.5);
 }
 
 void JoystickTeleop::printButtonMapping() {
@@ -157,16 +167,30 @@ void JoystickTeleop::printButtonMapping() {
     RCLCPP_INFO(get_logger(), "   Start Button:       %d", button_map_.start_button);
     RCLCPP_INFO(get_logger(), "   Left Stick Button:  %d", button_map_.left_stick_button);
     RCLCPP_INFO(get_logger(), "   Right Stick Button: %d", button_map_.right_stick_button);
+    if (button_map_.dpad_up >= 0) {
+        RCLCPP_INFO(get_logger(), "   D-Pad (buttons):    up=%d down=%d left=%d right=%d",
+                    button_map_.dpad_up, button_map_.dpad_down,
+                    button_map_.dpad_left, button_map_.dpad_right);
+    }
     RCLCPP_INFO(get_logger(), "📋 Axes Mapping Configuration:");
     RCLCPP_INFO(get_logger(), "   Left Stick X:       %d", axes_map_.left_stick_x);
     RCLCPP_INFO(get_logger(), "   Left Stick Y:       %d", axes_map_.left_stick_y);
     RCLCPP_INFO(get_logger(), "   Right Stick X:      %d", axes_map_.right_stick_x);
     RCLCPP_INFO(get_logger(), "   Right Stick Y:      %d", axes_map_.right_stick_y);
-    RCLCPP_INFO(get_logger(), "   D-Pad X:            %d", axes_map_.dpad_x);
-    RCLCPP_INFO(get_logger(), "   D-Pad Y:            %d", axes_map_.dpad_y);
+    if (button_map_.dpad_up < 0) {
+        RCLCPP_INFO(get_logger(), "   D-Pad X:            %d", axes_map_.dpad_x);
+        RCLCPP_INFO(get_logger(), "   D-Pad Y:            %d", axes_map_.dpad_y);
+    }
     RCLCPP_INFO(get_logger(), "   Deadzone:           %.2f", axes_map_.deadzone);
-    RCLCPP_INFO(get_logger(), "   D-Pad Deadzone:     %.2f", axes_map_.dpad_deadzone);
+    if (button_map_.dpad_up < 0) {
+        RCLCPP_INFO(get_logger(), "   D-Pad Deadzone:     %.2f", axes_map_.dpad_deadzone);
+    }
     RCLCPP_INFO(get_logger(), "   Arm Activation Thr: %.2f", arm_axes_activation_threshold_);
+    if (axes_map_.left_trigger >= 0 || axes_map_.right_trigger >= 0) {
+        RCLCPP_INFO(get_logger(), "   LT / RT Axes:       %d / %d (deadzone %.2f, step %.3f)",
+                    axes_map_.left_trigger, axes_map_.right_trigger,
+                    axes_map_.trigger_deadzone, gripper_step_per_tick_);
+    }
     RCLCPP_INFO(get_logger(), "📋 Mirror Movement:     %s", mirror_movement_ ? "ENABLED" : "DISABLED");
 }
 
@@ -180,8 +204,8 @@ void JoystickTeleop::joy_callback(sensor_msgs::msg::Joy::SharedPtr msg) {
         return;
     }
     lastUpdateTime_ = currentTime;
+    inputs_.hand_command = kNoHandCommand;
 
-    // Process buttons first (handles both FSM and normal functions)
     processButtons(msg);
 
     // Only process axes if joystick is enabled and not in FSM mode
@@ -195,14 +219,9 @@ void JoystickTeleop::joy_callback(sensor_msgs::msg::Joy::SharedPtr msg) {
             if (!lb_pressed) {
                 // Normal mode: Process axes for incremental control
                 processAxes(msg);
-                
-                // Publish incremental control to /control_input (includes hand_command if set)
+                processGripperTriggers(msg);
+
                 publisher_->publish(inputs_);
-                
-                // Reset hand_command after publishing (only send once per button press)
-                if (inputs_.hand_command != -1) {
-                    inputs_.hand_command = -1;
-                }
             }
         } else {
             // Chassis control mode
@@ -363,23 +382,13 @@ void JoystickTeleop::processButtons(const sensor_msgs::msg::Joy::SharedPtr msg) 
                 }
 
                 if (x_just_pressed) {
-                    // X button: toggle gripper
-                    bool current_gripper_state = (currentTarget_ == 1) ? left_gripper_open_ : right_gripper_open_;
-                    bool should_open = !current_gripper_state;
+                    double & ratio = (currentTarget_ == 1) ? left_gripper_ratio_ : right_gripper_ratio_;
+                    ratio = (ratio > 0.5) ? 0.0 : 1.0;
+                    inputs_.hand_command = static_cast<float>(ratio);
 
-                    // Set hand_command in inputs message (will be sent with next control_input message)
-                    inputs_.hand_command = should_open ? 1 : 0;
-                    
-                    // Update local state for display
-                    if (currentTarget_ == 1) {
-                        left_gripper_open_ = should_open;
-                    } else {
-                        right_gripper_open_ = should_open;
-                    }
-
-                    std::string arm_name = (currentTarget_ == 1) ? "LEFT" : "RIGHT";
-                    RCLCPP_INFO(get_logger(), "🎮 %s gripper command: %s (will be sent with control_input)",
-                               arm_name.c_str(), should_open ? "OPEN" : "CLOSE");
+                    const std::string arm_name = (currentTarget_ == 1) ? "LEFT" : "RIGHT";
+                    RCLCPP_INFO(get_logger(), "🎮 %s gripper ratio set to: %.0f%%",
+                                arm_name.c_str(), ratio * 100.0);
                 }
             }
             
@@ -407,14 +416,50 @@ void JoystickTeleop::processButtons(const sensor_msgs::msg::Joy::SharedPtr msg) 
     last_right_stick_pressed_ = right_stick_pressed;
 }
 
+bool JoystickTeleop::isButtonPressed(const sensor_msgs::msg::Joy::SharedPtr msg, int index) const {
+    return index >= 0 &&
+           static_cast<size_t>(index) < msg->buttons.size() &&
+           msg->buttons[static_cast<size_t>(index)] != 0;
+}
+
+JoystickTeleop::DpadAxes JoystickTeleop::readDpad(
+    const sensor_msgs::msg::Joy::SharedPtr msg) const
+{
+    if (button_map_.dpad_up >= 0) {
+        DpadAxes dpad;
+        if (isButtonPressed(msg, button_map_.dpad_left)) {
+            dpad.x -= 1.0;
+        }
+        if (isButtonPressed(msg, button_map_.dpad_right)) {
+            dpad.x += 1.0;
+        }
+        if (isButtonPressed(msg, button_map_.dpad_up)) {
+            dpad.y -= 1.0;
+        }
+        if (isButtonPressed(msg, button_map_.dpad_down)) {
+            dpad.y += 1.0;
+        }
+        dpad.x = -dpad.x;
+        dpad.y = -dpad.y;
+        return dpad;
+    }
+
+    if (msg->axes.size() <= static_cast<size_t>(std::max(axes_map_.dpad_x, axes_map_.dpad_y))) {
+        return {};
+    }
+
+    DpadAxes dpad;
+    dpad.x = applyDeadzone(msg->axes[axes_map_.dpad_x], axes_map_.dpad_deadzone);
+    dpad.y = applyDeadzone(msg->axes[axes_map_.dpad_y], axes_map_.dpad_deadzone);
+    return dpad;
+}
+
 void JoystickTeleop::processAxes(const sensor_msgs::msg::Joy::SharedPtr msg) {
-    // Check if we have enough axes
     size_t max_axis_index = std::max({
         axes_map_.left_stick_x, axes_map_.left_stick_y,
-        axes_map_.right_stick_x, axes_map_.right_stick_y,
-        axes_map_.dpad_x, axes_map_.dpad_y
+        axes_map_.right_stick_x, axes_map_.right_stick_y
     });
-    
+
     if (msg->axes.size() <= max_axis_index) {
         return;
     }
@@ -437,9 +482,9 @@ void JoystickTeleop::processAxes(const sensor_msgs::msg::Joy::SharedPtr msg) {
         right_stick_x = -right_stick_x;
     }
 
-    // D-pad controls roll and pitch rotation - use configured mapping
-    double dpad_x = applyDeadzone(msg->axes[axes_map_.dpad_x], axes_map_.dpad_deadzone);
-    double dpad_y = applyDeadzone(msg->axes[axes_map_.dpad_y], axes_map_.dpad_deadzone);
+    auto dpad = readDpad(msg);
+    double dpad_x = dpad.x;
+    double dpad_y = dpad.y;
 
     // Apply mirror movement to D-pad if enabled (invert both X and Y)
     if (!mirror_movement_) {
@@ -449,7 +494,7 @@ void JoystickTeleop::processAxes(const sensor_msgs::msg::Joy::SharedPtr msg) {
 
     // Apply activation threshold in ARM mode to avoid accidental micro movements.
     auto applyActivationThreshold = [this](double value) {
-        return (std::abs(value) >= arm_axes_activation_threshold_) ? value : 0.0;
+        return std::abs(value) >= arm_axes_activation_threshold_ ? value : 0.0;
     };
     left_stick_x = applyActivationThreshold(left_stick_x);
     left_stick_y = applyActivationThreshold(left_stick_y);
@@ -477,14 +522,54 @@ double JoystickTeleop::applyDeadzone(double value, double deadzone) const {
     return value;
 }
 
+double JoystickTeleop::readTriggerAxis(
+    const sensor_msgs::msg::Joy::SharedPtr msg, int axis_index) const
+{
+    if (axis_index < 0 || static_cast<size_t>(axis_index) >= msg->axes.size()) {
+        return 0.0;
+    }
+
+    const double axis_value = msg->axes[static_cast<size_t>(axis_index)];
+    // SDL/game_controller triggers: idle ~1.0, pressed toward -1.0
+    double pressed = (1.0 - axis_value) * 0.5;
+    pressed = std::clamp(pressed, 0.0, 1.0);
+    if (pressed < axes_map_.trigger_deadzone) {
+        return 0.0;
+    }
+    return pressed;
+}
+
+void JoystickTeleop::processGripperTriggers(const sensor_msgs::msg::Joy::SharedPtr msg)
+{
+    if (axes_map_.left_trigger < 0 && axes_map_.right_trigger < 0) {
+        return;
+    }
+
+    const double lt = readTriggerAxis(msg, axes_map_.left_trigger);
+    const double rt = readTriggerAxis(msg, axes_map_.right_trigger);
+    if (lt <= 0.0 && rt <= 0.0) {
+        return;
+    }
+
+    double & ratio = (currentTarget_ == 1) ? left_gripper_ratio_ : right_gripper_ratio_;
+    const double prev_ratio = ratio;
+    const double speed_scale = high_speed_mode_ ? high_speed_scale_ : low_speed_scale_;
+    ratio += (rt - lt) * gripper_step_per_tick_ * speed_scale;
+    ratio = std::clamp(ratio, 0.0, 1.0);
+
+    if (std::abs(ratio - prev_ratio) < 1e-6) {
+        return;
+    }
+
+    inputs_.hand_command = static_cast<float>(ratio);
+}
+
 void JoystickTeleop::processChassisAxes(const sensor_msgs::msg::Joy::SharedPtr msg) {
-    // Check if we have enough axes
     size_t max_axis_index = std::max({
         axes_map_.left_stick_x, axes_map_.left_stick_y,
-        axes_map_.right_stick_x, axes_map_.right_stick_y,
-        axes_map_.dpad_x
+        axes_map_.right_stick_x, axes_map_.right_stick_y
     });
-    
+
     if (msg->axes.size() <= max_axis_index) {
         return;
     }
@@ -496,43 +581,29 @@ void JoystickTeleop::processChassisAxes(const sensor_msgs::msg::Joy::SharedPtr m
     double left_stick_x = applyDeadzone(msg->axes[axes_map_.left_stick_x], axes_map_.deadzone);
     double left_stick_y = applyDeadzone(msg->axes[axes_map_.left_stick_y], axes_map_.deadzone);
 
-    // Right stick controls angular velocity
-    // Right stick X: rotation (angular.z)
+    // Right stick X: chassis rotation (angular.z)
     double right_stick_x = applyDeadzone(msg->axes[axes_map_.right_stick_x], axes_map_.deadzone);
-    // Right stick Y: waist lifting
-    double right_stick_y = applyDeadzone(msg->axes[axes_map_.right_stick_y], axes_map_.deadzone);
-    // D-pad X: waist turning
-    double dpad_x = applyDeadzone(msg->axes[axes_map_.dpad_x], axes_map_.dpad_deadzone);
+    const auto dpad = readDpad(msg);
+    const double dpad_x = dpad.x;
+    const double dpad_y = dpad.y;
 
-    // Process waist commands as mutually-exclusive factors.
-    // Disable simultaneous non-zero lifting and turning command publishing.
     auto waist_cmd = std_msgs::msg::Float64();
     auto waist_turn_cmd = std_msgs::msg::Float64();
     double speed_scale = high_speed_mode_ ? high_speed_scale_ : low_speed_scale_;
 
-    const bool lifting_active = right_stick_y > 0.5 || right_stick_y < -0.5;
+    const bool lifting_active = dpad_y > 0.5 || dpad_y < -0.5;
     const bool turning_active = dpad_x > 0.5 || dpad_x < -0.5;
-
-    // Priority: lifting > turning when both inputs are active.
-    // Waist turning follows mirror mode:
-    // - mirror enabled: keep current turning mapping
-    // - mirror disabled: invert turning direction
     const double turning_direction_scale = mirror_movement_ ? -1.0 : 1.0;
+
     if (lifting_active) {
-        waist_cmd.data = (right_stick_y > 0.0) ? speed_scale : -speed_scale;
-        waist_turn_cmd.data = 0.0;
-    } else if (turning_active) {
-        waist_cmd.data = 0.0;
+        waist_cmd.data = (dpad_y > 0.0) ? speed_scale : -speed_scale;
+    }
+    if (turning_active) {
         waist_turn_cmd.data = ((dpad_x > 0.0) ? -speed_scale : speed_scale) * turning_direction_scale;
-    } else {
-        waist_cmd.data = 0.0;
-        waist_turn_cmd.data = 0.0;
     }
 
     waist_lifting_publisher_->publish(waist_cmd);
     waist_turning_publisher_->publish(waist_turn_cmd);
-
-    // Apply speed scaling based on current mode
 
     // Update chassis velocity command
     chassis_cmd_.linear.x = left_stick_y * chassis_linear_scale_ * speed_scale;   // Forward/backward

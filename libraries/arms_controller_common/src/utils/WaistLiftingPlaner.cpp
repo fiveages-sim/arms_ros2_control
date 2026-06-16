@@ -80,46 +80,49 @@ namespace arms_controller_common
     }
 
     bool WaistLiftingPlaner::resolveFeasibleLiftingEndThreeJoint(
-        const Eigen::Vector3d& init_joint_angle, const double start_pos,
-        const double requested_end, double& feasible_end)
+        const Eigen::Vector3d& init_joint_angle, const Eigen::Vector3d& start_pose,
+        const Eigen::Vector3d& requested_end, Eigen::Vector3d& feasible_end)
     {
-        feasible_end = start_pos;
-        const double requested_delta = requested_end - start_pos;
-        if (std::abs(requested_delta) <= min_val)
-        {
-            return true;
-        }
-
         Eigen::Vector3d endpoint_joint_angle;
-        if (threeLinkPlanerEndpointIK(init_joint_angle, x_, requested_end, phi_,
-                                      endpoint_joint_angle, false))
+        if (threeLinkPlanerEndpointIK(init_joint_angle, requested_end.x(), requested_end.y(),
+                                      requested_end.z(), endpoint_joint_angle, false))
         {
             feasible_end = requested_end;
             return true;
         }
 
-        double near = start_pos;
-        double far = requested_end;
-        double best = start_pos;
+        double low = 0.0;
+        double high = 1.0;
+        bool found = false;
+        Eigen::Vector3d best = start_pose;
         constexpr int kMaxBinarySearchIterations = 32;
         for (int i = 0; i < kMaxBinarySearchIterations; ++i)
         {
-            if (std::abs(far - near) <= min_val)
+            const double mid = 0.5 * (low + high);
+            const Eigen::Vector3d candidate = start_pose + (requested_end - start_pose) * mid;
+            if (threeLinkPlanerEndpointIK(init_joint_angle, candidate.x(), candidate.y(),
+                                          candidate.z(), endpoint_joint_angle, false))
             {
-                break;
-            }
-            const double mid = 0.5 * (near + far);
-            if (threeLinkPlanerEndpointIK(init_joint_angle, x_, mid, phi_, endpoint_joint_angle,
-                                          false))
-            {
-                best = mid;
-                near = mid;
+                best = candidate;
+                low = mid;
+                found = true;
             }
             else
             {
-                far = mid;
+                high = mid;
             }
         }
+
+        if (!found)
+        {
+            if (!threeLinkPlanerEndpointIK(init_joint_angle, start_pose.x(), start_pose.y(),
+                                           start_pose.z(), endpoint_joint_angle, true))
+            {
+                std::cerr << "Current waist pose is not reachable by endpoint IK" << std::endl;
+                return false;
+            }
+        }
+
         feasible_end = best;
         return true;
     }
@@ -130,19 +133,26 @@ namespace arms_controller_common
     {
         if (type_three_joint_)
         {
-            return resolveFeasibleLiftingEndThreeJoint(
-                init_joint_angle, start_pos, requested_end, feasible_end);
+            Eigen::Vector3d feasible_end_pose;
+            const bool ok = resolveFeasibleLiftingEndThreeJoint(
+                init_joint_angle,
+                Eigen::Vector3d(x_, start_pos, phi_),
+                Eigen::Vector3d(x_, requested_end, phi_),
+                feasible_end_pose);
+            feasible_end = feasible_end_pose.y();
+            return ok;
         }
         return resolveFeasibleLiftingEndSingleJoint(start_pos, requested_end, feasible_end);
     }
 
     bool WaistLiftingPlaner::initTargetLiftingLength(
-        const Eigen::Vector3d& init_joint_angle, const double lifting_length,
+        const Eigen::Vector3d& init_joint_angle, const Eigen::Vector3d& lifting_delta,
         const double duration, const double period)
     {
         type_speed_ = false;
         speed_mode_max_reachable_valid_ = false;
         speed_mode_stop_replanned_ = false;
+        length_plan_uses_xz_ = false;
         current_joint_angle_ = init_joint_angle;
         double start_pos = 0.0;
         double requested_end_pos = 0.0;
@@ -155,22 +165,43 @@ namespace arms_controller_common
             threeLinkPlanerFK(init_joint_angle, &init_x, &init_z, &init_phi);
             x_ = init_x;
             phi_ = init_phi;
-            start_pos = init_z;
-            requested_end_pos = init_z + lifting_length;
+            start_x_ = init_x;
+            start_z_ = init_z;
+            start_phi_ = init_phi;
+            const Eigen::Vector3d start_pose(init_x, init_z, init_phi);
+            const Eigen::Vector3d requested_end_pose(
+                init_x + lifting_delta(0), init_z + lifting_delta(1), init_phi + lifting_delta(2));
+            Eigen::Vector3d end_pose;
+            if (!resolveFeasibleLiftingEndThreeJoint(
+                    init_joint_angle, start_pose, requested_end_pose, end_pose))
+            {
+                last_planned_lifting_length_ = 0.0;
+                length_plan_uses_xz_ = false;
+                return false;
+            }
+            target_x_ = end_pose.x();
+            target_z_ = end_pose.y();
+            target_phi_ = end_pose.z();
+            phi_ = target_phi_;
+            const Eigen::Vector3d planned_delta = end_pose - start_pose;
+            last_planned_lifting_length_ = planned_delta.norm();
+            start_pos = 0.0;
+            end_pos = 1.0;
+            length_plan_uses_xz_ = true;
         }
         else
         {
             // 对于单关节，直接规划关节角度
+            const double lifting_length = lifting_delta(1);
             start_pos = init_joint_angle(0);
             requested_end_pos = init_joint_angle(0) + lifting_length;
+            if (!resolveFeasibleLiftingEnd(init_joint_angle, start_pos, requested_end_pos, end_pos))
+            {
+                last_planned_lifting_length_ = 0.0;
+                return false;
+            }
+            last_planned_lifting_length_ = end_pos - start_pos;
         }
-
-        if (!resolveFeasibleLiftingEnd(init_joint_angle, start_pos, requested_end_pos, end_pos))
-        {
-            last_planned_lifting_length_ = 0.0;
-            return false;
-        }
-        last_planned_lifting_length_ = end_pos - start_pos;
 
 #ifdef HAS_LINA_PLANNING
         movej_planner_ = std::make_unique<planning::moveJ>();
@@ -348,6 +379,8 @@ namespace arms_controller_common
 
     bool WaistLiftingPlaner::calNextPoint(std::vector<double>& next_point)
     {
+        double planner_pos = 0.0;
+        double curr_x = x_;
         double curr_z = 0.0;
 #ifdef HAS_LINA_PLANNING
         planning::TrajectPoint point(1);
@@ -355,7 +388,7 @@ namespace arms_controller_common
         {
             if (!speedj_planner_)
             {
-                curr_z = waist_position_cache_;
+                planner_pos = waist_position_cache_;
             }
             else
             {
@@ -395,16 +428,18 @@ namespace arms_controller_common
                         }
                     }
                 }
-                curr_z = point.joint_pos(0);
-                waist_position_cache_ = curr_z;
+                planner_pos = point.joint_pos(0);
+                waist_position_cache_ = planner_pos;
                 waist_velocity_cache_ = point.joint_vel(0);
             }
         }
         else
         {
+            // 定距模式下推进一维 moveJ 轨迹，得到标量进度/位置 planner_pos；
+            // 后续再把该标量映射为 x/z（three_joint）或直接作为 z（single_joint）。
             point = movej_planner_->run();
-            curr_z = point.joint_pos(0);
-            waist_position_cache_ = curr_z;
+            planner_pos = point.joint_pos(0);
+            waist_position_cache_ = planner_pos;
             waist_velocity_cache_ = point.joint_vel(0);
         }
 #else
@@ -433,7 +468,7 @@ namespace arms_controller_common
                     speed_plan_state_.motion_over = true;
                 }
             }
-            curr_z = waist_position_cache_;
+            planner_pos = waist_position_cache_;
         }
         else
         {
@@ -451,15 +486,28 @@ namespace arms_controller_common
                     speed_plan_state_.motion_over = true;
                 }
             }
-            curr_z = waist_position_cache_;
+            planner_pos = waist_position_cache_;
             waist_velocity_cache_ = 0.0;
         }
 #endif
+        double curr_phi = phi_;
+        if (type_three_joint_ && !type_speed_ && length_plan_uses_xz_)
+        {
+            const double s = std::clamp(planner_pos, 0.0, 1.0);
+            curr_x = start_x_ + (target_x_ - start_x_) * s;
+            curr_z = start_z_ + (target_z_ - start_z_) * s;
+            curr_phi = start_phi_ + (target_phi_ - start_phi_) * s;
+        }
+        else
+        {
+            curr_z = planner_pos;
+        }
+
         if (type_three_joint_)
         {
             // 三关节腰部
             Eigen::Vector3d cal_angles;
-            if (!threeLinkPlanerIK(current_joint_angle_, x_, curr_z, phi_,
+            if (!threeLinkPlanerIK(current_joint_angle_, curr_x, curr_z, curr_phi,
                                    cal_angles))
             {
                 return false;
@@ -509,6 +557,22 @@ namespace arms_controller_common
         single_joint_limit_lower_ = angle_lower;
         single_joint_limit_upper_ = angle_upper;
     };
+
+    bool WaistLiftingPlaner::calculateThreeJointEndpointXzPhi(
+        const Eigen::Vector3d& joint_angle, Eigen::Vector3d& output_xz_phi)
+    {
+        if (!type_three_joint_)
+        {
+            return false;
+        }
+
+        double x = 0.0;
+        double z = 0.0;
+        double phi = 0.0;
+        threeLinkPlanerFK(joint_angle, &x, &z, &phi);
+        output_xz_phi << x, z, phi;
+        return true;
+    }
 
     void WaistLiftingPlaner::threeLinkPlanerFK(const Eigen::Vector3d& joint_angle,
                                                double* x, double* z, double* phi)
