@@ -43,6 +43,7 @@ public:
     std::unique_ptr<QLabel> mobile_base_label_;
     std::unique_ptr<QLabel> body_relative_label_;
     std::unique_ptr<QLabel> waist_lock_label_;
+    std::unique_ptr<QLabel> custom_joint_lock_label_;
     std::unique_ptr<QLabel> bimanual_label_;
     std::unique_ptr<QLabel> body_tracking_label_;
   };
