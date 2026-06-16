@@ -17,7 +17,15 @@ def launch_setup(context, *args, **kwargs):
     direction = context.launch_configurations.get('direction', '1')
     hardware = context.launch_configurations.get('hardware', 'mock_components')
     world = context.launch_configurations.get('world', 'dart')
-
+    serial_port = context.launch_configurations.get('serial_port', '')
+    baudrate = context.launch_configurations.get('baudrate', '')
+    host_id = context.launch_configurations.get('host_id', '')
+    hand_id = context.launch_configurations.get('hand_id', '')
+    read_feedback = context.launch_configurations.get('read_feedback', '')
+    kp = context.launch_configurations.get('kp', '')
+    ki = context.launch_configurations.get('ki', '')
+    kd = context.launch_configurations.get('kd', '')
+    torque_limit = context.launch_configurations.get('torque_limit', '')
     # 基本参数
     use_sim_time = hardware in ['gz', 'isaac']
 
