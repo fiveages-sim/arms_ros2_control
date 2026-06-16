@@ -22,6 +22,7 @@
 #include <rclcpp/rclcpp.hpp>
 #include <rclcpp_lifecycle/lifecycle_node.hpp>
 #include <string>
+#include <vector>
 #include <tf2_ros/buffer.hpp>
 #include <tf2_ros/transform_listener.hpp>
 
@@ -124,6 +125,33 @@ private:
 
     rclcpp_lifecycle::LifecycleNode::SharedPtr node_;
     rclcpp::Logger logger_{rclcpp::get_logger("PoseBasedReferenceManager")};
+
+    struct ArmReferenceBuffer {
+        double startTime{0.0};
+        double duration{0.0};
+        std::vector<vector_t> path;
+    };
+
+    ArmReferenceBuffer left_arm_reference_buffer_;
+    ArmReferenceBuffer right_arm_reference_buffer_;
+
+    static vector_t interpolatePose7(const vector_t& start, const vector_t& goal, double alpha);
+    static vector_t samplePose7Path(const std::vector<vector_t>& path, double alpha);
+
+    void resetArmReferenceBuffer(ArmReferenceBuffer& buffer, const vector_t& pose, double time);
+    /** 用 execute_path 的 waypoints 覆盖单臂 reference buffer（waypoints 不含起点）。
+     *  若旧 buffer 在 start_time 仍有效，起点从旧轨迹采样；否则使用 fallback_start_pose。
+     *  写入 path = [start_pose, ...waypoints]，并设置 start_time 与 duration。 */
+    void setArmReferenceBufferFromWaypoints(ArmReferenceBuffer& buffer,
+                                            const vector_t& fallback_start_pose,
+                                            const std::vector<vector_t>& waypoints,
+                                            double start_time,
+                                            double duration);
+    [[nodiscard]] vector_t sampleArmReferenceBuffer(const ArmReferenceBuffer& buffer,
+                                                    const vector_t& fallback_pose,
+                                                    double time) const;
+    [[nodiscard]] bool isArmReferenceBufferActive(const ArmReferenceBuffer& buffer, double time) const;
+    void rebuildTargetTrajectoriesFromArmReferenceBuffers(double start_time, double end_time);
 
     SystemObservation current_observation_;
     vector_t left_target_state_;

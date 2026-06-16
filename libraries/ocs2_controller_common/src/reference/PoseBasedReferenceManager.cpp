@@ -273,6 +273,169 @@ namespace ocs2::controller_common
         return s;
     }
 
+    vector_t PoseBasedReferenceManager::interpolatePose7(const vector_t& start,
+                                                       const vector_t& goal,
+                                                       double alpha)
+    {
+        const double a = std::clamp(alpha, 0.0, 1.0);
+        vector_t out = vector_t::Zero(7);
+        out.segment<3>(0) = (1.0 - a) * start.segment<3>(0) + a * goal.segment<3>(0);
+
+        Eigen::Quaterniond q0(start(6), start(3), start(4), start(5));
+        Eigen::Quaterniond q1(goal(6), goal(3), goal(4), goal(5));
+        if (q0.norm() < 1e-9)
+        {
+            q0 = Eigen::Quaterniond::Identity();
+        }
+        else
+        {
+            q0.normalize();
+        }
+        if (q1.norm() < 1e-9)
+        {
+            q1 = q0;
+        }
+        else
+        {
+            q1.normalize();
+        }
+        if (q0.dot(q1) < 0.0)
+        {
+            q1.coeffs() *= -1.0;
+        }
+
+        Eigen::Quaterniond q = q0.slerp(a, q1);
+        q.normalize();
+        out(3) = q.x();
+        out(4) = q.y();
+        out(5) = q.z();
+        out(6) = q.w();
+        return out;
+    }
+
+    // 按归一化进度 alpha∈[0,1] 在 7 维 pose 路径上均匀分段采样；段内用 interpolatePose7 做位置线性插值与姿态 slerp。
+    vector_t PoseBasedReferenceManager::samplePose7Path(const std::vector<vector_t>& path,
+                                                        double alpha)
+    {
+        if (path.empty())
+        {
+            vector_t identity = vector_t::Zero(7);
+            identity(6) = 1.0;
+            return identity;
+        }
+        if (path.size() == 1)
+        {
+            return path.front();
+        }
+        const double global_alpha = std::clamp(alpha, 0.0, 1.0);
+        const size_t num_segments = path.size() - 1;
+        const double segment_size = 1.0 / static_cast<double>(num_segments);
+        size_t segment_idx = static_cast<size_t>(global_alpha / segment_size);
+        segment_idx = std::min(segment_idx, num_segments - 1);
+        const double segment_start = static_cast<double>(segment_idx) * segment_size;
+        const double local_alpha = std::clamp((global_alpha - segment_start) / segment_size, 0.0, 1.0);
+        return interpolatePose7(path[segment_idx], path[segment_idx + 1], local_alpha);
+    }
+
+    void PoseBasedReferenceManager::resetArmReferenceBuffer(ArmReferenceBuffer& buffer,
+                                                            const vector_t& pose,
+                                                            double time)
+    {
+        buffer.startTime = time;
+        buffer.duration = 0.0;
+        buffer.path = {pose};
+    }
+
+    void PoseBasedReferenceManager::setArmReferenceBufferFromWaypoints(
+        ArmReferenceBuffer& buffer,
+        const vector_t& fallback_start_pose,
+        const std::vector<vector_t>& waypoints,
+        double start_time,
+        double duration)
+    {
+        const bool has_active_old_path = isArmReferenceBufferActive(buffer, start_time);
+        const vector_t start_pose =
+            has_active_old_path ? sampleArmReferenceBuffer(buffer, fallback_start_pose, start_time) : fallback_start_pose;
+
+        buffer.startTime = start_time;
+        buffer.duration = std::max(duration, 0.0);
+        buffer.path.clear();
+        buffer.path.reserve(waypoints.size() + 1);
+        buffer.path.push_back(start_pose);
+        buffer.path.insert(buffer.path.end(), waypoints.begin(), waypoints.end());
+    }
+
+    vector_t PoseBasedReferenceManager::sampleArmReferenceBuffer(const ArmReferenceBuffer& buffer,
+                                                                 const vector_t& fallback_pose,
+                                                                 double time) const
+    {
+        if (buffer.path.empty())
+        {
+            return fallback_pose;
+        }
+        if (buffer.duration <= 0.0)
+        {
+            return fallback_pose;
+        }
+        const double end_time = buffer.startTime + buffer.duration;
+        if (time >= end_time)
+        {
+            return fallback_pose;
+        }
+        const double alpha = (time - buffer.startTime) / buffer.duration;
+        return samplePose7Path(buffer.path, alpha);
+    }
+
+    bool PoseBasedReferenceManager::isArmReferenceBufferActive(const ArmReferenceBuffer& buffer,
+                                                               double time) const
+    {
+        return !buffer.path.empty() && buffer.duration > 0.0 && time < buffer.startTime + buffer.duration;
+    }
+
+    void PoseBasedReferenceManager::rebuildTargetTrajectoriesFromArmReferenceBuffers(double start_time,
+                                                                                     double end_time)
+    {
+        constexpr double kSampleInterval = 0.04;
+        const double actual_end_time = std::max(end_time, start_time + kSampleInterval);
+        // 按约 40ms 间隔估算离散点数，至少 2 个点（起点与终点）以便计算 dt。
+        const size_t num_samples = std::max(
+            static_cast<size_t>(std::ceil((actual_end_time - start_time) / kSampleInterval)) + 1,
+            static_cast<size_t>(2));
+        const double dt = (actual_end_time - start_time) / static_cast<double>(num_samples - 1);
+
+        scalar_array_t time_trajectory;
+        vector_array_t state_trajectory;
+        time_trajectory.reserve(num_samples);
+        state_trajectory.reserve(num_samples);
+
+        for (size_t i = 0; i < num_samples; ++i)
+        {
+            const double t = start_time + static_cast<double>(i) * dt;
+            const vector_t left_pose = sampleArmReferenceBuffer(left_arm_reference_buffer_, left_target_state_, t);
+            const vector_t right_pose = dual_arm_mode_
+                ? sampleArmReferenceBuffer(right_arm_reference_buffer_, right_target_state_, t)
+                : vector_t::Zero(7);
+
+            vector_t state;
+            if (dual_arm_mode_)
+            {
+                state = assembleDualArmReferenceState(left_pose, right_pose);
+            }
+            else
+            {
+                state = left_pose;
+            }
+
+            time_trajectory.push_back(t);
+            state_trajectory.push_back(state);
+        }
+
+        vector_array_t input_trajectory(num_samples, vector_t::Zero(target_context_.input_dim));
+        TargetTrajectories target_trajectories(time_trajectory, state_trajectory, input_trajectory);
+        referenceManagerPtr_->setTargetTrajectories(std::move(target_trajectories));
+        publishCurrentTargets();
+    }
+
     void PoseBasedReferenceManager::setBodyPoseReference(const vector_t& body_pose_xyzw_7)
     {
         if (body_pose_xyzw_7.size() >= 7)
@@ -677,6 +840,11 @@ namespace ocs2::controller_common
     void PoseBasedReferenceManager::leftPoseCallback(
         const geometry_msgs::msg::Pose::SharedPtr msg)
     {
+        if (isArmReferenceBufferActive(left_arm_reference_buffer_, current_observation_.time))
+        {
+            return;
+        }
+
         // 转换pose到状态向量（单臂和双臂模式都使用前7维）
         vector_t target_state = vector_t::Zero(7);
         target_state(0) = msg->position.x;
@@ -702,6 +870,11 @@ namespace ocs2::controller_common
     void PoseBasedReferenceManager::rightPoseCallback(
         const geometry_msgs::msg::Pose::SharedPtr msg)
     {
+        if (isArmReferenceBufferActive(right_arm_reference_buffer_, current_observation_.time))
+        {
+            return;
+        }
+
         // 转换pose到状态向量（右臂状态为7维）
         vector_t target_state = vector_t::Zero(7);
         target_state(0) = msg->position.x;
@@ -744,6 +917,11 @@ namespace ocs2::controller_common
     {
         updateParam();
 
+        if (isArmReferenceBufferActive(left_arm_reference_buffer_, current_observation_.time))
+        {
+            return;
+        }
+
         // 保存上一帧缓存（用于插值起点）
         const vector_t previous_left_target_state = left_target_state_;
 
@@ -781,6 +959,11 @@ namespace ocs2::controller_common
         const geometry_msgs::msg::Pose::SharedPtr msg)
     {
         updateParam();
+
+        if (isArmReferenceBufferActive(right_arm_reference_buffer_, current_observation_.time))
+        {
+            return;
+        }
 
         // 保存上一帧缓存（用于插值起点）
         const vector_t previous_left_target_state = left_target_state_;
@@ -1293,14 +1476,55 @@ namespace ocs2::controller_common
             return;
         }
 
-        if (left_arm_waypoints.empty()) left_arm_waypoints.push_back(left_target_state_);
-        if (dual_arm_mode_ && right_arm_waypoints.empty()) right_arm_waypoints.push_back(right_target_state_);
+        const double start_time = current_observation_.time;
+        double end_time = start_time + duration;
 
-        runInterpolatedPathTrajectory(left_arm_waypoints, right_arm_waypoints, duration);
+        if (!left_arm_waypoints.empty())
+        {
+            setArmReferenceBufferFromWaypoints(
+                left_arm_reference_buffer_, left_target_state_, left_arm_waypoints, start_time, duration);
+            left_target_state_ = left_arm_waypoints.back();
+            end_time = std::max(end_time, left_arm_reference_buffer_.startTime + left_arm_reference_buffer_.duration);
+        }
+
+        if (dual_arm_mode_ && !right_arm_waypoints.empty())
+        {
+            setArmReferenceBufferFromWaypoints(
+                right_arm_reference_buffer_, right_target_state_, right_arm_waypoints, start_time, duration);
+            right_target_state_ = right_arm_waypoints.back();
+            end_time = std::max(end_time, right_arm_reference_buffer_.startTime + right_arm_reference_buffer_.duration);
+        }
+
+        const auto extendEndTimeFromActiveBuffer = [&end_time, start_time](const ArmReferenceBuffer& buffer)
+        {
+            if (!buffer.path.empty() && buffer.duration > 0.0)
+            {
+                const double buffer_end_time = buffer.startTime + buffer.duration;
+                if (buffer_end_time > start_time)
+                {
+                    end_time = std::max(end_time, buffer_end_time);
+                }
+            }
+        };
+        extendEndTimeFromActiveBuffer(left_arm_reference_buffer_);
+        if (dual_arm_mode_)
+        {
+            extendEndTimeFromActiveBuffer(right_arm_reference_buffer_);
+        }
+
+        if (!dual_arm_mode_ && left_arm_waypoints.empty())
+        {
+            response->success = false;
+            response->message = "left_arm_path is empty";
+            response->estimated_duration = 0.0;
+            return;
+        }
+
+        rebuildTargetTrajectoriesFromArmReferenceBuffers(start_time, end_time);
 
         response->success = true;
-        response->message = "trajectory applied";
-        response->estimated_duration = duration;
+        response->message = "trajectory stitched";
+        response->estimated_duration = end_time - start_time;
     }
 
     void PoseBasedReferenceManager::resetTargetStateCache()
@@ -1310,6 +1534,8 @@ namespace ocs2::controller_common
         right_target_state_ = vector_t::Zero(7);
         body_pose_7_xyzw_ = vector_t::Zero(7);
         body_pose_7_xyzw_(6) = 1.0;
+        left_arm_reference_buffer_ = ArmReferenceBuffer{};
+        right_arm_reference_buffer_ = ArmReferenceBuffer{};
 
         RCLCPP_INFO(logger_,
                     "Target state cache reset - cleared all cached target states");
@@ -1319,16 +1545,26 @@ namespace ocs2::controller_common
         const vector_t& left_ee_pose, const vector_t& right_ee_pose,
         bool update_target_trajectory)
     {
-        // 设置左臂pose到缓存
-        left_target_state_ = left_ee_pose;
+        const double t = current_observation_.time;
+        const bool left_buffer_active = isArmReferenceBufferActive(left_arm_reference_buffer_, t);
+        const bool right_buffer_active = isArmReferenceBufferActive(right_arm_reference_buffer_, t);
+
+        if (!left_buffer_active)
+        {
+            left_target_state_ = left_ee_pose;
+        }
 
         // 如果是双臂模式，设置右臂pose到缓存
         if (dual_arm_mode_)
         {
-            right_target_state_ = right_ee_pose;
+            if (!right_buffer_active)
+            {
+                right_target_state_ = right_ee_pose;
+            }
             // 仅轮式人形 21 维布局需要在此处把缓存推入 ReferenceManager；固定臂控仍保持 7/14 维原行为
             if (update_target_trajectory &&
-                effectiveTargetStateDim() == Ocs2ReferenceTargetContext::kWheelHumanoidTargetStateDim)
+                effectiveTargetStateDim() == Ocs2ReferenceTargetContext::kWheelHumanoidTargetStateDim &&
+                !left_buffer_active && !right_buffer_active)
             {
                 updateTargetTrajectory();
             }
