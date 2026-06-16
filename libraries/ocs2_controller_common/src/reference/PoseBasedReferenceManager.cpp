@@ -1047,6 +1047,47 @@ namespace ocs2::controller_common
         }
     }
 
+    bool PoseBasedReferenceManager::parsePoseStampedToState(
+        const geometry_msgs::msg::PoseStamped& pose_stamped,
+        const char* tag,
+        vector_t& out_state) const
+    {
+        auto poseToState = [](const geometry_msgs::msg::Pose& pose) -> vector_t
+        {
+            vector_t state = vector_t::Zero(7);
+            state(0) = pose.position.x;
+            state(1) = pose.position.y;
+            state(2) = pose.position.z;
+            state(3) = pose.orientation.x;
+            state(4) = pose.orientation.y;
+            state(5) = pose.orientation.z;
+            state(6) = pose.orientation.w;
+            return state;
+        };
+
+        if (pose_stamped.header.frame_id == base_frame_)
+        {
+            out_state = poseToState(pose_stamped.pose);
+            return true;
+        }
+
+        try
+        {
+            geometry_msgs::msg::PoseStamped transformed_pose;
+            geometry_msgs::msg::TransformStamped transform =
+                tf_buffer_->lookupTransform(base_frame_, pose_stamped.header.frame_id, tf2::TimePointZero);
+            tf2::doTransform(pose_stamped, transformed_pose, transform);
+            out_state = poseToState(transformed_pose.pose);
+            return true;
+        }
+        catch (const tf2::TransformException& ex)
+        {
+            RCLCPP_WARN(logger_, "无法将%s pose从 %s 转换到 %s: %s",
+                        tag, pose_stamped.header.frame_id.c_str(), base_frame_.c_str(), ex.what());
+            return false;
+        }
+    }
+
     void PoseBasedReferenceManager::leftPoseStampedCallback(
         const geometry_msgs::msg::PoseStamped::SharedPtr msg)
     {
@@ -1101,45 +1142,6 @@ namespace ocs2::controller_common
         const vector_t previous_left_target_state = left_target_state_;
         const vector_t previous_right_target_state = right_target_state_;
         const vector_t previous_body_target_state = body_pose_7_xyzw_;
-
-        // 转换pose到状态向量的辅助函数
-        auto poseToState = [](const geometry_msgs::msg::Pose& pose) -> vector_t
-        {
-            vector_t state = vector_t::Zero(7);
-            state(0) = pose.position.x;
-            state(1) = pose.position.y;
-            state(2) = pose.position.z;
-            state(3) = pose.orientation.x;
-            state(4) = pose.orientation.y;
-            state(5) = pose.orientation.z;
-            state(6) = pose.orientation.w;
-            return state;
-        };
-
-        auto parsePoseStampedToState = [this, &poseToState](const geometry_msgs::msg::PoseStamped& pose_stamped,
-                                                             const char* tag, vector_t& out_state) -> bool
-        {
-            if (pose_stamped.header.frame_id == base_frame_)
-            {
-                out_state = poseToState(pose_stamped.pose);
-                return true;
-            }
-            try
-            {
-                geometry_msgs::msg::PoseStamped transformed_pose;
-                geometry_msgs::msg::TransformStamped transform =
-                    tf_buffer_->lookupTransform(base_frame_, pose_stamped.header.frame_id, tf2::TimePointZero);
-                tf2::doTransform(pose_stamped, transformed_pose, transform);
-                out_state = poseToState(transformed_pose.pose);
-                return true;
-            }
-            catch (const tf2::TransformException& ex)
-            {
-                RCLCPP_WARN(logger_, "无法将%s pose从 %s 转换到 %s: %s",
-                            tag, pose_stamped.header.frame_id.c_str(), base_frame_.c_str(), ex.what());
-                return false;
-            }
-        };
 
         // 处理左臂（第一个pose）
         vector_t left_target_state;
@@ -1450,23 +1452,37 @@ namespace ocs2::controller_common
         double duration = request->trajectory_duration;
         if (duration <= 0.0) duration = trajectory_duration_;
 
-        auto poseToState = [](const geometry_msgs::msg::PoseStamped& ps) -> vector_t
-        {
-            vector_t s = vector_t::Zero(7);
-            s(0) = ps.pose.position.x;    s(1) = ps.pose.position.y;    s(2) = ps.pose.position.z;
-            s(3) = ps.pose.orientation.x; s(4) = ps.pose.orientation.y;
-            s(5) = ps.pose.orientation.z; s(6) = ps.pose.orientation.w;
-            return s;
-        };
-
         std::vector<vector_t> left_arm_waypoints;
         std::vector<vector_t> right_arm_waypoints;
 
         for (const auto& ps : request->left_arm_path.poses)
-            left_arm_waypoints.push_back(poseToState(ps));
+        {
+            vector_t state;
+            if (!parsePoseStampedToState(ps, "左臂路径点", state))
+            {
+                response->success = false;
+                response->message = "failed to transform left_arm_path waypoint to base frame";
+                response->estimated_duration = 0.0;
+                return;
+            }
+            left_arm_waypoints.push_back(state);
+        }
+
         if (dual_arm_mode_)
+        {
             for (const auto& ps : request->right_arm_path.poses)
-                right_arm_waypoints.push_back(poseToState(ps));
+            {
+                vector_t state;
+                if (!parsePoseStampedToState(ps, "右臂路径点", state))
+                {
+                    response->success = false;
+                    response->message = "failed to transform right_arm_path waypoint to base frame";
+                    response->estimated_duration = 0.0;
+                    return;
+                }
+                right_arm_waypoints.push_back(state);
+            }
+        }
 
         if (dual_arm_mode_ && request->left_arm_path.poses.empty() && request->right_arm_path.poses.empty())
         {

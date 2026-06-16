@@ -95,6 +95,13 @@ private:
     void processPoseStamped(const geometry_msgs::msg::PoseStamped::SharedPtr& msg,
                             std::function<void(geometry_msgs::msg::Pose::SharedPtr)> callback);
 
+    /** 将 PoseStamped 转为控制器内部 7 维位姿状态 [x,y,z,qx,qy,qz,qw]。
+     * 若 header.frame_id 与 base_frame_ 不同，先通过 TF 变换到 base_frame_ 再转换。
+     * tag 用于转换失败时的日志标识；成功返回 true，TF 失败返回 false。 */
+    [[nodiscard]] bool parsePoseStampedToState(const geometry_msgs::msg::PoseStamped& pose_stamped,
+                                               const char* tag,
+                                               vector_t& out_state) const;
+
     void publishCurrentTargets(const std::string& arm_type = "");
 
     /** Wheel-humanoid COUPLED: after updating one arm target, set the other from captured relative pose (matches WheelHumanoidTargetNode). */
