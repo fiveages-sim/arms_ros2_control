@@ -222,6 +222,10 @@ namespace ocs2::controller_common
                 node->create_publisher<geometry_msgs::msg::PoseStamped>(
                     "right_current_target", 1);
         }
+
+        body_target_publisher_ =
+            node->create_publisher<geometry_msgs::msg::PoseStamped>(
+                "body_current_target", 1);
     }
 
     int PoseBasedReferenceManager::effectiveTargetStateDim() const
@@ -295,6 +299,7 @@ namespace ocs2::controller_common
         {
             updateBodyTrajectory(previous_body_target_state);
         }
+        publishBodyCurrentTarget();
     }
 
     void PoseBasedReferenceManager::publishCurrentTargetsFromCache()
@@ -737,6 +742,7 @@ namespace ocs2::controller_common
         body_pose_7_xyzw_(6) = msg->orientation.w;
 
         updateTargetTrajectory();
+        publishBodyCurrentTarget();
     }
 
     void PoseBasedReferenceManager::leftPoseStampedPoseCallback(
@@ -822,6 +828,7 @@ namespace ocs2::controller_common
         body_pose_7_xyzw_(6) = msg->orientation.w;
 
         updateBodyTrajectory(previous_body_target_state);
+        publishBodyCurrentTarget();
     }
 
     void PoseBasedReferenceManager::processPoseStamped(
@@ -1378,6 +1385,31 @@ namespace ocs2::controller_common
             right_target_msg.pose.orientation.w = right_target_state_(6);
             right_target_publisher_->publish(right_target_msg);
         }
+
+        if (arm_type.empty() || arm_type == "both" || arm_type == "body")
+        {
+            publishBodyCurrentTarget();
+        }
+    }
+
+    void PoseBasedReferenceManager::publishBodyCurrentTarget() const
+    {
+        if (!body_target_publisher_ || body_pose_7_xyzw_.size() < 7)
+        {
+            return;
+        }
+
+        geometry_msgs::msg::PoseStamped body_target_msg;
+        body_target_msg.header.stamp = clock_->now();
+        body_target_msg.header.frame_id = base_frame_;
+        body_target_msg.pose.position.x = body_pose_7_xyzw_(0);
+        body_target_msg.pose.position.y = body_pose_7_xyzw_(1);
+        body_target_msg.pose.position.z = body_pose_7_xyzw_(2);
+        body_target_msg.pose.orientation.x = body_pose_7_xyzw_(3);
+        body_target_msg.pose.orientation.y = body_pose_7_xyzw_(4);
+        body_target_msg.pose.orientation.z = body_pose_7_xyzw_(5);
+        body_target_msg.pose.orientation.w = body_pose_7_xyzw_(6);
+        body_target_publisher_->publish(body_target_msg);
     }
 
     // 新增圆形轨迹相关函数

@@ -95,6 +95,7 @@ private:
                             std::function<void(geometry_msgs::msg::Pose::SharedPtr)> callback);
 
     void publishCurrentTargets(const std::string& arm_type = "");
+    void publishBodyCurrentTarget() const;
 
     /** Wheel-humanoid COUPLED: after updating one arm target, set the other from captured relative pose (matches WheelHumanoidTargetNode). */
     void syncWheelHumanoidCoupledOppositeArmIfNeeded(bool left_target_was_updated);
@@ -116,6 +117,7 @@ private:
 
     rclcpp::Publisher<geometry_msgs::msg::PoseStamped>::SharedPtr left_target_publisher_;
     rclcpp::Publisher<geometry_msgs::msg::PoseStamped>::SharedPtr right_target_publisher_;
+    rclcpp::Publisher<geometry_msgs::msg::PoseStamped>::SharedPtr body_target_publisher_;
 
     std::shared_ptr<tf2_ros::Buffer> tf_buffer_;
     std::shared_ptr<tf2_ros::TransformListener> tf_listener_;
