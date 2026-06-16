@@ -784,6 +784,15 @@ namespace arms_controller_common
                 finishJointTrajectoryAction(true, false, "Joint trajectory completed successfully");
             }
         }
+        else if (trajectory_manager_.isCompleted())
+        {
+            refreshHoldPositions();
+            target_pos_ = ctrl_interfaces_.last_sent_joint_positions_;
+            start_pos_ = target_pos_;
+            trajectory_manager_.reset();
+            interpolation_active_ = false;
+            has_target_ = false;
+        }
 
         // In force control mode, calculate static torques
         if (ctrl_interfaces_.control_mode_ == ControlMode::MIX && gravity_compensation_)
