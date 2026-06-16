@@ -629,6 +629,7 @@ namespace arms_rviz_control_plugin
         capability_state_.has_body_relative_constraint = msg->has_body_relative_constraint;
         capability_state_.has_waist_lock = msg->has_waist_lock;
         capability_state_.has_head_coupling = msg->has_head_coupling;
+        capability_state_.has_custom_joint_lock = msg->has_custom_joint_lock;
         capability_state_.has_bimanual_coupling = msg->has_bimanual_coupling;
         capability_state_.body_tracking_ee_enabled = msg->body_tracking_ee_enabled;
 
@@ -693,6 +694,11 @@ namespace arms_rviz_control_plugin
         return current_wbc_state_.body_state == 4; // BODY_HEAD_COUPLED
     }
 
+    bool OCS2FSMPanel::isBodyCustomLocked() const
+    {
+        return current_wbc_state_.body_state == 5; // BODY_CUSTOM_LOCKED
+    }
+
     int OCS2FSMPanel::getCurrentBodyModeIndex() const
     {
         if (isBodyFree()) return BODY_MODE_FREE;
@@ -700,6 +706,7 @@ namespace arms_rviz_control_plugin
         if (isBodyTracking()) return BODY_MODE_TRACKING;
         if (isBodyLocked()) return BODY_MODE_LOCKED;
         if (isBodyHeadCoupled()) return BODY_MODE_HEAD_COUPLED;
+        if (isBodyCustomLocked()) return BODY_MODE_CUSTOM_LOCKED;
         return BODY_MODE_LOCKED;
     }
 
@@ -717,6 +724,8 @@ namespace arms_rviz_control_plugin
                 return "BODY_LOCK";
             case BODY_MODE_HEAD_COUPLED:
                 return "BODY_HEAD_COUPLED";
+            case BODY_MODE_CUSTOM_LOCKED:
+                return "BODY_CUSTOM_LOCK";
             default:
                 return "";
         }
@@ -749,6 +758,11 @@ namespace arms_rviz_control_plugin
         if (capability_state_.has_head_coupling)
         {
             body_combo_box_->addItem("锁头", BODY_MODE_HEAD_COUPLED);
+        }
+
+        if (capability_state_.has_custom_joint_lock)
+        {
+            body_combo_box_->addItem("自定义", BODY_MODE_CUSTOM_LOCKED);
         }
 
         int current_mode = getCurrentBodyModeIndex();

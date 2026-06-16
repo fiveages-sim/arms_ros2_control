@@ -147,6 +147,7 @@ WbcCurrentStatePanel::WbcCurrentStatePanel(QWidget* parent)
     body_combo_box_->addItem("竖直", BODY_MODE_VERTICAL);
     body_combo_box_->addItem("跟随", BODY_MODE_TRACKING);
     body_combo_box_->addItem("锁定", BODY_MODE_LOCKED);
+    body_combo_box_->addItem("自定义", BODY_MODE_CUSTOM_LOCKED);
 
     connect(body_combo_box_.get(),
             QOverload<int>::of(&QComboBox::currentIndexChanged),
@@ -199,6 +200,7 @@ void WbcCurrentStatePanel::onReceiveCapability(const WbcCapabilityMsg::SharedPtr
     capability_state_.has_mobile_base = msg->has_mobile_base;
     capability_state_.has_body_relative_constraint = msg->has_body_relative_constraint;
     capability_state_.has_waist_lock = msg->has_waist_lock;
+    capability_state_.has_custom_joint_lock = msg->has_custom_joint_lock;
     capability_state_.has_bimanual_coupling = msg->has_bimanual_coupling;
     capability_state_.body_tracking_ee_enabled = msg->body_tracking_ee_enabled;
 
@@ -258,12 +260,18 @@ bool WbcCurrentStatePanel::isBodyLocked() const
     return current_state_.body_state == WbcCurrentStateMsg::BODY_LOCKED;
 }
 
+bool WbcCurrentStatePanel::isBodyCustomLocked() const
+{
+    return current_state_.body_state == WbcCurrentStateMsg::BODY_CUSTOM_LOCKED;
+}
+
 int WbcCurrentStatePanel::getCurrentBodyModeIndex() const
 {
     if (isBodyFree()) return BODY_MODE_FREE;
     if (isBodyVertical()) return BODY_MODE_VERTICAL;
     if (isBodyTracking()) return BODY_MODE_TRACKING;
     if (isBodyLocked()) return BODY_MODE_LOCKED;
+    if (isBodyCustomLocked()) return BODY_MODE_CUSTOM_LOCKED;
     return BODY_MODE_LOCKED;
 }
 
@@ -279,6 +287,8 @@ QString WbcCurrentStatePanel::getBodyModeCommand(int modeIndex) const
             return "BODY_TRACKING";
         case BODY_MODE_LOCKED:
             return "BODY_LOCK";
+        case BODY_MODE_CUSTOM_LOCKED:
+            return "BODY_CUSTOM_LOCK";
         default:
             return "";
     }
@@ -306,6 +316,11 @@ void WbcCurrentStatePanel::updateBodyComboBox()
     if (capability_state_.has_waist_lock)
     {
         body_combo_box_->addItem("锁定", BODY_MODE_LOCKED);
+    }
+
+    if (capability_state_.has_custom_joint_lock)
+    {
+        body_combo_box_->addItem("自定义", BODY_MODE_CUSTOM_LOCKED);
     }
 
     int current_mode = getCurrentBodyModeIndex();
