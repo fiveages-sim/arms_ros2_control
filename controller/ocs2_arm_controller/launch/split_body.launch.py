@@ -1,409 +1,137 @@
 import os
+import sys
 
-from ament_index_python.packages import get_package_share_directory
 from launch import LaunchDescription
-from launch.actions import DeclareLaunchArgument, OpaqueFunction, SetEnvironmentVariable
-from launch.actions import IncludeLaunchDescription
-from launch.launch_description_sources import PythonLaunchDescriptionSource
-from launch.substitutions import LaunchConfiguration
+from launch.actions import DeclareLaunchArgument, OpaqueFunction
 from launch_ros.actions import Node
 
-# Import robot_common_launch utilities
 from robot_common_launch import (
-    get_robot_package_path,
-    extract_info_file_name_from_config,
-    detect_controllers,
-    create_controller_spawners,
-    load_robot_config,
-    get_ros2_control_robot_description,
-    prepare_arms_target_manager_parameters,
-    parse_launch_mode,
     create_launch_mode_arguments,
-    forward_robot_launch_args,
     create_robot_profile_launch_arguments,
-    resolve_profile_path,
-    resolve_control_sides,
-    resolve_control_patch,
-    load_robot_profile,
-    build_planning_urdf_launch_params,
-    write_spawner_controller_param_file,
-    prepare_ros2_controllers_override_path,
+    extract_info_file_name_from_config,
+    get_robot_package_path,
+    prepare_arms_target_manager_parameters,
 )
 
-# All utility functions are now imported from robot_common_launch
+_launch_dir = os.path.dirname(os.path.abspath(__file__))
+if _launch_dir not in sys.path:
+    sys.path.insert(0, _launch_dir)
+import _ocs2_launch_common as ocs2_common
+
 
 def launch_setup(context, *args, **kwargs):
-    """Launch setup function using OpaqueFunction"""
-    robot_name = context.launch_configurations['robot']
-    robot_type = context.launch_configurations.get('type', '')
-    hardware = context.launch_configurations.get('hardware', 'mock_components')
-    world = context.launch_configurations.get('world', 'dart')
+    ctx = ocs2_common.build_ocs2_control_context(context)
 
-    profile_path = resolve_profile_path(context.launch_configurations)
-    profile = load_robot_profile(profile_path) if profile_path else {}
-    control_left, control_right = resolve_control_sides(context.launch_configurations, profile)
-    control_patch = resolve_control_patch(profile)
-
-    # 基本参数
-    use_sim_time = hardware in ['gz', 'isaac']
-
-    # Launch mode (needed early for planning_robot_state_publisher)
-    launch_mode, rviz_only, use_rviz = parse_launch_mode(context)
-
-    config, _ = load_robot_config(
-        robot_name,
-        "ros2_control",
-        robot_type,
-        control_left=control_left,
-        control_right=control_right,
-        control_patch=control_patch,
+    planning_robot_name = ocs2_common.resolve_planning_robot_name_from_config(
+        ctx.config, "ocs2_arm_controller", ctx.robot_name
     )
-    planning_robot_name = robot_name
-    planning_robot_type = robot_type
-    if config is not None:
-        try:
-            # Extract robot_name and robot_type from ocs2_arm_controller parameters
-            ocs2_params = config.get('ocs2_arm_controller', {}).get('ros__parameters', {})
-            config_robot_name = ocs2_params.get('robot_name', None)
-            config_robot_type = ocs2_params.get('robot_type', None)
-            # Use config robot_name if specified (it's specifically configured for this controller)
-            # This allows using arms-only robot description (e.g., rokae_ar5) for split_body mode
-            if config_robot_name:
-                planning_robot_name = config_robot_name
-                if config_robot_name != robot_name:
-                    print(f"[INFO] Using robot_name from config for planning URDF: {planning_robot_name} (launch arg: {robot_name})")
-            # Use config robot_type if specified (it's specifically configured for this controller)
-            # If not specified, use the type from launch argument
-            if config_robot_type:
-                planning_robot_type = config_robot_type
-                if config_robot_type != robot_type:
-                    print(f"[INFO] Using robot_type from config for planning URDF: {planning_robot_type} (launch arg: {robot_type})")
-        except KeyError:
-            pass
 
-    planning_urdf_params = build_planning_urdf_launch_params(
+    planning_urdf_params = ocs2_common.validate_planning_urdf(
         planning_robot_name,
-        context.launch_configurations,
-        hardware,
-        profile_path or None,
+        ctx.launch_configurations,
+        ctx.hardware,
+        ctx.profile_path or None,
         planning_scope="arms",
     )
-    _plan_path = (planning_urdf_params.get("planning_urdf_path") or "").strip()
-    if (
-        planning_urdf_params.get("planning_urdf_variant") != "xacro"
-        or not _plan_path
-        or not os.path.isfile(_plan_path)
-    ):
-        print(
-            f"[ERROR] OCS2 requires xacro planning URDF for '{planning_robot_name}' "
-            f"(scope=arms). variant={planning_urdf_params.get('planning_urdf_variant')!r} "
-            f"path={_plan_path!r}"
-        )
+    if planning_urdf_params is None:
         return []
 
-    ros2_controllers_override = prepare_ros2_controllers_override_path(
-        config,
-        control_left,
-        control_right,
-        control_patch,
-        robot_name=robot_name,
-        robot_type=robot_type,
-    )
-    if ros2_controllers_override:
-        print(f"[INFO] Preloaded ros2_control config: {ros2_controllers_override}")
-
-    ocs2_planning_param_file = write_spawner_controller_param_file(
-        'ocs2_arm_controller', planning_urdf_params, quiet=True
-    )
-    print(
-        f"[INFO] OCS2 planning URDF: {_plan_path} "
-        f"(params: {ocs2_planning_param_file})"
-    )
-    ocs2_spawner_param_file = ocs2_planning_param_file
-
-    forward_args = forward_robot_launch_args(context)
-
-    controller_manager_launch = IncludeLaunchDescription(
-        PythonLaunchDescriptionSource([
-            os.path.join(get_package_share_directory('robot_common_launch'), 'launch'),
-            '/controller_manager.launch.py',
-        ]),
-        launch_arguments=forward_args + [
-            ('use_sim_time', str(use_sim_time)),
-            ('world', world),
-            ('ocs2_planning_param_file', ocs2_planning_param_file),
-            ('ros2_controllers_override', ros2_controllers_override),
-        ],
+    main_spawner, ocs2_planning_param_file = ocs2_common.create_main_controller_spawner(
+        "ocs2_arm_controller", planning_urdf_params
     )
 
-    # OCS2 Arm Controller spawner (-p: Jazzy spawner --param-file; YAML root = controller name)
-    ocs2_arm_controller_spawner = Node(
-        package='controller_manager',
-        executable='spawner',
-        arguments=[
-            'ocs2_arm_controller',
-            '-p',
-            ocs2_spawner_param_file,
-        ],
-        output='screen',
+    controller_stack_nodes = ocs2_common.create_controller_stack_nodes(
+        ctx,
+        context,
+        ocs2_planning_param_file=ocs2_planning_param_file,
     )
 
-    # Detect hand controllers using robot_common_launch (only if gripper is enabled)
-    enable_gripper = context.launch_configurations.get('enable_gripper', 'true').lower() == 'true'
-    hand_controllers = []
-    hand_controller_spawners = []
+    enable_gripper = (
+        context.launch_configurations.get("enable_gripper", "true").lower() == "true"
+    )
+    hand_controllers, hand_spawners = ocs2_common.setup_hand_controllers(ctx, enable_gripper)
 
-    if enable_gripper:
-        # Get ros2_control robot_description to verify joints exist in xacro
-        # This uses the same logic as controller_manager.launch.py
-        robot_description = get_ros2_control_robot_description(
-            robot_name,
-            robot_type=robot_type,
-            hardware=hardware,
-            launch_configurations=context.launch_configurations,
-            robot_profile=profile_path or None,
-        )
-        
-        # Detect controllers matching hand/gripper patterns
-        # Pass robot_description to verify joints exist in xacro
-        hand_controllers = detect_controllers(
-            robot_name,
-            robot_type,
-            ['hand', 'gripper'],
-            robot_description=robot_description,
-            control_left=control_left,
-            control_right=control_right,
-            control_patch=control_patch,
-            ros2_control_config=config,
-        )
-        hand_controller_spawners = create_controller_spawners(hand_controllers, use_sim_time)
-
-    # Detect body controllers using robot_common_launch (body, head)
-    enable_body = context.launch_configurations.get('enable_body', 'true').lower() == 'true'
-    body_controller_spawners = []
-    joint_controller_names = ['ocs2_arm_controller']
-
+    enable_body = context.launch_configurations.get("enable_body", "true").lower() == "true"
+    body_spawners = []
+    joint_controller_names = ["ocs2_arm_controller"]
     if enable_body:
-        head_controllers = detect_controllers(
-            robot_name,
-            robot_type,
-            ['body', 'head'],
-            control_left=control_left,
-            control_right=control_right,
-            control_patch=control_patch,
-            ros2_control_config=config,
-        )
-        body_controller_spawners = create_controller_spawners(head_controllers, use_sim_time)
-        joint_controller_names.extend([c['name'] for c in head_controllers])
+        body_controllers, body_spawners = ocs2_common.setup_body_controllers(ctx, ["body", "head"])
+        joint_controller_names.extend(c["name"] for c in body_controllers)
 
-
-    info_file_name = extract_info_file_name_from_config(config, launch_mode="split_body")
-
-    # Use the same robot_name from config for task file (already loaded above)
+    info_file_name = extract_info_file_name_from_config(ctx.config, launch_mode="split_body")
     task_robot_name = planning_robot_name
-
-    # Get robot package path for task file (use config robot_name if different)
     robot_pkg_path = get_robot_package_path(task_robot_name)
     if robot_pkg_path is None:
         print(f"[ERROR] Cannot find robot package path for '{task_robot_name}'")
         return []
 
-    # OCS2 ArmsTargetManager for interactive pose control (auto-detects dual_arm_mode and frame_id from task.info)
-    # task.info 使用 planning_robot_name（机械臂描述，如 m6_CCS）
-    task_file_path = os.path.join(
-        robot_pkg_path,
-        "config",
-        "ocs2",
-        f"{info_file_name}.info"
-    )
+    task_file_path = os.path.join(robot_pkg_path, "config", "ocs2", f"{info_file_name}.info")
     print(f"[INFO] Using task file for ArmsTargetManager: {task_file_path}")
-    
-    # target_manager.yaml 使用原始 robot_name（全身描述，如 fiveages_w2）
-    # 这样可以确保头部控制等配置使用全身机器人的配置
-    full_body_robot_pkg_path = get_robot_package_path(robot_name)
+
     config_file_path = None
-    if full_body_robot_pkg_path is not None:
-        full_body_config_path = os.path.join(
-            full_body_robot_pkg_path,
-            "config",
-            "ocs2",
-            "target_manager.yaml"
-        )
-        if os.path.exists(full_body_config_path):
-            config_file_path = full_body_config_path
+    full_body_pkg = get_robot_package_path(ctx.robot_name)
+    if full_body_pkg is not None:
+        candidate = os.path.join(full_body_pkg, "config", "ocs2", "target_manager.yaml")
+        if os.path.exists(candidate):
+            config_file_path = candidate
             print(f"[INFO] Using target_manager.yaml from full body robot description: {config_file_path}")
         else:
-            print(f"[WARN] target_manager.yaml not found at: {full_body_config_path}")
-    else:
-        print(f"[WARN] Cannot find full body robot package path for '{robot_name}'")
+            print(f"[WARN] target_manager.yaml not found at: {candidate}")
 
-    # Extract hand controller names for ArmsTargetManager (if available)
-    hand_controller_names_for_target_manager = []
-    if enable_gripper and hand_controllers:
-        hand_controller_names_for_target_manager = [c['name'] for c in hand_controllers]
-
-    # Prepare parameters using robot_common_launch utility function
-    # enable_head_control is now configured via YAML config file, not via launch argument
-    arms_target_manager_parameters = prepare_arms_target_manager_parameters(
+    hand_names = [c["name"] for c in hand_controllers] if enable_gripper else []
+    arms_target_manager = None
+    arms_params = prepare_arms_target_manager_parameters(
         task_file_path=task_file_path,
-        config_file_path=config_file_path,  # Use full body robot's config if available
-        hand_controllers=hand_controller_names_for_target_manager if hand_controller_names_for_target_manager else None
+        config_file_path=config_file_path,
+        hand_controllers=hand_names or None,
+    )
+    if arms_params and (
+        context.launch_configurations.get("enable_arms_target_manager", "true").lower()
+        == "true"
+    ):
+        arms_target_manager = Node(
+            package="arms_target_manager",
+            executable="arms_target_manager_node",
+            name="arms_target_manager",
+            output="screen",
+            parameters=arms_params + [{"use_sim_time": ctx.use_sim_time}],
+        )
+
+    rviz_node = ocs2_common.build_rviz_node(
+        ctx,
+        ocs2_common.resolve_rviz_config(ctx.robot_name, "splitbody.rviz"),
+        hand_names,
+        joint_controller_names,
+        extra_rviz_parameters=[{"wbc_available": False}],
     )
 
-    # Create ArmsTargetManager node directly
-    ocs2_arms_target_manager = None
-    if arms_target_manager_parameters and context.launch_configurations.get('enable_arms_target_manager', 'true').lower() == 'true':
-        ocs2_arms_target_manager = Node(
-            package='arms_target_manager',
-            executable='arms_target_manager_node',
-            name='arms_target_manager',
-            output='screen',
-            parameters=arms_target_manager_parameters + [{'use_sim_time': use_sim_time}],
-        )
-
-    # Launch mode: 'full' (default), 'control_only', or 'rviz_only'
-    # Note: launch_mode, rviz_only, use_rviz and zenoh_env are already set above
-
-    # RViz for visualization
-    rviz_node = None
-    if use_rviz:
-        # 确定配置文件路径（优先级：机器人description包目录 > 默认配置）
-        rviz_config_path = None
-        
-        # 检查机器人description包目录下是否有ocs2rviz配置
-        robot_pkg_path = get_robot_package_path(robot_name)
-        if robot_pkg_path is not None:
-            robot_rviz_config = os.path.join(robot_pkg_path, "config", "rviz", "splitbody.rviz")
-            print(f"[INFO] Checking for rviz config in robot description package: {robot_rviz_config}")
-            if os.path.exists(robot_rviz_config):
-                rviz_config_path = robot_rviz_config
-                print(f"[INFO] Using rviz config from robot description package: {rviz_config_path}")
-        
-        # 如果还没有找到，使用默认配置文件
-        if not rviz_config_path:
-            rviz_base = os.path.join(
-                get_package_share_directory("ocs2_arm_controller"), "config",
-            )
-            rviz_config_path = os.path.join(rviz_base, "demo.rviz")
-            print(f"[INFO] Using default rviz config: {rviz_config_path}")
-
-        # Extract hand controller names for GripperControlPanel
-        hand_controller_names = []
-        if enable_gripper and hand_controllers:
-            hand_controller_names = [c['name'] for c in hand_controllers]
-
-        # Prepare RViz parameters
-        rviz_parameters = [{'use_sim_time': use_sim_time}]
-
-        # Only add hand_controllers parameter if we have controllers
-        if hand_controller_names:
-            rviz_parameters.append({'hand_controllers': hand_controller_names})
-
-        # Add joint_controllers parameter for JointControlPanel
-        rviz_parameters.append({'joint_controllers': joint_controller_names})
-
-        rviz_parameters.append({'wbc_available': False})
-
-        # Do not set name=rviz2: rviz2 creates multiple internal nodes; a global
-        # __node remap would collide and trigger rcl.logging_rosout warnings.
-        rviz_node = Node(
-            package="rviz2",
-            executable="rviz2",
-            output="log",
-            arguments=["-d", rviz_config_path],
-            parameters=rviz_parameters,
-        )
-
-    # 统一的节点列表 - 不管是否使用 Gazebo，控制器都是一样的
-    # robot_state_publisher 和 joint_state_broadcaster 现在由 controller_manager_launch 处理
-    nodes = []
-    
-    # If rviz_only mode, only add rviz (all other nodes should be running on the robot)
-    if rviz_only:
-        if rviz_node:
-            nodes.append(rviz_node)
-        # In rviz_only mode, we don't start any other nodes
-        # robot_state_publisher, controller_manager, etc. should be running on the robot
-    else:
-        # Normal mode: add all nodes
-        if rviz_node:
-            nodes.append(rviz_node)
-        nodes.append(controller_manager_launch)
-        nodes.append(ocs2_arm_controller_spawner)
-    
-    # Add ArmsTargetManager node if created (skip in rviz_only mode)
-    if not rviz_only and ocs2_arms_target_manager:
-        nodes.append(ocs2_arms_target_manager)
-
-    # Add planning robot state publisher if available (already added in rviz_only branch above)
-    # Only add in normal mode if not already added
-    # Planning robot description is now published by Visualizer in ocs2_arm_controller
-
-    # Add hand controller spawners if any were detected (skip in rviz_only mode)
-    if not rviz_only:
-        nodes.extend(hand_controller_spawners)
-
-    # Add body controller spawners if any were detected (skip in rviz_only mode)
-    if not rviz_only:
-        nodes.extend(body_controller_spawners)
-
-    return nodes
+    return ocs2_common.assemble_nodes(
+        ctx,
+        rviz_node=rviz_node,
+        controller_stack_nodes=controller_stack_nodes,
+        main_spawner=main_spawner,
+        extra_spawners=hand_spawners + body_spawners,
+        optional_nodes=[arms_target_manager] if arms_target_manager else [],
+    )
 
 
 def generate_launch_description():
-    # Command-line arguments
-    robot_name_arg = DeclareLaunchArgument(
-        "robot",
-        default_value="cr5",
-        description="Robot name (arx5, cr5, etc.)"
+    return LaunchDescription(
+        [
+            DeclareLaunchArgument("robot", default_value="cr5"),
+            DeclareLaunchArgument("type", default_value=""),
+            DeclareLaunchArgument("hardware", default_value="mock_components"),
+            DeclareLaunchArgument("world", default_value="dart"),
+            DeclareLaunchArgument("enable_arms_target_manager", default_value="true"),
+            DeclareLaunchArgument("enable_gripper", default_value="true"),
+            DeclareLaunchArgument("enable_body", default_value="true"),
+            DeclareLaunchArgument(
+                "use_controller_manager_include",
+                default_value="false",
+                description="Fallback: use IncludeLaunchDescription for controller_manager",
+            ),
+            *create_launch_mode_arguments(),
+        ]
+        + create_robot_profile_launch_arguments()
+        + [OpaqueFunction(function=launch_setup)]
     )
-
-    robot_type_arg = DeclareLaunchArgument(
-        "type",
-        default_value="",
-        description="Robot type (x5, r5, robotiq85, etc.). Leave empty to not pass type parameter to xacro."
-    )
-
-    hardware_arg = DeclareLaunchArgument(
-        "hardware",
-        default_value="mock_components",
-        description="Hardware type: 'gz' for Gazebo simulation, 'isaac' for Isaac simulation, 'mock_components' for mock components"
-    )
-
-    world_arg = DeclareLaunchArgument(
-        'world', default_value='dart', description='Gz sim World (only used when hardware=gz)'
-    )
-
-    enable_arms_target_manager_arg = DeclareLaunchArgument(
-        'enable_arms_target_manager',
-        default_value='true',
-        description='Enable ArmsTargetManager for interactive pose control'
-    )
-
-    enable_gripper_arg = DeclareLaunchArgument(
-        'enable_gripper',
-        default_value='true',
-        description='Enable gripper controllers and gripper control panel'
-    )
-
-    enable_body_arg = DeclareLaunchArgument(
-        'enable_body',
-        default_value='true',
-        description='Enable body controllers (body, head)'
-    )
-
-    # Get launch mode arguments from common utilities
-    launch_mode_args = create_launch_mode_arguments()
-
-    return LaunchDescription([
-        robot_name_arg,
-        robot_type_arg,
-        hardware_arg,
-        world_arg,
-        enable_arms_target_manager_arg,
-        enable_gripper_arg,
-        enable_body_arg,
-        *launch_mode_args,
-    ] + create_robot_profile_launch_arguments() + [
-        OpaqueFunction(function=launch_setup),
-    ])
