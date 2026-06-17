@@ -127,11 +127,13 @@ namespace arms_controller_common
                                          Eigen::VectorXd& solution,
                                          std::string arm_type,
                                          int maxIterations,
-                                         double tolerance)
+                                         double tolerance,
+                                         double joint_limit_margin)
     {
         SolutionInfo info;
         return solveSingleArmIKWithInfo(targetPose, initialGuess, solution, info,
-                                        arm_type, maxIterations, tolerance);
+                                        arm_type, maxIterations, tolerance,
+                                        joint_limit_margin);
     }
 
     bool ArmKinematics::solveSingleArmIKWithInfo(const EndEffectorPose& targetPose,
@@ -140,7 +142,8 @@ namespace arms_controller_common
                                                  SolutionInfo& info,
                                                  std::string arm_type,
                                                  int maxIterations,
-                                                 double tolerance)
+                                                 double tolerance,
+                                                 double joint_limit_margin)
     {
         int jointCount = (arm_type == "left") ? leftArmJointCount_ : rightArmJointCount_;
         if (initialGuess.size() != static_cast<Eigen::Index>(jointCount))
@@ -155,6 +158,19 @@ namespace arms_controller_common
 
         Eigen::VectorXd lower, upper;
         getJointLimits(arm_type, lower, upper);
+        if (joint_limit_margin > 0.0 &&
+            lower.size() == upper.size() &&
+            lower.size() == static_cast<Eigen::Index>(jointCount))
+        {
+            for (Eigen::Index i = 0; i < lower.size(); ++i)
+            {
+                if (upper(i) - lower(i) > 2.0 * joint_limit_margin)
+                {
+                    lower(i) += joint_limit_margin;
+                    upper(i) -= joint_limit_margin;
+                }
+            }
+        }
 
         std::pair<Eigen::VectorXd, SolutionInfo> result;
 

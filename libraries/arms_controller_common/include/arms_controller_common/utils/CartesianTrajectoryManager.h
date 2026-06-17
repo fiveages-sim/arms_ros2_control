@@ -95,6 +95,7 @@ namespace arms_controller_common
                            Eigen::VectorXd& current_joint_pos,
                            std::vector<double>& result);
         double min_val = 1.0e-6;
+        static constexpr double kMoveLJointLimitMargin = 0.1;
         rclcpp::Logger logger_;
     };
 #else

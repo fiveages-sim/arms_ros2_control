@@ -168,7 +168,8 @@ namespace arms_controller_common
                               Eigen::VectorXd& solution,
                               std::string arm_type,
                               int maxIterations = 1500,
-                              double tolerance = 1e-4);
+                              double tolerance = 1e-4,
+                              double joint_limit_margin = 0.0);
 
         bool solveSingleArmIKWithInfo(const EndEffectorPose& targetPose,
                                       const Eigen::VectorXd& initialGuess,
@@ -176,7 +177,8 @@ namespace arms_controller_common
                                       SolutionInfo& info,
                                       std::string arm_type,
                                       int maxIterations = 1500,
-                                      double tolerance = 1e-4);
+                                      double tolerance = 1e-4,
+                                      double joint_limit_margin = 0.0);
 
 
         void setWeight(const Eigen::VectorXd& weight) { weight_ = weight; }

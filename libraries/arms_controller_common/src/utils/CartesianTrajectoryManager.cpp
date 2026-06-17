@@ -572,7 +572,8 @@ namespace arms_controller_common
         Eigen::VectorXd solution;
         ArmKinematics::SolutionInfo info;
         if (!arm_kinematics_->solveSingleArmIKWithInfo(
-            pose, current_joint_pos, solution, info, arm_name, 50))
+            pose, current_joint_pos, solution, info, arm_name, 50, 1e-4,
+            kMoveLJointLimitMargin))
         {
             std::ostringstream oss;
             oss << "IK failed while calculating MoveL joint position for " << arm_name
