@@ -8,6 +8,7 @@
 #include <vector>
 #include <map>
 #include <atomic>
+#include <chrono>
 #include <rclcpp/rclcpp.hpp>
 #include <geometry_msgs/msg/pose_stamped.hpp>
 #include <geometry_msgs/msg/pose.hpp>
@@ -15,6 +16,7 @@
 #include <geometry_msgs/msg/twist.hpp>
 #include <Eigen/Core>
 #include <Eigen/Geometry>
+#include <std_msgs/msg/float64.hpp>
 #include <std_msgs/msg/int32.hpp>
 #include <nav_msgs/msg/path.hpp>
 #include <tf2_ros/buffer.hpp>
@@ -139,6 +141,12 @@ namespace arms_ros2_control::command
          * @param msg Twist消息，linear.x/y 表示左摇杆，angular.x/y 表示右摇杆
          */
         void thumbstickAxesCallback(const geometry_msgs::msg::Twist::SharedPtr msg);
+
+        /**
+         * 扳机模拟量回调函数（合并处理左右扳机）
+         * @param msg Twist消息，linear.x 表示左扳机拉动比例，angular.x 表示右扳机拉动比例
+         */
+        void triggerValuesCallback(const geometry_msgs::msg::Twist::SharedPtr msg);
         
         /**
          * 处理左摇杆轴值（内部辅助函数）
@@ -168,6 +176,33 @@ namespace arms_ros2_control::command
          * @param command 命令值 (0=close, 1=open)
          */
         void publishGripperCommand(const std::string& controller_name, int32_t command);
+
+        /**
+         * 发布夹爪/灵巧手百分比目标到对应的控制器
+         * @param controller_name 控制器名称
+         * @param percent 百分比目标 (0.0=完全闭合, 1.0=完全张开)
+         */
+        void publishGripperPercent(const std::string& controller_name, double percent);
+
+        /**
+         * 模式切换后先把左右手同步到张开状态，避免旧模式目标和新模式目标冲突
+         * @param percent_mode true=用target_percent张开, false=用target_command张开
+         */
+        void openGrippersAfterModeSwitch(bool percent_mode);
+
+        /**
+         * 按镜像模式解析左右扳机对应的手控制器
+         * @param is_left_trigger true=左扳机, false=右扳机
+         * @param controller_name 输出控制器名称
+         * @param is_target_left_arm 输出是否对应左手/左臂
+         */
+        void resolveTriggerTarget(bool is_left_trigger, std::string& controller_name, bool& is_target_left_arm) const;
+
+        /**
+         * 处理旧式扳机开关控制：每按一次在开/关之间切换
+         * @param is_left_trigger true=左扳机, false=右扳机
+         */
+        void toggleGripperByTrigger(bool is_left_trigger);
 
         /**
          * 左夹爪状态回调函数（同步夹爪状态）
@@ -266,6 +301,8 @@ namespace arms_ros2_control::command
         rclcpp::Subscription<std_msgs::msg::Int32>::SharedPtr sub_controller_state_;
         // 摇杆轴值订阅器（合并订阅左右摇杆，使用 Twist 消息）
         rclcpp::Subscription<geometry_msgs::msg::Twist>::SharedPtr sub_thumbstick_axes_;
+        // 扳机模拟量订阅器（合并订阅左右扳机，使用 Twist 消息）
+        rclcpp::Subscription<geometry_msgs::msg::Twist>::SharedPtr sub_trigger_values_;
         // 夹爪状态订阅器（用于同步夹爪状态）
         rclcpp::Subscription<std_msgs::msg::Int32>::SharedPtr sub_left_gripper_state_;
         rclcpp::Subscription<std_msgs::msg::Int32>::SharedPtr sub_right_gripper_state_;
@@ -343,12 +380,17 @@ namespace arms_ros2_control::command
         std::vector<std::string> hand_controllers_;
         // Publishers for gripper commands (created on demand)
         std::map<std::string, rclcpp::Publisher<std_msgs::msg::Int32>::SharedPtr> gripper_command_publishers_;
+        std::map<std::string, rclcpp::Publisher<std_msgs::msg::Float64>::SharedPtr> gripper_percent_publishers_;
+        std::map<std::string, double> last_gripper_percent_;
         // 检测到的左右控制器名称
         std::string left_gripper_controller_name_;
         std::string right_gripper_controller_name_;
         // 夹爪状态跟踪
         std::atomic<bool> left_gripper_open_;
         std::atomic<bool> right_gripper_open_;
+        std::atomic<bool> trigger_percent_mode_;
+        std::chrono::steady_clock::time_point last_trigger_mode_toggle_time_{};
+        std::chrono::steady_clock::time_point trigger_percent_resume_time_{};
 
         // VR控制缩放参数（从配置文件读取 / 固定配置）
         double vr_thumbstick_linear_scale_; // 摇杆位置缩放因子（单位 m/step）
