@@ -58,6 +58,25 @@ namespace gripper_hardware_common
             }
         };
 
+        /** @brief Changingtek 120S gripper torque conversion (0–100%). */
+        class Changingtek120S
+        {
+        public:
+            static constexpr int MAX_TORQUE = 100;
+
+            static int normalizedToModbus(double normalized)
+            {
+                normalized = std::clamp(normalized, 0.0, 1.0);
+                return static_cast<int>(normalized * MAX_TORQUE);
+            }
+
+            static double modbusToNormalized(int modbus_torque)
+            {
+                modbus_torque = std::max(0, std::min(MAX_TORQUE, modbus_torque));
+                return static_cast<double>(modbus_torque) / MAX_TORQUE;
+            }
+        };
+
         /**
          * @brief Jodell gripper torque conversion
          * 

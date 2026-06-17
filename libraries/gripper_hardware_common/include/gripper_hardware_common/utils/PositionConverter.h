@@ -68,6 +68,30 @@ namespace gripper_hardware_common
         };
 
         /**
+         * @brief Changingtek 120S gripper position conversion (0-12000 range)
+         */
+        class Changingtek120S
+        {
+        public:
+            static constexpr uint16_t MAX_POSITION = 12000;
+
+            static uint16_t normalizedToModbus(double normalized)
+            {
+                normalized = std::clamp(normalized, 0.0, 1.0);
+                return static_cast<uint16_t>((1.0 - normalized) * MAX_POSITION);
+            }
+
+            static double modbusToNormalized(uint32_t modbus_pos)
+            {
+                if (modbus_pos > MAX_POSITION)
+                {
+                    modbus_pos = MAX_POSITION;
+                }
+                return std::clamp(1.0 - (static_cast<double>(modbus_pos) / MAX_POSITION), 0.0, 1.0);
+            }
+        };
+
+        /**
          * @brief Jodell gripper position conversion
          * 
          * Position range: 0-255 (0 = closed, 255 = open)

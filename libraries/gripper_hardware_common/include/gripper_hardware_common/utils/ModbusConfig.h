@@ -52,6 +52,9 @@ namespace gripper_hardware_common
             static constexpr uint16_t TRIGGER_VALUE = 0x0001;
             static constexpr uint16_t POWER_ON = 0x0001;
             static constexpr uint16_t POWER_OFF = 0x0000;
+
+            /** Use Changingtek120S converters (pos 0-12000, vel/trq 0-100). */
+            static constexpr bool USE_120S_CONVERTER = false;
         };
 
         /**
@@ -92,6 +95,19 @@ namespace gripper_hardware_common
             static constexpr uint16_t TRIGGER_VALUE = 0x0001;
             static constexpr uint16_t POWER_ON = 0x0001;
             static constexpr uint16_t POWER_OFF = 0x0000;
+
+            /** Use Changingtek120S converters (pos 0-12000, vel/trq 0-100). */
+            static constexpr bool USE_120S_CONVERTER = false;
+        };
+
+        /** AG2F120S — 闭环步进协议，量程 0-12000，反馈 0x060D。 */
+        struct Changingtek120S : Changingtek90D
+        {
+            static constexpr uint16_t MAX_POSITION_MM = 12000;
+            static constexpr uint16_t FEEDBACK_REG_ADDR = 0x060D;
+
+            /** Use Changingtek120S converters (pos 0-12000, vel/trq 0-100). */
+            static constexpr bool USE_120S_CONVERTER = true;
         };
 
         /**
