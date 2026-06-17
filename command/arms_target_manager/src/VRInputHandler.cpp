@@ -9,6 +9,7 @@
 #include <geometry_msgs/msg/pose.hpp>
 #include <geometry_msgs/msg/point.hpp>
 #include <geometry_msgs/msg/twist.hpp>
+#include <std_msgs/msg/float64.hpp>
 #include <std_msgs/msg/int32.hpp>
 #include <nav_msgs/msg/path.hpp>
 #include <Eigen/Core>
@@ -50,6 +51,7 @@ namespace arms_ros2_control::command
           , hand_controllers_(handControllers)
           , left_gripper_open_(false)
           , right_gripper_open_(false)
+          , trigger_percent_mode_(true)
           , vr_thumbstick_linear_scale_(vr_thumbstick_linear_scale)
           , vr_thumbstick_angular_scale_(vr_thumbstick_angular_scale)
           , vr_pose_scale_(vr_pose_scale)
@@ -126,6 +128,15 @@ namespace arms_ros2_control::command
         sub_thumbstick_axes_ = node_->create_subscription<geometry_msgs::msg::Twist>(
             "/xr/thumbstick_axes", 10, thumbstickAxesCallback);
 
+        // 创建扳机模拟量订阅器（合并订阅左右扳机，使用 Twist 消息）
+        // linear.x 表示左扳机拉动比例，angular.x 表示右扳机拉动比例
+        auto triggerValuesCallback = [this](const geometry_msgs::msg::Twist::SharedPtr msg)
+        {
+            this->triggerValuesCallback(msg);
+        };
+        sub_trigger_values_ = node_->create_subscription<geometry_msgs::msg::Twist>(
+            "/xr/trigger_values", 10, triggerValuesCallback);
+
         // 创建双臂目标位姿发布器（用于尺度校准后发送校准目标）
         pub_dual_target_stamped_ = node_->create_publisher<nav_msgs::msg::Path>(
             "/dual_target/stamped", 1);
@@ -142,6 +153,8 @@ namespace arms_ros2_control::command
         RCLCPP_INFO(node_->get_logger(), "🕹️🕶️🕹️ VRInputHandler created");
         RCLCPP_INFO(node_->get_logger(), "🕹️🕶️🕹️ Subscribed to button event topic: /xr/controller_state (Int32)");
         RCLCPP_INFO(node_->get_logger(), "🕹️🕶️🕹️ Subscribed to thumbstick axes topic: /xr/thumbstick_axes (ThumbstickAxes)");
+        RCLCPP_INFO(node_->get_logger(), "🕹️🕶️🕹️ Subscribed to trigger values topic: /xr/trigger_values (linear.x=left, angular.x=right)");
+        RCLCPP_INFO(node_->get_logger(), "🕹️🕶️🕹️ Trigger hand mode: percent control by default; press left Y + right B together to toggle percent/switch mode");
         RCLCPP_INFO(node_->get_logger(), "🕹️🕶️🕹️ Thumbstick scaling: linear=%.3f, angular=%.3f",
                     vr_thumbstick_linear_scale_, vr_thumbstick_angular_scale_);
         RCLCPP_INFO(node_->get_logger(), "🕹️🕶️🕹️ VR pose scale: left=%.3f, right=%.3f",
@@ -205,6 +218,11 @@ namespace arms_ros2_control::command
 
     void VRInputHandler::publishGripperCommand(const std::string& controller_name, int32_t command)
     {
+        if (controller_name.empty())
+        {
+            return;
+        }
+
         // 创建发布器（如果还没有）- 类似ControlInputHandler的方式
         if (gripper_command_publishers_.find(controller_name) == gripper_command_publishers_.end())
         {
@@ -218,6 +236,113 @@ namespace arms_ros2_control::command
         auto target_msg = std_msgs::msg::Int32();
         target_msg.data = command;
         gripper_command_publishers_[controller_name]->publish(target_msg);
+    }
+
+    void VRInputHandler::publishGripperPercent(const std::string& controller_name, double percent)
+    {
+        if (controller_name.empty())
+        {
+            return;
+        }
+
+        percent = std::clamp(percent, 0.0, 1.0);
+        auto last_it = last_gripper_percent_.find(controller_name);
+        if (last_it != last_gripper_percent_.end() && std::abs(last_it->second - percent) < 0.005)
+        {
+            return;
+        }
+        last_gripper_percent_[controller_name] = percent;
+
+        if (gripper_percent_publishers_.find(controller_name) == gripper_percent_publishers_.end())
+        {
+            std::string topic_name = "/" + controller_name + "/target_percent";
+            gripper_percent_publishers_[controller_name] =
+                node_->create_publisher<std_msgs::msg::Float64>(topic_name, 10);
+            RCLCPP_INFO(node_->get_logger(), "🕹️🕶️🕹️ Created gripper percent publisher: %s", topic_name.c_str());
+        }
+
+        auto target_msg = std_msgs::msg::Float64();
+        target_msg.data = percent;
+        gripper_percent_publishers_[controller_name]->publish(target_msg);
+    }
+
+    void VRInputHandler::openGrippersAfterModeSwitch(bool percent_mode)
+    {
+        if (percent_mode)
+        {
+            // 切回比例模式时强制重发1.0，避免缓存认为“已经张开”而漏发同步目标。
+            last_gripper_percent_.erase(left_gripper_controller_name_);
+            last_gripper_percent_.erase(right_gripper_controller_name_);
+            publishGripperPercent(left_gripper_controller_name_, 1.0);
+            publishGripperPercent(right_gripper_controller_name_, 1.0);
+        }
+        else
+        {
+            publishGripperCommand(left_gripper_controller_name_, 1);
+            publishGripperCommand(right_gripper_controller_name_, 1);
+        }
+
+        left_gripper_open_.store(true);
+        right_gripper_open_.store(true);
+    }
+
+    void VRInputHandler::resolveTriggerTarget(bool is_left_trigger,
+                                             std::string& controller_name,
+                                             bool& is_target_left_arm) const
+    {
+        if (mirror_mode_.load())
+        {
+            if (is_left_trigger)
+            {
+                controller_name = right_gripper_controller_name_;
+                is_target_left_arm = false;
+            }
+            else
+            {
+                controller_name = left_gripper_controller_name_;
+                is_target_left_arm = true;
+            }
+        }
+        else
+        {
+            if (is_left_trigger)
+            {
+                controller_name = left_gripper_controller_name_;
+                is_target_left_arm = true;
+            }
+            else
+            {
+                controller_name = right_gripper_controller_name_;
+                is_target_left_arm = false;
+            }
+        }
+    }
+
+    void VRInputHandler::toggleGripperByTrigger(bool is_left_trigger)
+    {
+        std::string target_controller_name;
+        bool is_target_left_arm = true;
+        resolveTriggerTarget(is_left_trigger, target_controller_name, is_target_left_arm);
+
+        const char* trigger_name = is_left_trigger ? "左扳机按钮" : "右扳机按钮";
+        if (target_controller_name.empty())
+        {
+            RCLCPP_WARN(node_->get_logger(),
+                        "🔘 [%s] 按下 - 功能: 控制夹爪开合 - 操作: 失败（未检测到%s臂控制器）",
+                        trigger_name, is_target_left_arm ? "左" : "右");
+            return;
+        }
+
+        bool current_gripper_open = is_target_left_arm ? left_gripper_open_.load() : right_gripper_open_.load();
+        int32_t command = current_gripper_open ? 0 : 1; // 0=close, 1=open
+        publishGripperCommand(target_controller_name, command);
+
+        RCLCPP_INFO(node_->get_logger(),
+                    "🔘 [%s] 按下 - 模式: 开关控制(0/1) - 操作: %s夹爪已%s%s",
+                    trigger_name,
+                    is_target_left_arm ? "左" : "右",
+                    (command == 1) ? "打开" : "关闭",
+                    mirror_mode_.load() ? " [镜像模式]" : "");
     }
 
     void VRInputHandler::leftGripperStateCallback(const std_msgs::msg::Int32::SharedPtr msg)
@@ -729,6 +854,39 @@ namespace arms_ros2_control::command
         
         // 处理右摇杆轴值
         processRightThumbstickAxes();
+    }
+
+    void VRInputHandler::triggerValuesCallback(const geometry_msgs::msg::Twist::SharedPtr msg)
+    {
+        if (!trigger_percent_mode_.load())
+        {
+            return;
+        }
+
+        const auto now = std::chrono::steady_clock::now();
+        if (now < trigger_percent_resume_time_)
+        {
+            return;
+        }
+
+        const double left_trigger_pull = std::clamp(msg->linear.x, 0.0, 1.0);
+        const double right_trigger_pull = std::clamp(msg->angular.x, 0.0, 1.0);
+
+        // BasicJointController 的 target_percent: 0.0=闭合, 1.0=张开。
+        // VR 扳机语义: 0.0=松开, 1.0=拉满，所以这里反向映射。
+        const double left_hand_percent = 1.0 - left_trigger_pull;
+        const double right_hand_percent = 1.0 - right_trigger_pull;
+
+        if (mirror_mode_.load())
+        {
+            publishGripperPercent(right_gripper_controller_name_, left_hand_percent);
+            publishGripperPercent(left_gripper_controller_name_, right_hand_percent);
+        }
+        else
+        {
+            publishGripperPercent(left_gripper_controller_name_, left_hand_percent);
+            publishGripperPercent(right_gripper_controller_name_, right_hand_percent);
+        }
     }
     
     void VRInputHandler::processLeftThumbstickAxes()
@@ -1250,80 +1408,28 @@ namespace arms_ros2_control::command
             }
             case 9:  // 左扳机按钮
             {
-                // 根据镜像模式决定控制哪个臂
-                std::string target_controller_name;
-                bool is_target_left_arm; // true for left arm, false for right arm
-
-                if (mirror_mode_.load())
+                if (trigger_percent_mode_.load())
                 {
-                    // 镜像模式：左扳机控制右臂
-                    target_controller_name = right_gripper_controller_name_;
-                    is_target_left_arm = false;
+                    RCLCPP_DEBUG(node_->get_logger(),
+                                 "🔘 [左扳机按钮] 按下 - 当前为比例控制(0~1)，忽略旧的开关事件");
                 }
                 else
                 {
-                    // 正常模式：左扳机控制左臂
-                    target_controller_name = left_gripper_controller_name_;
-                    is_target_left_arm = true;
+                    toggleGripperByTrigger(true);
                 }
-
-                if (target_controller_name.empty())
-                {
-                    RCLCPP_WARN(node_->get_logger(), "🔘 [左扳机按钮] 按下 - 功能: 控制夹爪开合 - 操作: 失败（未检测到%s臂控制器）",
-                                is_target_left_arm ? "左" : "右");
-                    break;
-                }
-
-                // 获取当前夹爪状态并切换
-                bool current_gripper_open = is_target_left_arm ? left_gripper_open_.load() : right_gripper_open_.load();
-                int32_t command = current_gripper_open ? 0 : 1; // 0=close, 1=open
-
-                publishGripperCommand(target_controller_name, command);
-
-                // 状态会通过订阅器回调自动更新，无需手动更新
-
-                RCLCPP_INFO(node_->get_logger(), "🔘 [左扳机按钮] 按下 - 功能: 控制夹爪开合 - 操作: %s夹爪已%s%s",
-                            is_target_left_arm ? "左" : "右", (command == 1) ? "打开" : "关闭",
-                            mirror_mode_.load() ? " [镜像模式]" : "");
                 break;
             }
             case 10: // 右扳机按钮
             {
-                // 根据镜像模式决定控制哪个臂
-                std::string target_controller_name;
-                bool is_target_left_arm; // true for left arm, false for right arm
-
-                if (mirror_mode_.load())
+                if (trigger_percent_mode_.load())
                 {
-                    // 镜像模式：右扳机控制左臂
-                    target_controller_name = left_gripper_controller_name_;
-                    is_target_left_arm = true;
+                    RCLCPP_DEBUG(node_->get_logger(),
+                                 "🔘 [右扳机按钮] 按下 - 当前为比例控制(0~1)，忽略旧的开关事件");
                 }
                 else
                 {
-                    // 正常模式：右扳机控制右臂
-                    target_controller_name = right_gripper_controller_name_;
-                    is_target_left_arm = false;
+                    toggleGripperByTrigger(false);
                 }
-
-                if (target_controller_name.empty())
-                {
-                    RCLCPP_WARN(node_->get_logger(), "🔘 [右扳机按钮] 按下 - 功能: 控制夹爪开合 - 操作: 失败（未检测到%s臂控制器）",
-                                is_target_left_arm ? "左" : "右");
-                    break;
-                }
-
-                // 获取当前夹爪状态并切换
-                bool current_gripper_open = is_target_left_arm ? left_gripper_open_.load() : right_gripper_open_.load();
-                int32_t command = current_gripper_open ? 0 : 1; // 0=close, 1=open
-
-                publishGripperCommand(target_controller_name, command);
-
-                // 状态会通过订阅器回调自动更新，无需手动更新
-
-                RCLCPP_INFO(node_->get_logger(), "🔘 [右扳机按钮] 按下 - 功能: 控制夹爪开合 - 操作: %s夹爪已%s%s",
-                            is_target_left_arm ? "左" : "右", (command == 1) ? "打开" : "关闭",
-                            mirror_mode_.load() ? " [镜像模式]" : "");
                 break;
             }
             case 11: // 右A按钮（FSM状态控制）
@@ -1674,6 +1780,27 @@ namespace arms_ros2_control::command
                                 head_right_dist);
                 }
 
+                break;
+            }
+            case 15: // 左Y+右B组合键：切换扳机控制模式
+            {
+                const auto now = std::chrono::steady_clock::now();
+                if (now - last_trigger_mode_toggle_time_ < std::chrono::milliseconds(500))
+                {
+                    RCLCPP_DEBUG(node_->get_logger(),
+                                 "🔘 [左Y+右B组合键] 扳机模式切换事件过近，已忽略防抖");
+                    break;
+                }
+                last_trigger_mode_toggle_time_ = now;
+
+                bool new_mode = !trigger_percent_mode_.load();
+                trigger_percent_mode_.store(new_mode);
+                trigger_percent_resume_time_ = new_mode ? now + std::chrono::milliseconds(350)
+                                                        : std::chrono::steady_clock::time_point{};
+                openGrippersAfterModeSwitch(new_mode);
+                RCLCPP_INFO(node_->get_logger(),
+                            "🔘 [左Y+右B组合键] 扳机手部控制模式切换为: %s，已先同步左右手张开",
+                            new_mode ? "比例控制(0~1，按压深度控制闭合)" : "开关控制(0/1，按一下开/关)");
                 break;
             }
             case 0:  // 无事件
