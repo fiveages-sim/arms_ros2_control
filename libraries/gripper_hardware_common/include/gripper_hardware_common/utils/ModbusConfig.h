@@ -100,14 +100,18 @@ namespace gripper_hardware_common
             static constexpr bool USE_120S_CONVERTER = false;
         };
 
-        /** AG2F120S — 闭环步进协议，量程 0-12000，反馈 0x060D。 */
+        /** AG2F120S — 量程 0-12000，反馈 0x060D（同 90C）。 */
         struct Changingtek120S : Changingtek90D
         {
             static constexpr uint16_t MAX_POSITION_MM = 12000;
             static constexpr uint16_t FEEDBACK_REG_ADDR = 0x060D;
-
-            /** Use Changingtek120S converters (pos 0-12000, vel/trq 0-100). */
             static constexpr bool USE_120S_CONVERTER = true;
+        };
+
+        /** AG2F120S_D — 伺服步进，量程 0-12000，反馈 0x0418（同 90D）。 */
+        struct Changingtek120S_D : Changingtek120S
+        {
+            static constexpr uint16_t FEEDBACK_REG_ADDR = 0x0418;
         };
 
         /**
