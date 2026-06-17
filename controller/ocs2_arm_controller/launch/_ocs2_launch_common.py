@@ -28,6 +28,7 @@ from robot_common_launch import (
     resolve_control_patch,
     resolve_control_sides,
     resolve_profile_path,
+    resolve_robot_variant,
     write_spawner_controller_param_file,
 )
 
@@ -66,6 +67,7 @@ def build_ocs2_control_context(context) -> Ocs2ControlContext:
     profile = load_robot_profile(profile_path) if profile_path else {}
     control_left, control_right = resolve_control_sides(configs, profile)
     control_patch = resolve_control_patch(profile)
+    robot_variant = resolve_robot_variant(configs, profile)
 
     config, _path, meta = load_robot_config(
         robot_name,
@@ -74,6 +76,7 @@ def build_ocs2_control_context(context) -> Ocs2ControlContext:
         control_left=control_left,
         control_right=control_right,
         control_patch=control_patch,
+        robot_variant=robot_variant,
     )
 
     return Ocs2ControlContext(
