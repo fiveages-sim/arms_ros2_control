@@ -47,5 +47,19 @@ namespace gripper_hardware_common
                 return std::max(0, std::min(MAX_REGISTER_VALUE, v));
             }
         };
+
+        /** @brief Changingtek 120S — VELOCITY_REG 0–100 (%). */
+        class Changingtek120S
+        {
+        public:
+            static constexpr int MAX_REGISTER_VALUE = 100;
+
+            static int normalizedToVelocityRegister(double normalized)
+            {
+                normalized = std::clamp(normalized, 0.0, 1.0);
+                const int v = static_cast<int>(std::lround(normalized * static_cast<double>(MAX_REGISTER_VALUE)));
+                return std::max(0, std::min(MAX_REGISTER_VALUE, v));
+            }
+        };
     };
 } // namespace gripper_hardware_common
