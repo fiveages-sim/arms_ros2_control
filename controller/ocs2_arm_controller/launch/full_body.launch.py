@@ -122,7 +122,12 @@ def launch_setup(context, *args, **kwargs):
         return []
 
     ros2_controllers_override = prepare_ros2_controllers_override_path(
-        config, control_left, control_right, control_patch
+        config,
+        control_left,
+        control_right,
+        control_patch,
+        robot_name=robot_name,
+        robot_type=robot_type,
     )
     if ros2_controllers_override:
         print(f"[INFO] Preloaded ros2_control config: {ros2_controllers_override}")
