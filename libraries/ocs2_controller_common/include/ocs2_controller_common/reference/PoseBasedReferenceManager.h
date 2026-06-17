@@ -142,7 +142,9 @@ private:
     ArmReferenceBuffer left_arm_reference_buffer_;
     ArmReferenceBuffer right_arm_reference_buffer_;
 
+    /** 在两点 7 维位姿 [x,y,z,qx,qy,qz,qw] 之间插值；alpha∈[0,1] 时位置线性插值，姿态四元数 slerp（最短路径）。 */
     static vector_t interpolatePose7(const vector_t& start, const vector_t& goal, double alpha);
+    /** 按归一化进度 alpha∈[0,1] 在 7 维位姿路径上均匀分段采样；段内调用 interpolatePose7。 */
     static vector_t samplePose7Path(const std::vector<vector_t>& path, double alpha);
 
     void resetArmReferenceBuffer(ArmReferenceBuffer& buffer, const vector_t& pose, double time);
