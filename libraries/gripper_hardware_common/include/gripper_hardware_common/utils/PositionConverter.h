@@ -12,6 +12,33 @@
 
 namespace gripper_hardware_common
 {
+    namespace detail
+    {
+        /** @brief 0=关/1=开 归一化 ↔ 0~max Modbus；Inverted 时 0=开、max=关（90 系列） */
+        enum class ChangingtekRangeDirection { Linear, Inverted };
+
+        template<ChangingtekRangeDirection Dir>
+        struct ChangingtekRangeConverter
+        {
+            static uint16_t normalizedToModbus(double normalized, uint16_t max_position)
+            {
+                normalized = std::clamp(normalized, 0.0, 1.0);
+                if constexpr (Dir == ChangingtekRangeDirection::Inverted)
+                    return static_cast<uint16_t>((1.0 - normalized) * max_position);
+                return static_cast<uint16_t>(normalized * max_position);
+            }
+
+            static double modbusToNormalized(uint32_t modbus_pos, uint16_t max_position)
+            {
+                if (modbus_pos > max_position)
+                    modbus_pos = max_position;
+                if constexpr (Dir == ChangingtekRangeDirection::Inverted)
+                    return std::clamp(1.0 - static_cast<double>(modbus_pos) / max_position, 0.0, 1.0);
+                return std::clamp(static_cast<double>(modbus_pos) / max_position, 0.0, 1.0);
+            }
+        };
+    }
+
     /**
      * @brief Position conversion utilities for different gripper types
      * 
@@ -33,61 +60,47 @@ namespace gripper_hardware_common
         class Changingtek90
         {
         public:
-            static constexpr uint16_t MAX_POSITION = 9000;  // Maximum position value
+            static constexpr uint16_t MAX_POSITION = 9000;
+            using Converter = detail::ChangingtekRangeConverter<detail::ChangingtekRangeDirection::Inverted>;
 
-            /**
-             * @brief Convert normalized position (0.0-1.0) to Modbus position (0-9000)
-             * @param normalized Normalized position (0.0=closed, 1.0=open)
-             * @return Modbus position value (0=open, 9000=closed)
-             */
             static uint16_t normalizedToModbus(double normalized)
             {
-                // Limit to valid range
-                normalized = std::clamp(normalized, 0.0, 1.0);
-                
-                // Changingtek: 0.0(closed) -> 9000, 1.0(open) -> 0
-                return static_cast<uint16_t>((1.0 - normalized) * MAX_POSITION);
+                return Converter::normalizedToModbus(normalized, MAX_POSITION);
             }
 
-            /**
-             * @brief Convert Modbus position (0-9000) to normalized position (0.0-1.0)
-             * @param modbus_pos Modbus position value (0=open, 9000=closed)
-             * @return Normalized position (0.0=closed, 1.0=open)
-             */
             static double modbusToNormalized(uint32_t modbus_pos)
             {
-                // Changingtek: 0(open) -> 1.0, 9000(closed) -> 0.0
-                if (modbus_pos > MAX_POSITION)
-                {
-                    modbus_pos = MAX_POSITION;
-                }
-
-                double normalized = 1.0 - (static_cast<double>(modbus_pos) / MAX_POSITION);
-                return std::clamp(normalized, 0.0, 1.0);
+                return Converter::modbusToNormalized(modbus_pos, MAX_POSITION);
             }
         };
 
         /**
-         * @brief Changingtek 120S gripper position conversion (0-12000 range)
+         * @brief Changingtek 120S 系列 — 线性 0(关) ~ max(开)；120S=12000，120S D=1000
          */
         class Changingtek120S
         {
         public:
             static constexpr uint16_t MAX_POSITION = 12000;
+            using Converter = detail::ChangingtekRangeConverter<detail::ChangingtekRangeDirection::Linear>;
+
+            static uint16_t normalizedToModbus(double normalized, uint16_t max_position)
+            {
+                return Converter::normalizedToModbus(normalized, max_position);
+            }
+
+            static double modbusToNormalized(uint32_t modbus_pos, uint16_t max_position)
+            {
+                return Converter::modbusToNormalized(modbus_pos, max_position);
+            }
 
             static uint16_t normalizedToModbus(double normalized)
             {
-                normalized = std::clamp(normalized, 0.0, 1.0);
-                return static_cast<uint16_t>((1.0 - normalized) * MAX_POSITION);
+                return normalizedToModbus(normalized, MAX_POSITION);
             }
 
             static double modbusToNormalized(uint32_t modbus_pos)
             {
-                if (modbus_pos > MAX_POSITION)
-                {
-                    modbus_pos = MAX_POSITION;
-                }
-                return std::clamp(1.0 - (static_cast<double>(modbus_pos) / MAX_POSITION), 0.0, 1.0);
+                return modbusToNormalized(modbus_pos, MAX_POSITION);
             }
         };
 
