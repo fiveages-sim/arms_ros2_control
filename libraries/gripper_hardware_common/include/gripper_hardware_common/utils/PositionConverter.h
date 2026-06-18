@@ -24,48 +24,37 @@ namespace gripper_hardware_common
     class PositionConverter
     {
     public:
-        /**
-         * @brief Changingtek 90 gripper position conversion
-         * 
-         * Position range: 0-9000 (0 = open, 9000 = closed)
-         * Normalized: 0.0 = closed, 1.0 = open
-         */
-        class Changingtek90
+        /** @brief Changingtek 系列共用（90/120S/120S D）；Modbus 0=开、max=关，量程由调用方传入。 */
+        class Changingtek
         {
         public:
-            static constexpr uint16_t MAX_POSITION = 9000;  // Maximum position value
+            static constexpr uint16_t DEFAULT_MAX_POSITION = 9000;
 
-            /**
-             * @brief Convert normalized position (0.0-1.0) to Modbus position (0-9000)
-             * @param normalized Normalized position (0.0=closed, 1.0=open)
-             * @return Modbus position value (0=open, 9000=closed)
-             */
+            static uint16_t normalizedToModbus(double normalized, uint16_t max_position)
+            {
+                normalized = std::clamp(normalized, 0.0, 1.0);
+                return static_cast<uint16_t>((1.0 - normalized) * max_position);
+            }
+
+            static double modbusToNormalized(uint32_t modbus_pos, uint16_t max_position)
+            {
+                if (modbus_pos > max_position)
+                    modbus_pos = max_position;
+                return std::clamp(1.0 - static_cast<double>(modbus_pos) / max_position, 0.0, 1.0);
+            }
+
             static uint16_t normalizedToModbus(double normalized)
             {
-                // Limit to valid range
-                normalized = std::clamp(normalized, 0.0, 1.0);
-                
-                // Changingtek: 0.0(closed) -> 9000, 1.0(open) -> 0
-                return static_cast<uint16_t>((1.0 - normalized) * MAX_POSITION);
+                return normalizedToModbus(normalized, DEFAULT_MAX_POSITION);
             }
 
-            /**
-             * @brief Convert Modbus position (0-9000) to normalized position (0.0-1.0)
-             * @param modbus_pos Modbus position value (0=open, 9000=closed)
-             * @return Normalized position (0.0=closed, 1.0=open)
-             */
             static double modbusToNormalized(uint32_t modbus_pos)
             {
-                // Changingtek: 0(open) -> 1.0, 9000(closed) -> 0.0
-                if (modbus_pos > MAX_POSITION)
-                {
-                    modbus_pos = MAX_POSITION;
-                }
-
-                double normalized = 1.0 - (static_cast<double>(modbus_pos) / MAX_POSITION);
-                return std::clamp(normalized, 0.0, 1.0);
+                return modbusToNormalized(modbus_pos, DEFAULT_MAX_POSITION);
             }
         };
+
+        using Changingtek90 = Changingtek;
 
         /**
          * @brief Jodell gripper position conversion

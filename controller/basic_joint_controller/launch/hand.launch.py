@@ -80,7 +80,9 @@ def launch_setup(context, *args, **kwargs):
     # Controller Manager Node
     # 使用 load_robot_config 根据 type 动态匹配控制器配置文件
     # 支持渐进匹配：如果提供了 type，会依次尝试 {type}.yaml, 缩短后的类型, 最后回退到 ros2_controllers.yaml
-    ros2_controllers_config, ros2_controllers_path = load_robot_config(hand_name, "ros2_control", hand_type)
+    ros2_controllers_config, ros2_controllers_path, _meta = load_robot_config(
+        hand_name, "ros2_control", hand_type
+    )
     
     if ros2_controllers_path is None:
         print(f"[ERROR] Controllers config file not found for hand '{hand_name}'")
