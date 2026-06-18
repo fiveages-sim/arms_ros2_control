@@ -53,8 +53,8 @@ namespace gripper_hardware_common
             static constexpr uint16_t POWER_ON = 0x0001;
             static constexpr uint16_t POWER_OFF = 0x0000;
 
-            /** Use Changingtek120S converters (pos 0-12000, vel/trq 0-100). */
-            static constexpr bool USE_120S_CONVERTER = false;
+            static constexpr int MAX_TORQUE_VALUE = 255;
+            static constexpr int MAX_VELOCITY_VALUE = 255;
         };
 
         /**
@@ -96,22 +96,26 @@ namespace gripper_hardware_common
             static constexpr uint16_t POWER_ON = 0x0001;
             static constexpr uint16_t POWER_OFF = 0x0000;
 
-            /** Use Changingtek120S converters (pos 0-12000, vel/trq 0-100). */
-            static constexpr bool USE_120S_CONVERTER = false;
+            static constexpr int MAX_TORQUE_VALUE = 255;
+            static constexpr int MAX_VELOCITY_VALUE = 255;
         };
 
-        /** AG2F120S — 量程 0-12000，反馈 0x060D（同 90C）。 */
+        /** AG2F120S — Modbus 0=开、12000=关，反馈 0x060D。 */
         struct Changingtek120S : Changingtek90D
         {
             static constexpr uint16_t MAX_POSITION_MM = 12000;
             static constexpr uint16_t FEEDBACK_REG_ADDR = 0x060D;
-            static constexpr bool USE_120S_CONVERTER = true;
+            static constexpr int MAX_TORQUE_VALUE = 100;
+            static constexpr int MAX_VELOCITY_VALUE = 100;
         };
 
-        /** AG2F120S_D — 伺服步进，量程 0-12000，反馈 0x0418（同 90D）。 */
+        /** AG2F120S_D — Modbus 0=开、1000=关；力矩/速度 0–100，反馈 0x0418。 */
         struct Changingtek120S_D : Changingtek120S
         {
+            static constexpr uint16_t MAX_POSITION_MM = 1000;
             static constexpr uint16_t FEEDBACK_REG_ADDR = 0x0418;
+            static constexpr int MAX_TORQUE_VALUE = 100;
+            static constexpr int MAX_VELOCITY_VALUE = 100;
         };
 
         /**
