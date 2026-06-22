@@ -171,7 +171,7 @@ States can transition between each other based on the control input received on 
 The OCS2 state integrates with the OCS2 mobile manipulator framework:
 
 - **Task File**: Located at `{robot_pkg}/config/ocs2/task.info`
-- **Planning URDF**: Xacro-generated cache via `robot_common_launch` (`planning_urdf_path`); static `urdf/*.urdf` is not used
+- **Planning URDF**: Xacro-generated cache via `robot_common_launch` (`planning_urdf_path`); static `urdf/*.urdf` is not used. The same xacro path applies to `manipulator_ocs2.launch.py` and `humanoid_ocs2.launch.py` in `robot_common_launch` (via `resolve_planning_urdf_file_or_fail`).
 - **Generated Library**: Located at `{robot_pkg}/config/ocs2/generated`
 
 The controller automatically loads these files based on the `robot_pkg` parameter. 
