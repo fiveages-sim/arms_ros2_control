@@ -22,60 +22,36 @@ namespace gripper_hardware_common
     class TorqueConverter
     {
     public:
-        /**
-         * @brief Changingtek 90 gripper torque conversion
-         * 
-         * Torque range: 0-255 (0xFF) as used in Modbus communication
-         * Normalized: 0.0 = no torque, 1.0 = maximum torque
-         */
-        class Changingtek90
+        /** @brief Changingtek 系列共用；默认量程 0–255，120S 等由调用方传入 max。 */
+        class Changingtek
         {
         public:
-            static constexpr int MAX_TORQUE = 0xFF;  // Maximum torque value (0-255 range)
+            static constexpr int DEFAULT_MAX_TORQUE = 0xFF;
 
-            /**
-             * @brief Convert normalized torque (0.0-1.0) to Modbus torque value
-             * @param normalized Normalized torque (0.0=no torque, 1.0=max torque)
-             * @return Modbus torque value (0-255)
-             */
-            static int normalizedToModbus(double normalized)
+            static int normalizedToModbus(double normalized, int max_torque)
             {
-                // Limit to valid range
                 normalized = std::clamp(normalized, 0.0, 1.0);
-                return static_cast<int>(normalized * MAX_TORQUE);
+                return static_cast<int>(normalized * max_torque);
             }
-
-            /**
-             * @brief Convert Modbus torque value to normalized torque (0.0-1.0)
-             * @param modbus_torque Modbus torque value (0-255)
-             * @return Normalized torque (0.0=no torque, 1.0=max torque)
-             */
-            static double modbusToNormalized(int modbus_torque)
-            {
-                // Limit to valid range
-                modbus_torque = std::max(0, std::min(MAX_TORQUE, modbus_torque));
-                return static_cast<double>(modbus_torque) / MAX_TORQUE;
-            }
-        };
-
-        /** @brief Changingtek 120S gripper torque conversion (0–100%). */
-        class Changingtek120S
-        {
-        public:
-            static constexpr int MAX_TORQUE = 100;
 
             static int normalizedToModbus(double normalized)
             {
-                normalized = std::clamp(normalized, 0.0, 1.0);
-                return static_cast<int>(normalized * MAX_TORQUE);
+                return normalizedToModbus(normalized, DEFAULT_MAX_TORQUE);
+            }
+
+            static double modbusToNormalized(int modbus_torque, int max_torque)
+            {
+                modbus_torque = std::max(0, std::min(max_torque, modbus_torque));
+                return static_cast<double>(modbus_torque) / max_torque;
             }
 
             static double modbusToNormalized(int modbus_torque)
             {
-                modbus_torque = std::max(0, std::min(MAX_TORQUE, modbus_torque));
-                return static_cast<double>(modbus_torque) / MAX_TORQUE;
+                return modbusToNormalized(modbus_torque, DEFAULT_MAX_TORQUE);
             }
         };
+
+        using Changingtek90 = Changingtek;
 
         /**
          * @brief Jodell gripper torque conversion

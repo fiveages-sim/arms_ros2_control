@@ -87,6 +87,7 @@ def launch_setup(context, *args, **kwargs):
     ros2_controllers_config, ros2_controllers_path, _meta = load_robot_config(
         hand_name, "ros2_control", hand_type
     )
+    
     if ros2_controllers_path is None:
         print(f"[ERROR] Controllers config file not found for hand '{hand_name}'")
         return []

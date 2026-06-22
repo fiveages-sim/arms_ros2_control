@@ -32,34 +32,25 @@ namespace gripper_hardware_common
             }
         };
 
-        /**
-         * @brief Changingtek 90 — VELOCITY_REG value used in Marvin stack (0–255 range).
-         */
-        class Changingtek90
+        /** @brief Changingtek VELOCITY_REG；默认 0–255，120S 等由调用方传入 max。 */
+        class Changingtek
         {
         public:
-            static constexpr int MAX_REGISTER_VALUE = 255;
+            static constexpr int DEFAULT_MAX_REGISTER_VALUE = 255;
+
+            static int normalizedToVelocityRegister(double normalized, int max_register_value)
+            {
+                normalized = std::clamp(normalized, 0.0, 1.0);
+                const int v = static_cast<int>(std::lround(normalized * static_cast<double>(max_register_value)));
+                return std::max(0, std::min(max_register_value, v));
+            }
 
             static int normalizedToVelocityRegister(double normalized)
             {
-                normalized = std::clamp(normalized, 0.0, 1.0);
-                const int v = static_cast<int>(std::lround(normalized * static_cast<double>(MAX_REGISTER_VALUE)));
-                return std::max(0, std::min(MAX_REGISTER_VALUE, v));
+                return normalizedToVelocityRegister(normalized, DEFAULT_MAX_REGISTER_VALUE);
             }
         };
 
-        /** @brief Changingtek 120S — VELOCITY_REG 0–100 (%). */
-        class Changingtek120S
-        {
-        public:
-            static constexpr int MAX_REGISTER_VALUE = 100;
-
-            static int normalizedToVelocityRegister(double normalized)
-            {
-                normalized = std::clamp(normalized, 0.0, 1.0);
-                const int v = static_cast<int>(std::lround(normalized * static_cast<double>(MAX_REGISTER_VALUE)));
-                return std::max(0, std::min(MAX_REGISTER_VALUE, v));
-            }
-        };
+        using Changingtek90 = Changingtek;
     };
 } // namespace gripper_hardware_common
