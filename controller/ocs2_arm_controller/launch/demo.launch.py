@@ -82,7 +82,7 @@ def launch_setup(context, *args, **kwargs):
         ctx,
         ocs2_common.resolve_rviz_config(ctx.robot_name, "demo_ocs2.rviz"),
         hand_names,
-        ["ocs2_arm_controller"],
+        ["ocs2_arm_controller"] + hand_names,
     )
 
     return ocs2_common.assemble_nodes(

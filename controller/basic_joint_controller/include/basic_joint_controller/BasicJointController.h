@@ -107,6 +107,11 @@ namespace basic_joint_controller
         bool target_command_enabled_{false};
         int32_t target_command_close_config_{1};
         int32_t target_command_open_config_{0};
+        std::vector<std::string> target_command_hold_joint_names_;
+        std::vector<bool> target_command_hold_mask_;
+
+        void buildTargetCommandHoldMask();
+        void applyTargetCommandHoldOverrides(std::vector<double>& target) const;
 
         // ROS subscriptions
         rclcpp::Subscription<std_msgs::msg::Int32>::SharedPtr fsm_command_subscription_;

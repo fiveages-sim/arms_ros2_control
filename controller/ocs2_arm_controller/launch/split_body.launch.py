@@ -79,6 +79,8 @@ def launch_setup(context, *args, **kwargs):
             print(f"[WARN] target_manager.yaml not found at: {candidate}")
 
     hand_names = [c["name"] for c in hand_controllers] if enable_gripper else []
+    if hand_names:
+        joint_controller_names.extend(hand_names)
     arms_target_manager = None
     arms_params = prepare_arms_target_manager_parameters(
         task_file_path=task_file_path,
