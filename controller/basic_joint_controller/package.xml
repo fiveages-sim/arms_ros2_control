@@ -12,7 +12,6 @@
 	<depend>controller_interface</depend>
 	<depend>pluginlib</depend>
 	<depend>std_msgs</depend>
-	<depend>realtime_tools</depend>
 	<depend>geometry_msgs</depend>
 	<depend>tf2_ros</depend>
 	<depend>tf2_geometry_msgs</depend>
@@ -30,3 +29,4 @@
 		<build_type>ament_cmake</build_type>
 	</export>
 </package>
+

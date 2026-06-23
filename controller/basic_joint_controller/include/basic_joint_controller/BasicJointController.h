@@ -10,11 +10,9 @@
 #include <unordered_map>
 #include <limits>
 #include <algorithm>
-#include <atomic>
-#include <cstdint>
+#include <mutex>
 
 #include <controller_interface/controller_interface.hpp>
-#include <realtime_tools/realtime_buffer.hpp>
 #include <std_msgs/msg/string.hpp>
 #include <std_msgs/msg/int32.hpp>
 #include <std_msgs/msg/float64.hpp>
@@ -72,24 +70,9 @@ namespace basic_joint_controller
         controller_interface::return_type update(const rclcpp::Time& time, const rclcpp::Duration& period) override;
 
     private:
-        enum class TargetPercentCommandType
-        {
-            NONE,
-            DIRECT_TARGET,
-            CLEAR
-        };
-
-        struct TargetPercentCommand
-        {
-            TargetPercentCommandType type{TargetPercentCommandType::NONE};
-            uint64_t sequence{0};
-            std::vector<double> target;
-        };
-
         std::shared_ptr<FSMState> getNextState(FSMStateName stateName) const;
         void applyPendingTargetPercentPosition();
-        void queueTargetPercentPosition(const std::vector<double>& target);
-        void requestClearTargetPercentPosition();
+        void clearPendingTargetPercentPosition();
 
         // Hardware parameters
         std::string command_prefix_;
@@ -127,10 +110,10 @@ namespace basic_joint_controller
         bool target_command_enabled_{false};
         int32_t target_command_close_config_{1};
         int32_t target_command_open_config_{0};
-        realtime_tools::RealtimeBuffer<TargetPercentCommand> target_percent_command_buffer_;
-        std::atomic<uint64_t> target_percent_command_sequence_{0};
-        uint64_t last_target_percent_command_sequence_{0};
+        std::mutex target_percent_mutex_;
+        std::vector<double> pending_target_percent_position_;
         std::vector<double> active_target_percent_position_;
+        bool has_pending_target_percent_position_{false};
         bool has_active_target_percent_position_{false};
 
         // ROS subscriptions
