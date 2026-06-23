@@ -72,8 +72,6 @@ namespace basic_joint_controller
                 RCLCPP_INFO(get_node()->get_logger(), "Switched from %s to %s",
                             current_state_->state_name_string.c_str(), next_state_->state_name_string.c_str());
             }
-
-            applyPendingTargetPercentPosition();
         }
         else if (mode_ == FSMMode::CHANGE)
         {
@@ -84,47 +82,6 @@ namespace basic_joint_controller
         }
 
         return controller_interface::return_type::OK;
-    }
-
-    void BasicJointController::applyPendingTargetPercentPosition()
-    {
-        std::vector<double> target;
-        {
-            std::lock_guard<std::mutex> lock(target_percent_mutex_);
-            if (has_pending_target_percent_position_)
-            {
-                active_target_percent_position_ = pending_target_percent_position_;
-                has_active_target_percent_position_ = true;
-                has_pending_target_percent_position_ = false;
-            }
-
-            if (!has_active_target_percent_position_)
-            {
-                return;
-            }
-
-            target = active_target_percent_position_;
-        }
-
-        if (!current_state_ || current_state_->state_name != FSMStateName::MOVEJ)
-        {
-            std::lock_guard<std::mutex> lock(target_percent_mutex_);
-            has_active_target_percent_position_ = false;
-            return;
-        }
-
-        if (target.size() != ctrl_interfaces_.joint_position_command_interface_.size())
-        {
-            RCLCPP_WARN(get_node()->get_logger(),
-                        "target_percent direct command size(%zu) != command interfaces size(%zu), ignoring",
-                        target.size(), ctrl_interfaces_.joint_position_command_interface_.size());
-            return;
-        }
-
-        for (size_t i = 0; i < target.size(); ++i)
-        {
-            ctrl_interfaces_.setJointPositionCommand(i, target[i]);
-        }
     }
 
     controller_interface::CallbackReturn BasicJointController::on_init()
@@ -228,8 +185,20 @@ namespace basic_joint_controller
                 ctrl_interfaces_.fsm_command_ = msg->data;
             });
 
+        std::string target_joint_position_topic = controller_name_ + "/target_joint_position";
+        target_joint_position_subscription_ = get_node()->create_subscription<std_msgs::msg::Float64MultiArray>(
+            target_joint_position_topic, rclcpp::QoS(10),
+            [this](const std_msgs::msg::Float64MultiArray::SharedPtr msg)
+            {
+                std::vector<double> target_pos(msg->data.begin(), msg->data.end());
+                if (!target_pos.empty())
+                {
+                    state_list_.movej->setTargetPosition(target_pos);
+                }
+            });
+        RCLCPP_DEBUG(get_node()->get_logger(), "Subscribed to %s for all joints",
+                     target_joint_position_topic.c_str());
 
-        state_list_.movej->setupSubscriptions("target_joint_position", false);
         state_list_.movej->setupTrajectorySubscription();
         robot_description_subscription_ = get_node()->create_subscription<std_msgs::msg::String>(
             "/robot_description", rclcpp::QoS(rclcpp::KeepLast(1)).transient_local(),
@@ -474,28 +443,10 @@ namespace basic_joint_controller
 
                             if (!target_config.empty())
                             {
-                                std::string movej_interpolation_type = get_node()->get_parameter(
-                                    "movej_interpolation_type").as_string();
-                                std::transform(movej_interpolation_type.begin(), movej_interpolation_type.end(),
-                                               movej_interpolation_type.begin(),
-                                               [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
-
-                                if (movej_interpolation_type == "none")
-                                {
-                                    std::lock_guard<std::mutex> lock(target_percent_mutex_);
-                                    pending_target_percent_position_ = target_config;
-                                    has_pending_target_percent_position_ = true;
-                                    RCLCPP_INFO(get_node()->get_logger(),
-                                                "Target command received: %d, queueing direct target configuration %d",
-                                                msg->data, config_index);
-                                }
-                                else
-                                {
-                                    state_list_.movej->setTargetPosition(target_config);
-                                    RCLCPP_INFO(get_node()->get_logger(),
-                                                "Target command received: %d, setting MOVEJ target to configuration %d",
-                                                msg->data, config_index);
-                                }
+                                state_list_.movej->setTargetPosition(target_config);
+                                RCLCPP_INFO(get_node()->get_logger(),
+                                            "Target command received: %d, setting MOVEJ target to configuration %d",
+                                            msg->data, config_index);
                             }
                             else
                             {
@@ -564,36 +515,18 @@ namespace basic_joint_controller
                         return;
                     }
 
-	                    // 逐关节线性插值
-	                    std::vector<double> target(close_config.size());
-	                    for (size_t i = 0; i < target.size(); ++i)
-	                    {
-	                        target[i] = close_config[i] + percent * (open_config[i] - close_config[i]);
-	                    }
-	
-	                    std::string movej_interpolation_type = get_node()->get_parameter(
-	                        "movej_interpolation_type").as_string();
-	                    std::transform(movej_interpolation_type.begin(), movej_interpolation_type.end(),
-	                                   movej_interpolation_type.begin(),
-	                                   [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
+                    // 逐关节线性插值
+                    std::vector<double> target(close_config.size());
+                    for (size_t i = 0; i < target.size(); ++i)
+                    {
+                        target[i] = close_config[i] + percent * (open_config[i] - close_config[i]);
+                    }
 
-	                    if (movej_interpolation_type == "none")
-	                    {
-	                        std::lock_guard<std::mutex> lock(target_percent_mutex_);
-	                        pending_target_percent_position_ = target;
-	                        has_pending_target_percent_position_ = true;
-	                        RCLCPP_DEBUG(get_node()->get_logger(),
-	                                     "target_percent %.1f%% -> direct target queued (%zu joints)",
-	                                     percent * 100.0, target.size());
-	                    }
-	                    else
-	                    {
-	                        state_list_.movej->setTargetPosition(target);
-	                        RCLCPP_INFO(get_node()->get_logger(),
-	                                    "target_percent %.1f%% -> interpolated target set (%zu joints)",
-	                                    percent * 100.0, target.size());
-	                    }
-	                });
+                    state_list_.movej->setTargetPosition(target);
+                    RCLCPP_INFO(get_node()->get_logger(),
+                                "target_percent %.1f%% -> MOVEJ target set (%zu joints)",
+                                percent * 100.0, target.size());
+                });
 
             RCLCPP_DEBUG(get_node()->get_logger(),
                          "Subscribed to target_percent topic: %s (0.0=close_config[%d], 1.0=open_config[%d])",

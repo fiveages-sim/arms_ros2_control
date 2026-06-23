@@ -10,7 +10,6 @@
 #include <unordered_map>
 #include <limits>
 #include <algorithm>
-#include <mutex>
 
 #include <controller_interface/controller_interface.hpp>
 #include <std_msgs/msg/string.hpp>
@@ -71,7 +70,6 @@ namespace basic_joint_controller
 
     private:
         std::shared_ptr<FSMState> getNextState(FSMStateName stateName) const;
-        void applyPendingTargetPercentPosition();
 
         // Hardware parameters
         std::string command_prefix_;
@@ -109,15 +107,11 @@ namespace basic_joint_controller
         bool target_command_enabled_{false};
         int32_t target_command_close_config_{1};
         int32_t target_command_open_config_{0};
-        std::mutex target_percent_mutex_;
-        std::vector<double> pending_target_percent_position_;
-        std::vector<double> active_target_percent_position_;
-        bool has_pending_target_percent_position_{false};
-        bool has_active_target_percent_position_{false};
 
         // ROS subscriptions
         rclcpp::Subscription<std_msgs::msg::Int32>::SharedPtr fsm_command_subscription_;
         rclcpp::Subscription<std_msgs::msg::String>::SharedPtr robot_description_subscription_;
+        rclcpp::Subscription<std_msgs::msg::Float64MultiArray>::SharedPtr target_joint_position_subscription_;
         rclcpp::Subscription<std_msgs::msg::Int32>::SharedPtr target_command_subscription_;
         rclcpp::Subscription<std_msgs::msg::Float64>::SharedPtr target_percent_subscription_;
 
