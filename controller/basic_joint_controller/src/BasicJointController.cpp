@@ -127,6 +127,15 @@ namespace basic_joint_controller
         }
     }
 
+    void BasicJointController::clearPendingTargetPercentPosition()
+    {
+        std::lock_guard<std::mutex> lock(target_percent_mutex_);
+        has_pending_target_percent_position_ = false;
+        has_active_target_percent_position_ = false;
+        pending_target_percent_position_.clear();
+        active_target_percent_position_.clear();
+    }
+
     controller_interface::CallbackReturn BasicJointController::on_init()
     {
         try
@@ -228,8 +237,21 @@ namespace basic_joint_controller
                 ctrl_interfaces_.fsm_command_ = msg->data;
             });
 
+        std::string target_joint_position_topic = controller_name_ + "/target_joint_position";
+        target_joint_position_subscription_ = get_node()->create_subscription<std_msgs::msg::Float64MultiArray>(
+            target_joint_position_topic, rclcpp::QoS(10),
+            [this](const std_msgs::msg::Float64MultiArray::SharedPtr msg)
+            {
+                std::vector<double> target_pos(msg->data.begin(), msg->data.end());
+                if (!target_pos.empty())
+                {
+                    clearPendingTargetPercentPosition();
+                    state_list_.movej->setTargetPosition(target_pos);
+                }
+            });
+        RCLCPP_DEBUG(get_node()->get_logger(), "Subscribed to %s for all joints",
+                     target_joint_position_topic.c_str());
 
-        state_list_.movej->setupSubscriptions("target_joint_position", false);
         state_list_.movej->setupTrajectorySubscription();
         robot_description_subscription_ = get_node()->create_subscription<std_msgs::msg::String>(
             "/robot_description", rclcpp::QoS(rclcpp::KeepLast(1)).transient_local(),
@@ -491,6 +513,7 @@ namespace basic_joint_controller
                                 }
                                 else
                                 {
+                                    clearPendingTargetPercentPosition();
                                     state_list_.movej->setTargetPosition(target_config);
                                     RCLCPP_INFO(get_node()->get_logger(),
                                                 "Target command received: %d, setting MOVEJ target to configuration %d",
@@ -588,6 +611,7 @@ namespace basic_joint_controller
 	                    }
 	                    else
 	                    {
+	                        clearPendingTargetPercentPosition();
 	                        state_list_.movej->setTargetPosition(target);
 	                        RCLCPP_INFO(get_node()->get_logger(),
 	                                    "target_percent %.1f%% -> interpolated target set (%zu joints)",

@@ -72,6 +72,7 @@ namespace basic_joint_controller
     private:
         std::shared_ptr<FSMState> getNextState(FSMStateName stateName) const;
         void applyPendingTargetPercentPosition();
+        void clearPendingTargetPercentPosition();
 
         // Hardware parameters
         std::string command_prefix_;
@@ -118,6 +119,7 @@ namespace basic_joint_controller
         // ROS subscriptions
         rclcpp::Subscription<std_msgs::msg::Int32>::SharedPtr fsm_command_subscription_;
         rclcpp::Subscription<std_msgs::msg::String>::SharedPtr robot_description_subscription_;
+        rclcpp::Subscription<std_msgs::msg::Float64MultiArray>::SharedPtr target_joint_position_subscription_;
         rclcpp::Subscription<std_msgs::msg::Int32>::SharedPtr target_command_subscription_;
         rclcpp::Subscription<std_msgs::msg::Float64>::SharedPtr target_percent_subscription_;
 
