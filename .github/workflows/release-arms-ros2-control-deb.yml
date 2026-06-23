@@ -109,7 +109,7 @@ jobs:
           apt-get install -y gh
 
       - name: Checkout repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
         with:
           fetch-depth: 0
           submodules: false
@@ -420,7 +420,7 @@ jobs:
 
       - name: Cache rosdep sources
         id: cache-rosdep
-        uses: actions/cache@v4
+        uses: actions/cache@v5
         with:
           path: /home/rosdep/.ros/rosdep/sources.cache
           key: rosdep-${{ runner.os }}-${{ matrix.arch }}-${{ steps.meta.outputs.ros_distro }}-${{ hashFiles('**/package.xml') }}
@@ -760,7 +760,7 @@ jobs:
           echo "No package */src/* sources or .git metadata in deb (rosidl-generated .c/.cpp allowed)."
 
       - name: Upload workflow artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v5
         with:
           name: arms-ros2-control-${{ steps.meta.outputs.version }}-${{ matrix.bundle }}-${{ matrix.arch }}
           path: ${{ steps.meta.outputs.deb_file }}
@@ -869,7 +869,7 @@ jobs:
           echo "common_tag=$common_tag" >> "$GITHUB_OUTPUT"
 
       - name: Download built deb artifacts
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v5
         with:
           pattern: arms-ros2-control-${{ steps.meta.outputs.version }}-*
           merge-multiple: true
