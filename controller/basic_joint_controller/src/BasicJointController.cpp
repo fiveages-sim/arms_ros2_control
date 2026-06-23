@@ -72,8 +72,6 @@ namespace basic_joint_controller
                 RCLCPP_INFO(get_node()->get_logger(), "Switched from %s to %s",
                             current_state_->state_name_string.c_str(), next_state_->state_name_string.c_str());
             }
-
-            applyPendingTargetPercentPosition();
         }
         else if (mode_ == FSMMode::CHANGE)
         {
@@ -84,99 +82,6 @@ namespace basic_joint_controller
         }
 
         return controller_interface::return_type::OK;
-    }
-
-    void BasicJointController::applyPendingTargetPercentPosition()
-    {
-        TargetPercentCommand command;
-        bool has_new_command = false;
-        while (target_percent_command_queue_.pop(command))
-        {
-            has_new_command = true;
-        }
-
-        if (has_new_command)
-        {
-            switch (command.type)
-            {
-            case TargetPercentCommandType::DIRECT_TARGET:
-                active_target_percent_position_size_ = command.size;
-                std::copy_n(command.target.begin(), command.size, active_target_percent_position_.begin());
-                has_active_target_percent_position_ = true;
-                break;
-            case TargetPercentCommandType::CLEAR:
-                active_target_percent_position_size_ = 0;
-                has_active_target_percent_position_ = false;
-                break;
-            case TargetPercentCommandType::NONE:
-                break;
-            }
-        }
-
-        if (!has_active_target_percent_position_)
-        {
-            return;
-        }
-
-        if (!current_state_ || current_state_->state_name != FSMStateName::MOVEJ)
-        {
-            active_target_percent_position_size_ = 0;
-            has_active_target_percent_position_ = false;
-            return;
-        }
-
-        if (active_target_percent_position_size_ != ctrl_interfaces_.joint_position_command_interface_.size())
-        {
-            RCLCPP_WARN(get_node()->get_logger(),
-                        "target_percent direct command size(%zu) != command interfaces size(%zu), ignoring",
-                        active_target_percent_position_size_,
-                        ctrl_interfaces_.joint_position_command_interface_.size());
-            return;
-        }
-
-        for (size_t i = 0; i < active_target_percent_position_size_; ++i)
-        {
-            ctrl_interfaces_.setJointPositionCommand(i, active_target_percent_position_[i]);
-        }
-    }
-
-    void BasicJointController::queueTargetPercentPosition(const std::vector<double>& target)
-    {
-        if (target.size() > MAX_TARGET_PERCENT_JOINTS)
-        {
-            RCLCPP_WARN(get_node()->get_logger(),
-                        "target_percent direct command size(%zu) exceeds max supported joints(%zu), ignoring",
-                        target.size(), MAX_TARGET_PERCENT_JOINTS);
-            return;
-        }
-
-        TargetPercentCommand command;
-        command.type = TargetPercentCommandType::DIRECT_TARGET;
-        command.size = target.size();
-        std::copy(target.begin(), target.end(), command.target.begin());
-        pushTargetPercentCommand(command);
-    }
-
-    void BasicJointController::requestClearTargetPercentPosition()
-    {
-        TargetPercentCommand command;
-        command.type = TargetPercentCommandType::CLEAR;
-        pushTargetPercentCommand(command);
-    }
-
-    void BasicJointController::pushTargetPercentCommand(const TargetPercentCommand& command)
-    {
-        if (target_percent_command_queue_.push(command))
-        {
-            return;
-        }
-
-        TargetPercentCommand dropped;
-        (void)target_percent_command_queue_.pop(dropped);
-        if (!target_percent_command_queue_.push(command))
-        {
-            RCLCPP_WARN(get_node()->get_logger(), "target_percent command queue full, dropping command");
-        }
     }
 
     controller_interface::CallbackReturn BasicJointController::on_init()
@@ -288,7 +193,6 @@ namespace basic_joint_controller
                 std::vector<double> target_pos(msg->data.begin(), msg->data.end());
                 if (!target_pos.empty())
                 {
-                    requestClearTargetPercentPosition();
                     state_list_.movej->setTargetPosition(target_pos);
                 }
             });
@@ -539,27 +443,10 @@ namespace basic_joint_controller
 
                             if (!target_config.empty())
                             {
-                                std::string movej_interpolation_type = get_node()->get_parameter(
-                                    "movej_interpolation_type").as_string();
-                                std::transform(movej_interpolation_type.begin(), movej_interpolation_type.end(),
-                                               movej_interpolation_type.begin(),
-                                               [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
-
-                                if (movej_interpolation_type == "none")
-                                {
-                                    queueTargetPercentPosition(target_config);
-                                    RCLCPP_INFO(get_node()->get_logger(),
-                                                "Target command received: %d, queueing direct target configuration %d",
-                                                msg->data, config_index);
-                                }
-                                else
-                                {
-                                    requestClearTargetPercentPosition();
-                                    state_list_.movej->setTargetPosition(target_config);
-                                    RCLCPP_INFO(get_node()->get_logger(),
-                                                "Target command received: %d, setting MOVEJ target to configuration %d",
-                                                msg->data, config_index);
-                                }
+                                state_list_.movej->setTargetPosition(target_config);
+                                RCLCPP_INFO(get_node()->get_logger(),
+                                            "Target command received: %d, setting MOVEJ target to configuration %d",
+                                            msg->data, config_index);
                             }
                             else
                             {
@@ -628,35 +515,18 @@ namespace basic_joint_controller
                         return;
                     }
 
-	                    // 逐关节线性插值
-	                    std::vector<double> target(close_config.size());
-	                    for (size_t i = 0; i < target.size(); ++i)
-	                    {
-	                        target[i] = close_config[i] + percent * (open_config[i] - close_config[i]);
-	                    }
-	
-	                    std::string movej_interpolation_type = get_node()->get_parameter(
-	                        "movej_interpolation_type").as_string();
-	                    std::transform(movej_interpolation_type.begin(), movej_interpolation_type.end(),
-	                                   movej_interpolation_type.begin(),
-	                                   [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
+                    // 逐关节线性插值
+                    std::vector<double> target(close_config.size());
+                    for (size_t i = 0; i < target.size(); ++i)
+                    {
+                        target[i] = close_config[i] + percent * (open_config[i] - close_config[i]);
+                    }
 
-	                    if (movej_interpolation_type == "none")
-	                    {
-	                        queueTargetPercentPosition(target);
-	                        RCLCPP_DEBUG(get_node()->get_logger(),
-	                                     "target_percent %.1f%% -> direct target queued (%zu joints)",
-	                                     percent * 100.0, target.size());
-	                    }
-	                    else
-	                    {
-	                        requestClearTargetPercentPosition();
-	                        state_list_.movej->setTargetPosition(target);
-	                        RCLCPP_INFO(get_node()->get_logger(),
-	                                    "target_percent %.1f%% -> interpolated target set (%zu joints)",
-	                                    percent * 100.0, target.size());
-	                    }
-	                });
+                    state_list_.movej->setTargetPosition(target);
+                    RCLCPP_INFO(get_node()->get_logger(),
+                                "target_percent %.1f%% -> MOVEJ target set (%zu joints)",
+                                percent * 100.0, target.size());
+                });
 
             RCLCPP_DEBUG(get_node()->get_logger(),
                          "Subscribed to target_percent topic: %s (0.0=close_config[%d], 1.0=open_config[%d])",

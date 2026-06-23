@@ -10,10 +10,8 @@
 #include <unordered_map>
 #include <limits>
 #include <algorithm>
-#include <array>
 
 #include <controller_interface/controller_interface.hpp>
-#include <realtime_tools/lock_free_queue.hpp>
 #include <std_msgs/msg/string.hpp>
 #include <std_msgs/msg/int32.hpp>
 #include <std_msgs/msg/float64.hpp>
@@ -71,28 +69,7 @@ namespace basic_joint_controller
         controller_interface::return_type update(const rclcpp::Time& time, const rclcpp::Duration& period) override;
 
     private:
-        static constexpr size_t MAX_TARGET_PERCENT_JOINTS = 256;
-        static constexpr size_t TARGET_PERCENT_COMMAND_QUEUE_CAPACITY = 32;
-
-        enum class TargetPercentCommandType
-        {
-            NONE,
-            DIRECT_TARGET,
-            CLEAR
-        };
-
-        struct TargetPercentCommand
-        {
-            TargetPercentCommandType type{TargetPercentCommandType::NONE};
-            size_t size{0};
-            std::array<double, MAX_TARGET_PERCENT_JOINTS> target{};
-        };
-
         std::shared_ptr<FSMState> getNextState(FSMStateName stateName) const;
-        void applyPendingTargetPercentPosition();
-        void queueTargetPercentPosition(const std::vector<double>& target);
-        void requestClearTargetPercentPosition();
-        void pushTargetPercentCommand(const TargetPercentCommand& command);
 
         // Hardware parameters
         std::string command_prefix_;
@@ -130,11 +107,6 @@ namespace basic_joint_controller
         bool target_command_enabled_{false};
         int32_t target_command_close_config_{1};
         int32_t target_command_open_config_{0};
-        realtime_tools::LockFreeMPMCQueue<TargetPercentCommand, TARGET_PERCENT_COMMAND_QUEUE_CAPACITY>
-            target_percent_command_queue_;
-        std::array<double, MAX_TARGET_PERCENT_JOINTS> active_target_percent_position_{};
-        size_t active_target_percent_position_size_{0};
-        bool has_active_target_percent_position_{false};
 
         // ROS subscriptions
         rclcpp::Subscription<std_msgs::msg::Int32>::SharedPtr fsm_command_subscription_;
