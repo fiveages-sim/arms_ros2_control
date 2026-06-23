@@ -88,52 +88,95 @@ namespace basic_joint_controller
 
     void BasicJointController::applyPendingTargetPercentPosition()
     {
-        std::vector<double> target;
+        TargetPercentCommand command;
+        bool has_new_command = false;
+        while (target_percent_command_queue_.pop(command))
         {
-            std::lock_guard<std::mutex> lock(target_percent_mutex_);
-            if (has_pending_target_percent_position_)
+            has_new_command = true;
+        }
+
+        if (has_new_command)
+        {
+            switch (command.type)
             {
-                active_target_percent_position_ = pending_target_percent_position_;
+            case TargetPercentCommandType::DIRECT_TARGET:
+                active_target_percent_position_size_ = command.size;
+                std::copy_n(command.target.begin(), command.size, active_target_percent_position_.begin());
                 has_active_target_percent_position_ = true;
-                has_pending_target_percent_position_ = false;
+                break;
+            case TargetPercentCommandType::CLEAR:
+                active_target_percent_position_size_ = 0;
+                has_active_target_percent_position_ = false;
+                break;
+            case TargetPercentCommandType::NONE:
+                break;
             }
+        }
 
-            if (!has_active_target_percent_position_)
-            {
-                return;
-            }
-
-            target = active_target_percent_position_;
+        if (!has_active_target_percent_position_)
+        {
+            return;
         }
 
         if (!current_state_ || current_state_->state_name != FSMStateName::MOVEJ)
         {
-            std::lock_guard<std::mutex> lock(target_percent_mutex_);
+            active_target_percent_position_size_ = 0;
             has_active_target_percent_position_ = false;
             return;
         }
 
-        if (target.size() != ctrl_interfaces_.joint_position_command_interface_.size())
+        if (active_target_percent_position_size_ != ctrl_interfaces_.joint_position_command_interface_.size())
         {
             RCLCPP_WARN(get_node()->get_logger(),
                         "target_percent direct command size(%zu) != command interfaces size(%zu), ignoring",
-                        target.size(), ctrl_interfaces_.joint_position_command_interface_.size());
+                        active_target_percent_position_size_,
+                        ctrl_interfaces_.joint_position_command_interface_.size());
             return;
         }
 
-        for (size_t i = 0; i < target.size(); ++i)
+        for (size_t i = 0; i < active_target_percent_position_size_; ++i)
         {
-            ctrl_interfaces_.setJointPositionCommand(i, target[i]);
+            ctrl_interfaces_.setJointPositionCommand(i, active_target_percent_position_[i]);
         }
     }
 
-    void BasicJointController::clearPendingTargetPercentPosition()
+    void BasicJointController::queueTargetPercentPosition(const std::vector<double>& target)
     {
-        std::lock_guard<std::mutex> lock(target_percent_mutex_);
-        has_pending_target_percent_position_ = false;
-        has_active_target_percent_position_ = false;
-        pending_target_percent_position_.clear();
-        active_target_percent_position_.clear();
+        if (target.size() > MAX_TARGET_PERCENT_JOINTS)
+        {
+            RCLCPP_WARN(get_node()->get_logger(),
+                        "target_percent direct command size(%zu) exceeds max supported joints(%zu), ignoring",
+                        target.size(), MAX_TARGET_PERCENT_JOINTS);
+            return;
+        }
+
+        TargetPercentCommand command;
+        command.type = TargetPercentCommandType::DIRECT_TARGET;
+        command.size = target.size();
+        std::copy(target.begin(), target.end(), command.target.begin());
+        pushTargetPercentCommand(command);
+    }
+
+    void BasicJointController::requestClearTargetPercentPosition()
+    {
+        TargetPercentCommand command;
+        command.type = TargetPercentCommandType::CLEAR;
+        pushTargetPercentCommand(command);
+    }
+
+    void BasicJointController::pushTargetPercentCommand(const TargetPercentCommand& command)
+    {
+        if (target_percent_command_queue_.push(command))
+        {
+            return;
+        }
+
+        TargetPercentCommand dropped;
+        (void)target_percent_command_queue_.pop(dropped);
+        if (!target_percent_command_queue_.push(command))
+        {
+            RCLCPP_WARN(get_node()->get_logger(), "target_percent command queue full, dropping command");
+        }
     }
 
     controller_interface::CallbackReturn BasicJointController::on_init()
@@ -245,7 +288,7 @@ namespace basic_joint_controller
                 std::vector<double> target_pos(msg->data.begin(), msg->data.end());
                 if (!target_pos.empty())
                 {
-                    clearPendingTargetPercentPosition();
+                    requestClearTargetPercentPosition();
                     state_list_.movej->setTargetPosition(target_pos);
                 }
             });
@@ -504,16 +547,14 @@ namespace basic_joint_controller
 
                                 if (movej_interpolation_type == "none")
                                 {
-                                    std::lock_guard<std::mutex> lock(target_percent_mutex_);
-                                    pending_target_percent_position_ = target_config;
-                                    has_pending_target_percent_position_ = true;
+                                    queueTargetPercentPosition(target_config);
                                     RCLCPP_INFO(get_node()->get_logger(),
                                                 "Target command received: %d, queueing direct target configuration %d",
                                                 msg->data, config_index);
                                 }
                                 else
                                 {
-                                    clearPendingTargetPercentPosition();
+                                    requestClearTargetPercentPosition();
                                     state_list_.movej->setTargetPosition(target_config);
                                     RCLCPP_INFO(get_node()->get_logger(),
                                                 "Target command received: %d, setting MOVEJ target to configuration %d",
@@ -602,16 +643,14 @@ namespace basic_joint_controller
 
 	                    if (movej_interpolation_type == "none")
 	                    {
-	                        std::lock_guard<std::mutex> lock(target_percent_mutex_);
-	                        pending_target_percent_position_ = target;
-	                        has_pending_target_percent_position_ = true;
+	                        queueTargetPercentPosition(target);
 	                        RCLCPP_DEBUG(get_node()->get_logger(),
 	                                     "target_percent %.1f%% -> direct target queued (%zu joints)",
 	                                     percent * 100.0, target.size());
 	                    }
 	                    else
 	                    {
-	                        clearPendingTargetPercentPosition();
+	                        requestClearTargetPercentPosition();
 	                        state_list_.movej->setTargetPosition(target);
 	                        RCLCPP_INFO(get_node()->get_logger(),
 	                                    "target_percent %.1f%% -> interpolated target set (%zu joints)",
