@@ -158,6 +158,36 @@ namespace gripper_hardware_common
         }
 
         /**
+         * @brief Jodell ERG32-150 (rotate + grip, parameterized Modbus)
+         * Manual V1.6: FC03 read @0x07D0, FC16 write @0x03E8+
+         */
+        namespace ERG32
+        {
+            static constexpr uint8_t SLAVE_ADDRESS = 0x09;
+            static constexpr uint8_t SLAVE_ID = SLAVE_ADDRESS;
+            static constexpr uint8_t READ_FUNCTION = 0x03;
+            static constexpr uint8_t WRITE_FUNCTION = 0x10;
+
+            static constexpr uint16_t GRIP_CTRL_REG = 0x03E8;
+            static constexpr uint16_t ROTATE_CTRL_REG = 0x03E9;
+            /// FC16 activation block: 0x03E8 grip rACT + 0x03E9 rotate rACT (consecutive).
+            static constexpr uint16_t CTRL_REG_BASE = GRIP_CTRL_REG;
+            static constexpr int CTRL_REG_COUNT = 2;
+            static constexpr uint16_t GRIP_PARAM_REG = 0x03EA;
+            static constexpr uint16_t ROTATE_ABS_POS_REG = 0x03EC;
+            static constexpr uint16_t ROTATE_PARAM_REG = 0x03ED;
+            static constexpr uint16_t ROTATE_TRIGGER_REG = 0x03EF;
+
+            static constexpr uint16_t STATUS_REG_ADDR = 0x07D0;
+            static constexpr int STATUS_REG_COUNT = 8;
+
+            static constexpr uint16_t ACTIVATE_VALUE = 0x0001;
+            static constexpr uint16_t DEACTIVATE_VALUE = 0x0000;
+            static constexpr uint8_t GRIP_TRIGGER = 0x01;
+            static constexpr uint8_t ROTATE_ABS_TRIGGER = 0x01;
+        }
+
+        /**
          * @brief LinkerHand dexterous hand Modbus configuration namespace
          * 
          * Contains Modbus protocol configurations for different LinkerHand models:
