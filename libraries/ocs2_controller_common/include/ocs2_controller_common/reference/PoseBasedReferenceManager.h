@@ -22,6 +22,7 @@
 #include <rclcpp/rclcpp.hpp>
 #include <rclcpp_lifecycle/lifecycle_node.hpp>
 #include <string>
+#include <vector>
 #include <tf2_ros/buffer.hpp>
 #include <tf2_ros/transform_listener.hpp>
 
@@ -94,6 +95,13 @@ private:
     void processPoseStamped(const geometry_msgs::msg::PoseStamped::SharedPtr& msg,
                             std::function<void(geometry_msgs::msg::Pose::SharedPtr)> callback);
 
+    /** 将 PoseStamped 转为控制器内部 7 维位姿状态 [x,y,z,qx,qy,qz,qw]。
+     * 若 header.frame_id 与 base_frame_ 不同，先通过 TF 变换到 base_frame_ 再转换。
+     * tag 用于转换失败时的日志标识；成功返回 true，TF 失败返回 false。 */
+    [[nodiscard]] bool parsePoseStampedToState(const geometry_msgs::msg::PoseStamped& pose_stamped,
+                                               const char* tag,
+                                               vector_t& out_state) const;
+
     void publishCurrentTargets(const std::string& arm_type = "");
 
     /** Wheel-humanoid COUPLED: after updating one arm target, set the other from captured relative pose (matches WheelHumanoidTargetNode). */
@@ -124,6 +132,35 @@ private:
 
     rclcpp_lifecycle::LifecycleNode::SharedPtr node_;
     rclcpp::Logger logger_{rclcpp::get_logger("PoseBasedReferenceManager")};
+
+    struct ArmReferenceBuffer {
+        double startTime{0.0};
+        double duration{0.0};
+        std::vector<vector_t> path;
+    };
+
+    ArmReferenceBuffer left_arm_reference_buffer_;
+    ArmReferenceBuffer right_arm_reference_buffer_;
+
+    /** 在两点 7 维位姿 [x,y,z,qx,qy,qz,qw] 之间插值；alpha∈[0,1] 时位置线性插值，姿态四元数 slerp（最短路径）。 */
+    static vector_t interpolatePose7(const vector_t& start, const vector_t& goal, double alpha);
+    /** 按归一化进度 alpha∈[0,1] 在 7 维位姿路径上均匀分段采样；段内调用 interpolatePose7。 */
+    static vector_t samplePose7Path(const std::vector<vector_t>& path, double alpha);
+
+    void resetArmReferenceBuffer(ArmReferenceBuffer& buffer, const vector_t& pose, double time);
+    /** 用 execute_path 的 waypoints 覆盖单臂 reference buffer（waypoints 不含起点）。
+     *  若旧 buffer 在 start_time 仍有效，起点从旧轨迹采样；否则使用 fallback_start_pose。
+     *  写入 path = [start_pose, ...waypoints]，并设置 start_time 与 duration。 */
+    void setArmReferenceBufferFromWaypoints(ArmReferenceBuffer& buffer,
+                                            const vector_t& fallback_start_pose,
+                                            const std::vector<vector_t>& waypoints,
+                                            double start_time,
+                                            double duration);
+    [[nodiscard]] vector_t sampleArmReferenceBuffer(const ArmReferenceBuffer& buffer,
+                                                    const vector_t& fallback_pose,
+                                                    double time) const;
+    [[nodiscard]] bool isArmReferenceBufferActive(const ArmReferenceBuffer& buffer, double time) const;
+    void rebuildTargetTrajectoriesFromArmReferenceBuffers(double start_time, double end_time);
 
     SystemObservation current_observation_;
     vector_t left_target_state_;
