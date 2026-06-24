@@ -1,8 +1,56 @@
 # arms_ros2_control Debian 发布说明
 
-仅在 **本仓库（fiveages-sim/arms_ros2_control）** 打 `v*` tag 或手动触发：
+Workflow：[`.github/workflows/release-arms-ros2-control-deb.yml`](.github/workflows/release-arms-ros2-control-deb.yml)
 
-[`.github/workflows/release-arms-ros2-control-deb.yml`](.github/workflows/release-arms-ros2-control-deb.yml)
+## Pre-release 与版本号
+
+### 触发与依赖
+
+| 触发 | Arms 产物 | common / ocs2 依赖 |
+|------|-----------|-------------------|
+| PR 合并进 `main` | 更新唯一 rolling Release **`pre-release`** | 优先各仓库的 **`pre-release`**；不存在则回退 **latest 正式版** |
+| 打 `v*` tag 或 `workflow_dispatch` | 正式 Release | **仅** latest 正式版（不使用依赖仓的 pre-release） |
+| PR 关闭未合并 | 不构建 | — |
+
+每次 PR 合并会**覆盖** `pre-release` 上的资产；历史 pre-release 会在发布时自动清理。
+
+### 版本号规则
+
+Arms 有 **两层标识**：GitHub Release 的 **tag** 与 deb 包内的 **Version** 字段。
+
+**Pre-release（PR 合并进 main）**
+
+| 项目 | 规则 | 示例 |
+|------|------|------|
+| GitHub Release tag | 固定 `pre-release` | `pre-release` |
+| deb `Version` | latest **正式版** tag 的 minor +1，再加 `~main.` + 合并 commit 短 SHA（7 位） | latest 为 `v1.4.0` → `1.5.0~main.7b73a8b` |
+| deb 文件名 | `{包名}_{Version}_{arch}.deb` | `ros-jazzy-arms-ros2-control_1.5.0~main.7b73a8b_amd64.deb` |
+
+- 读取 `gh release view` / GitHub API 的 **latest 正式版**（不含 `pre-release`）
+- 解析 `X.Y.Z` 后将 **次版本 Y +1**，patch 归零（`1.4.0` → `1.5.0`）
+- 若尚无正式 release，则对 `libraries/arms_controller_common/package.xml` 中的版本做同样 minor +1；再无则自 `0.1.0` 起
+- `standard` 与 `full` 两个 bundle **共用同一 deb Version**，仅包名前缀不同
+- `~main.` + 短 SHA 区分每次合并构建（不用 `+`，避免下载 pattern 问题）
+
+**正式 Release（打 `v*` tag）**
+
+| 项目 | 规则 | 示例 |
+|------|------|------|
+| GitHub Release tag | git tag | `v2.0.0` |
+| deb `Version` | tag 去 `v`，`-` 转 `~` | `2.0.0` |
+
+### 安装示例
+
+```bash
+# pre-release（rolling）
+gh release download pre-release --repo fiveages-sim/arms_ros2_control --pattern 'ros-jazzy-arms-ros2-control_*_amd64.deb'
+sudo dpkg -i ros-jazzy-arms-ros2-control_1.5.0~main.7b73a8b_amd64.deb
+# 另需与构建时相同来源的 ocs2 / common deb（workflow 日志中的 ocs2_tag / common_tag）
+
+# 正式版
+gh release download v2.0.0 --repo fiveages-sim/arms_ros2_control --pattern '*_amd64.deb'
+sudo dpkg -i ros-jazzy-arms-ros2-control_2.0.0_amd64.deb
+```
 
 ## 发布的包（仅此两种）
 
@@ -12,13 +60,6 @@
 | `ros-jazzy-arms-ros2-control-full` | 上表 + `gripper_hardware_common` + `marvin_ros2_control` + `modbus_ros2_control` + `can_ros2_control` + `juxie_ros2_control` + `rokae_ros2_control`（amd64 + arm64） |
 
 运行时依赖：`ros-jazzy-ocs2`、`ros-jazzy-robot-descriptions-common`（旧 OCS2 包名见 `ros-jazzy-ocs2` 的 `Provides` 字段）。
-
-安装示例：
-
-```bash
-sudo dpkg -i ros-jazzy-arms-ros2-control-full_<version>_<arch>.deb
-# 另需同 tag 的 ocs2 / robot_descriptions 依赖 deb（workflow 文档中的外部 Release）
-```
 
 ## 已退役的独立 deb（请勿再打 tag）
 
