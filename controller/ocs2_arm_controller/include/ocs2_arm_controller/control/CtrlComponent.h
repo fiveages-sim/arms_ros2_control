@@ -60,7 +60,6 @@ namespace ocs2::mobile_manipulator
             hardware_latency_ = auto_declare("hardware_latency", 0.2);
 
             robot_name_ = auto_declare("robot_name", std::string("cr5"));
-            robot_type_ = auto_declare("robot_type", std::string(""));
             planning_urdf_variant_ = auto_declare("planning_urdf_variant", std::string(""));
             planning_urdf_path_ = auto_declare("planning_urdf_path", std::string(""));
             future_time_offset_ = auto_declare("future_time_offset", 1.0);
@@ -188,7 +187,6 @@ namespace ocs2::mobile_manipulator
 
         // Configuration
         std::string robot_name_;
-        std::string robot_type_; // Robot type/variant (e.g., red, blue, long_arm, short_arm, etc.)
         std::string planning_urdf_variant_; // must be "xacro"
         std::string planning_urdf_path_; // xacro-generated URDF cache path
         std::vector<std::string> joint_names_;

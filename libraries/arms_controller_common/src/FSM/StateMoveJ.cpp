@@ -617,6 +617,34 @@ namespace arms_controller_common
             maintainCommandFromLastSent();
             return;
         }
+        else if (interpolation_type_ == InterpolationType::NONE)
+        {
+            if (hold_positions_.size() != ctrl_interfaces_.joint_position_command_interface_.size())
+            {
+                refreshHoldPositions();
+            }
+
+            for (size_t i = 0; i < ctrl_interfaces_.joint_position_command_interface_.size() &&
+                 i < target_pos_.size(); ++i)
+            {
+                double position_to_set = target_pos_[i];
+                if (use_prefix_filter_ && i < joint_mask_.size() && !joint_mask_[i])
+                {
+                    position_to_set = (i < hold_positions_.size())
+                                          ? hold_positions_[i]
+                                          : ((i < start_pos_.size()) ? start_pos_[i] : 0.0);
+                }
+                ctrl_interfaces_.setJointPositionCommand(i, position_to_set);
+            }
+
+            refreshHoldPositions();
+            target_pos_ = ctrl_interfaces_.last_sent_joint_positions_;
+            start_pos_ = target_pos_;
+            has_target_ = false;
+            interpolation_active_ = false;
+            trajectory_manager_.reset();
+            return;
+        }
         else if (!interpolation_active_)
         {
             start_pos_.clear();
@@ -783,6 +811,15 @@ namespace arms_controller_common
                 has_target_ = false;
                 finishJointTrajectoryAction(true, false, "Joint trajectory completed successfully");
             }
+        }
+        else if (trajectory_manager_.isCompleted())
+        {
+            refreshHoldPositions();
+            target_pos_ = ctrl_interfaces_.last_sent_joint_positions_;
+            start_pos_ = target_pos_;
+            trajectory_manager_.reset();
+            interpolation_active_ = false;
+            has_target_ = false;
         }
 
         // In force control mode, calculate static torques

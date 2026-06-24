@@ -91,9 +91,17 @@ namespace arms_controller_common
                 }
                 else
                 {
+                    size_t num_joints = ctrl_interfaces_.joint_position_state_interface_.size();
+                    hold_positions_.resize(num_joints);
+                    for (size_t i = 0; i < num_joints; ++i)
+                    {
+                        auto value = ctrl_interfaces_.joint_position_state_interface_[i].get().get_optional();
+                        hold_positions_[i] = value.value_or(0.0);
+                    }
+                    first_threshold_check_passed_ = true;
                     RCLCPP_WARN_THROTTLE(node_->get_logger(), *node_->get_clock(), 1000,
                                        "HOLD state: first threshold check failed (max diff: %.4f rad > first check threshold: %.4f rad). "
-                                       "Waiting for threshold to be satisfied before enabling automatic adjustment.",
+                                       "Updating hold positions to current positions to avoid a startup jump.",
                                        max_diff, first_check_position_threshold_);
                 }
             }
