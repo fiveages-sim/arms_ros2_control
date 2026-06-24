@@ -17,31 +17,35 @@ def launch_setup(context, *args, **kwargs):
     direction = context.launch_configurations.get('direction', '1')
     hardware = context.launch_configurations.get('hardware', 'mock_components')
     world = context.launch_configurations.get('world', 'dart')
-
     # 基本参数
     use_sim_time = hardware in ['gz', 'isaac']
 
     # 显示手部配置信息
     hand_side = "left" if direction == "1" else "right"
-    modbus_id = "0x28" if direction == "1" else "0x27"
+    if hand_name == "freedom":
+        modbus_id = "0" if direction == "1" else "1"
+    elif hand_name == "inspire":
+        modbus_id = "2" if direction == "1" else "1"
+    else:
+        modbus_id = "0x28" if direction == "1" else "0x27"
     print(f"[INFO] Hand configuration: {hand_side} hand (direction={direction}, Modbus ID={modbus_id})")
 
     # 生成 ros2_control robot_description
     # 对于灵巧手，直接处理 hand.xacro 文件
     hand_pkg_name = f"{hand_name}_description"
     hand_pkg_path = get_package_share_directory(hand_pkg_name)
-    
+
     if hand_pkg_path is None:
         print(f"[ERROR] Cannot find package '{hand_pkg_name}'")
         return []
-    
+
     # 查找 ros2_control/hand.xacro 文件
     hand_xacro_path = os.path.join(hand_pkg_path, 'xacro', 'ros2_control', 'hand.xacro')
-    
+
     if not os.path.exists(hand_xacro_path):
         print(f"[ERROR] Hand xacro file not found: {hand_xacro_path}")
         return []
-    
+
     # 构建 xacro mappings
     mappings = {
         'ros2_control_hardware_type': hardware,
@@ -50,11 +54,11 @@ def launch_setup(context, *args, **kwargs):
         mappings["type"] = hand_type
     if direction and direction.strip():
         mappings["direction"] = direction
-    
+
     # 如果是 Gazebo 模式，添加 gazebo 映射
     if hardware == 'gz':
         mappings['gazebo'] = 'true'
-    
+
     # 处理 xacro 文件
     try:
         robot_description_config = xacro.process_file(hand_xacro_path, mappings=mappings)
@@ -87,27 +91,27 @@ def launch_setup(context, *args, **kwargs):
     if ros2_controllers_path is None:
         print(f"[ERROR] Controllers config file not found for hand '{hand_name}'")
         return []
-    
+
     # 利用 load_robot_config 已经处理过的结果来判断是否使用了 type-specific 配置
     # load_robot_config 已经处理了回退逻辑，返回的路径就是最终使用的配置文件路径
     # 只要不是默认配置文件名（ros2_controllers.yaml），就说明使用了 type-specific 配置
     config_filename = os.path.basename(ros2_controllers_path)
     default_config_filename = "ros2_controllers.yaml"
     is_type_specific_config = (config_filename != default_config_filename)
-    
+
     # 构建参数列表
     node_parameters = [
         ros2_controllers_path,
         {'use_sim_time': use_sim_time},
     ]
-    
+
     # 如果使用了 type-specific 配置，可以在这里添加额外的参数处理逻辑
     # 例如，如果配置文件中没有 type 参数，可以传递 launch 参数中的 type
     if is_type_specific_config:
         print(f"[INFO] Using type-specific config file: {config_filename}")
     else:
         print(f"[INFO] Using default config file: {config_filename}")
-    
+
     ros2_control_node = Node(
         package="controller_manager",
         executable="ros2_control_node",
@@ -153,19 +157,19 @@ def launch_setup(context, *args, **kwargs):
             get_package_share_directory("basic_joint_controller"), "config",
         )
         rviz_full_config = os.path.join(rviz_base, "hand.rviz")
-        
+
         # 检查配置文件是否存在，如果不存在则使用默认配置或跳过
         if not os.path.exists(rviz_full_config):
             print(f"[WARN] RViz config file not found: {rviz_full_config}, skipping RViz")
         else:
             # 准备 RViz 参数
             rviz_parameters = [{'use_sim_time': use_sim_time}]
-            
+
             # Add joint_controllers parameter for JointControlPanel
             # 设置默认的控制器名称，这样 joint_control_panel 就能正确找到 topic
             rviz_parameters.append({'joint_controllers': ['hand_joint_controller']})
             print(rviz_parameters)
-            
+
             rviz_node = Node(
                 package="rviz2",
                 executable="rviz2",

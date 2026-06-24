@@ -12,6 +12,33 @@
 
 namespace gripper_hardware_common
 {
+    namespace detail
+    {
+        /** @brief 0=关/1=开 归一化 ↔ 0~max Modbus；Inverted 时 0=开、max=关（90 系列） */
+        enum class ChangingtekRangeDirection { Linear, Inverted };
+
+        template<ChangingtekRangeDirection Dir>
+        struct ChangingtekRangeConverter
+        {
+            static uint16_t normalizedToModbus(double normalized, uint16_t max_position)
+            {
+                normalized = std::clamp(normalized, 0.0, 1.0);
+                if constexpr (Dir == ChangingtekRangeDirection::Inverted)
+                    return static_cast<uint16_t>((1.0 - normalized) * max_position);
+                return static_cast<uint16_t>(normalized * max_position);
+            }
+
+            static double modbusToNormalized(uint32_t modbus_pos, uint16_t max_position)
+            {
+                if (modbus_pos > max_position)
+                    modbus_pos = max_position;
+                if constexpr (Dir == ChangingtekRangeDirection::Inverted)
+                    return std::clamp(1.0 - static_cast<double>(modbus_pos) / max_position, 0.0, 1.0);
+                return std::clamp(static_cast<double>(modbus_pos) / max_position, 0.0, 1.0);
+            }
+        };
+    }
+
     /**
      * @brief Position conversion utilities for different gripper types
      * 
