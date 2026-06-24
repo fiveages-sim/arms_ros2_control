@@ -318,14 +318,6 @@ namespace gripper_hardware_common
                 static constexpr double RING_JOINT_LOWER = 0.0, RING_JOINT_UPPER = 1.0;
                 static constexpr double PINKY_JOINT_LOWER = 0.0, PINKY_JOINT_UPPER = 1.0;
             };
-            struct InspireE2 {
-                static constexpr double THUMB_JOINT1_LOWER = 0.0, THUMB_JOINT1_UPPER = 1.0;
-                static constexpr double THUMB_JOINT2_LOWER = 0.0, THUMB_JOINT2_UPPER = 1.0;
-                static constexpr double INDEX_JOINT_LOWER = 0.0, INDEX_JOINT_UPPER = 1.0;
-                static constexpr double MIDDLE_JOINT_LOWER = 0.0, MIDDLE_JOINT_UPPER = 1.0;
-                static constexpr double RING_JOINT_LOWER = 0.0, RING_JOINT_UPPER = 1.0;
-                static constexpr double PINKY_JOINT_LOWER = 0.0, PINKY_JOINT_UPPER = 1.0;
-            };
         }
     }
 } // namespace gripper_hardware_common

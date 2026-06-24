@@ -1,6 +1,6 @@
 # Sole release path for arms_ros2_control. See README.deb.md.
 #   ros-jazzy-arms-ros2-control       — WBC stack + topic_based_ros2_control (amd64 + arm64)
-#   ros-jazzy-arms-ros2-control-full  — WBC + topic_based_ros2_control + gripper_hardware_common + marvin + modbus + juxie + rokae (amd64 + arm64)
+#   ros-jazzy-arms-ros2-control-full  — WBC + topic_based_ros2_control + gripper_hardware_common + marvin + modbus + can + juxie + rokae (amd64 + arm64)
 # Retired: standalone gripper / per-hardware debs / arms-ros2-control-jazzy-wbc.
 # Requires PRIVATE_SUBMODULES_TOKEN (selective submodule init; never submodules: recursive). Debs: install only, no .cpp.
 
@@ -152,6 +152,7 @@ jobs:
           if [[ "${BUNDLE}" == "full" ]]; then
             check_pat_repo_read "marvin-ros2-control"
             check_pat_repo_read "modbus-ros2-control"
+            check_pat_repo_read "can-ros2-control"
             check_pat_repo_read "juxie-ros2-control"
             check_pat_repo_read "rokae-ros2-control"
             check_pat_repo_read "TJ_FX_ROBOT_CONTRL_SDK"
@@ -223,6 +224,7 @@ jobs:
           full_hw_paths=(
             hardwares/marvin_ros2_control
             hardwares/modbus_ros2_control
+            hardwares/can_ros2_control
             hardwares/juxie_ros2_control
             hardwares/rokae_ros2_control
           )
@@ -266,6 +268,7 @@ jobs:
               libraries/gripper_hardware_common/package.xml \
               hardwares/marvin_ros2_control/package.xml \
               hardwares/modbus_ros2_control/package.xml \
+              hardwares/can_ros2_control/package.xml \
               hardwares/juxie_ros2_control/package.xml \
               hardwares/rokae_ros2_control/package.xml; do
               if [[ ! -f "${ws}/${p}" ]]; then
@@ -585,6 +588,7 @@ jobs:
             rsync -a "${ws}/libraries/gripper_hardware_common/" "${source_root}/gripper_hardware_common/"
             rsync -a "${ws}/hardwares/marvin_ros2_control/" "${source_root}/marvin_ros2_control/"
             rsync -a "${ws}/hardwares/modbus_ros2_control/" "${source_root}/modbus_ros2_control/"
+            rsync -a "${ws}/hardwares/can_ros2_control/" "${source_root}/can_ros2_control/"
             rsync -a "${ws}/hardwares/juxie_ros2_control/" "${source_root}/juxie_ros2_control/"
             rsync -a "${ws}/hardwares/rokae_ros2_control/" "${source_root}/rokae_ros2_control/"
           fi
@@ -674,7 +678,7 @@ jobs:
             exit 1
           fi
           if [[ "${{ matrix.bundle }}" == "full" ]]; then
-            for pkg in gripper_hardware_common marvin_ros2_control modbus_ros2_control juxie_ros2_control rokae_ros2_control; do
+            for pkg in gripper_hardware_common marvin_ros2_control modbus_ros2_control can_ros2_control juxie_ros2_control rokae_ros2_control; do
               if [[ ! -d "${install_root}/share/${pkg}" ]]; then
                 echo "${pkg} was not installed into the package root." >&2
                 exit 1
@@ -703,7 +707,7 @@ jobs:
 
           if [[ "${BUNDLE}" == "full" ]]; then
             deb_description="Prebuilt arms_ros2_control full bundle for ROS 2 ${ROS_DISTRO}
-             Includes WBC stack (lina_planning, ocs2_humanoid, ocs2_wbc_controller), topic_based_ros2_control, plus gripper_hardware_common, marvin_ros2_control, modbus_ros2_control, juxie_ros2_control, rokae_ros2_control. Installed into ${INSTALL_PREFIX} without shared prefix setup files."
+             Includes WBC stack (lina_planning, ocs2_humanoid, ocs2_wbc_controller), topic_based_ros2_control, plus gripper_hardware_common, marvin_ros2_control, modbus_ros2_control, can_ros2_control, juxie_ros2_control, rokae_ros2_control. Installed into ${INSTALL_PREFIX} without shared prefix setup files."
           else
             deb_description="Prebuilt arms_ros2_control WBC bundle for ROS 2 ${ROS_DISTRO}
              Includes command, controllers, arms_controller_common, ocs2_controller_common, lina_planning, ocs2_humanoid, ocs2_wbc_controller, topic_based_ros2_control. Installed into ${INSTALL_PREFIX} without shared prefix setup files."
@@ -1106,6 +1110,7 @@ jobs:
                   "gripper_hardware_common",
                   "marvin_ros2_control",
                   "modbus_ros2_control",
+                  "can_ros2_control",
                   "juxie_ros2_control",
                   "rokae_ros2_control",
               ])
@@ -1152,6 +1157,7 @@ jobs:
           find_package(gripper_hardware_common REQUIRED)
           find_package(marvin_ros2_control REQUIRED)
           find_package(modbus_ros2_control REQUIRED)
+          find_package(can_ros2_control REQUIRED)
           find_package(juxie_ros2_control REQUIRED)
           find_package(rokae_ros2_control REQUIRED)
           EOF
