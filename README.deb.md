@@ -23,8 +23,8 @@ Arms 有 **两层标识**：GitHub Release 的 **tag** 与 deb 包内的 **Versi
 | 项目 | 规则 | 示例 |
 |------|------|------|
 | GitHub Release tag | 固定 `pre-release` | `pre-release` |
-| deb `Version` | latest 正式版基础上 **patch 累加** + `~main.` + 短 SHA | latest `v1.4.0`：第 1/2/3 次 → `1.4.1` / `1.4.2` / `1.4.3` |
-| deb 文件名 | `{包名}_{Version}_{arch}.deb` | `ros-jazzy-arms-ros2-control_1.4.2~main.7b73a8b_amd64.deb` |
+| deb `Version`（control 字段） | latest 正式版基础上 **patch 累加** + `~main.` + 短 SHA | latest `v1.4.0`：第 1/2/3 次 → `1.4.1` / `1.4.2` / `1.4.3` |
+| deb 文件名（Release 资产） | `{包名}_{Version}_{arch}.deb`；GitHub 上传时 `~` 会变为 `.` | `ros-jazzy-arms-ros2-control_1.4.2.main.7b73a8b_amd64.deb` |
 
 - 读取 **latest 正式版**；从现有 `pre-release` 的 deb 资产解析上一次基础版本
 - **对齐**（`major.minor` 与 latest 一致）：在上一次 patch +1（`1.4.1` → `1.4.2`）
@@ -45,7 +45,7 @@ Arms 有 **两层标识**：GitHub Release 的 **tag** 与 deb 包内的 **Versi
 ```bash
 # pre-release（rolling）
 gh release download pre-release --repo fiveages-sim/arms_ros2_control --pattern 'ros-jazzy-arms-ros2-control_*_amd64.deb'
-sudo dpkg -i ros-jazzy-arms-ros2-control_1.4.2~main.7b73a8b_amd64.deb
+sudo dpkg -i ros-jazzy-arms-ros2-control_1.4.2.main.7b73a8b_amd64.deb
 # 另需与构建时相同来源的 ocs2 / common deb（workflow 日志中的 ocs2_tag / common_tag）
 
 # 正式版

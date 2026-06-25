@@ -429,7 +429,9 @@ jobs:
             echo "Requested: ${ros_distro}" >&2
             exit 1
           fi
-          deb_file="${DEB_PREFIX}_${version}_${DEB_ARCH}.deb"
+          # GitHub Release rewrites "~" to "." in uploaded asset filenames.
+          deb_file_version="${version//~/.}"
+          deb_file="${DEB_PREFIX}_${deb_file_version}_${DEB_ARCH}.deb"
 
           ocs2_tag="$(resolve_dependency_release_tag_with_prerelease \
             "${INPUT_OCS2_TAG:-}" \
@@ -1123,7 +1125,8 @@ jobs:
           echo "common_tag=${COMMON_TAG}" >> "$GITHUB_OUTPUT"
           echo "deb_arch=${DEB_ARCH}" >> "$GITHUB_OUTPUT"
           echo "bundle=${BUNDLE}" >> "$GITHUB_OUTPUT"
-          echo "deb_file=${DEB_PREFIX}_${VERSION}_${DEB_ARCH}.deb" >> "$GITHUB_OUTPUT"
+          deb_file_version="${VERSION//~/.}"
+          echo "deb_file=${DEB_PREFIX}_${deb_file_version}_${DEB_ARCH}.deb" >> "$GITHUB_OUTPUT"
 
       - name: Install verification tools
         shell: bash

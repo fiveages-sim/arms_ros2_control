@@ -69,19 +69,28 @@ def main():
         latest = (0, 0, 0)
         print(f"No formal release on {repo}; starting from 0.0.1 base.", file=sys.stderr)
 
+    # GitHub Release asset names store "~" as "." (e.g. 1.4.1.main.sha, not 1.4.1~main.sha).
+    prerelease_base_re = re.compile(r"_(\d+\.\d+\.\d+)[~.]main\.")
+
     prev = None
+    prev_name = ""
     pr_data = api_get(f"https://api.github.com/repos/{repo}/releases/tags/{prerelease_tag}", token)
     if pr_data:
         for asset in pr_data.get("assets", []):
             name = asset.get("name", "")
-            match = re.search(r"_(\d+\.\d+\.\d+)~main\.", name)
-            if match:
-                prev = parse_triplet(match.group(1))
-                print(
-                    f"Previous pre-release deb base from {name}: {format_triplet(prev)}",
-                    file=sys.stderr,
-                )
-                break
+            match = prerelease_base_re.search(name)
+            if not match:
+                continue
+            candidate = parse_triplet(match.group(1))
+            if prev is None or candidate > prev:
+                prev = candidate
+                prev_name = name
+
+        if prev is not None:
+            print(
+                f"Previous pre-release deb base from {prev_name}: {format_triplet(prev)}",
+                file=sys.stderr,
+            )
 
     if prev is None:
         nxt = (latest[0], latest[1], latest[2] + 1)
