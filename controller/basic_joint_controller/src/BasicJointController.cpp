@@ -135,12 +135,30 @@ namespace basic_joint_controller
             target_command_enabled_ = auto_declare<bool>("target_command_enabled", false);
             target_command_close_config_ = auto_declare<int32_t>("target_command_close_config", 1);
             target_command_open_config_ = auto_declare<int32_t>("target_command_open_config", 0);
+            target_command_hold_joint_names_ =
+                auto_declare<std::vector<std::string>>("target_command_hold_joints", {});
+            buildTargetCommandHoldMask();
 
             if (target_command_enabled_)
             {
                 RCLCPP_INFO(get_node()->get_logger(),
                             "Target command enabled: close_config=%d, open_config=%d",
                             target_command_close_config_, target_command_open_config_);
+                if (!target_command_hold_joint_names_.empty())
+                {
+                    std::string held;
+                    for (const auto& joint_name : target_command_hold_joint_names_)
+                    {
+                        if (!held.empty())
+                        {
+                            held += ", ";
+                        }
+                        held += joint_name;
+                    }
+                    RCLCPP_INFO(get_node()->get_logger(),
+                                "Target command hold joints (unchanged by switch/percent): %s",
+                                held.c_str());
+                }
             }
 
             // 读取腰部升降配置
@@ -443,6 +461,7 @@ namespace basic_joint_controller
 
                             if (!target_config.empty())
                             {
+                                applyTargetCommandHoldOverrides(target_config);
                                 state_list_.movej->setTargetPosition(target_config);
                                 RCLCPP_INFO(get_node()->get_logger(),
                                             "Target command received: %d, setting MOVEJ target to configuration %d",
@@ -522,6 +541,7 @@ namespace basic_joint_controller
                         target[i] = close_config[i] + percent * (open_config[i] - close_config[i]);
                     }
 
+                    applyTargetCommandHoldOverrides(target);
                     state_list_.movej->setTargetPosition(target);
                     RCLCPP_INFO(get_node()->get_logger(),
                                 "target_percent %.1f%% -> MOVEJ target set (%zu joints)",
@@ -604,6 +624,60 @@ namespace basic_joint_controller
         const rclcpp_lifecycle::State& /*previous_state*/)
     {
         return CallbackReturn::SUCCESS;
+    }
+
+    void BasicJointController::buildTargetCommandHoldMask()
+    {
+        target_command_hold_mask_.assign(joint_names_.size(), false);
+        if (target_command_hold_joint_names_.empty())
+        {
+            return;
+        }
+
+        for (const auto& hold_joint : target_command_hold_joint_names_)
+        {
+            const auto it = std::find(joint_names_.begin(), joint_names_.end(), hold_joint);
+            if (it == joint_names_.end())
+            {
+                RCLCPP_WARN(get_node()->get_logger(),
+                            "target_command_hold_joints: joint '%s' not in controller joints list",
+                            hold_joint.c_str());
+                continue;
+            }
+            target_command_hold_mask_[static_cast<size_t>(std::distance(joint_names_.begin(), it))] = true;
+        }
+    }
+
+    void BasicJointController::applyTargetCommandHoldOverrides(std::vector<double>& target) const
+    {
+        if (target_command_hold_mask_.empty() ||
+            target.size() != target_command_hold_mask_.size())
+        {
+            return;
+        }
+
+        for (size_t i = 0; i < target.size(); ++i)
+        {
+            if (!target_command_hold_mask_[i])
+            {
+                continue;
+            }
+
+            if (i < ctrl_interfaces_.joint_position_state_interface_.size())
+            {
+                const auto value = ctrl_interfaces_.joint_position_state_interface_[i].get().get_optional();
+                if (value.has_value())
+                {
+                    target[i] = value.value();
+                    continue;
+                }
+            }
+
+            if (i < ctrl_interfaces_.last_sent_joint_positions_.size())
+            {
+                target[i] = ctrl_interfaces_.last_sent_joint_positions_[i];
+            }
+        }
     }
 
     std::shared_ptr<FSMState> BasicJointController::getNextState(FSMStateName stateName) const

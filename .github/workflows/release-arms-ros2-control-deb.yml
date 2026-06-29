@@ -5,7 +5,7 @@
 # Release policy:
 # - push v* tag                    -> formal GitHub Release
 # - pull_request merged into main  -> single rolling pre-release (tag: pre-release)
-#   deb Version: latest formal release minor +1, then ~main.{short_sha}
+#   deb Version: patch bump on latest formal; reset when pre-release X.Y drifts
 # - workflow_dispatch              -> manual formal release for a given tag
 #
 # Retired: standalone gripper / per-hardware debs / arms-ros2-control-jazzy-wbc.
@@ -322,49 +322,12 @@ jobs:
             local release_repo="$2"
             local fallback_package_xml="$3"
 
-            local latest_tag version_core major minor
-            latest_tag="$(RELEASE_REPO="${release_repo}" python3 -c "
-          import json, os, urllib.request
-          repo = os.environ['RELEASE_REPO']
-          token = os.environ.get('GH_TOKEN', '')
-          headers = {'Accept': 'application/vnd.github+json'}
-          if token:
-              headers['Authorization'] = f'Bearer {token}'
-          req = urllib.request.Request(
-              f'https://api.github.com/repos/{repo}/releases/latest',
-              headers=headers,
-          )
-          try:
-              with urllib.request.urlopen(req) as resp:
-                  print(json.load(resp).get('tag_name') or '')
-          except Exception:
-              print('')
-          " 2>/dev/null || true)"
-
-            if [[ -n "${latest_tag}" ]]; then
-              version_core="$(printf '%s' "${latest_tag}" | sed -E 's/^[vV]//' | sed 's/-.*//')"
-              echo "Pre-release deb version: latest formal ${latest_tag} -> minor bump on ${release_repo}." >&2
-            elif [[ -f "${fallback_package_xml}" ]]; then
-              version_core="$(grep -m1 '<version>' "${fallback_package_xml}" | sed -E 's@.*<version>([^<]+)</version>.*@\1@' | sed 's/-.*//')"
-              if [[ -z "${version_core}" ]]; then
-                echo "Unable to read version from ${fallback_package_xml}." >&2
-                exit 1
-              fi
-              echo "No formal release on ${release_repo}; minor bump from ${fallback_package_xml} (${version_core})." >&2
-            else
-              version_core="0.0.0"
-              echo "No formal release on ${release_repo}; using 0.1.0 pre-release base." >&2
-            fi
-
-            IFS='.' read -r major minor _patch <<< "${version_core}"
-            major="${major:-0}"
-            minor="${minor:-0}"
-            if [[ ! "${major}" =~ ^[0-9]+$ ]] || [[ ! "${minor}" =~ ^[0-9]+$ ]]; then
-              echo "Unable to parse semver major.minor from: ${version_core}" >&2
-              exit 1
-            fi
-
-            printf '%s\n' "${major}.$((minor + 1)).0~main.${short_sha}"
+            RELEASE_REPO="${release_repo}" \
+            SHORT_SHA="${short_sha}" \
+            FALLBACK_PACKAGE_XML="${fallback_package_xml}" \
+            PRE_RELEASE_TAG="${PRE_RELEASE_TAG}" \
+            GH_TOKEN="${GH_TOKEN:-}" \
+            python3 "${GITHUB_WORKSPACE}/.github/scripts/resolve_prerelease_deb_version.py"
           }
 
           resolve_dependency_release_tag() {
@@ -466,7 +429,9 @@ jobs:
             echo "Requested: ${ros_distro}" >&2
             exit 1
           fi
-          deb_file="${DEB_PREFIX}_${version}_${DEB_ARCH}.deb"
+          # GitHub Release rewrites "~" to "." in uploaded asset filenames.
+          deb_file_version="${version//~/.}"
+          deb_file="${DEB_PREFIX}_${deb_file_version}_${DEB_ARCH}.deb"
 
           ocs2_tag="$(resolve_dependency_release_tag_with_prerelease \
             "${INPUT_OCS2_TAG:-}" \
@@ -925,49 +890,12 @@ jobs:
             local release_repo="$2"
             local fallback_package_xml="$3"
 
-            local latest_tag version_core major minor
-            latest_tag="$(RELEASE_REPO="${release_repo}" python3 -c "
-          import json, os, urllib.request
-          repo = os.environ['RELEASE_REPO']
-          token = os.environ.get('GH_TOKEN', '')
-          headers = {'Accept': 'application/vnd.github+json'}
-          if token:
-              headers['Authorization'] = f'Bearer {token}'
-          req = urllib.request.Request(
-              f'https://api.github.com/repos/{repo}/releases/latest',
-              headers=headers,
-          )
-          try:
-              with urllib.request.urlopen(req) as resp:
-                  print(json.load(resp).get('tag_name') or '')
-          except Exception:
-              print('')
-          " 2>/dev/null || true)"
-
-            if [[ -n "${latest_tag}" ]]; then
-              version_core="$(printf '%s' "${latest_tag}" | sed -E 's/^[vV]//' | sed 's/-.*//')"
-              echo "Pre-release deb version: latest formal ${latest_tag} -> minor bump on ${release_repo}." >&2
-            elif [[ -f "${fallback_package_xml}" ]]; then
-              version_core="$(grep -m1 '<version>' "${fallback_package_xml}" | sed -E 's@.*<version>([^<]+)</version>.*@\1@' | sed 's/-.*//')"
-              if [[ -z "${version_core}" ]]; then
-                echo "Unable to read version from ${fallback_package_xml}." >&2
-                exit 1
-              fi
-              echo "No formal release on ${release_repo}; minor bump from ${fallback_package_xml} (${version_core})." >&2
-            else
-              version_core="0.0.0"
-              echo "No formal release on ${release_repo}; using 0.1.0 pre-release base." >&2
-            fi
-
-            IFS='.' read -r major minor _patch <<< "${version_core}"
-            major="${major:-0}"
-            minor="${minor:-0}"
-            if [[ ! "${major}" =~ ^[0-9]+$ ]] || [[ ! "${minor}" =~ ^[0-9]+$ ]]; then
-              echo "Unable to parse semver major.minor from: ${version_core}" >&2
-              exit 1
-            fi
-
-            printf '%s\n' "${major}.$((minor + 1)).0~main.${short_sha}"
+            RELEASE_REPO="${release_repo}" \
+            SHORT_SHA="${short_sha}" \
+            FALLBACK_PACKAGE_XML="${fallback_package_xml}" \
+            PRE_RELEASE_TAG="${PRE_RELEASE_TAG}" \
+            GH_TOKEN="${GH_TOKEN:-}" \
+            python3 "${GITHUB_WORKSPACE}/.github/scripts/resolve_prerelease_deb_version.py"
           }
 
           resolve_dependency_release_tag() {
@@ -1197,7 +1125,8 @@ jobs:
           echo "common_tag=${COMMON_TAG}" >> "$GITHUB_OUTPUT"
           echo "deb_arch=${DEB_ARCH}" >> "$GITHUB_OUTPUT"
           echo "bundle=${BUNDLE}" >> "$GITHUB_OUTPUT"
-          echo "deb_file=${DEB_PREFIX}_${VERSION}_${DEB_ARCH}.deb" >> "$GITHUB_OUTPUT"
+          deb_file_version="${VERSION//~/.}"
+          echo "deb_file=${DEB_PREFIX}_${deb_file_version}_${DEB_ARCH}.deb" >> "$GITHUB_OUTPUT"
 
       - name: Install verification tools
         shell: bash
@@ -1359,7 +1288,7 @@ jobs:
           export CMAKE_PREFIX_PATH="${INSTALL_PREFIX}:${CMAKE_PREFIX_PATH:-}"
           export AMENT_PREFIX_PATH="${INSTALL_PREFIX}:${AMENT_PREFIX_PATH:-}"
 
-          python3 - <<'PY'
+          python3 -c 'import textwrap; exec(textwrap.dedent("""
           import os
           from ament_index_python.packages import get_package_share_directory
 
@@ -1386,7 +1315,7 @@ jobs:
               ])
           for package_name in packages:
               print(package_name, get_package_share_directory(package_name))
-          PY
+          """))'
         env:
           VERIFY_BUNDLE: ${{ matrix.bundle }}
 

@@ -29,21 +29,29 @@ namespace
         {
             return 2;
         }
-        if (n.find("index_joint") != std::string::npos)
+        if (n.find("rotate_joint") != std::string::npos)
         {
             return 3;
         }
-        if (n.find("middle_joint") != std::string::npos)
+        if (n.find("gripper_joint") != std::string::npos)
         {
             return 4;
         }
-        if (n.find("ring_joint") != std::string::npos)
+        if (n.find("index_joint") != std::string::npos)
         {
             return 5;
         }
-        if (n.find("pinky_joint") != std::string::npos)
+        if (n.find("middle_joint") != std::string::npos)
         {
             return 6;
+        }
+        if (n.find("ring_joint") != std::string::npos)
+        {
+            return 7;
+        }
+        if (n.find("pinky_joint") != std::string::npos)
+        {
+            return 8;
         }
         return 100;
     }
@@ -1750,7 +1758,8 @@ namespace arms_rviz_control_plugin
             
             // Filter out gripper-related joints, but keep left_hand and right_hand joints
             bool is_gripper_joint =
-                joint_name_lower.find("gripper") != std::string::npos ||
+                (joint_name_lower.find("gripper") != std::string::npos &&
+                 category != "left_hand" && category != "right_hand") ||
                 (joint_name_lower.find("hand") != std::string::npos && 
                  category != "left_hand" && category != "right_hand") ||
                 (joint_name_lower.find("finger") != std::string::npos && 
