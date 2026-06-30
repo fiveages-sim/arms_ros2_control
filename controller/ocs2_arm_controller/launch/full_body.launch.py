@@ -67,8 +67,6 @@ def launch_setup(context, *args, **kwargs):
     )
     hand_controllers, hand_spawners = ocs2_common.setup_hand_controllers(ctx, enable_gripper)
     hand_names = [c["name"] for c in hand_controllers] if enable_gripper else []
-    if hand_names:
-        joint_controller_names.extend(hand_names)
 
     body_spawners = []
     joint_controller_names = ["ocs2_wbc_controller"]
@@ -83,6 +81,9 @@ def launch_setup(context, *args, **kwargs):
             )
         else:
             print("[WARN] ARM type detected in full_body but no head controller found to spawn")
+
+    if hand_names:
+        joint_controller_names.extend(hand_names)
 
     info_file_name = extract_info_file_name_from_config(ctx.config, launch_mode="full_body")
     task_robot_name = planning_robot_name
