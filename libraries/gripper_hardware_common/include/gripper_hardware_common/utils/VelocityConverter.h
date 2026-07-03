@@ -52,5 +52,24 @@ namespace gripper_hardware_common
         };
 
         using Changingtek90 = Changingtek;
+
+        /** @brief EincinX — speed register 0x4702, pulse/s (32-bit). */
+        class EincinX
+        {
+        public:
+            static constexpr int DEFAULT_MAX_SPEED = 120000;
+
+            static uint32_t normalizedToSpeed(double normalized, int max_speed)
+            {
+                normalized = std::clamp(normalized, 0.0, 1.0);
+                const auto speed = static_cast<uint32_t>(normalized * static_cast<double>(max_speed));
+                return std::max<uint32_t>(1, speed);
+            }
+
+            static uint32_t normalizedToSpeed(double normalized)
+            {
+                return normalizedToSpeed(normalized, DEFAULT_MAX_SPEED);
+            }
+        };
     };
 } // namespace gripper_hardware_common
