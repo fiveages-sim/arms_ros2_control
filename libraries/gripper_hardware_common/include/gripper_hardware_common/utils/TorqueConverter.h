@@ -53,6 +53,26 @@ namespace gripper_hardware_common
 
         using Changingtek90 = Changingtek;
 
+        /** @brief EincinX — grip/release current (registers 0x4307 / 0x4308, manual defaults 35/50). */
+        class EincinX
+        {
+        public:
+            static int normalizedToGripCurrent(double normalized, int max_current = MAX_GRIP_CURRENT)
+            {
+                normalized = std::clamp(normalized, 0.0, 1.0);
+                return static_cast<int>(normalized * max_current);
+            }
+
+            static int normalizedToReleaseCurrent(double normalized, int max_current = MAX_RELEASE_CURRENT)
+            {
+                normalized = std::clamp(normalized, 0.0, 1.0);
+                return static_cast<int>(normalized * max_current);
+            }
+
+            static constexpr int MAX_GRIP_CURRENT = 100;   // 1.0A, unit 0.01A (tutorial 0x64)
+            static constexpr int MAX_RELEASE_CURRENT = 90; // 0.9A (tutorial 0x5A)
+        };
+
         /**
          * @brief Jodell gripper torque conversion
          * 

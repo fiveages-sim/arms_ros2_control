@@ -119,6 +119,41 @@ namespace gripper_hardware_common
         };
 
         /**
+         * @brief EincinX electric gripper RS485 quick-control registers (grip axis slave 2).
+         * Manual table: 6101 abs pos, 4307/4308 current, 4702 speed, 6103 homing, 6064 feedback.
+         */
+        struct EincinX
+        {
+            static constexpr uint16_t ABS_POSITION_REG = 0x6101;       // item 1, FC06
+            static constexpr uint16_t REL_POSITION_REG = 0x6102;     // item 2 (unused)
+            static constexpr uint16_t FORWARD_CURRENT_REG = 0x4307;   // item 3, FC06
+            static constexpr uint16_t REVERSE_CURRENT_REG = 0x4308;   // item 4, FC06
+            static constexpr uint16_t SPEED_REG = 0x4702;             // item 5, FC10 32-bit
+            static constexpr uint16_t CONTROL_MODE_REG = 0x4701;        // param 76: 2=absolute
+            static constexpr uint16_t HOMING_CMD_REG = 0x6103;          // item 8, FC06 0x0021
+            static constexpr uint16_t POSITION_FB_REG = 0x6064;       // item 9, FC03 x2
+            static constexpr uint16_t VELOCITY_FB_REG = 0x606C;
+            static constexpr uint16_t CURRENT_FB_REG = 0x6078;
+
+            static constexpr uint16_t CONTROL_MODE_ABSOLUTE = 2;
+            static constexpr uint32_t MAX_POSITION_PULSES = 21000;
+            static constexpr uint32_t DEFAULT_SPEED_PULSES = 120000;
+            static constexpr int DEFAULT_FORWARD_CURRENT = 50;   // tutorial: 0.5A -> 0x32
+            static constexpr int DEFAULT_REVERSE_CURRENT = 90;   // tutorial: 0.9A -> 0x5A
+            static constexpr int MAX_GRIP_CURRENT = 100;         // tutorial: 1.0A -> 0x64
+            static constexpr int MAX_RELEASE_CURRENT = 90;
+            static constexpr int MAX_SPEED_PULSES = 120000;
+
+            static constexpr uint8_t READ_FUNCTION = 0x03;
+            static constexpr uint8_t WRITE_FUNCTION = 0x10;
+            static constexpr uint8_t WRITE_SINGLE_FUNCTION = 0x06;
+
+            static constexpr uint8_t SLAVE_ID = 0x02;
+            static constexpr uint8_t DEFAULT_SLAVE_ID = SLAVE_ID;
+            static constexpr uint16_t HOMING_CMD_VALUE = 0x0021;
+        };
+
+        /**
          * @brief Jodell gripper Modbus configuration
          */
         namespace Jodell
