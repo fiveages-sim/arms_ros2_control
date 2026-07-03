@@ -392,6 +392,26 @@ namespace ocs2::controller_common
         return !buffer.path.empty() && buffer.duration > 0.0 && time < buffer.startTime + buffer.duration;
     }
 
+    void PoseBasedReferenceManager::rebuildTargetTrajectoriesFromActiveArmReferenceBuffers(
+        double start_time, double minimum_duration)
+    {
+        double end_time = start_time + std::max(minimum_duration, 0.0);
+        const auto extend_end_time = [&end_time, start_time](const ArmReferenceBuffer& buffer)
+        {
+            const double buffer_end_time = buffer.startTime + buffer.duration;
+            if (!buffer.path.empty() && buffer.duration > 0.0 && buffer_end_time > start_time)
+            {
+                end_time = std::max(end_time, buffer_end_time);
+            }
+        };
+        extend_end_time(left_arm_reference_buffer_);
+        if (dual_arm_mode_)
+        {
+            extend_end_time(right_arm_reference_buffer_);
+        }
+        rebuildTargetTrajectoriesFromArmReferenceBuffers(start_time, end_time);
+    }
+
     void PoseBasedReferenceManager::rebuildTargetTrajectoriesFromArmReferenceBuffers(double start_time,
                                                                                      double end_time)
     {
@@ -779,29 +799,29 @@ namespace ocs2::controller_common
         moveL_duration_ = node_->get_parameter("movel_duration").as_double();
     }
 
-    void PoseBasedReferenceManager::syncWheelHumanoidCoupledOppositeArmIfNeeded(bool left_target_was_updated)
+    bool PoseBasedReferenceManager::syncWheelHumanoidCoupledOppositeArmIfNeeded(bool left_target_was_updated)
     {
 #ifndef HAS_OCS2_WHEEL_HUMANOID
         (void)left_target_was_updated;
-        return;
+        return false;
 #else
         if (!dual_arm_mode_ ||
             effectiveTargetStateDim() != Ocs2ReferenceTargetContext::kWheelHumanoidTargetStateDim) {
-            return;
+            return false;
         }
         auto* sw = dynamic_cast<::ocs2::wheel_humanoid::SwitchedHumanoidReferenceManager*>(referenceManagerPtr_.get());
         if (sw == nullptr) {
-            return;
+            return false;
         }
         const scalar_t t = current_observation_.time;
         if (!sw->isBimanualCoupled(t) || !sw->hasCapturedCoupling()) {
-            return;
+            return false;
         }
         const auto rel = sw->getCouplingParameters(t);
         const Eigen::Matrix<scalar_t, 3, 1> relPos = rel.first;
         Eigen::Quaternion<scalar_t> relQuat = rel.second;
         if (relQuat.norm() < static_cast<scalar_t>(1e-9)) {
-            return;
+            return false;
         }
         relQuat.normalize();
 
@@ -834,6 +854,7 @@ namespace ocs2::controller_common
             left(5) = leftQuat.z();
             left(6) = leftQuat.w();
         }
+        return true;
 #endif
     }
 
@@ -858,7 +879,7 @@ namespace ocs2::controller_common
         // 更新左臂target state缓存
         left_target_state_ = target_state;
 
-        syncWheelHumanoidCoupledOppositeArmIfNeeded(true);
+        (void)syncWheelHumanoidCoupledOppositeArmIfNeeded(true);
 
         // 更新target trajectory
         updateTargetTrajectory();
@@ -888,7 +909,7 @@ namespace ocs2::controller_common
         // 更新右臂target state缓存
         right_target_state_ = target_state;
 
-        syncWheelHumanoidCoupledOppositeArmIfNeeded(false);
+        (void)syncWheelHumanoidCoupledOppositeArmIfNeeded(false);
 
         // 更新target trajectory
         updateTargetTrajectory();
@@ -917,15 +938,6 @@ namespace ocs2::controller_common
     {
         updateParam();
 
-        if (isArmReferenceBufferActive(left_arm_reference_buffer_, current_observation_.time))
-        {
-            return;
-        }
-
-        // 保存上一帧缓存（用于插值起点）
-        const vector_t previous_left_target_state = left_target_state_;
-
-        // 更新缓存到新目标
         vector_t target_state = vector_t::Zero(7);
         target_state(0) = msg->position.x;
         target_state(1) = msg->position.y;
@@ -934,24 +946,26 @@ namespace ocs2::controller_common
         target_state(4) = msg->orientation.y;
         target_state(5) = msg->orientation.z;
         target_state(6) = msg->orientation.w;
+
+        const double start_time = current_observation_.time;
+        const vector_t previous_left_target_state = left_target_state_;
+        const vector_t previous_right_target_state = right_target_state_;
+
+        setArmReferenceBufferFromWaypoints(
+            left_arm_reference_buffer_, previous_left_target_state, {target_state},
+            start_time, moveL_duration_);
         left_target_state_ = target_state;
 
-        syncWheelHumanoidCoupledOppositeArmIfNeeded(true);
-
-        // 生成轨迹
-        if (dual_arm_mode_)
+        const bool coupled = syncWheelHumanoidCoupledOppositeArmIfNeeded(true);
+        if (coupled && dual_arm_mode_)
         {
-            // 双臂模式：同时更新两个臂
-            const vector_t previous_right_target_state = right_target_state_;
-            updateTrajectory(previous_left_target_state, previous_right_target_state);
-        }
-        else
-        {
-            // 单臂模式：只更新左臂，传递零向量作为右臂占位符（不会被使用）
-            updateTrajectory(previous_left_target_state, vector_t::Zero(7));
+            const vector_t coupled_right_target = right_target_state_;
+            setArmReferenceBufferFromWaypoints(
+                right_arm_reference_buffer_, previous_right_target_state, {coupled_right_target},
+                start_time, moveL_duration_);
         }
 
-        // 发布当前目标（只发布左臂）
+        rebuildTargetTrajectoriesFromActiveArmReferenceBuffers(start_time, moveL_duration_);
         publishCurrentTargets("left");
     }
 
@@ -960,16 +974,6 @@ namespace ocs2::controller_common
     {
         updateParam();
 
-        if (isArmReferenceBufferActive(right_arm_reference_buffer_, current_observation_.time))
-        {
-            return;
-        }
-
-        // 保存上一帧缓存（用于插值起点）
-        const vector_t previous_left_target_state = left_target_state_;
-        const vector_t previous_right_target_state = right_target_state_;
-
-        // 更新缓存到新目标
         vector_t target_state = vector_t::Zero(7);
         target_state(0) = msg->position.x;
         target_state(1) = msg->position.y;
@@ -978,14 +982,26 @@ namespace ocs2::controller_common
         target_state(4) = msg->orientation.y;
         target_state(5) = msg->orientation.z;
         target_state(6) = msg->orientation.w;
+
+        const double start_time = current_observation_.time;
+        const vector_t previous_left_target_state = left_target_state_;
+        const vector_t previous_right_target_state = right_target_state_;
+
+        setArmReferenceBufferFromWaypoints(
+            right_arm_reference_buffer_, previous_right_target_state, {target_state},
+            start_time, moveL_duration_);
         right_target_state_ = target_state;
 
-        syncWheelHumanoidCoupledOppositeArmIfNeeded(false);
+        const bool coupled = syncWheelHumanoidCoupledOppositeArmIfNeeded(false);
+        if (coupled && dual_arm_mode_)
+        {
+            const vector_t coupled_left_target = left_target_state_;
+            setArmReferenceBufferFromWaypoints(
+                left_arm_reference_buffer_, previous_left_target_state, {coupled_left_target},
+                start_time, moveL_duration_);
+        }
 
-        // 生成轨迹（在双臂模式下，同时更新两个臂）
-        updateTrajectory(previous_left_target_state, previous_right_target_state);
-
-        // 发布当前目标（只发布右臂）
+        rebuildTargetTrajectoriesFromActiveArmReferenceBuffers(start_time, moveL_duration_);
         publishCurrentTargets("right");
     }
 

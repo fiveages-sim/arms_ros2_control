@@ -104,8 +104,12 @@ private:
 
     void publishCurrentTargets(const std::string& arm_type = "");
 
-    /** Wheel-humanoid COUPLED: after updating one arm target, set the other from captured relative pose (matches WheelHumanoidTargetNode). */
-    void syncWheelHumanoidCoupledOppositeArmIfNeeded(bool left_target_was_updated);
+    /** Wheel-humanoid COUPLED: after updating one arm target, set the other from captured relative pose (matches WheelHumanoidTargetNode).
+     *  Returns true if the opposite arm target was synchronized. */
+    [[nodiscard]] bool syncWheelHumanoidCoupledOppositeArmIfNeeded(bool left_target_was_updated);
+
+    void rebuildTargetTrajectoriesFromActiveArmReferenceBuffers(double start_time,
+                                                                  double minimum_duration);
 
     const std::string topic_prefix_;
     Ocs2ReferenceTargetContext target_context_;
