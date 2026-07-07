@@ -362,6 +362,20 @@ namespace arms_controller_common
         // 优先处理腰部升降（与转向互斥）
         if (waist_lifting_active_ && waist_lifting_planer_)
         {
+            if (active_waist_lifting_pose_goal_ && waist_lifting_pose_action_active_ &&
+                active_waist_lifting_pose_goal_->is_canceling())
+            {
+                waist_lifting_active_ = false;
+                waist_lifting_debug_print_active_ = false;
+                waist_lifting_planer_->setCurrentVelToZero();
+                motion_mode_ = MotionMode::MOVEJ;
+                refreshHoldPositions();
+                finishWaistLiftingPoseAction(
+                    false,
+                    WaistLiftingPoseAction::Result::ERROR_CANCELED,
+                    "goal canceled");
+                return;
+            }
             std::vector<double> next_waist_pos;
 
             if (waist_lifting_planer_->calNextPoint(next_waist_pos))
@@ -404,11 +418,16 @@ namespace arms_controller_common
                     // Waist lifting is continuous speed planning; publish the updated
                     // commanded joint target each cycle so observers can track it.
                     publishCurrentTargetJoint(target_pos_);
+                    publishWaistLiftingPoseFeedback();
 
                     if (waist_lifting_planer_->isMotionOver())
                     {
                         if (pending_waist_motion_)
                         {
+                            finishWaistLiftingPoseAction(
+                                false,
+                                WaistLiftingPoseAction::Result::ERROR_CANCELED,
+                                "preempted by a new waist motion");
                             auto apply = std::move(pending_waist_motion_);
                             pending_waist_motion_ = nullptr;
                             apply();
@@ -419,6 +438,12 @@ namespace arms_controller_common
                         motion_mode_ = MotionMode::MOVEJ;
                         maintainCommandFromLastSent();
                         has_target_ = false;
+                        finishWaistLiftingPoseAction(
+                            true,
+                            WaistLiftingPoseAction::Result::ERROR_NONE,
+                            waist_lifting_pose_reachable_
+                                ? "target reached"
+                                : "target clamped and planned target reached");
                         RCLCPP_INFO(node_->get_logger(),
                                     "waist lifting trajectory completed, returning to MOVEJ mode");
                     }
@@ -440,6 +465,10 @@ namespace arms_controller_common
                 waist_lifting_debug_print_active_ = false;
                 waist_lifting_planer_->setCurrentVelToZero(); //奇异了，报错停止，然后把当前实际的速度设为0
                 motion_mode_ = MotionMode::MOVEJ;
+                finishWaistLiftingPoseAction(
+                    false,
+                    WaistLiftingPoseAction::Result::ERROR_RUNTIME_FAILED,
+                    "failed to calculate next waist lifting point");
                 RCLCPP_WARN(node_->get_logger(), "Failed to calculate next waist lifting point");
             }
 
@@ -873,6 +902,10 @@ namespace arms_controller_common
         finishLinearAction(false, false, "StateMoveJ exited before MoveL trajectory completed");
         finishCircleAction(false, false, "StateMoveJ exited before MoveC trajectory completed");
         finishJointTrajectoryAction(false, false, "StateMoveJ exited before joint trajectory completed");
+        finishWaistLiftingPoseAction(
+            false,
+            WaistLiftingPoseAction::Result::ERROR_RUNTIME_FAILED,
+            "StateMoveJ exited before waist lifting pose completed");
 
         last_waist_factor_ = 0.0;
         last_waist_turning_factor_ = 0.0;
@@ -989,6 +1022,10 @@ namespace arms_controller_common
         finishLinearAction(false, false, "MoveL preempted for stop-to-zero");
         finishCircleAction(false, false, "MoveC preempted for stop-to-zero");
         finishJointTrajectoryAction(false, false, "Joint trajectory preempted for stop-to-zero");
+        finishWaistLiftingPoseAction(
+            false,
+            WaistLiftingPoseAction::Result::ERROR_RUNTIME_FAILED,
+            "waist lifting pose preempted for stop-to-zero");
 
         waist_lifting_active_ = false;
         waist_turning_active_ = false;
@@ -2482,6 +2519,158 @@ namespace arms_controller_common
                      full_action_name.c_str());
     }
 
+    void StateMoveJ::setupWaistLiftingPoseAction(const std::string& action_name)
+    {
+        std::string full_action_name = node_->get_name() + std::string("/") + action_name;
+        waist_lifting_pose_action_server_ = rclcpp_action::create_server<WaistLiftingPoseAction>(
+            node_,
+            full_action_name,
+            std::bind(&StateMoveJ::handleWaistLiftingPoseGoal, this, std::placeholders::_1, std::placeholders::_2),
+            std::bind(&StateMoveJ::handleWaistLiftingPoseCancel, this, std::placeholders::_1),
+            std::bind(&StateMoveJ::handleWaistLiftingPoseAccepted, this, std::placeholders::_1));
+        RCLCPP_DEBUG(node_->get_logger(), "Created waist lifting pose action at %s",
+                     full_action_name.c_str());
+    }
+
+    rclcpp_action::GoalResponse StateMoveJ::handleWaistLiftingPoseGoal(
+        const rclcpp_action::GoalUUID& uuid,
+        std::shared_ptr<const WaistLiftingPoseAction::Goal> goal)
+    {
+        (void)uuid;
+        std::lock_guard lock(target_mutex_);
+        if (!state_active_)
+        {
+            RCLCPP_WARN(node_->get_logger(),
+                        "Rejecting waist lifting pose goal: StateMoveJ is not active");
+            return rclcpp_action::GoalResponse::REJECT;
+        }
+        if (goal->mode != WaistLiftingPoseAction::Goal::MODE_ABSOLUTE &&
+            goal->mode != WaistLiftingPoseAction::Goal::MODE_RELATIVE)
+        {
+            RCLCPP_WARN(node_->get_logger(),
+                        "Rejecting waist lifting pose goal: invalid mode %u", goal->mode);
+            return rclcpp_action::GoalResponse::REJECT;
+        }
+        if (waist_lifting_pose_action_active_)
+        {
+            RCLCPP_WARN(node_->get_logger(),
+                        "Rejecting waist lifting pose goal: another goal is active");
+            return rclcpp_action::GoalResponse::REJECT;
+        }
+        return rclcpp_action::GoalResponse::ACCEPT_AND_EXECUTE;
+    }
+
+    rclcpp_action::CancelResponse StateMoveJ::handleWaistLiftingPoseCancel(
+        const std::shared_ptr<WaistLiftingPoseGoalHandle> goal_handle)
+    {
+        (void)goal_handle;
+        return rclcpp_action::CancelResponse::ACCEPT;
+    }
+
+    void StateMoveJ::handleWaistLiftingPoseAccepted(
+        const std::shared_ptr<WaistLiftingPoseGoalHandle> goal_handle)
+    {
+        std::lock_guard lock(target_mutex_);
+        const auto goal = goal_handle->get_goal();
+        auto result = std::make_shared<WaistLiftingPoseAction::Result>();
+
+        if (!waist_lifting_planer_)
+        {
+            setWaistLiftingPlaner();
+        }
+        if (!waist_lifting_planer_)
+        {
+            result->reachable = false;
+            result->success = false;
+            result->error_code = WaistLiftingPoseAction::Result::ERROR_CONTROLLER_NOT_READY;
+            result->message = "waist lifting planner is not available";
+            goal_handle->abort(result);
+            return;
+        }
+
+        Eigen::VectorXd current_angles = getCurrentWaistAngles();
+        const bool three_joint =
+            waist_lifting_planer_->isBodyThreeJoint() && current_angles.size() >= 3;
+
+        Eigen::Vector3d lifting_delta(0.0, 0.0, 0.0);
+        double requested_norm = 0.0;
+        if (goal->mode == WaistLiftingPoseAction::Goal::MODE_ABSOLUTE)
+        {
+            if (!three_joint)
+            {
+                result->reachable = false;
+                result->success = false;
+                result->error_code = WaistLiftingPoseAction::Result::ERROR_CONTROLLER_NOT_READY;
+                result->message = "absolute mode only supported for THREE_JOINT waist";
+                goal_handle->abort(result);
+                return;
+            }
+            Eigen::Vector3d angles3d(current_angles(0), current_angles(1), current_angles(2));
+            Eigen::Vector3d current_pose;
+            if (!waist_lifting_planer_->calculateThreeJointEndpointXzPhi(angles3d, current_pose))
+            {
+                result->reachable = false;
+                result->success = false;
+                result->error_code = WaistLiftingPoseAction::Result::ERROR_CONTROLLER_NOT_READY;
+                result->message = "failed to compute current waist pose";
+                goal_handle->abort(result);
+                return;
+            }
+            lifting_delta = Eigen::Vector3d(goal->x, goal->z, goal->phi) - current_pose;
+        }
+        else
+        {
+            lifting_delta = Eigen::Vector3d(goal->x, goal->z, goal->phi);
+        }
+        requested_norm = three_joint ? lifting_delta.norm() : std::abs(lifting_delta(1));
+
+        if (!moveWaistLiftingImpl(lifting_delta))
+        {
+            result->reachable = false;
+            result->success = false;
+            if (three_joint)
+            {
+                Eigen::Vector3d cur;
+                Eigen::Vector3d angles3d(current_angles(0), current_angles(1), current_angles(2));
+                if (waist_lifting_planer_->calculateThreeJointEndpointXzPhi(angles3d, cur))
+                {
+                    result->planned_x = cur.x();
+                    result->planned_z = cur.y();
+                    result->planned_phi = cur.z();
+                }
+            }
+            result->error_code = WaistLiftingPoseAction::Result::ERROR_UNREACHABLE;
+            result->message = "no executable waist motion (already at limit or unreachable)";
+            goal_handle->abort(result);
+            return;
+        }
+
+        const double planned_norm = waist_lifting_planer_->getLastPlannedLiftingLength();
+        constexpr double kPlannedDistanceEpsilon = 1.0e-4;
+        const bool reachable = std::abs(planned_norm - requested_norm) <= kPlannedDistanceEpsilon;
+
+        Eigen::Vector3d planned_target(0.0, 0.0, 0.0);
+        if (three_joint)
+        {
+            planned_target = waist_lifting_planer_->getPlannedTargetPose();
+        }
+        else if (current_angles.size() >= 1)
+        {
+            planned_target = Eigen::Vector3d(0.0, current_angles(0) + lifting_delta(1), 0.0);
+        }
+
+        waist_lifting_pose_reachable_ = reachable;
+        waist_lifting_pose_planned_target_ = planned_target;
+        active_waist_lifting_pose_goal_ = goal_handle;
+        waist_lifting_pose_action_start_time_ = node_->now();
+        waist_lifting_pose_action_active_ = true;
+        publishWaistLiftingPoseFeedback();
+        RCLCPP_INFO(node_->get_logger(),
+                    "Waist lifting pose action started: reachable=%d, planned=(%.4f, %.4f, %.4f)",
+                    reachable ? 1 : 0,
+                    planned_target.x(), planned_target.y(), planned_target.z());
+    }
+
     rclcpp_action::GoalResponse StateMoveJ::handleJointTrajectoryGoal(
         const rclcpp_action::GoalUUID& uuid,
         std::shared_ptr<const JointTrajectoryAction::Goal> goal)
@@ -2871,6 +3060,52 @@ namespace arms_controller_common
         feedback->elapsed_time = elapsed;
         feedback->remaining_time = remaining;
         active_joint_trajectory_goal_->publish_feedback(feedback);
+    }
+
+    void StateMoveJ::publishWaistLiftingPoseFeedback()
+    {
+        if (!active_waist_lifting_pose_goal_ || !waist_lifting_pose_action_active_)
+        {
+            return;
+        }
+        const double elapsed =
+            std::max(0.0, (node_->now() - waist_lifting_pose_action_start_time_).seconds());
+        const double duration = std::max(waist_lifting_duration_, 1.0e-3);
+        auto feedback = std::make_shared<WaistLiftingPoseAction::Feedback>();
+        feedback->progress = std::clamp(elapsed / duration, 0.0, 1.0);
+        active_waist_lifting_pose_goal_->publish_feedback(feedback);
+    }
+
+    void StateMoveJ::finishWaistLiftingPoseAction(
+        bool success, int32_t error_code, const std::string& message)
+    {
+        if (!active_waist_lifting_pose_goal_ || !waist_lifting_pose_action_active_)
+        {
+            return;
+        }
+        auto result = std::make_shared<WaistLiftingPoseAction::Result>();
+        result->reachable = waist_lifting_pose_reachable_;
+        result->success = success;
+        result->planned_x = waist_lifting_pose_planned_target_.x();
+        result->planned_z = waist_lifting_pose_planned_target_.y();
+        result->planned_phi = waist_lifting_pose_planned_target_.z();
+        result->error_code = error_code;
+        result->message = message;
+
+        if (error_code == WaistLiftingPoseAction::Result::ERROR_CANCELED)
+        {
+            active_waist_lifting_pose_goal_->canceled(result);
+        }
+        else if (success)
+        {
+            active_waist_lifting_pose_goal_->succeed(result);
+        }
+        else
+        {
+            active_waist_lifting_pose_goal_->abort(result);
+        }
+        active_waist_lifting_pose_goal_.reset();
+        waist_lifting_pose_action_active_ = false;
     }
 
     void StateMoveJ::finishJointTrajectoryAction(bool success, bool canceled, const std::string& message)

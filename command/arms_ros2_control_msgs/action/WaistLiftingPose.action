@@ -1,0 +1,30 @@
+# Goal
+uint8 MODE_ABSOLUTE=0
+uint8 MODE_RELATIVE=1
+
+uint8 mode
+
+float64 x
+float64 z
+float64 phi
+---
+# Result
+int32 ERROR_NONE=0
+int32 ERROR_INVALID_MODE=1
+int32 ERROR_CONTROLLER_NOT_READY=2
+int32 ERROR_UNREACHABLE=3
+int32 ERROR_RUNTIME_FAILED=4
+int32 ERROR_CANCELED=5
+
+bool reachable
+bool success
+
+float64 planned_x
+float64 planned_z
+float64 planned_phi
+
+string message
+int32 error_code
+---
+# Feedback
+float64 progress

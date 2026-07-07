@@ -89,6 +89,11 @@ namespace arms_controller_common
 
         // 最近一次定距升降实际规划的距离（可能因限位/逆解被裁剪）
         double getLastPlannedLiftingLength() const { return last_planned_lifting_length_; }
+        // 最近一次三关节定距规划的最终目标位姿 (x, z, phi)，已包含可达裁剪结果
+        Eigen::Vector3d getPlannedTargetPose() const
+        {
+            return Eigen::Vector3d(target_x_, target_z_, target_phi_);
+        }
         // 用当前三关节角计算 body_base 下腰部末端位姿 (x, z, phi)
         bool calculateThreeJointEndpointXzPhi(const Eigen::Vector3d& joint_angle,
                                               Eigen::Vector3d& output_xz_phi);

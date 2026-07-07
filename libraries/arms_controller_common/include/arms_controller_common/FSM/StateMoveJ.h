@@ -30,6 +30,7 @@
 #include "arms_controller_common/utils/CartesianTrajectoryManager.h"
 #include "arms_ros2_control_msgs/action/execute_linear.hpp"
 #include "arms_ros2_control_msgs/action/movec_use_ik.hpp"
+#include "arms_ros2_control_msgs/action/waist_lifting_pose.hpp"
 #include "arms_ros2_control_msgs/srv/execute_linear.hpp"
 #include "arms_ros2_control_msgs/srv/movec_use_ik.hpp"
 
@@ -185,6 +186,7 @@ namespace arms_controller_common
          */
         void setupJointTrajectoryService(const std::string& service_name = "joint_trajectory");
         void setupJointTrajectoryAction(const std::string& action_name = "joint_trajectory");
+        void setupWaistLiftingPoseAction(const std::string& action_name = "waist_lifting_pose");
 
         void setKinematicsSolver(const std::shared_ptr<ArmKinematics>& kinematics = nullptr);
         // 在 StateMoveJ.h 的 public 部分添加
@@ -434,6 +436,24 @@ namespace arms_controller_common
             double& planned_duration);
         void publishJointTrajectoryFeedback();
         void finishJointTrajectoryAction(bool success, bool canceled, const std::string& message);
+
+        using WaistLiftingPoseAction = arms_ros2_control_msgs::action::WaistLiftingPose;
+        using WaistLiftingPoseGoalHandle = rclcpp_action::ServerGoalHandle<WaistLiftingPoseAction>;
+        rclcpp_action::Server<WaistLiftingPoseAction>::SharedPtr waist_lifting_pose_action_server_;
+        std::shared_ptr<WaistLiftingPoseGoalHandle> active_waist_lifting_pose_goal_;
+        rclcpp::Time waist_lifting_pose_action_start_time_;
+        bool waist_lifting_pose_action_active_{false};
+        bool waist_lifting_pose_reachable_{false};
+        Eigen::Vector3d waist_lifting_pose_planned_target_{0.0, 0.0, 0.0};
+        rclcpp_action::GoalResponse handleWaistLiftingPoseGoal(
+            const rclcpp_action::GoalUUID& uuid,
+            std::shared_ptr<const WaistLiftingPoseAction::Goal> goal);
+        rclcpp_action::CancelResponse handleWaistLiftingPoseCancel(
+            const std::shared_ptr<WaistLiftingPoseGoalHandle> goal_handle);
+        void handleWaistLiftingPoseAccepted(
+            const std::shared_ptr<WaistLiftingPoseGoalHandle> goal_handle);
+        void publishWaistLiftingPoseFeedback();
+        void finishWaistLiftingPoseAction(bool success, int32_t error_code, const std::string& message);
 
         // 辅助函数
         bool validateJointNames(const std::vector<std::string>& request_joint_names, std::string& error_msg);
