@@ -91,6 +91,20 @@ namespace gripper_hardware_common
         public:
             static constexpr uint16_t DEFAULT_MAX_POSITION = 9000;
 
+            static double physicalToNormalized(double rad, double lower_rad, double upper_rad)
+            {
+                const double range = upper_rad - lower_rad;
+                if (range <= 1e-6)
+                    return 0.0;
+                return std::clamp((rad - lower_rad) / range, 0.0, 1.0);
+            }
+
+            static double normalizedToPhysical(double normalized, double lower_rad, double upper_rad)
+            {
+                normalized = std::clamp(normalized, 0.0, 1.0);
+                return lower_rad + normalized * (upper_rad - lower_rad);
+            }
+
             static uint16_t normalizedToModbus(double normalized, uint16_t max_position)
             {
                 normalized = std::clamp(normalized, 0.0, 1.0);
@@ -102,6 +116,16 @@ namespace gripper_hardware_common
                 if (modbus_pos > max_position)
                     modbus_pos = max_position;
                 return std::clamp(1.0 - static_cast<double>(modbus_pos) / max_position, 0.0, 1.0);
+            }
+
+            static uint16_t physicalToModbus(double rad, double lower_rad, double upper_rad, uint16_t max_position)
+            {
+                return normalizedToModbus(physicalToNormalized(rad, lower_rad, upper_rad), max_position);
+            }
+
+            static double modbusToPhysical(uint32_t modbus_pos, double lower_rad, double upper_rad, uint16_t max_position)
+            {
+                return normalizedToPhysical(modbusToNormalized(modbus_pos, max_position), lower_rad, upper_rad);
             }
 
             static uint16_t normalizedToModbus(double normalized)
@@ -136,12 +160,14 @@ namespace gripper_hardware_common
              */
             static int normalizedToJodell(double normalized)
             {
-                // Limit to valid range
-                normalized = physicalToNormalized(normalized);
-                
+                normalized = std::clamp(normalized, 0.0, 1.0);
                 // Jodell: 0.0(closed) -> 255, 1.0(open) -> 0
-                // Formula: pos_set = 255 * (1.0 - normalized)
                 return 255 - static_cast<int>(normalized * MAX_POSITION);
+            }
+
+            static int physicalToJodell(double physical_m)
+            {
+                return normalizedToJodell(physicalToNormalized(physical_m));
             }
 
             /**
@@ -151,11 +177,13 @@ namespace gripper_hardware_common
              */
             static double jodellToNormalized(int pos_set)
             {
-                // Limit to valid range
-                double pos_double = 1.0 - (static_cast<double>(pos_set) / static_cast<double>(MAX_POSITION));
-                // Jodell: 0(closed) -> 0.0, 255(open) -> 1.0
-                // Formula: normalized = 1.0 - (pos_set / 255.0)
-                return normalizedToPhysical(pos_double);
+                pos_set = std::max(0, std::min(MAX_POSITION, pos_set));
+                return 1.0 - (static_cast<double>(pos_set) / static_cast<double>(MAX_POSITION));
+            }
+
+            static double jodellToPhysical(int pos_set)
+            {
+                return normalizedToPhysical(jodellToNormalized(pos_set));
             }
 
             /**

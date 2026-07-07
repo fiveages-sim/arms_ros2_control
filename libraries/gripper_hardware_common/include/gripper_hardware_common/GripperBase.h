@@ -17,9 +17,11 @@ namespace gripper_hardware_common
         /// Perform hardware initialization/configuration.
         virtual bool initialize() = 0;
 
-        /// Move the gripper: normalized torque and velocity in [0,1]; position 0=closed, 1=open.
-        /// Velocity maps linearly to device byte 0–255 (see JD / Changingtek implementations).
-        virtual bool move_gripper(double normalized_torque, double normalized_velocity, double position) = 0;
+        /// Move the gripper.
+        /// @param torque Normalized torque in [0, 1].
+        /// @param velocity Normalized velocity in [0, 1].
+        /// @param position Physical joint position from ros2_control (m for prismatic, rad for revolute).
+        virtual bool move_gripper(double torque, double velocity, double position) = 0;
 
         /// Send async read request for current status (status updated by recv_thread_func).
         virtual bool getStatus() = 0;
