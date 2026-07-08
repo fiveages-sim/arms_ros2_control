@@ -8,6 +8,8 @@
 #include <sstream>
 #include <string>
 #include <std_msgs/msg/int32.hpp>
+#include <geometry_msgs/msg/point_stamped.hpp>
+#include <tf2_geometry_msgs/tf2_geometry_msgs.hpp>
 
 // // planners/kinematics required for cartesian moveL support
 // #include "lina_planning/planning/path_planner/movel.h"
@@ -1872,6 +1874,163 @@ namespace arms_controller_common
         waist_lifting_duration_ = node_->get_parameter("waist_lifting_duration").as_double();
     }
 
+    void StateMoveJ::setupWaistAbsoluteTransform(
+        const std::shared_ptr<tf2_ros::Buffer>& tf_buffer,
+        const std::string& source_frame,
+        const std::string& target_frame)
+    {
+        waist_absolute_tf_buffer_ = tf_buffer;
+        waist_absolute_source_frame_ = source_frame.empty() ? "base_footprint" : source_frame;
+        waist_absolute_target_frame_ = target_frame.empty() ? "body_base" : target_frame;
+        RCLCPP_INFO(node_->get_logger(),
+                    "Waist absolute transform configured: %s -> %s",
+                    waist_absolute_source_frame_.c_str(),
+                    waist_absolute_target_frame_.c_str());
+    }
+
+    bool StateMoveJ::getCurrentWaistPoseForCommand(
+        const Eigen::VectorXd& current_angles,
+        Eigen::Vector3d& current_pose,
+        std::string& error_message) const
+    {
+        if (!waist_lifting_planer_)
+        {
+            error_message = "waist lifting planner is not available";
+            return false;
+        }
+
+        if (waist_lifting_planer_->isBodyThreeJoint())
+        {
+            if (current_angles.size() < 3)
+            {
+                error_message = "cannot compute current THREE_JOINT waist pose: expected at least 3 waist joints";
+                return false;
+            }
+
+            Eigen::Vector3d angles3d(current_angles(0), current_angles(1), current_angles(2));
+            if (!waist_lifting_planer_->calculateThreeJointEndpointXzPhi(angles3d, current_pose))
+            {
+                error_message = "failed to compute current THREE_JOINT waist pose";
+                return false;
+            }
+            return true;
+        }
+
+        if (current_angles.size() < 1)
+        {
+            error_message = "cannot compute current SINGLE_JOINT waist pose: expected at least 1 waist joint";
+            return false;
+        }
+
+        current_pose = Eigen::Vector3d(0.0, current_angles(0), 0.0);
+        return true;
+    }
+
+    bool StateMoveJ::resolveWaistAbsoluteTargetToBodyBase(
+        const Eigen::Vector3d& source_xz_phi,
+        Eigen::Vector3d& body_base_xz_phi,
+        std::string& error_message) const
+    {
+        if (!waist_absolute_tf_buffer_)
+        {
+            error_message = "waist absolute TF buffer is not configured";
+            return false;
+        }
+
+        geometry_msgs::msg::PointStamped target_source;
+        target_source.header.frame_id = waist_absolute_source_frame_;
+        target_source.header.stamp = rclcpp::Time(0);
+        target_source.point.x = source_xz_phi.x();
+        target_source.point.y = 0.0;
+        target_source.point.z = source_xz_phi.y();
+
+        try
+        {
+            const auto transform = waist_absolute_tf_buffer_->lookupTransform(
+                waist_absolute_target_frame_,
+                waist_absolute_source_frame_,
+                tf2::TimePointZero);
+
+            geometry_msgs::msg::PointStamped target_body;
+            tf2::doTransform(target_source, target_body, transform);
+            if (std::abs(target_body.point.y) > 1.0e-4)
+            {
+                RCLCPP_WARN(node_->get_logger(),
+                            "Transformed waist absolute target has non-zero y in %s: %.6f; using x/z only",
+                            waist_absolute_target_frame_.c_str(), target_body.point.y);
+            }
+
+            body_base_xz_phi = Eigen::Vector3d(target_body.point.x, target_body.point.z, source_xz_phi.z());
+            return true;
+        }
+        catch (const tf2::TransformException& ex)
+        {
+            error_message = std::string("failed to transform waist absolute target from ") +
+                waist_absolute_source_frame_ + " to " + waist_absolute_target_frame_ + ": " + ex.what();
+            return false;
+        }
+    }
+
+    bool StateMoveJ::resolveWaistPoseGoalToDelta(
+        uint8_t mode,
+        const Eigen::Vector3d& input_xz_phi,
+        const Eigen::VectorXd& current_angles,
+        Eigen::Vector3d& lifting_delta,
+        Eigen::Vector3d& requested_target,
+        std::string& error_message) const
+    {
+        Eigen::Vector3d current_pose(0.0, 0.0, 0.0);
+        if (!getCurrentWaistPoseForCommand(current_angles, current_pose, error_message))
+        {
+            return false;
+        }
+
+        const bool three_joint = waist_lifting_planer_ && waist_lifting_planer_->isBodyThreeJoint();
+        if (mode == WaistLiftingPoseAction::Goal::MODE_RELATIVE)
+        {
+            if (three_joint)
+            {
+                lifting_delta = input_xz_phi;
+                requested_target = current_pose + lifting_delta;
+            }
+            else
+            {
+                lifting_delta = Eigen::Vector3d(0.0, input_xz_phi.y(), input_xz_phi.z());
+                requested_target = Eigen::Vector3d(0.0, current_pose.y() + lifting_delta.y(), input_xz_phi.z());
+            }
+            return true;
+        }
+
+        if (mode == WaistLiftingPoseAction::Goal::MODE_ABSOLUTE)
+        {
+            if (three_joint)
+            {
+                Eigen::Vector3d body_target(0.0, 0.0, 0.0);
+                if (!resolveWaistAbsoluteTargetToBodyBase(input_xz_phi, body_target, error_message))
+                {
+                    return false;
+                }
+                lifting_delta = body_target - current_pose;
+                requested_target = body_target;
+            }
+            else
+            {
+                const Eigen::Vector3d single_input(0.0, input_xz_phi.y(), input_xz_phi.z());
+                Eigen::Vector3d body_target(0.0, 0.0, 0.0);
+                if (!resolveWaistAbsoluteTargetToBodyBase(single_input, body_target, error_message))
+                {
+                    return false;
+                }
+                lifting_delta = Eigen::Vector3d(0.0, body_target.y() - current_pose.y(), input_xz_phi.z());
+                requested_target = Eigen::Vector3d(0.0, body_target.y(), input_xz_phi.z());
+            }
+            return true;
+        }
+
+        error_message = "invalid waist lifting pose mode";
+        return false;
+    }
+
     bool StateMoveJ::moveWaistLifting(const Eigen::Vector3d& lifting_delta)
     {
         if (!waist_lifting_planer_)
@@ -1922,33 +2081,30 @@ namespace arms_controller_common
             RCLCPP_WARN(node_->get_logger(), "Waist lifting planner not initialized");
             return false;
         }
-        if (!waist_lifting_planer_->isBodyThreeJoint())
-        {
-            RCLCPP_WARN(node_->get_logger(),
-                        "Absolute waist x/z/phi target is only supported for THREE_JOINT waist lifting");
-            return false;
-        }
 
         Eigen::VectorXd current_angles = getCurrentWaistAngles();
-        if (current_angles.size() < 3)
+        Eigen::Vector3d current_pose(0.0, 0.0, 0.0);
+        std::string error_message;
+        if (!getCurrentWaistPoseForCommand(current_angles, current_pose, error_message))
         {
-            RCLCPP_WARN(node_->get_logger(),
-                        "Cannot compute current waist x/z/phi: expected at least 3 waist joints, got %ld",
-                        current_angles.size());
+            RCLCPP_WARN(node_->get_logger(), "%s", error_message.c_str());
             return false;
         }
 
-        Eigen::Vector3d angles3d(current_angles(0), current_angles(1), current_angles(2));
-        Eigen::Vector3d current_pose;
-        if (!waist_lifting_planer_->calculateThreeJointEndpointXzPhi(angles3d, current_pose))
+        Eigen::Vector3d lifting_delta(0.0, 0.0, 0.0);
+        if (waist_lifting_planer_->isBodyThreeJoint())
         {
-            RCLCPP_WARN(node_->get_logger(), "Failed to calculate current waist x/z/phi in body_base");
-            return false;
+            lifting_delta = target_xz_phi - current_pose;
+        }
+        else
+        {
+            lifting_delta = Eigen::Vector3d(0.0, target_xz_phi.y() - current_pose.y(), 0.0);
         }
 
-        const Eigen::Vector3d lifting_delta = target_xz_phi - current_pose;
         RCLCPP_INFO(node_->get_logger(),
-                    "Waist absolute target in body_base: target=(%.4f, %.4f, %.4f), current=(%.4f, %.4f, %.4f), delta=(%.4f, %.4f, %.4f)",
+                    "Waist absolute target in %s: type=%s, target=(%.4f, %.4f, %.4f), current=(%.4f, %.4f, %.4f), delta=(%.4f, %.4f, %.4f)",
+                    waist_absolute_target_frame_.c_str(),
+                    waist_lifting_planer_->isBodyThreeJoint() ? "THREE_JOINT" : "SINGLE_JOINT",
                     target_xz_phi(0), target_xz_phi(1), target_xz_phi(2),
                     current_pose(0), current_pose(1), current_pose(2),
                     lifting_delta(0), lifting_delta(1), lifting_delta(2));
@@ -2593,51 +2749,37 @@ namespace arms_controller_common
             waist_lifting_planer_->isBodyThreeJoint() && current_angles.size() >= 3;
 
         Eigen::Vector3d lifting_delta(0.0, 0.0, 0.0);
-        double requested_norm = 0.0;
-        if (goal->mode == WaistLiftingPoseAction::Goal::MODE_ABSOLUTE)
+        Eigen::Vector3d requested_target(0.0, 0.0, 0.0);
+        std::string error_message;
+        const Eigen::Vector3d input_xz_phi(goal->x, goal->z, goal->phi);
+        if (!resolveWaistPoseGoalToDelta(
+                goal->mode,
+                input_xz_phi,
+                current_angles,
+                lifting_delta,
+                requested_target,
+                error_message))
         {
-            if (!three_joint)
-            {
-                result->reachable = false;
-                result->success = false;
-                result->error_code = WaistLiftingPoseAction::Result::ERROR_CONTROLLER_NOT_READY;
-                result->message = "absolute mode only supported for THREE_JOINT waist";
-                goal_handle->abort(result);
-                return;
-            }
-            Eigen::Vector3d angles3d(current_angles(0), current_angles(1), current_angles(2));
-            Eigen::Vector3d current_pose;
-            if (!waist_lifting_planer_->calculateThreeJointEndpointXzPhi(angles3d, current_pose))
-            {
-                result->reachable = false;
-                result->success = false;
-                result->error_code = WaistLiftingPoseAction::Result::ERROR_CONTROLLER_NOT_READY;
-                result->message = "failed to compute current waist pose";
-                goal_handle->abort(result);
-                return;
-            }
-            lifting_delta = Eigen::Vector3d(goal->x, goal->z, goal->phi) - current_pose;
+            result->reachable = false;
+            result->success = false;
+            result->error_code = WaistLiftingPoseAction::Result::ERROR_CONTROLLER_NOT_READY;
+            result->message = error_message;
+            goal_handle->abort(result);
+            return;
         }
-        else
-        {
-            lifting_delta = Eigen::Vector3d(goal->x, goal->z, goal->phi);
-        }
-        requested_norm = three_joint ? lifting_delta.norm() : std::abs(lifting_delta(1));
+        const double requested_norm = three_joint ? lifting_delta.norm() : std::abs(lifting_delta(1));
 
         if (!moveWaistLiftingImpl(lifting_delta))
         {
             result->reachable = false;
             result->success = false;
-            if (three_joint)
+            Eigen::Vector3d cur(0.0, 0.0, 0.0);
+            std::string current_pose_error;
+            if (getCurrentWaistPoseForCommand(current_angles, cur, current_pose_error))
             {
-                Eigen::Vector3d cur;
-                Eigen::Vector3d angles3d(current_angles(0), current_angles(1), current_angles(2));
-                if (waist_lifting_planer_->calculateThreeJointEndpointXzPhi(angles3d, cur))
-                {
-                    result->planned_x = cur.x();
-                    result->planned_z = cur.y();
-                    result->planned_phi = cur.z();
-                }
+                result->planned_x = cur.x();
+                result->planned_z = cur.y();
+                result->planned_phi = cur.z();
             }
             result->error_code = WaistLiftingPoseAction::Result::ERROR_UNREACHABLE;
             result->message = "no executable waist motion (already at limit or unreachable)";
@@ -2649,15 +2791,7 @@ namespace arms_controller_common
         constexpr double kPlannedDistanceEpsilon = 1.0e-4;
         const bool reachable = std::abs(planned_norm - requested_norm) <= kPlannedDistanceEpsilon;
 
-        Eigen::Vector3d planned_target(0.0, 0.0, 0.0);
-        if (three_joint)
-        {
-            planned_target = waist_lifting_planer_->getPlannedTargetPose();
-        }
-        else if (current_angles.size() >= 1)
-        {
-            planned_target = Eigen::Vector3d(0.0, current_angles(0) + lifting_delta(1), 0.0);
-        }
+        const Eigen::Vector3d planned_target = waist_lifting_planer_->getPlannedTargetPose();
 
         waist_lifting_pose_reachable_ = reachable;
         waist_lifting_pose_planned_target_ = planned_target;
@@ -2666,8 +2800,11 @@ namespace arms_controller_common
         waist_lifting_pose_action_active_ = true;
         publishWaistLiftingPoseFeedback();
         RCLCPP_INFO(node_->get_logger(),
-                    "Waist lifting pose action started: reachable=%d, planned=(%.4f, %.4f, %.4f)",
+                    "Waist lifting pose action started: mode=%u, type=%s, reachable=%d, requested_target=(%.4f, %.4f, %.4f), planned=(%.4f, %.4f, %.4f)",
+                    goal->mode,
+                    three_joint ? "THREE_JOINT" : "SINGLE_JOINT",
                     reachable ? 1 : 0,
+                    requested_target.x(), requested_target.y(), requested_target.z(),
                     planned_target.x(), planned_target.y(), planned_target.z());
     }
 

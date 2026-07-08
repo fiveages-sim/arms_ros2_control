@@ -225,13 +225,18 @@ namespace basic_joint_controller
                 state_list_.movej->updateJointLimitsFromURDF(msg->data);
             });
         state_list_.movej->setupJointTrajectoryService("joint_trajectory_with_para");
-        state_list_.movej->setupWaistLiftingPoseAction("waist_lifting_pose");
 
         // 创建腰部升降规划器并传递给 StateMoveJ
         if (waist_lifting_enabled_)
         {
             tf_buffer_ = std::make_shared<tf2_ros::Buffer>(get_node()->get_clock());
             tf_listener_ = std::make_shared<tf2_ros::TransformListener>(*tf_buffer_);
+            if (state_list_.movej)
+            {
+                state_list_.movej->setupWaistAbsoluteTransform(
+                    tf_buffer_, waist_absolute_source_frame_, waist_absolute_target_frame_);
+                state_list_.movej->setupWaistLiftingPoseAction("waist_lifting_pose");
+            }
 
             // 订阅腰部升降话题
             std::string waist_lifting_topic = "/" + controller_name_ + "/waist_lifting";

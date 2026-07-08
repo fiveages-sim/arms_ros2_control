@@ -200,7 +200,10 @@ namespace arms_controller_common
                 last_planned_lifting_length_ = 0.0;
                 return false;
             }
-            last_planned_lifting_length_ = end_pos - start_pos;
+            target_x_ = 0.0;
+            target_z_ = end_pos;
+            target_phi_ = 0.0;
+            last_planned_lifting_length_ = std::abs(end_pos - start_pos);
         }
 
 #ifdef HAS_LINA_PLANNING
