@@ -2,6 +2,7 @@
 #include <array>
 #include <eigen3/Eigen/Dense>
 #include <memory>
+#include <utility>
 #include <vector>
 
 // Optional dependency: lina_planning
@@ -58,6 +59,27 @@ namespace arms_controller_common
                                 const Eigen::Vector3d& angle_upper);
         // 设置单关节升降角度上下限
         void setSingleJointLimit(const double angle_lower, const double angle_upper);
+
+        // 设置单关节升降映射参数：height = raw_lift_joint * direction + offset
+        void setSingleJointParameter(double direction, double offset);
+
+        // 设置单关节 pitch 映射参数：phi = raw_pitch_joint * direction + offset
+        void setSingleJointPitchParameter(double direction, double offset);
+
+        // 设置单关节 pitch raw joint 上下限
+        void setSingleJointPitchLimit(double angle_lower, double angle_upper);
+
+        // 单关节正解：raw lift joint -> physical lift height
+        bool calculateSingleJointHeight(double joint_position, double& height) const;
+
+        // 单关节逆解：physical lift height -> raw lift joint
+        bool singleJointIK(double height, double& joint_position) const;
+
+        // 单关节 pitch 正解：raw pitch joint -> phi
+        bool calculateSingleJointPhi(double pitch_joint_position, double& phi) const;
+
+        // 单关节 pitch 逆解：phi -> raw pitch joint
+        bool singleJointPitchIK(double phi, double& pitch_joint_position) const;
 
         // 当前 movej/speedj 轨迹是否已执行完毕
         bool isMotionOver()
@@ -168,10 +190,22 @@ namespace arms_controller_common
         bool isThreeJointsOverLimits(const Eigen::Vector3d& joint_angle);
 
         /*单关节限制参数*/
-        double single_joint_limit_lower_;
-        double single_joint_limit_upper_;
-        // 检查单关节升降角是否超出限位
-        bool isSingleJointsOverLimts(const double joint_angle);
+        double single_joint_limit_lower_{0.0};
+        double single_joint_limit_upper_{0.0};
+        double single_joint_direction_{1.0};
+        double single_joint_offset_{0.0};
+        double single_joint_pitch_limit_lower_{0.0};
+        double single_joint_pitch_limit_upper_{0.0};
+        double single_joint_pitch_direction_{1.0};
+        double single_joint_pitch_offset_{0.0};
+
+        // 检查单关节 raw lift joint 是否超出限位；height 通过 IK 转 raw 后统一使用该检查
+        bool isSingleJointsOverLimts(double joint_angle) const;
+        // 检查单关节 raw pitch joint 是否超出限位；phi 通过 IK 转 raw 后统一使用该检查
+        bool isSingleJointPitchOverLimits(double joint_angle) const;
+        std::pair<double, double> getSingleJointHeightRange() const;
+        std::pair<double, double> getSingleJointPhiRange() const;
+        bool resolveFeasibleSingleJointPhi(double requested_phi, double& feasible_phi);
 
         /*由于只升降腰部，就使用简单的movej单关节*/
 #ifdef HAS_LINA_PLANNING

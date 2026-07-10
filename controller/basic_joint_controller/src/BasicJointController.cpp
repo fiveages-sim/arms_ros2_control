@@ -178,6 +178,14 @@ namespace basic_joint_controller
                     auto_declare<std::vector<double>>("waist_rotation_direction", {1.0, 1.0, 1.0});
                     auto_declare<std::vector<double>>("waist_angle_offset", {0.0, 0.0, 0.0});
                 }
+                else
+                {
+                    auto_declare<double>("waist_single_joint_direction", 1.0);
+                    auto_declare<double>("waist_single_joint_offset", 0.0);
+                    auto_declare<std::string>("waist_single_joint_pitch_joint", "body_joint2");
+                    auto_declare<double>("waist_single_joint_pitch_direction", 1.0);
+                    auto_declare<double>("waist_single_joint_pitch_offset", 0.0);
+                }
 
                 RCLCPP_INFO(get_node()->get_logger(),
                             "Waist lifting enabled for controller %s",

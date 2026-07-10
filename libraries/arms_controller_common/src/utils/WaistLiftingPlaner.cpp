@@ -67,15 +67,25 @@ namespace arms_controller_common
             return resolveFeasibleLiftingEnd(init_joint_angle, start_pos, requested_end,
                                              max_reachable_pos);
         }
-        max_reachable_pos = (direction > 0.0) ? single_joint_limit_upper_ : single_joint_limit_lower_;
+        const auto [min_height, max_height] = getSingleJointHeightRange();
+        max_reachable_pos = (direction > 0.0) ? max_height : min_height;
         return true;
     }
 
     bool WaistLiftingPlaner::resolveFeasibleLiftingEndSingleJoint(
         const double start_pos, const double requested_end, double& feasible_end)
     {
-        feasible_end = std::clamp(requested_end, single_joint_limit_lower_, single_joint_limit_upper_);
         (void)start_pos;
+        const auto [min_height, max_height] = getSingleJointHeightRange();
+        feasible_end = std::clamp(requested_end, min_height, max_height);
+        return true;
+    }
+
+    bool WaistLiftingPlaner::resolveFeasibleSingleJointPhi(
+        const double requested_phi, double& feasible_phi)
+    {
+        const auto [min_phi, max_phi] = getSingleJointPhiRange();
+        feasible_phi = std::clamp(requested_phi, min_phi, max_phi);
         return true;
     }
 
@@ -155,7 +165,6 @@ namespace arms_controller_common
         length_plan_uses_xz_ = false;
         current_joint_angle_ = init_joint_angle;
         double start_pos = 0.0;
-        double requested_end_pos = 0.0;
         double end_pos = 0.0;
 
         if (type_three_joint_)
@@ -191,19 +200,37 @@ namespace arms_controller_common
         }
         else
         {
-            // 对于单关节，直接规划关节角度
-            const double lifting_length = lifting_delta(1);
-            start_pos = init_joint_angle(0);
-            requested_end_pos = init_joint_angle(0) + lifting_length;
-            if (!resolveFeasibleLiftingEnd(init_joint_angle, start_pos, requested_end_pos, end_pos))
+            double start_height = 0.0;
+            calculateSingleJointHeight(init_joint_angle(0), start_height);
+            double start_phi = 0.0;
+            calculateSingleJointPhi(init_joint_angle(1), start_phi);
+
+            const double requested_end_height = start_height + lifting_delta(1);
+            if (!resolveFeasibleLiftingEnd(init_joint_angle, start_height,
+                                           requested_end_height, end_pos))
             {
                 last_planned_lifting_length_ = 0.0;
                 return false;
             }
+
+            double feasible_phi = 0.0;
+            if (!resolveFeasibleSingleJointPhi(start_phi + lifting_delta(2), feasible_phi))
+            {
+                last_planned_lifting_length_ = 0.0;
+                return false;
+            }
+
+            start_z_ = start_height;
+            start_phi_ = start_phi;
             target_x_ = 0.0;
             target_z_ = end_pos;
-            target_phi_ = 0.0;
-            last_planned_lifting_length_ = std::abs(end_pos - start_pos);
+            target_phi_ = feasible_phi;
+            const Eigen::Vector2d planned_delta(end_pos - start_height,
+                                                feasible_phi - start_phi);
+            last_planned_lifting_length_ = planned_delta.norm();
+            start_pos = 0.0;
+            end_pos = 1.0;
+            length_plan_uses_xz_ = true;
         }
 
 #ifdef HAS_LINA_PLANNING
@@ -494,12 +521,20 @@ namespace arms_controller_common
         }
 #endif
         double curr_phi = phi_;
-        if (type_three_joint_ && !type_speed_ && length_plan_uses_xz_)
+        if (!type_speed_ && length_plan_uses_xz_)
         {
             const double s = std::clamp(planner_pos, 0.0, 1.0);
-            curr_x = start_x_ + (target_x_ - start_x_) * s;
-            curr_z = start_z_ + (target_z_ - start_z_) * s;
-            curr_phi = start_phi_ + (target_phi_ - start_phi_) * s;
+            if (type_three_joint_)
+            {
+                curr_x = start_x_ + (target_x_ - start_x_) * s;
+                curr_z = start_z_ + (target_z_ - start_z_) * s;
+                curr_phi = start_phi_ + (target_phi_ - start_phi_) * s;
+            }
+            else
+            {
+                curr_z = start_z_ + (target_z_ - start_z_) * s;
+                curr_phi = start_phi_ + (target_phi_ - start_phi_) * s;
+            }
         }
         else
         {
@@ -525,14 +560,24 @@ namespace arms_controller_common
         }
         else
         {
-            // 单关节腰部
-            if (isSingleJointsOverLimts(curr_z))
+            // curr_z/curr_phi 是接口语义空间值；IK 反解后统一用 raw joint limit 判断可达性。
+            double lift_joint_position = 0.0;
+            if (!singleJointIK(curr_z, lift_joint_position))
             {
                 return false;
             }
-            next_point.resize(1);
-            next_point[0] = curr_z;
-            current_joint_angle_(0) = curr_z;
+
+            double pitch_joint_position = 0.0;
+            if (!singleJointPitchIK(curr_phi, pitch_joint_position))
+            {
+                return false;
+            }
+
+            next_point.resize(2);
+            next_point[0] = lift_joint_position;
+            next_point[1] = pitch_joint_position;
+            current_joint_angle_(0) = lift_joint_position;
+            current_joint_angle_(1) = pitch_joint_position;
             return true;
         }
     }
@@ -560,6 +605,105 @@ namespace arms_controller_common
         single_joint_limit_lower_ = angle_lower;
         single_joint_limit_upper_ = angle_upper;
     };
+
+    void WaistLiftingPlaner::setSingleJointParameter(const double direction,
+                                                     const double offset)
+    {
+        if (std::fabs(direction) <= min_val)
+        {
+            std::cerr << "single_joint_direction must be non-zero, fallback to 1.0" << std::endl;
+            single_joint_direction_ = 1.0;
+        }
+        else
+        {
+            single_joint_direction_ = direction;
+        }
+        single_joint_offset_ = offset;
+    }
+
+    bool WaistLiftingPlaner::calculateSingleJointHeight(const double joint_position,
+                                                        double& height) const
+    {
+        height = joint_position * single_joint_direction_ + single_joint_offset_;
+        return true;
+    }
+
+    bool WaistLiftingPlaner::singleJointIK(const double height,
+                                           double& joint_position) const
+    {
+        if (std::fabs(single_joint_direction_) <= min_val)
+        {
+            return false;
+        }
+        joint_position = (height - single_joint_offset_) / single_joint_direction_;
+        return !isSingleJointsOverLimts(joint_position);
+    }
+
+    void WaistLiftingPlaner::setSingleJointPitchParameter(const double direction,
+                                                          const double offset)
+    {
+        if (std::fabs(direction) <= min_val)
+        {
+            std::cerr << "single_joint_pitch_direction must be non-zero, fallback to 1.0" << std::endl;
+            single_joint_pitch_direction_ = 1.0;
+        }
+        else
+        {
+            single_joint_pitch_direction_ = direction;
+        }
+        single_joint_pitch_offset_ = offset;
+    }
+
+    void WaistLiftingPlaner::setSingleJointPitchLimit(const double angle_lower,
+                                                      const double angle_upper)
+    {
+        single_joint_pitch_limit_lower_ = angle_lower;
+        single_joint_pitch_limit_upper_ = angle_upper;
+    }
+
+    bool WaistLiftingPlaner::calculateSingleJointPhi(const double pitch_joint_position,
+                                                     double& phi) const
+    {
+        phi = pitch_joint_position * single_joint_pitch_direction_ +
+            single_joint_pitch_offset_;
+        return true;
+    }
+
+    bool WaistLiftingPlaner::singleJointPitchIK(const double phi,
+                                                double& pitch_joint_position) const
+    {
+        if (std::fabs(single_joint_pitch_direction_) <= min_val)
+        {
+            return false;
+        }
+        pitch_joint_position = (phi - single_joint_pitch_offset_) /
+            single_joint_pitch_direction_;
+        return !isSingleJointPitchOverLimits(pitch_joint_position);
+    }
+
+    std::pair<double, double> WaistLiftingPlaner::getSingleJointHeightRange() const
+    {
+        double h_lower = 0.0;
+        double h_upper = 0.0;
+        calculateSingleJointHeight(single_joint_limit_lower_, h_lower);
+        calculateSingleJointHeight(single_joint_limit_upper_, h_upper);
+        return {std::min(h_lower, h_upper), std::max(h_lower, h_upper)};
+    }
+
+    std::pair<double, double> WaistLiftingPlaner::getSingleJointPhiRange() const
+    {
+        double phi_lower = 0.0;
+        double phi_upper = 0.0;
+        calculateSingleJointPhi(single_joint_pitch_limit_lower_, phi_lower);
+        calculateSingleJointPhi(single_joint_pitch_limit_upper_, phi_upper);
+        return {std::min(phi_lower, phi_upper), std::max(phi_lower, phi_upper)};
+    }
+
+    bool WaistLiftingPlaner::isSingleJointPitchOverLimits(const double joint_angle) const
+    {
+        return joint_angle < single_joint_pitch_limit_lower_ - min_val ||
+            joint_angle > single_joint_pitch_limit_upper_ + min_val;
+    }
 
     bool WaistLiftingPlaner::calculateThreeJointEndpointXzPhi(
         const Eigen::Vector3d& joint_angle, Eigen::Vector3d& output_xz_phi)
@@ -736,7 +880,7 @@ namespace arms_controller_common
         return false;
     };
 
-    bool WaistLiftingPlaner::isSingleJointsOverLimts(const double joint_angle)
+    bool WaistLiftingPlaner::isSingleJointsOverLimts(const double joint_angle) const
     {
         return (joint_angle < single_joint_limit_lower_ - min_val ||
             joint_angle > single_joint_limit_upper_ + min_val);

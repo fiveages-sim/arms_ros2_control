@@ -438,6 +438,10 @@ namespace arms_controller_common
         double last_waist_turning_factor_{0.0};
         static constexpr double waist_factor_epsilon_{1e-6};
         size_t waist_turning_joint_index_{0};
+        size_t waist_lift_joint_index_{0};
+        size_t waist_pitch_joint_index_{0};
+        std::string waist_single_joint_pitch_joint_name_{"body_joint2"};
+        bool waist_single_joint_has_pitch_{false};
 
         std::vector<std::string> waist_joint_names_; // 腰部关节名称（前三个关节）
         void setWaistLiftingPlaner();
