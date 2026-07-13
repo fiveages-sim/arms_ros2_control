@@ -119,38 +119,41 @@ namespace gripper_hardware_common
         };
 
         /**
-         * @brief EincinX electric gripper RS485 quick-control registers (grip axis slave 2).
-         * Manual table: 6101 abs pos, 4307/4308 current, 4702 speed, 6103 homing, 6064 feedback.
+         * @brief EincinX electric gripper RS485 (slave 0x02, captured protocol).
+         * Init: FC06 enable + FC03 version. Runtime: FC10 position/speed, FC06 current/save, FC03 position/status.
          */
         struct EincinX
         {
-            static constexpr uint16_t ABS_POSITION_REG = 0x6101;       // item 1, FC06
-            static constexpr uint16_t REL_POSITION_REG = 0x6102;     // item 2 (unused)
-            static constexpr uint16_t FORWARD_CURRENT_REG = 0x4307;   // item 3, FC06
-            static constexpr uint16_t REVERSE_CURRENT_REG = 0x4308;   // item 4, FC06
-            static constexpr uint16_t SPEED_REG = 0x4702;             // item 5, FC10 32-bit
-            static constexpr uint16_t CONTROL_MODE_REG = 0x4701;        // param 76: 2=absolute
-            static constexpr uint16_t HOMING_CMD_REG = 0x6103;          // item 8, FC06 0x0021
-            static constexpr uint16_t POSITION_FB_REG = 0x6064;       // item 9, FC03 x2
-            static constexpr uint16_t VELOCITY_FB_REG = 0x606C;
-            static constexpr uint16_t CURRENT_FB_REG = 0x6078;
+            static constexpr uint16_t CONTROL_WORD_REG = 0x6040;   // FC06 enable=7 / disable=6
+            static constexpr uint16_t SOFTWARE_VERSION_REG = 0x100A;  // FC03 CiA402 software version
+            static constexpr uint16_t CURRENT_REG = 0x4307;         // FC06 write / FC03 read, 0–500
+            static constexpr uint16_t SAVE_PARAM_REG = 0x3001;        // FC06 write 1
+            static constexpr uint16_t SPEED_REG = 0x4702;             // FC10 / FC03 32-bit, 0–500000
+            static constexpr uint16_t ABS_POSITION_REG = 0x6101;    // FC10 32-bit
+            static constexpr uint16_t POSITION_FB_REG = 0x6064;     // FC03 32-bit
+            static constexpr uint16_t STATUS_WORD_REG = 0x6041;     // FC03 statusword
 
-            static constexpr uint16_t CONTROL_MODE_ABSOLUTE = 2;
-            static constexpr uint32_t MAX_POSITION_PULSES = 21000;
+            static constexpr uint16_t STATUS_TARGET_REACHED_MASK = 0x0400;  // bit10
+            static constexpr uint16_t SAVE_PARAM_VALUE = 0x0001;
+            static constexpr uint16_t ENABLE_VALUE = 0x0007;
+            static constexpr uint16_t DISABLE_VALUE = 0x0006;
+            static constexpr uint32_t MAX_POSITION_PULSES = 93000;
+            static constexpr double MAX_POSITION_RAD = 1.5707963267948966;
             static constexpr uint32_t DEFAULT_SPEED_PULSES = 120000;
-            static constexpr int DEFAULT_FORWARD_CURRENT = 50;   // tutorial: 0.5A -> 0x32
-            static constexpr int DEFAULT_REVERSE_CURRENT = 90;   // tutorial: 0.9A -> 0x5A
-            static constexpr int MAX_GRIP_CURRENT = 100;         // tutorial: 1.0A -> 0x64
-            static constexpr int MAX_RELEASE_CURRENT = 90;
-            static constexpr int MAX_SPEED_PULSES = 120000;
+            static constexpr int DEFAULT_CURRENT = 100;  // 0x64 per capture example
+            static constexpr int MAX_CURRENT = 500;
+            static constexpr int MAX_SPEED_PULSES = 500000;
 
             static constexpr uint8_t READ_FUNCTION = 0x03;
-            static constexpr uint8_t WRITE_FUNCTION = 0x10;
+            static constexpr uint16_t POSITION_FB_REGISTER_COUNT = 2;
+            static constexpr uint16_t SPEED_REGISTER_COUNT = 2;
+            static constexpr uint16_t READ_REGISTER_COUNT = 1;
+            static constexpr uint16_t SOFTWARE_VERSION_REGISTER_COUNT = 2;
             static constexpr uint8_t WRITE_SINGLE_FUNCTION = 0x06;
+            static constexpr uint8_t WRITE_FUNCTION = 0x10;
 
             static constexpr uint8_t SLAVE_ID = 0x02;
             static constexpr uint8_t DEFAULT_SLAVE_ID = SLAVE_ID;
-            static constexpr uint16_t HOMING_CMD_VALUE = 0x0021;
         };
 
         /**

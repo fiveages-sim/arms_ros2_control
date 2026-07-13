@@ -10,6 +10,8 @@
 #include <array>
 #include <cstdint>
 
+#include "gripper_hardware_common/utils/ModbusConfig.h"
+
 namespace gripper_hardware_common
 {
     namespace detail
@@ -83,38 +85,32 @@ namespace gripper_hardware_common
 
         using Changingtek90 = Changingtek;
 
-        /** @brief EincinX — 0 pulse = open, MAX_POSITION_PULSES = closed (same as Changingtek inverted). */
+        /** @brief EincinX — 0 pulse = open, MAX_POSITION_PULSES = closed. */
         class EincinX
         {
         public:
-            static constexpr uint32_t DEFAULT_MAX_POSITION_PULSES = 21000;
-
-            static uint32_t normalizedToPulses(double normalized, uint32_t max_pulses)
+            static uint32_t positionRadToPulses(double position_rad)
             {
-                normalized = std::clamp(normalized, 0.0, 1.0);
-                const double closed_fraction = 1.0 - normalized;
-                return static_cast<uint32_t>(closed_fraction * static_cast<double>(max_pulses));
+                const double max_rad = ModbusConfig::EincinX::MAX_POSITION_RAD;
+                position_rad = std::clamp(position_rad, 0.0, max_rad);
+                const uint32_t max_pulses = ModbusConfig::EincinX::MAX_POSITION_PULSES;
+                return static_cast<uint32_t>(
+                    (1.0 - position_rad / max_rad) * static_cast<double>(max_pulses));
             }
 
-            static double pulsesToNormalized(int32_t pulses, uint32_t max_pulses)
+            static double pulsesToPositionRad(int32_t pulses)
             {
+                const uint32_t max_pulses = ModbusConfig::EincinX::MAX_POSITION_PULSES;
+                const double max_rad = ModbusConfig::EincinX::MAX_POSITION_RAD;
                 if (pulses < 0)
                 {
                     pulses = 0;
                 }
                 const uint32_t clamped = static_cast<uint32_t>(
                     std::min(static_cast<int64_t>(pulses), static_cast<int64_t>(max_pulses)));
-                return std::clamp(1.0 - static_cast<double>(clamped) / static_cast<double>(max_pulses), 0.0, 1.0);
-            }
-
-            static uint32_t normalizedToPulses(double normalized)
-            {
-                return normalizedToPulses(normalized, DEFAULT_MAX_POSITION_PULSES);
-            }
-
-            static double pulsesToNormalized(int32_t pulses)
-            {
-                return pulsesToNormalized(pulses, DEFAULT_MAX_POSITION_PULSES);
+                return std::clamp(
+                    (1.0 - static_cast<double>(clamped) / static_cast<double>(max_pulses)) * max_rad,
+                    0.0, max_rad);
             }
         };
 

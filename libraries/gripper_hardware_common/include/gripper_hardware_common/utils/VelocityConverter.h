@@ -57,7 +57,7 @@ namespace gripper_hardware_common
         class EincinX
         {
         public:
-            static constexpr int DEFAULT_MAX_SPEED = 120000;
+            static constexpr int DEFAULT_MAX_SPEED = 500000;  // user: 0–500000
 
             static uint32_t normalizedToSpeed(double normalized, int max_speed)
             {
