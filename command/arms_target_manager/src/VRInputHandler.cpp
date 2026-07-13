@@ -712,6 +712,58 @@ namespace arms_ros2_control::command
         }
     }
 
+    void VRInputHandler::recordLastPublishedTarget(const std::string& armType,
+                                                   const Eigen::Vector3d& position,
+                                                   const Eigen::Quaterniond& orientation)
+    {
+        if (armType == "left")
+        {
+            has_last_published_left_target_ = true;
+            last_published_left_position_ = position;
+            last_published_left_orientation_ = orientation;
+            last_published_left_orientation_.normalize();
+        }
+        else if (armType == "right")
+        {
+            has_last_published_right_target_ = true;
+            last_published_right_position_ = position;
+            last_published_right_orientation_ = orientation;
+            last_published_right_orientation_.normalize();
+        }
+    }
+
+    void VRInputHandler::setRobotBaseFromLastCommandOrCurrent(const std::string& armType)
+    {
+        if (armType == "left")
+        {
+            if (has_last_published_left_target_)
+            {
+                robot_base_left_position_ = last_published_left_position_;
+                robot_base_left_orientation_ = last_published_left_orientation_;
+            }
+            else
+            {
+                robot_base_left_position_ = robot_current_left_position_;
+                robot_base_left_orientation_ = robot_current_left_orientation_;
+            }
+            robot_base_left_orientation_.normalize();
+        }
+        else if (armType == "right")
+        {
+            if (has_last_published_right_target_)
+            {
+                robot_base_right_position_ = last_published_right_position_;
+                robot_base_right_orientation_ = last_published_right_orientation_;
+            }
+            else
+            {
+                robot_base_right_position_ = robot_current_right_position_;
+                robot_base_right_orientation_ = robot_current_right_orientation_;
+            }
+            robot_base_right_orientation_.normalize();
+        }
+    }
+
     void VRInputHandler::publishTargetPoseDirect(const std::string& armType,
                                                 const Eigen::Vector3d& position,
                                                 const Eigen::Quaterniond& orientation)
@@ -730,12 +782,14 @@ namespace arms_ros2_control::command
         if (armType == "left" && pub_left_target_)
         {
             pub_left_target_->publish(pose);
+            recordLastPublishedTarget(armType, position, orientation);
             RCLCPP_DEBUG(node_->get_logger(), "🕹️🕶️🕹️ Published left_target: [%.3f, %.3f, %.3f]",
                         pose.position.x, pose.position.y, pose.position.z);
         }
         else if (armType == "right" && pub_right_target_)
         {
             pub_right_target_->publish(pose);
+            recordLastPublishedTarget(armType, position, orientation);
             RCLCPP_DEBUG(node_->get_logger(), "🕹️🕶️🕹️ Published right_target: [%.3f, %.3f, %.3f]",
                         pose.position.x, pose.position.y, pose.position.z);
         }
@@ -1113,8 +1167,7 @@ namespace arms_ros2_control::command
                         // 当前是暂停状态，执行恢复操作
                         vr_base_left_position_ = left_position_;
                         vr_base_left_orientation_ = left_orientation_;
-                        robot_base_right_position_ = robot_current_right_position_;
-                        robot_base_right_orientation_ = robot_current_right_orientation_;
+                        setRobotBaseFromLastCommandOrCurrent("right");
 
                         // 重置右摇杆累积偏移
                         right_thumbstick_offset_ = Eigen::Vector3d::Zero();
@@ -1127,6 +1180,9 @@ namespace arms_ros2_control::command
                         paused_left_orientation_ = Eigen::Quaterniond::Identity();
 
                         RCLCPP_INFO(node_->get_logger(), "🔘 [左Y按钮] 按下 - 功能: 切换右臂更新状态 - 操作: 恢复右臂更新（重置基准位姿和摇杆偏移） [镜像模式]");
+                        RCLCPP_DEBUG(node_->get_logger(),
+                                    "   Right Robot Base Source: %s",
+                                    has_last_published_right_target_ ? "last_command" : "current_pose");
                     }
                     else
                     {
@@ -1146,8 +1202,7 @@ namespace arms_ros2_control::command
                         // 当前是暂停状态，执行恢复操作
                         vr_base_left_position_ = left_position_;
                         vr_base_left_orientation_ = left_orientation_;
-                        robot_base_left_position_ = robot_current_left_position_;
-                        robot_base_left_orientation_ = robot_current_left_orientation_;
+                        setRobotBaseFromLastCommandOrCurrent("left");
 
                         // 重置左摇杆累积偏移
                         left_thumbstick_offset_ = Eigen::Vector3d::Zero();
@@ -1166,6 +1221,9 @@ namespace arms_ros2_control::command
                         RCLCPP_DEBUG(node_->get_logger(),
                                     "   Robot Base Position: [%.3f, %.3f, %.3f]",
                                     robot_base_left_position_.x(), robot_base_left_position_.y(), robot_base_left_position_.z());
+                        RCLCPP_DEBUG(node_->get_logger(),
+                                    "   Left Robot Base Source: %s",
+                                    has_last_published_left_target_ ? "last_command" : "current_pose");
                     }
                     else
                     {
@@ -1203,10 +1261,8 @@ namespace arms_ros2_control::command
                     vr_base_right_position_ = right_position_;
                     vr_base_right_orientation_ = right_orientation_;
 
-                    robot_base_left_position_ = robot_current_left_position_;
-                    robot_base_left_orientation_ = robot_current_left_orientation_;
-                    robot_base_right_position_ = robot_current_right_position_;
-                    robot_base_right_orientation_ = robot_current_right_orientation_;
+                    setRobotBaseFromLastCommandOrCurrent("left");
+                    setRobotBaseFromLastCommandOrCurrent("right");
 
                     // 重置摇杆累积偏移
                     left_thumbstick_offset_ = Eigen::Vector3d::Zero();
@@ -1243,6 +1299,10 @@ namespace arms_ros2_control::command
                                 robot_base_left_position_.x(), robot_base_left_position_.y(), robot_base_left_position_.z(),
                                 robot_base_right_position_.x(), robot_base_right_position_.y(),
                                 robot_base_right_position_.z());
+                    RCLCPP_DEBUG(node_->get_logger(),
+                                "   Robot Base Source: Left=%s, Right=%s",
+                                has_last_published_left_target_ ? "last_command" : "current_pose",
+                                has_last_published_right_target_ ? "last_command" : "current_pose");
                 }
                 else
                 {
@@ -1303,8 +1363,7 @@ namespace arms_ros2_control::command
                         // 当前是暂停状态，执行恢复操作
                         vr_base_right_position_ = right_position_;
                         vr_base_right_orientation_ = right_orientation_;
-                        robot_base_left_position_ = robot_current_left_position_;
-                        robot_base_left_orientation_ = robot_current_left_orientation_;
+                        setRobotBaseFromLastCommandOrCurrent("left");
 
                         // 重置左摇杆累积偏移
                         left_thumbstick_offset_ = Eigen::Vector3d::Zero();
@@ -1317,6 +1376,9 @@ namespace arms_ros2_control::command
                         paused_right_orientation_ = Eigen::Quaterniond::Identity();
 
                         RCLCPP_INFO(node_->get_logger(), "🔘 [右B按钮] 按下 - 功能: 切换左臂更新状态 - 操作: 恢复左臂更新（重置基准位姿和摇杆偏移） [镜像模式]");
+                        RCLCPP_DEBUG(node_->get_logger(),
+                                    "   Left Robot Base Source: %s",
+                                    has_last_published_left_target_ ? "last_command" : "current_pose");
                     }
                     else
                     {
@@ -1336,8 +1398,7 @@ namespace arms_ros2_control::command
                         // 当前是暂停状态，执行恢复操作
                         vr_base_right_position_ = right_position_;
                         vr_base_right_orientation_ = right_orientation_;
-                        robot_base_right_position_ = robot_current_right_position_;
-                        robot_base_right_orientation_ = robot_current_right_orientation_;
+                        setRobotBaseFromLastCommandOrCurrent("right");
 
                         // 重置右摇杆累积偏移
                         right_thumbstick_offset_ = Eigen::Vector3d::Zero();
@@ -1356,6 +1417,9 @@ namespace arms_ros2_control::command
                         RCLCPP_DEBUG(node_->get_logger(),
                                     "   Robot Base Position: [%.3f, %.3f, %.3f]",
                                     robot_base_right_position_.x(), robot_base_right_position_.y(), robot_base_right_position_.z());
+                        RCLCPP_DEBUG(node_->get_logger(),
+                                    "   Right Robot Base Source: %s",
+                                    has_last_published_right_target_ ? "last_command" : "current_pose");
                     }
                     else
                     {
