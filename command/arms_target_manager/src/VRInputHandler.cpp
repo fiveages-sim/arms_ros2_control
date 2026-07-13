@@ -732,6 +732,17 @@ namespace arms_ros2_control::command
         }
     }
 
+    void VRInputHandler::clearLastPublishedTargets()
+    {
+        has_last_published_left_target_ = false;
+        last_published_left_position_ = Eigen::Vector3d::Zero();
+        last_published_left_orientation_ = Eigen::Quaterniond::Identity();
+
+        has_last_published_right_target_ = false;
+        last_published_right_position_ = Eigen::Vector3d::Zero();
+        last_published_right_orientation_ = Eigen::Quaterniond::Identity();
+    }
+
     void VRInputHandler::setRobotBaseFromLastCommandOrCurrent(const std::string& armType)
     {
         if (armType == "left")
@@ -1911,6 +1922,13 @@ namespace arms_ros2_control::command
         // 更新状态
         if (new_state != old_state)
         {
+            if (old_state == 2 && new_state == 3)
+            {
+                clearLastPublishedTargets();
+                RCLCPP_INFO(node_->get_logger(),
+                            "🕹️🕶️🕹️ HOLD → OCS2: cleared cached command targets; next UPDATE will anchor from current pose");
+            }
+
             current_fsm_state_.store(new_state);
             
             // 如果当前状态不是OCS2，自动切换到存储模式

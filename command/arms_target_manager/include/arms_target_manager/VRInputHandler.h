@@ -243,6 +243,11 @@ namespace arms_ros2_control::command
                                        const Eigen::Quaterniond& orientation);
 
         /**
+         * 清空上一次 OCS2 会话发布的 command target 缓存。
+         */
+        void clearLastPublishedTargets();
+
+        /**
          * 将对应手臂的 robot base 设置为最后 command target；若还没有发布历史，则回退到 current pose。
          * @param armType 手臂类型 ("left" 或 "right")
          */
