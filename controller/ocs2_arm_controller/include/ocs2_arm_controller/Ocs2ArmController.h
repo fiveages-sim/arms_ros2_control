@@ -35,6 +35,7 @@ namespace ocs2::mobile_manipulator
     class StateOCS2;
     class StateHold;
     class StateMoveJ;
+    class StateCompliance;
 
     // Use ControlMode from arms_controller_common
     using ControlMode = arms_controller_common::ControlMode;
@@ -46,6 +47,7 @@ namespace ocs2::mobile_manipulator
         std::shared_ptr<StateOCS2> ocs2;   // OCS2 state
         std::shared_ptr<StateHold> hold;   // Hold position state
         std::shared_ptr<StateMoveJ> movej; // MoveJ state
+        std::shared_ptr<StateCompliance> compliance; // Compliance state
     };
 
     class Ocs2ArmController final : public controller_interface::ControllerInterface
