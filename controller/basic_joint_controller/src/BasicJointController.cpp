@@ -5,6 +5,7 @@
 #include "basic_joint_controller/BasicJointController.h"
 #include "basic_joint_controller/FSM/StateHold.h"
 #include "basic_joint_controller/FSM/StateMoveJ.h"
+#include "basic_joint_controller/FSM/StateCompliance.h"
 #include <eigen3/Eigen/Dense>
 #include <arms_controller_common/FSM/StateHome.h>
 
@@ -131,6 +132,11 @@ namespace basic_joint_controller
 
             state_list_.movej = std::make_shared<StateMoveJ>(
                 ctrl_interfaces_, get_node(), joint_names_);
+
+            // COMPLIANCE state (fsm_command=5 from HOLD)
+            auto_declare<std::vector<double>>("compliance_gains", {10.0, 1.0});
+            state_list_.compliance = std::make_shared<StateCompliance>(
+                ctrl_interfaces_, get_node());
 
             target_command_enabled_ = auto_declare<bool>("target_command_enabled", false);
             target_command_close_config_ = auto_declare<int32_t>("target_command_close_config", 1);
@@ -706,6 +712,8 @@ namespace basic_joint_controller
             return state_list_.hold;
         case FSMStateName::MOVEJ:
             return state_list_.movej;
+        case FSMStateName::COMPLIANCE:
+            return state_list_.compliance;
         default:
             return state_list_.invalid;
         }

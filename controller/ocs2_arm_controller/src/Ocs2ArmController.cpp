@@ -8,6 +8,7 @@
 #include "ocs2_arm_controller/FSM/StateOCS2.h"
 #include "ocs2_arm_controller/FSM/StateHold.h"
 #include "ocs2_arm_controller/FSM/StateMoveJ.h"
+#include "ocs2_arm_controller/FSM/StateCompliance.h"
 #include <arms_controller_common/utils/GravityCompensation.h>
 #include "arms_controller_common/utils/Kinematics.h"
 
@@ -211,6 +212,18 @@ namespace ocs2::mobile_manipulator
             state_list_.movej = std::make_shared<StateMoveJ>(
                 ctrl_interfaces_, get_node(), joint_names_, gravity_compensation);
             state_list_.movej->setKinematicsSolver(kinematics_);
+
+            // COMPLIANCE state (fsm_command=5 from HOLD)
+            auto_declare<std::vector<double>>("compliance_gains", {10.0, 1.0});
+            auto_declare<double>("compliance_force_ff_scale", 1.0);
+            auto_declare<bool>("compliance_admittance_enabled", false);
+            auto_declare<std::vector<double>>("compliance_admittance_mass",
+                                              {1.0, 1.0, 1.0, 0.1, 0.1, 0.1});
+            auto_declare<std::vector<double>>("compliance_admittance_damping",
+                                              {20.0, 20.0, 20.0, 2.0, 2.0, 2.0});
+            auto_declare<double>("compliance_admittance_max_displacement", 0.05);
+            state_list_.compliance = std::make_shared<StateCompliance>(
+                ctrl_interfaces_, get_node(), gravity_compensation, kinematics_);
 
             // ===== Waist lifting parameters copied from BasicJointController =====
             waist_lifting_enabled_ = auto_declare<bool>("waist_lifting_enabled", false);
@@ -489,6 +502,8 @@ namespace ocs2::mobile_manipulator
             return state_list_.hold;
         case FSMStateName::MOVEJ:
             return state_list_.movej;
+        case FSMStateName::COMPLIANCE:
+            return state_list_.compliance;
         default:
             return state_list_.invalid;
         }
@@ -530,6 +545,9 @@ namespace ocs2::mobile_manipulator
             break;
         case FSMStateName::MOVEJ:
             state_code = 4;
+            break;
+        case FSMStateName::COMPLIANCE:
+            state_code = 5;
             break;
         case FSMStateName::INVALID:
         default:

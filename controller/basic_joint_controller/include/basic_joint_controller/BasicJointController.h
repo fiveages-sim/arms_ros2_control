@@ -41,6 +41,7 @@ namespace basic_joint_controller
     // Forward declarations
     class StateHold; // Extended StateHold with MOVEJ transition
     class StateMoveJ; // Extended StateMoveJ for basic_joint_controller
+    class StateCompliance; // Extended StateCompliance for basic_joint_controller
 
     struct FSMStateList
     {
@@ -48,6 +49,7 @@ namespace basic_joint_controller
         std::shared_ptr<arms_controller_common::StateHome> home; // Use common StateHome
         std::shared_ptr<StateHold> hold; // Extended StateHold for basic_joint_controller
         std::shared_ptr<StateMoveJ> movej; // Extended StateMoveJ for basic_joint_controller
+        std::shared_ptr<StateCompliance> compliance; // Compliance state
     };
 
     class BasicJointController final : public controller_interface::ControllerInterface

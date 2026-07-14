@@ -8,7 +8,7 @@ namespace basic_joint_controller
     arms_controller_common::FSMStateName StateHold::checkChange()
     {
         // Check FSM command for state transition
-        // Supports: HOLD -> HOME (command 1), HOLD -> MOVEJ (command 3)
+        // Supports: HOLD -> HOME (command 1), HOLD -> MOVEJ (command 3), HOLD -> COMPLIANCE (command 5)
         switch (ctrl_interfaces_.fsm_command_)
         {
         case 1:
@@ -16,6 +16,8 @@ namespace basic_joint_controller
         case 3:
         case 4:
             return arms_controller_common::FSMStateName::MOVEJ;
+        case 5:
+            return arms_controller_common::FSMStateName::COMPLIANCE;
         default:
             return arms_controller_common::FSMStateName::HOLD;
         }

@@ -32,6 +32,7 @@ add_library(${PROJECT_NAME} SHARED
         src/BasicJointController.cpp
         src/FSM/StateHold.cpp
         src/FSM/StateMoveJ.cpp
+        src/FSM/StateCompliance.cpp
 )
 
 target_include_directories(${PROJECT_NAME}
