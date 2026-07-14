@@ -17,7 +17,8 @@ namespace arms_controller_common
         HOME,
         HOLD,
         MOVEJ,  // Move Joint - for basic_joint_controller
-        OCS2    // For ocs2_arm_controller
+        OCS2,   // For ocs2_arm_controller
+        COMPLIANCE  // Force/position hybrid compliance control (fsm_command=5)
     };
 
     // FSM Mode enum
