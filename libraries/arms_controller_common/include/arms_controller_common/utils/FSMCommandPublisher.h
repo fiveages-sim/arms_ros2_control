@@ -73,7 +73,7 @@ namespace arms_controller_common
          * Special handling:
          * - command=100: Automatically sends command=0 after 100ms delay to reset debounce flag
          *
-         * @param command FSM command value (1=HOME, 2=HOLD, 3=OCS2, 4=MOVEJ, 100=switch pose, 0=reset)
+         * @param command FSM command value (1=HOME, 2=HOLD, 3=OCS2, 4=MOVEJ, 5=COMPLIANCE, 100=switch pose, 0=reset)
          */
         void publishCommand(std::int32_t command)
         {
