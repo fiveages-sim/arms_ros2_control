@@ -53,6 +53,26 @@ namespace gripper_hardware_common
 
         using Changingtek90 = Changingtek;
 
+        /** @brief EincinX — motor current register 0x4307, range 0–500. */
+        class EincinX
+        {
+        public:
+            static int normalizedToGripCurrent(double normalized, int max_current = MAX_CURRENT)
+            {
+                normalized = std::clamp(normalized, 0.0, 1.0);
+                return static_cast<int>(normalized * max_current);
+            }
+
+            static int normalizedToReleaseCurrent(double normalized, int max_current = MAX_CURRENT)
+            {
+                return normalizedToGripCurrent(normalized, max_current);
+            }
+
+            static constexpr int MAX_CURRENT = 500;
+            static constexpr int MAX_GRIP_CURRENT = MAX_CURRENT;
+            static constexpr int MAX_RELEASE_CURRENT = MAX_CURRENT;
+        };
+
         /**
          * @brief Jodell gripper torque conversion
          * 
