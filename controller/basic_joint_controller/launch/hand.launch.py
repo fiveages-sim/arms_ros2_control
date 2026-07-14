@@ -8,7 +8,6 @@ import xacro
 
 # Import robot_common_launch utilities
 from robot_common_launch import load_robot_config, create_rmw_zenohd_node
-from robot_common_launch.common.launch_arg_utils import extract_prefixed_args
 
 
 def launch_setup(context, *args, **kwargs):
@@ -28,7 +27,7 @@ def launch_setup(context, *args, **kwargs):
     elif hand_name == "inspire":
         modbus_id = "2" if direction == "1" else "1"
     elif hand_name == "theohand":
-        modbus_id = context.launch_configurations.get('hardware_slave_id', '') or "1"
+        modbus_id = "2" if direction == "1" else "1"
     else:
         modbus_id = "0x28" if direction == "1" else "0x27"
     print(f"[INFO] Hand configuration: {hand_side} hand (direction={direction}, Modbus ID={modbus_id})")
@@ -61,9 +60,6 @@ def launch_setup(context, *args, **kwargs):
     # 如果是 Gazebo 模式，添加 gazebo 映射
     if hardware == 'gz':
         mappings['gazebo'] = 'true'
-    if hardware in ['real', 'real_usb']:
-        mappings.update(extract_prefixed_args(context.launch_configurations, 'hardware_'))
-
     # 处理 xacro 文件
     try:
         robot_description_config = xacro.process_file(hand_xacro_path, mappings=mappings)
@@ -173,7 +169,6 @@ def launch_setup(context, *args, **kwargs):
             # Add joint_controllers parameter for JointControlPanel
             # 设置默认的控制器名称，这样 joint_control_panel 就能正确找到 topic
             rviz_parameters.append({'joint_controllers': ['hand_joint_controller']})
-            print(rviz_parameters)
 
             rviz_node = Node(
                 package="rviz2",
@@ -239,42 +234,6 @@ def generate_launch_description():
         description='Whether to launch RViz visualization'
     )
 
-    hardware_serial_port_arg = DeclareLaunchArgument(
-        'hardware_serial_port',
-        default_value='',
-        description='Serial port forwarded to hand ros2_control xacro when hardware:=real',
-    )
-
-    hardware_slave_id_arg = DeclareLaunchArgument(
-        'hardware_slave_id',
-        default_value='',
-        description='Modbus slave ID forwarded to hand ros2_control xacro when hardware:=real',
-    )
-
-    hardware_baudrate_arg = DeclareLaunchArgument(
-        'hardware_baudrate',
-        default_value='',
-        description='Baudrate forwarded to hand ros2_control xacro when hardware:=real',
-    )
-
-    hardware_read_feedback_arg = DeclareLaunchArgument(
-        'hardware_read_feedback',
-        default_value='',
-        description='Feedback-read flag forwarded to hand ros2_control xacro when hardware:=real',
-    )
-
-    hardware_background_period_ms_arg = DeclareLaunchArgument(
-        'hardware_background_period_ms',
-        default_value='',
-        description='Background Modbus polling period in ms forwarded to hand ros2_control xacro when hardware:=real',
-    )
-
-    hardware_feedback_quiet_after_write_ms_arg = DeclareLaunchArgument(
-        'hardware_feedback_quiet_after_write_ms',
-        default_value='',
-        description='Feedback quiet period after hand command writes in ms forwarded to hand ros2_control xacro when hardware:=real',
-    )
-
     return LaunchDescription([
         hand_arg,
         type_arg,
@@ -282,11 +241,5 @@ def generate_launch_description():
         hardware_arg,
         world_arg,
         use_rviz_arg,
-        hardware_serial_port_arg,
-        hardware_slave_id_arg,
-        hardware_baudrate_arg,
-        hardware_read_feedback_arg,
-        hardware_background_period_ms_arg,
-        hardware_feedback_quiet_after_write_ms_arg,
         OpaqueFunction(function=launch_setup),
     ])
