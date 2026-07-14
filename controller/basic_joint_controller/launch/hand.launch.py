@@ -26,6 +26,8 @@ def launch_setup(context, *args, **kwargs):
         modbus_id = "0" if direction == "1" else "1"
     elif hand_name == "inspire":
         modbus_id = "2" if direction == "1" else "1"
+    elif hand_name == "theohand":
+        modbus_id = "2" if direction == "1" else "1"
     else:
         modbus_id = "0x28" if direction == "1" else "0x27"
     print(f"[INFO] Hand configuration: {hand_side} hand (direction={direction}, Modbus ID={modbus_id})")
@@ -58,7 +60,6 @@ def launch_setup(context, *args, **kwargs):
     # 如果是 Gazebo 模式，添加 gazebo 映射
     if hardware == 'gz':
         mappings['gazebo'] = 'true'
-
     # 处理 xacro 文件
     try:
         robot_description_config = xacro.process_file(hand_xacro_path, mappings=mappings)
@@ -168,7 +169,6 @@ def launch_setup(context, *args, **kwargs):
             # Add joint_controllers parameter for JointControlPanel
             # 设置默认的控制器名称，这样 joint_control_panel 就能正确找到 topic
             rviz_parameters.append({'joint_controllers': ['hand_joint_controller']})
-            print(rviz_parameters)
 
             rviz_node = Node(
                 package="rviz2",
