@@ -609,6 +609,11 @@ namespace arms_rviz_control_plugin
         //     return "right";
         // }
 
+        if (joint_name_lower.find("gripper") != std::string::npos)
+        {
+            return "";
+        }
+
         // 3. 左臂 - 严格匹配
         // 只匹配以 "left" 或 "l_" 开头，或以 'l' + 数字开头的关节
         bool is_left = (joint_name_lower.find("left") == 0) ||
@@ -1730,60 +1735,21 @@ namespace arms_rviz_control_plugin
         joint_to_category_.clear();
         category_to_joints_.clear();
 
-        // 如果存在 hand / gripper 控制器，则不要过滤掉手部关节
-        bool has_hand_controller = false;
-        for (const auto& controller : available_controllers_)
-        {
-            std::string controller_lower = controller;
-            std::transform(controller_lower.begin(), controller_lower.end(),
-                           controller_lower.begin(), ::tolower);
-            if (controller_lower.find("hand") != std::string::npos ||
-                controller_lower.find("gripper") != std::string::npos)
-            {
-                has_hand_controller = true;
-                break;
-            }
-        }
-        // Filter out gripper joints and classify joints
+        // Filter and classify joints (empty category = gripper, skip)
         for (size_t i = 0; i < joint_names_source.size(); ++i)
         {
             const std::string& joint_name = joint_names_source[i];
-            // Skip gripper joints - check for gripper, hand, finger, thumb, etc.
-            std::string joint_name_lower = joint_name;
-            std::transform(joint_name_lower.begin(), joint_name_lower.end(),
-                           joint_name_lower.begin(), ::tolower);
-
-            // Classify joint first to check if it's a left_hand or right_hand
             std::string category = classifyJoint(joint_name);
-            
-            // Filter out gripper-related joints, but keep left_hand and right_hand joints
-            bool is_gripper_joint =
-                (joint_name_lower.find("gripper") != std::string::npos &&
-                 category != "left_hand" && category != "right_hand") ||
-                (joint_name_lower.find("hand") != std::string::npos && 
-                 category != "left_hand" && category != "right_hand") ||
-                (joint_name_lower.find("finger") != std::string::npos && 
-                 category != "left_hand" && category != "right_hand") ||
-                (joint_name_lower.find("thumb") != std::string::npos && 
-                 category != "left_hand" && category != "right_hand") ||
-                (joint_name_lower.find("palm") != std::string::npos && 
-                 category != "left_hand" && category != "right_hand");
-            // 如果有 hand/gripper 控制器，则不过滤手部关节
-            if (has_hand_controller)
+            if (category.empty())
             {
-                is_gripper_joint = false;
+                continue;
             }
 
-            if (!is_gripper_joint)
-            {
-                size_t joint_index = joint_names_.size();
-                joint_names_.push_back(joint_name);
-                joint_name_to_index_[joint_name] = joint_index;
-
-                // Use the category from classifyJoint
-                joint_to_category_[joint_name] = category;
-                category_to_joints_[category].push_back(joint_index);
-            }
+            size_t joint_index = joint_names_.size();
+            joint_names_.push_back(joint_name);
+            joint_name_to_index_[joint_name] = joint_index;
+            joint_to_category_[joint_name] = category;
+            category_to_joints_[category].push_back(joint_index);
         }
 
         // joint_states 顺序常为字母序，导致灵巧手 UI 与 Float64MultiArray 与 ros2_control 关节序不一致

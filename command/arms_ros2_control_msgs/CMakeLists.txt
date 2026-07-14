@@ -17,6 +17,7 @@ rosidl_generate_interfaces(${PROJECT_NAME}
         "action/ExecuteLinear.action"
         "srv/ExecuteLinear.srv"
         "action/MovecUseIK.action"
+        "action/WaistLiftingPose.action"
         "srv/KinematicsService.srv"
         "srv/MovecUseIK.srv"
         "msg/WbcCapability.msg"
