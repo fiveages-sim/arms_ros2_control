@@ -17,9 +17,10 @@ namespace arms_controller_common
      * 
      * Valid state transitions:
      * - command = 1: HOLD → HOME (only from HOLD state)
-     * - command = 2: HOME/OCS2/MOVEJ → HOLD (only from HOME, OCS2, or MOVEJ states)
+     * - command = 2: HOME/OCS2/MOVEJ/COMPLIANCE → HOLD (only from HOME, OCS2, MOVEJ, or COMPLIANCE states)
      * - command = 3: HOLD → OCS2 (only from HOLD state)
      * - command = 4: HOLD → MOVEJ (only from HOLD state)
+     * - command = 5: HOLD → COMPLIANCE (only from HOLD state)
      * 
      * Usage example:
      * ```cpp
@@ -44,7 +45,7 @@ namespace arms_controller_common
         /**
          * @brief Validate a state transition based on current state and command
          * 
-         * @param current_state Current FSM state ("HOME", "HOLD", "OCS2", "MOVEJ")
+         * @param current_state Current FSM state ("HOME", "HOLD", "OCS2", "MOVEJ", "COMPLIANCE")
          * @param command FSM command (1, 2, 3, 4, or special commands like 0, 100)
          * @param new_state Output parameter: new state if transition is valid (unchanged if invalid)
          * @return true if transition is valid, false otherwise
@@ -67,8 +68,9 @@ namespace arms_controller_common
                     }
                     break;
                     
-                case 2: // HOME → HOLD 或 OCS2 → HOLD 或 MOVEJ → HOLD
-                    if (current_state == "HOME" || current_state == "OCS2" || current_state == "MOVEJ")
+                case 2: // HOME → HOLD 或 OCS2 → HOLD 或 MOVEJ → HOLD 或 COMPLIANCE → HOLD
+                    if (current_state == "HOME" || current_state == "OCS2" ||
+                        current_state == "MOVEJ" || current_state == "COMPLIANCE")
                     {
                         new_state = "HOLD";
                         return true;
@@ -87,6 +89,14 @@ namespace arms_controller_common
                     if (current_state == "HOLD")
                     {
                         new_state = "MOVEJ";
+                        return true;
+                    }
+                    break;
+
+                case 5: // HOLD → COMPLIANCE
+                    if (current_state == "HOLD")
+                    {
+                        new_state = "COMPLIANCE";
                         return true;
                     }
                     break;
