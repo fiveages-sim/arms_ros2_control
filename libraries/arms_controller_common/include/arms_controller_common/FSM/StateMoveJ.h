@@ -22,6 +22,7 @@
 #include <std_msgs/msg/int32.hpp>
 #include <trajectory_msgs/msg/joint_trajectory.hpp>
 #include <eigen3/Eigen/Dense>
+#include <tf2_ros/buffer.hpp>
 #include "arms_controller_common/utils/WaistLiftingPlaner.h"
 #include "arms_ros2_control_msgs/action/joint_trajectory.hpp"
 #include "arms_ros2_control_msgs/msg/joint_waypoint.hpp"
@@ -30,6 +31,7 @@
 #include "arms_controller_common/utils/CartesianTrajectoryManager.h"
 #include "arms_ros2_control_msgs/action/execute_linear.hpp"
 #include "arms_ros2_control_msgs/action/movec_use_ik.hpp"
+#include "arms_ros2_control_msgs/action/waist_lifting_pose.hpp"
 #include "arms_ros2_control_msgs/srv/execute_linear.hpp"
 #include "arms_ros2_control_msgs/srv/movec_use_ik.hpp"
 
@@ -162,6 +164,18 @@ namespace arms_controller_common
         bool moveWaistLiftingToBodyBaseXz(const Eigen::Vector3d& target_xz_phi);
 
         /**
+         * @brief Configure TF used by waist absolute pose commands.
+         *
+         * Absolute pose commands interpret input x/z in source_frame and transform
+         * the point into target_frame before converting it to a lifting delta.
+         * phi is currently passed through unchanged, matching the existing topic behavior.
+         */
+        void setupWaistAbsoluteTransform(
+            const std::shared_ptr<tf2_ros::Buffer>& tf_buffer,
+            const std::string& source_frame,
+            const std::string& target_frame);
+
+        /**
          * @brief 控制腰部升降指令，command=0 停止，command=1 上升 ，command=2 下降
          */
         bool setWaistLiftingCommand(int command);
@@ -185,6 +199,7 @@ namespace arms_controller_common
          */
         void setupJointTrajectoryService(const std::string& service_name = "joint_trajectory");
         void setupJointTrajectoryAction(const std::string& action_name = "joint_trajectory");
+        void setupWaistLiftingPoseAction(const std::string& action_name = "waist_lifting_pose");
 
         void setKinematicsSolver(const std::shared_ptr<ArmKinematics>& kinematics = nullptr);
         // 在 StateMoveJ.h 的 public 部分添加
@@ -246,6 +261,43 @@ namespace arms_controller_common
         void setTrajectoryImpl(const trajectory_msgs::msg::JointTrajectory& trajectory);
         bool moveWaistLiftingImpl(const Eigen::Vector3d& lifting_delta);
         bool moveWaistLiftingToBodyBaseXzImpl(const Eigen::Vector3d& target_xz_phi);
+
+        /**
+         * @brief 根据当前关节角计算腰部在 body_base 下的位姿 [x, z, phi]。
+         *
+         * 三关节：FK 计算末端 x/z/phi；单关节：表达为 [0, joint_angle, 0]。
+         * 供 absolute/relative 目标解析与 result 回填复用。
+         */
+        bool getCurrentWaistPoseForCommand(
+            const Eigen::VectorXd& current_angles,
+            Eigen::Vector3d& current_pose,
+            std::string& error_message) const;
+
+        /**
+         * @brief 将 source_frame 下的绝对目标 [x, z, phi] 经 TF 转换到 body_base。
+         *
+         * 仅对 x/z 做点变换（y 固定为 0）；phi 原样透传，与 topic absolute 语义一致。
+         * 依赖 setupWaistAbsoluteTransform() 注入的 TF buffer 与 frame 参数。
+         */
+        bool resolveWaistAbsoluteTargetToBodyBase(
+            const Eigen::Vector3d& source_xz_phi,
+            Eigen::Vector3d& body_base_xz_phi,
+            std::string& error_message) const;
+
+        /**
+         * @brief 将 WaistLiftingPose action goal 解析为规划用的 lifting_delta 与 requested_target。
+         *
+         * MODE_RELATIVE：三关节直接使用 [dx, dz, dphi]；单关节仅用 z（及透传 phi），x 归零。
+         * MODE_ABSOLUTE：三关节先 TF 再减当前 pose；单关节仅对 z 做 TF 后减当前关节位置。
+         * 不加锁，可在已持有 target_mutex_ 的 action 回调中安全调用。
+         */
+        bool resolveWaistPoseGoalToDelta(
+            uint8_t mode,
+            const Eigen::Vector3d& input_xz_phi,
+            const Eigen::VectorXd& current_angles,
+            Eigen::Vector3d& lifting_delta,
+            Eigen::Vector3d& requested_target,
+            std::string& error_message) const;
         bool setWaistLiftingFactorImpl(double factor);
         bool setWaistTurningFactorImpl(double factor);
         bool startJointTrajectoryRequestImpl(
@@ -370,6 +422,9 @@ namespace arms_controller_common
 
         // Waist lifting support
         std::shared_ptr<arms_controller_common::WaistLiftingPlaner> waist_lifting_planer_;
+        std::shared_ptr<tf2_ros::Buffer> waist_absolute_tf_buffer_;
+        std::string waist_absolute_source_frame_{"base_footprint"};
+        std::string waist_absolute_target_frame_{"body_base"};
         bool waist_lifting_active_{false};
         bool waist_lifting_debug_print_active_{false};
         std::shared_ptr<arms_controller_common::WaistLiftingPlaner> waist_turning_planer_;
@@ -383,6 +438,10 @@ namespace arms_controller_common
         double last_waist_turning_factor_{0.0};
         static constexpr double waist_factor_epsilon_{1e-6};
         size_t waist_turning_joint_index_{0};
+        size_t waist_lift_joint_index_{0};
+        size_t waist_pitch_joint_index_{0};
+        std::string waist_single_joint_pitch_joint_name_{"body_joint2"};
+        bool waist_single_joint_has_pitch_{false};
 
         std::vector<std::string> waist_joint_names_; // 腰部关节名称（前三个关节）
         void setWaistLiftingPlaner();
@@ -434,6 +493,24 @@ namespace arms_controller_common
             double& planned_duration);
         void publishJointTrajectoryFeedback();
         void finishJointTrajectoryAction(bool success, bool canceled, const std::string& message);
+
+        using WaistLiftingPoseAction = arms_ros2_control_msgs::action::WaistLiftingPose;
+        using WaistLiftingPoseGoalHandle = rclcpp_action::ServerGoalHandle<WaistLiftingPoseAction>;
+        rclcpp_action::Server<WaistLiftingPoseAction>::SharedPtr waist_lifting_pose_action_server_;
+        std::shared_ptr<WaistLiftingPoseGoalHandle> active_waist_lifting_pose_goal_;
+        rclcpp::Time waist_lifting_pose_action_start_time_;
+        bool waist_lifting_pose_action_active_{false};
+        bool waist_lifting_pose_reachable_{false};
+        Eigen::Vector3d waist_lifting_pose_planned_target_{0.0, 0.0, 0.0};
+        rclcpp_action::GoalResponse handleWaistLiftingPoseGoal(
+            const rclcpp_action::GoalUUID& uuid,
+            std::shared_ptr<const WaistLiftingPoseAction::Goal> goal);
+        rclcpp_action::CancelResponse handleWaistLiftingPoseCancel(
+            const std::shared_ptr<WaistLiftingPoseGoalHandle> goal_handle);
+        void handleWaistLiftingPoseAccepted(
+            const std::shared_ptr<WaistLiftingPoseGoalHandle> goal_handle);
+        void publishWaistLiftingPoseFeedback();
+        void finishWaistLiftingPoseAction(bool success, int32_t error_code, const std::string& message);
 
         // 辅助函数
         bool validateJointNames(const std::vector<std::string>& request_joint_names, std::string& error_msg);

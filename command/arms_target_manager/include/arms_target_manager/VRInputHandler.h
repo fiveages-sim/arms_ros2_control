@@ -233,6 +233,27 @@ namespace arms_ros2_control::command
                                      const Eigen::Quaterniond& orientation);
 
         /**
+         * 记录最后一次实际发布出去的目标位姿，用作暂停恢复/进入 UPDATE 的 command 连续性基准。
+         * @param armType 手臂类型 ("left" 或 "right")
+         * @param position 已发布的位置
+         * @param orientation 已发布的方向
+         */
+        void recordLastPublishedTarget(const std::string& armType,
+                                       const Eigen::Vector3d& position,
+                                       const Eigen::Quaterniond& orientation);
+
+        /**
+         * 清空上一次 OCS2 会话发布的 command target 缓存。
+         */
+        void clearLastPublishedTargets();
+
+        /**
+         * 将对应手臂的 robot base 设置为最后 command target；若还没有发布历史，则回退到 current pose。
+         * @param armType 手臂类型 ("left" 或 "right")
+         */
+        void setRobotBaseFromLastCommandOrCurrent(const std::string& armType);
+
+        /**
          * 将Pose消息转换为Eigen::Matrix4d
          * @param msg Pose消息
          * @return 4x4变换矩阵
@@ -329,6 +350,14 @@ namespace arms_ros2_control::command
         Eigen::Quaterniond prev_calculated_left_orientation_ = Eigen::Quaterniond::Identity();
         Eigen::Vector3d prev_calculated_right_position_ = Eigen::Vector3d::Zero();
         Eigen::Quaterniond prev_calculated_right_orientation_ = Eigen::Quaterniond::Identity();
+
+        // 最后一次实际发布出去的 command target，用于暂停恢复和总开进入 UPDATE 时保持目标连续性
+        bool has_last_published_left_target_ = false;
+        Eigen::Vector3d last_published_left_position_ = Eigen::Vector3d::Zero();
+        Eigen::Quaterniond last_published_left_orientation_ = Eigen::Quaterniond::Identity();
+        bool has_last_published_right_target_ = false;
+        Eigen::Vector3d last_published_right_position_ = Eigen::Vector3d::Zero();
+        Eigen::Quaterniond last_published_right_orientation_ = Eigen::Quaterniond::Identity();
 
         // 状态管理
         std::atomic<bool> enabled_;

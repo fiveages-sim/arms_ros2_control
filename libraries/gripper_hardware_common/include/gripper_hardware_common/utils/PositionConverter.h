@@ -10,6 +10,8 @@
 #include <array>
 #include <cstdint>
 
+#include "gripper_hardware_common/utils/ModbusConfig.h"
+
 namespace gripper_hardware_common
 {
     namespace detail
@@ -82,6 +84,35 @@ namespace gripper_hardware_common
         };
 
         using Changingtek90 = Changingtek;
+
+        /** @brief EincinX — 0 pulse = open, MAX_POSITION_PULSES = closed. */
+        class EincinX
+        {
+        public:
+            static uint32_t positionRadToPulses(double position_rad)
+            {
+                const double max_rad = ModbusConfig::EincinX::MAX_POSITION_RAD;
+                position_rad = std::clamp(position_rad, 0.0, max_rad);
+                const uint32_t max_pulses = ModbusConfig::EincinX::MAX_POSITION_PULSES;
+                return static_cast<uint32_t>(
+                    (1.0 - position_rad / max_rad) * static_cast<double>(max_pulses));
+            }
+
+            static double pulsesToPositionRad(int32_t pulses)
+            {
+                const uint32_t max_pulses = ModbusConfig::EincinX::MAX_POSITION_PULSES;
+                const double max_rad = ModbusConfig::EincinX::MAX_POSITION_RAD;
+                if (pulses < 0)
+                {
+                    pulses = 0;
+                }
+                const uint32_t clamped = static_cast<uint32_t>(
+                    std::min(static_cast<int64_t>(pulses), static_cast<int64_t>(max_pulses)));
+                return std::clamp(
+                    (1.0 - static_cast<double>(clamped) / static_cast<double>(max_pulses)) * max_rad,
+                    0.0, max_rad);
+            }
+        };
 
         /**
          * @brief Jodell gripper position conversion

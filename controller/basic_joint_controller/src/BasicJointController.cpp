@@ -178,6 +178,14 @@ namespace basic_joint_controller
                     auto_declare<std::vector<double>>("waist_rotation_direction", {1.0, 1.0, 1.0});
                     auto_declare<std::vector<double>>("waist_angle_offset", {0.0, 0.0, 0.0});
                 }
+                else
+                {
+                    auto_declare<double>("waist_single_joint_direction", 1.0);
+                    auto_declare<double>("waist_single_joint_offset", 0.0);
+                    auto_declare<std::string>("waist_single_joint_pitch_joint", "body_joint2");
+                    auto_declare<double>("waist_single_joint_pitch_direction", 1.0);
+                    auto_declare<double>("waist_single_joint_pitch_offset", 0.0);
+                }
 
                 RCLCPP_INFO(get_node()->get_logger(),
                             "Waist lifting enabled for controller %s",
@@ -231,6 +239,12 @@ namespace basic_joint_controller
         {
             tf_buffer_ = std::make_shared<tf2_ros::Buffer>(get_node()->get_clock());
             tf_listener_ = std::make_shared<tf2_ros::TransformListener>(*tf_buffer_);
+            if (state_list_.movej)
+            {
+                state_list_.movej->setupWaistAbsoluteTransform(
+                    tf_buffer_, waist_absolute_source_frame_, waist_absolute_target_frame_);
+                state_list_.movej->setupWaistLiftingPoseAction("waist_lifting_pose");
+            }
 
             // 订阅腰部升降话题
             std::string waist_lifting_topic = "/" + controller_name_ + "/waist_lifting";
