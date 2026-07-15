@@ -12,10 +12,8 @@ namespace basic_joint_controller
     /**
      * @brief StateCompliance for basic_joint_controller
      *
-     * Inherits common compliance behavior; basic_joint_controller has no
-     * ArmKinematics instance, so it degrades gracefully to soft-hold +
-     * gravity compensation. checkChange only needs to be aware of
-     * basic_joint_controller's state graph (no OCS2 state here).
+     * Same hybrid API as ocs2; without ArmKinematics degrades to soft joint
+     * hold. checkChange aware of basic_joint_controller FSM (no OCS2).
      */
     class StateCompliance : public arms_controller_common::StateCompliance
     {
