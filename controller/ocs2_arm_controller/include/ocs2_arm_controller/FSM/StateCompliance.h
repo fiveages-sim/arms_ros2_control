@@ -13,9 +13,8 @@ namespace ocs2::mobile_manipulator
     /**
      * @brief StateCompliance for ocs2_arm_controller
      *
-     * Inherits common compliance behavior (force feed-forward + admittance).
-     * checkChange follows ocs2_arm_controller's state graph
-     * (HOLD on cmd 2; OCS2 not reachable from COMPLIANCE).
+     * Cartesian force/position hybrid (peer to OCS2, not nested).
+     * checkChange: COMPLIANCE -> HOLD on cmd 2.
      */
     class StateCompliance : public arms_controller_common::StateCompliance
     {

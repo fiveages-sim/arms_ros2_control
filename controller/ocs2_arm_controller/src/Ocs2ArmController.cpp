@@ -265,15 +265,20 @@ namespace ocs2::mobile_manipulator
                 ctrl_interfaces_, get_node(), joint_names_, gravity_compensation);
             state_list_.movej->setKinematicsSolver(kinematics_);
 
-            // COMPLIANCE state (fsm_command=5 from HOLD)
+            // COMPLIANCE: Cartesian force/position hybrid (fsm_command=5 from HOLD)
+            // Free-space tracking stays in OCS2 (cmd 3); switch via HOLD for contact.
             auto_declare<std::vector<double>>("compliance_gains", {10.0, 1.0});
-            auto_declare<double>("compliance_force_ff_scale", 1.0);
-            auto_declare<bool>("compliance_admittance_enabled", false);
+            auto_declare<double>("compliance_force_ff_scale", 0.0);
+            auto_declare<double>("compliance_force_lpf_tau", 0.0);
+            auto_declare<std::vector<double>>("compliance_selection",
+                                              {0.0, 0.0, 1.0, 0.0, 0.0, 0.0});
             auto_declare<std::vector<double>>("compliance_admittance_mass",
-                                              {1.0, 1.0, 1.0, 0.1, 0.1, 0.1});
+                                              {0.3, 0.3, 0.3, 0.05, 0.05, 0.05});
             auto_declare<std::vector<double>>("compliance_admittance_damping",
-                                              {20.0, 20.0, 20.0, 2.0, 2.0, 2.0});
-            auto_declare<double>("compliance_admittance_max_displacement", 0.05);
+                                              {8.0, 8.0, 8.0, 0.8, 0.8, 0.8});
+            auto_declare<double>("compliance_admittance_max_displacement", 0.03);
+            auto_declare<double>("compliance_dls_damping", 0.05);
+            auto_declare<double>("compliance_dls_step_limit", 0.2);
             state_list_.compliance = std::make_shared<StateCompliance>(
                 ctrl_interfaces_, get_node(), gravity_compensation, kinematics_);
 
