@@ -14,6 +14,7 @@
 #include <iostream>
 #include <fstream>
 #include <iomanip>
+#include <limits>
 
 #ifdef HAS_OCS2_WHEEL_HUMANOID
 #include <ocs2_wheel_humanoid/mode/SwitchedHumanoidReferenceManager.h>
@@ -21,6 +22,121 @@
 
 namespace ocs2::controller_common
 {
+    namespace
+    {
+        struct SCurveProfile
+        {
+            double jerk{1.0};
+            double jerk_time{0.0};
+            double constant_accel_time{0.0};
+            double cruise_time{0.0};
+            double minimum_duration{0.0};
+        };
+
+        SCurveProfile makeUnitSCurve(double max_velocity, double max_acceleration, double max_jerk)
+        {
+            constexpr double kEps = 1e-9;
+            const double v = std::max(max_velocity, kEps);
+            const double a = std::max(max_acceleration, kEps);
+            const double j = std::max(max_jerk, kEps);
+
+            SCurveProfile profile;
+            profile.jerk = j;
+
+            // Fastest acceleration ramp that respects both acceleration and velocity.
+            if (v >= a * a / j)
+            {
+                profile.jerk_time = a / j;
+                profile.constant_accel_time = v / a - profile.jerk_time;
+            }
+            else
+            {
+                profile.jerk_time = std::sqrt(v / j);
+            }
+
+            const auto accelDistance = [j](double tj, double ta)
+            {
+                return j * tj * tj * tj + 1.5 * j * tj * tj * ta +
+                       0.5 * j * tj * ta * ta;
+            };
+            double accel_decel_distance =
+                2.0 * accelDistance(profile.jerk_time, profile.constant_accel_time);
+
+            if (accel_decel_distance < 1.0 - kEps)
+            {
+                const double peak_velocity =
+                    j * profile.jerk_time * (profile.jerk_time + profile.constant_accel_time);
+                profile.cruise_time = (1.0 - accel_decel_distance) / peak_velocity;
+            }
+            else
+            {
+                // The move is too short to reach the requested peak velocity.
+                const double triangular_tj = std::cbrt(1.0 / (2.0 * j));
+                if (triangular_tj <= a / j + kEps && j * triangular_tj * triangular_tj <= v + kEps)
+                {
+                    profile.jerk_time = triangular_tj;
+                    profile.constant_accel_time = 0.0;
+                }
+                else
+                {
+                    profile.jerk_time = a / j;
+                    // Solve 2*x_acc(tj, ta)=1 for the non-negative constant-acceleration time.
+                    const double tj = profile.jerk_time;
+                    const double qa = j * tj;
+                    const double qb = 3.0 * j * tj * tj;
+                    const double qc = 2.0 * j * tj * tj * tj - 1.0;
+                    profile.constant_accel_time =
+                        std::max(0.0, (-qb + std::sqrt(std::max(0.0, qb * qb - 4.0 * qa * qc))) /
+                                          (2.0 * qa));
+                }
+                profile.cruise_time = 0.0;
+            }
+
+            profile.minimum_duration =
+                4.0 * profile.jerk_time + 2.0 * profile.constant_accel_time + profile.cruise_time;
+            return profile;
+        }
+
+        double sampleUnitSCurve(const SCurveProfile& profile, double elapsed, double actual_duration)
+        {
+            if (actual_duration <= 0.0 || profile.minimum_duration <= 0.0) return 1.0;
+            if (elapsed <= 0.0) return 0.0;
+            if (elapsed >= actual_duration) return 1.0;
+            const double base_time = std::clamp(elapsed / actual_duration, 0.0, 1.0) * profile.minimum_duration;
+            const double tj = profile.jerk_time;
+            const double ta = profile.constant_accel_time;
+            const double tv = profile.cruise_time;
+            const double phase_durations[7] = {tj, ta, tj, tv, tj, ta, tj};
+            const double phase_jerks[7] = {profile.jerk, 0.0, -profile.jerk, 0.0,
+                                           -profile.jerk, 0.0, profile.jerk};
+
+            double position = 0.0;
+            double velocity = 0.0;
+            double acceleration = 0.0;
+            double remaining = base_time;
+            for (size_t phase = 0; phase < 7 && remaining > 0.0; ++phase)
+            {
+                const double dt = std::min(remaining, phase_durations[phase]);
+                const double jerk = phase_jerks[phase];
+                position += velocity * dt + 0.5 * acceleration * dt * dt +
+                            jerk * dt * dt * dt / 6.0;
+                velocity += acceleration * dt + 0.5 * jerk * dt * dt;
+                acceleration += jerk * dt;
+                remaining -= dt;
+            }
+            return std::clamp(position, 0.0, 1.0);
+        }
+
+        double quaternionDistance(const vector_t& start, const vector_t& goal)
+        {
+            Eigen::Quaterniond q0(start(6), start(3), start(4), start(5));
+            Eigen::Quaterniond q1(goal(6), goal(3), goal(4), goal(5));
+            if (q0.norm() < 1e-9) q0 = Eigen::Quaterniond::Identity(); else q0.normalize();
+            if (q1.norm() < 1e-9) q1 = q0; else q1.normalize();
+            return 2.0 * std::acos(std::clamp(std::abs(q0.dot(q1)), 0.0, 1.0));
+        }
+    } // namespace
+
     PoseBasedReferenceManager::PoseBasedReferenceManager(
         std::string topicPrefix,
         std::shared_ptr<ReferenceManagerInterface> referenceManagerPtr,
@@ -337,6 +453,57 @@ namespace ocs2::controller_common
         return interpolatePose7(path[segment_idx], path[segment_idx + 1], local_alpha);
     }
 
+    double PoseBasedReferenceManager::minimumPoseDuration(const vector_t& start, const vector_t& goal) const
+    {
+        constexpr double kEps = 1e-9;
+        const double distance = (goal.head<3>() - start.head<3>()).norm();
+        const double angle = quaternionDistance(start, goal);
+
+        double path_velocity = std::numeric_limits<double>::infinity();
+        double path_acceleration = std::numeric_limits<double>::infinity();
+        double path_jerk = std::numeric_limits<double>::infinity();
+        if (distance > kEps)
+        {
+            path_velocity = std::min(path_velocity, moveL_max_linear_velocity_ / distance);
+            path_acceleration = std::min(path_acceleration, moveL_max_linear_acceleration_ / distance);
+            path_jerk = std::min(path_jerk, moveL_max_linear_jerk_ / distance);
+        }
+        if (angle > kEps)
+        {
+            path_velocity = std::min(path_velocity, moveL_max_angular_velocity_ / angle);
+            path_acceleration = std::min(path_acceleration, moveL_max_angular_acceleration_ / angle);
+            path_jerk = std::min(path_jerk, moveL_max_angular_jerk_ / angle);
+        }
+        if (!std::isfinite(path_velocity)) return 0.0;
+        return makeUnitSCurve(path_velocity, path_acceleration, path_jerk).minimum_duration;
+    }
+
+    double PoseBasedReferenceManager::samplePoseProgress(const vector_t& start, const vector_t& goal,
+                                                         double elapsed, double duration) const
+    {
+        constexpr double kEps = 1e-9;
+        const double distance = (goal.head<3>() - start.head<3>()).norm();
+        const double angle = quaternionDistance(start, goal);
+        if (distance <= kEps && angle <= kEps) return 1.0;
+
+        double path_velocity = std::numeric_limits<double>::infinity();
+        double path_acceleration = std::numeric_limits<double>::infinity();
+        double path_jerk = std::numeric_limits<double>::infinity();
+        if (distance > kEps)
+        {
+            path_velocity = std::min(path_velocity, moveL_max_linear_velocity_ / distance);
+            path_acceleration = std::min(path_acceleration, moveL_max_linear_acceleration_ / distance);
+            path_jerk = std::min(path_jerk, moveL_max_linear_jerk_ / distance);
+        }
+        if (angle > kEps)
+        {
+            path_velocity = std::min(path_velocity, moveL_max_angular_velocity_ / angle);
+            path_acceleration = std::min(path_acceleration, moveL_max_angular_acceleration_ / angle);
+            path_jerk = std::min(path_jerk, moveL_max_angular_jerk_ / angle);
+        }
+        return sampleUnitSCurve(makeUnitSCurve(path_velocity, path_acceleration, path_jerk), elapsed, duration);
+    }
+
     void PoseBasedReferenceManager::resetArmReferenceBuffer(ArmReferenceBuffer& buffer,
                                                             const vector_t& pose,
                                                             double time)
@@ -344,6 +511,7 @@ namespace ocs2::controller_common
         buffer.startTime = time;
         buffer.duration = 0.0;
         buffer.path = {pose};
+        buffer.segmentDurations.clear();
     }
 
     void PoseBasedReferenceManager::setArmReferenceBufferFromWaypoints(
@@ -358,11 +526,39 @@ namespace ocs2::controller_common
             has_active_old_path ? sampleArmReferenceBuffer(buffer, fallback_start_pose, start_time) : fallback_start_pose;
 
         buffer.startTime = start_time;
-        buffer.duration = std::max(duration, 0.0);
         buffer.path.clear();
         buffer.path.reserve(waypoints.size() + 1);
         buffer.path.push_back(start_pose);
         buffer.path.insert(buffer.path.end(), waypoints.begin(), waypoints.end());
+
+        buffer.segmentDurations.clear();
+        buffer.segmentDurations.reserve(waypoints.size());
+        double minimum_total = 0.0;
+        for (size_t i = 0; i + 1 < buffer.path.size(); ++i)
+        {
+            const double segment_minimum = minimumPoseDuration(buffer.path[i], buffer.path[i + 1]);
+            buffer.segmentDurations.push_back(segment_minimum);
+            minimum_total += segment_minimum;
+        }
+
+        const double requested = std::max(duration, 0.0);
+        const double actual_total = moveL_auto_extend_duration_ ? std::max(requested, minimum_total) : requested;
+        if (minimum_total > 1e-9)
+        {
+            const double scale = actual_total / minimum_total;
+            for (double& segment_duration : buffer.segmentDurations) segment_duration *= scale;
+        }
+        else if (!buffer.segmentDurations.empty())
+        {
+            const double equal_duration = actual_total / static_cast<double>(buffer.segmentDurations.size());
+            std::fill(buffer.segmentDurations.begin(), buffer.segmentDurations.end(), equal_duration);
+        }
+        buffer.duration = actual_total;
+        if (moveL_auto_extend_duration_ && actual_total > requested + 1e-6)
+        {
+            RCLCPP_INFO(logger_, "MoveL duration extended from %.3fs to %.3fs to satisfy limits",
+                        requested, actual_total);
+        }
     }
 
     vector_t PoseBasedReferenceManager::sampleArmReferenceBuffer(const ArmReferenceBuffer& buffer,
@@ -382,8 +578,19 @@ namespace ocs2::controller_common
         {
             return fallback_pose;
         }
-        const double alpha = (time - buffer.startTime) / buffer.duration;
-        return samplePose7Path(buffer.path, alpha);
+        double elapsed = std::max(0.0, time - buffer.startTime);
+        for (size_t i = 0; i < buffer.segmentDurations.size(); ++i)
+        {
+            const double segment_duration = buffer.segmentDurations[i];
+            if (elapsed <= segment_duration || i + 1 == buffer.segmentDurations.size())
+            {
+                const double progress = samplePoseProgress(
+                    buffer.path[i], buffer.path[i + 1], elapsed, segment_duration);
+                return interpolatePose7(buffer.path[i], buffer.path[i + 1], progress);
+            }
+            elapsed -= segment_duration;
+        }
+        return buffer.path.back();
     }
 
     bool PoseBasedReferenceManager::isArmReferenceBufferActive(const ArmReferenceBuffer& buffer,
@@ -415,11 +622,10 @@ namespace ocs2::controller_common
     void PoseBasedReferenceManager::rebuildTargetTrajectoriesFromArmReferenceBuffers(double start_time,
                                                                                      double end_time)
     {
-        constexpr double kSampleInterval = 0.04;
-        const double actual_end_time = std::max(end_time, start_time + kSampleInterval);
+        const double actual_end_time = std::max(end_time, start_time + moveL_sample_interval_);
         // 按约 40ms 间隔估算离散点数，至少 2 个点（起点与终点）以便计算 dt。
         const size_t num_samples = std::max(
-            static_cast<size_t>(std::ceil((actual_end_time - start_time) / kSampleInterval)) + 1,
+            static_cast<size_t>(std::ceil((actual_end_time - start_time) / moveL_sample_interval_)) + 1,
             static_cast<size_t>(2));
         const double dt = (actual_end_time - start_time) / static_cast<double>(num_samples - 1);
 
@@ -524,14 +730,20 @@ namespace ocs2::controller_common
         const vector_t& previous_right_target_state)
     {
         // 使用 moveL_duration_ 作为插值时间
-        const double actual_duration = moveL_duration_;
+        double actual_duration = moveL_duration_;
 
-        // 采样间隔（秒）
-        constexpr double kSampleInterval = 0.04; // 0.04秒一个采样点（25Hz）
+        if (moveL_auto_extend_duration_)
+        {
+            actual_duration = std::max(actual_duration,
+                minimumPoseDuration(previous_left_target_state, left_target_state_));
+            if (dual_arm_mode_)
+                actual_duration = std::max(actual_duration,
+                    minimumPoseDuration(previous_right_target_state, right_target_state_));
+        }
 
         // 根据时间长度动态计算采样点数量
         const size_t kNumSamples = std::max(
-            static_cast<size_t>(std::ceil(actual_duration / kSampleInterval)) + 1,
+            static_cast<size_t>(std::ceil(actual_duration / moveL_sample_interval_)) + 1,
             static_cast<size_t>(2) // 至少2个采样点
         );
 
@@ -607,22 +819,23 @@ namespace ocs2::controller_common
         for (size_t i = 0; i < kNumSamples; ++i)
         {
             const double t = t0 + static_cast<double>(i) * dt;
-            const double alpha = std::clamp(static_cast<double>(i) /
-                                            static_cast<double>(kNumSamples - 1),
-                                            0.0, 1.0);
-
             vector_t xt;
             if (dual_arm_mode_)
             {
+                const double left_progress = samplePoseProgress(
+                    start_state.segment(0, 7), goal_state.segment(0, 7), t - t0, actual_duration);
+                const double right_progress = samplePoseProgress(
+                    start_state.segment(7, 7), goal_state.segment(7, 7), t - t0, actual_duration);
                 const vector_t left_i = interpolatePose7(start_state.segment(0, 7),
-                                                         goal_state.segment(0, 7), alpha);
+                                                         goal_state.segment(0, 7), left_progress);
                 const vector_t right_i = interpolatePose7(start_state.segment(7, 7),
-                                                          goal_state.segment(7, 7), alpha);
+                                                          goal_state.segment(7, 7), right_progress);
                 xt = assembleDualArmReferenceState(left_i, right_i);
             }
             else
             {
-                xt = interpolatePose7(start_state, goal_state, alpha);
+                const double progress = samplePoseProgress(start_state, goal_state, t - t0, actual_duration);
+                xt = interpolatePose7(start_state, goal_state, progress);
             }
 
             time_trajectory.push_back(t);
@@ -649,10 +862,15 @@ namespace ocs2::controller_common
             return;
         }
 
-        const double actual_duration = moveL_duration_;
-        constexpr double kSampleInterval = 0.04; // 25Hz
+        double actual_duration = moveL_duration_;
+        if (moveL_auto_extend_duration_)
+        {
+            actual_duration = std::max(actual_duration, minimumPoseDuration(previous_left_target_state, left_target_state_));
+            actual_duration = std::max(actual_duration, minimumPoseDuration(previous_right_target_state, right_target_state_));
+            actual_duration = std::max(actual_duration, minimumPoseDuration(previous_body_target_state, body_pose_7_xyzw_));
+        }
         const size_t kNumSamples = std::max(
-            static_cast<size_t>(std::ceil(actual_duration / kSampleInterval)) + 1,
+            static_cast<size_t>(std::ceil(actual_duration / moveL_sample_interval_)) + 1,
             static_cast<size_t>(2));
 
         const double t0 = current_observation_.time;
@@ -698,12 +916,12 @@ namespace ocs2::controller_common
         for (size_t i = 0; i < kNumSamples; ++i)
         {
             const double t = t0 + static_cast<double>(i) * dt;
-            const double alpha = std::clamp(
-                static_cast<double>(i) / static_cast<double>(kNumSamples - 1), 0.0, 1.0);
-
-            const vector_t left_i = interpolatePose7(start_left, goal_left, alpha);
-            const vector_t right_i = interpolatePose7(start_right, goal_right, alpha);
-            const vector_t body_i = interpolatePose7(start_body, goal_body, alpha);
+            const vector_t left_i = interpolatePose7(start_left, goal_left,
+                samplePoseProgress(start_left, goal_left, t - t0, actual_duration));
+            const vector_t right_i = interpolatePose7(start_right, goal_right,
+                samplePoseProgress(start_right, goal_right, t - t0, actual_duration));
+            const vector_t body_i = interpolatePose7(start_body, goal_body,
+                samplePoseProgress(start_body, goal_body, t - t0, actual_duration));
             const vector_t xt = assembleWheelHumanoidTargetState(left_i, right_i, body_i);
 
             time_trajectory.push_back(t);
@@ -725,10 +943,11 @@ namespace ocs2::controller_common
             return;
         }
 
-        const double actual_duration = moveL_duration_;
-        constexpr double kSampleInterval = 0.04; // 25Hz
+        double actual_duration = moveL_duration_;
+        if (moveL_auto_extend_duration_)
+            actual_duration = std::max(actual_duration, minimumPoseDuration(previous_body_target_state, body_pose_7_xyzw_));
         const size_t kNumSamples = std::max(
-            static_cast<size_t>(std::ceil(actual_duration / kSampleInterval)) + 1,
+            static_cast<size_t>(std::ceil(actual_duration / moveL_sample_interval_)) + 1,
             static_cast<size_t>(2));
 
         const double t0 = current_observation_.time;
@@ -776,10 +995,8 @@ namespace ocs2::controller_common
         for (size_t i = 0; i < kNumSamples; ++i)
         {
             const double t = t0 + static_cast<double>(i) * dt;
-            const double alpha = std::clamp(
-                static_cast<double>(i) / static_cast<double>(kNumSamples - 1), 0.0, 1.0);
-
-            const vector_t body_i = interpolatePose7(start_body, goal_body, alpha);
+            const double progress = samplePoseProgress(start_body, goal_body, t - t0, actual_duration);
+            const vector_t body_i = interpolatePose7(start_body, goal_body, progress);
             const vector_t xt = assembleWheelHumanoidTargetState(fixed_left, fixed_right, body_i);
 
             time_trajectory.push_back(t);
@@ -794,9 +1011,17 @@ namespace ocs2::controller_common
 
     void PoseBasedReferenceManager::updateParam()
     {
-        trajectory_duration_ =
-            node_->get_parameter("movel_trajectory_duration").as_double();
-        moveL_duration_ = node_->get_parameter("movel_duration").as_double();
+        trajectory_duration_ = std::max(0.0,
+            node_->get_parameter("movel_trajectory_duration").as_double());
+        moveL_duration_ = std::max(0.0, node_->get_parameter("movel_duration").as_double());
+        moveL_sample_interval_ = std::max(1e-3, node_->get_parameter("movel_sample_interval").as_double());
+        moveL_max_linear_velocity_ = std::max(1e-6, node_->get_parameter("movel_max_linear_velocity").as_double());
+        moveL_max_linear_acceleration_ = std::max(1e-6, node_->get_parameter("movel_max_linear_acceleration").as_double());
+        moveL_max_linear_jerk_ = std::max(1e-6, node_->get_parameter("movel_max_linear_jerk").as_double());
+        moveL_max_angular_velocity_ = std::max(1e-6, node_->get_parameter("movel_max_angular_velocity").as_double());
+        moveL_max_angular_acceleration_ = std::max(1e-6, node_->get_parameter("movel_max_angular_acceleration").as_double());
+        moveL_max_angular_jerk_ = std::max(1e-6, node_->get_parameter("movel_max_angular_jerk").as_double());
+        moveL_auto_extend_duration_ = node_->get_parameter("movel_auto_extend_duration").as_bool();
     }
 
     bool PoseBasedReferenceManager::syncWheelHumanoidCoupledOppositeArmIfNeeded(bool left_target_was_updated)
@@ -1362,101 +1587,24 @@ namespace ocs2::controller_common
         const std::vector<vector_t>& right_arm_waypoints,
         double trajectory_duration_sec)
     {
-        constexpr double kSampleInterval = 0.04;
-        const size_t kNumSamples = std::max(
-            static_cast<size_t>(std::ceil(trajectory_duration_sec / kSampleInterval)) + 1,
-            static_cast<size_t>(2));
-
-        const double t0 = current_observation_.time;
-        const double t1 = t0 + trajectory_duration_sec;
-        const double dt = (t1 - t0) / static_cast<double>(kNumSamples - 1);
-
-        auto interpolatePose7 = [](const vector_t& s0, const vector_t& s1,
-                                   double alpha) -> vector_t
+        const double start_time = current_observation_.time;
+        if (!left_arm_waypoints.empty())
         {
-            vector_t out = vector_t::Zero(7);
-            out.segment<3>(0) =
-                (1.0 - alpha) * s0.segment<3>(0) + alpha * s1.segment<3>(0);
-
-            Eigen::Quaterniond q0(s0(6), s0(3), s0(4), s0(5));
-            Eigen::Quaterniond q1(s1(6), s1(3), s1(4), s1(5));
-            if (q0.norm() < 1e-9) q0 = Eigen::Quaterniond::Identity();
-            else q0.normalize();
-            if (q1.norm() < 1e-9) q1 = q0;
-            else q1.normalize();
-            if (q0.dot(q1) < 0.0) q1.coeffs() *= -1.0;
-
-            Eigen::Quaterniond q = q0.slerp(alpha, q1);
-            q.normalize();
-            out(3) = q.x(); out(4) = q.y(); out(5) = q.z(); out(6) = q.w();
-            return out;
-        };
-
-        std::vector<vector_t> left_full_path;
-        left_full_path.push_back(left_target_state_);
-        left_full_path.insert(left_full_path.end(), left_arm_waypoints.begin(), left_arm_waypoints.end());
-
-        std::vector<vector_t> right_full_path;
-        if (dual_arm_mode_)
-        {
-            right_full_path.push_back(right_target_state_);
-            right_full_path.insert(right_full_path.end(), right_arm_waypoints.begin(), right_arm_waypoints.end());
+            setArmReferenceBufferFromWaypoints(left_arm_reference_buffer_, left_target_state_,
+                                               left_arm_waypoints, start_time, trajectory_duration_sec);
+            left_target_state_ = left_arm_waypoints.back();
         }
-
-        scalar_array_t time_trajectory;
-        time_trajectory.reserve(kNumSamples);
-        vector_array_t state_trajectory;
-        state_trajectory.reserve(kNumSamples);
-
-        auto interpolateAlongPath =
-            [&interpolatePose7](const std::vector<vector_t>& path, double global_alpha) -> vector_t
+        if (dual_arm_mode_ && !right_arm_waypoints.empty())
         {
-            if (path.size() == 1) return path[0];
-            const size_t num_segments = path.size() - 1;
-            const double segment_size = 1.0 / static_cast<double>(num_segments);
-            size_t segment_idx = static_cast<size_t>(global_alpha / segment_size);
-            segment_idx = std::min(segment_idx, num_segments - 1);
-            const double segment_start = static_cast<double>(segment_idx) * segment_size;
-            const double clamped_alpha = std::clamp((global_alpha - segment_start) / segment_size, 0.0, 1.0);
-            return interpolatePose7(path[segment_idx], path[segment_idx + 1], clamped_alpha);
-        };
-
-        for (size_t i = 0; i < kNumSamples; ++i)
-        {
-            const double t = t0 + static_cast<double>(i) * dt;
-            const double global_alpha = static_cast<double>(i) / static_cast<double>(kNumSamples - 1);
-
-            vector_t combined_state;
-            if (dual_arm_mode_)
-            {
-                combined_state = assembleDualArmReferenceState(
-                    interpolateAlongPath(left_full_path, global_alpha),
-                    interpolateAlongPath(right_full_path, global_alpha));
-            }
-            else
-            {
-                combined_state = interpolateAlongPath(left_full_path, global_alpha);
-            }
-
-            time_trajectory.push_back(t);
-            state_trajectory.push_back(combined_state);
+            setArmReferenceBufferFromWaypoints(right_arm_reference_buffer_, right_target_state_,
+                                               right_arm_waypoints, start_time, trajectory_duration_sec);
+            right_target_state_ = right_arm_waypoints.back();
         }
+        rebuildTargetTrajectoriesFromActiveArmReferenceBuffers(start_time, trajectory_duration_sec);
 
-        if (!left_arm_waypoints.empty()) left_target_state_ = left_arm_waypoints.back();
-        if (dual_arm_mode_ && !right_arm_waypoints.empty()) right_target_state_ = right_arm_waypoints.back();
-
-        vector_array_t input_trajectory(kNumSamples, vector_t::Zero(target_context_.input_dim));
-        TargetTrajectories target_trajectories(time_trajectory, state_trajectory, input_trajectory);
-        referenceManagerPtr_->setTargetTrajectories(std::move(target_trajectories));
-
-        publishCurrentTargets();
-
-        if (dual_arm_mode_)
-            RCLCPP_INFO(logger_, "处理路径（双臂模式）：左臂 %zu 个路径点，右臂 %zu 个路径点，生成 %zu 个轨迹点",
-                        left_arm_waypoints.size(), right_arm_waypoints.size(), kNumSamples);
-        else
-            RCLCPP_INFO(logger_, "处理路径（单臂模式）：%zu 个路径点，生成 %zu 个轨迹点",
-                        left_arm_waypoints.size(), kNumSamples);
+        RCLCPP_INFO(logger_, "MoveL S-curve path: left=%zu, right=%zu, duration=%.3fs",
+                    left_arm_waypoints.size(), right_arm_waypoints.size(),
+                    std::max(left_arm_reference_buffer_.duration, right_arm_reference_buffer_.duration));
     }
 
     void PoseBasedReferenceManager::handleExecutePathService(
