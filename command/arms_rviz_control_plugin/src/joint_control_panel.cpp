@@ -29,29 +29,33 @@ namespace
         {
             return 2;
         }
-        if (n.find("rotate_joint") != std::string::npos)
+        if (n.find("thumb_joint4") != std::string::npos)
         {
             return 3;
         }
-        if (n.find("gripper_joint") != std::string::npos)
+        if (n.find("rotate_joint") != std::string::npos)
         {
             return 4;
         }
-        if (n.find("index_joint") != std::string::npos)
+        if (n.find("gripper_joint") != std::string::npos)
         {
             return 5;
         }
-        if (n.find("middle_joint") != std::string::npos)
+        if (n.find("index_joint") != std::string::npos)
         {
             return 6;
         }
-        if (n.find("ring_joint") != std::string::npos)
+        if (n.find("middle_joint") != std::string::npos)
         {
             return 7;
         }
-        if (n.find("pinky_joint") != std::string::npos)
+        if (n.find("ring_joint") != std::string::npos)
         {
             return 8;
+        }
+        if (n.find("pinky_joint") != std::string::npos)
+        {
+            return 9;
         }
         return 100;
     }
