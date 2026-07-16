@@ -241,6 +241,16 @@ def setup_body_controllers(
     return controllers, create_controller_spawners(controllers, ctx.use_sim_time)
 
 
+def setup_ft_broadcasters(
+    ctx: Ocs2ControlContext,
+) -> Tuple[List[dict], List[Node]]:
+    return detect_and_spawn_controllers(
+        ctx.config,
+        ["ft_broadcaster"],
+        use_sim_time=ctx.use_sim_time,
+    )
+
+
 def resolve_rviz_config(
     robot_name: str,
     rviz_filename: str,
