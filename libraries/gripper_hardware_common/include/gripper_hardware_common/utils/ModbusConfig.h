@@ -360,31 +360,31 @@ namespace gripper_hardware_common
             static constexpr int JOINT_COUNT_O6 = 6;
             static constexpr int JOINT_COUNT = JOINT_COUNT_O7;
             
-            // Joint limits (for backward compatibility only - should be in URDF/Xacro)
+            // Joint limits in radians (must match PositionConverter / URDF)
             struct O7 {
-                static constexpr double THUMB_JOINT1_LOWER = 0.0, THUMB_JOINT1_UPPER = 1.0;
-                static constexpr double THUMB_JOINT2_LOWER = 0.0, THUMB_JOINT2_UPPER = 1.0;
-                static constexpr double THUMB_JOINT3_LOWER = 0.0, THUMB_JOINT3_UPPER = 1.0;
-                static constexpr double INDEX_JOINT_LOWER = 0.0, INDEX_JOINT_UPPER = 1.0;
-                static constexpr double MIDDLE_JOINT_LOWER = 0.0, MIDDLE_JOINT_UPPER = 1.0;
-                static constexpr double RING_JOINT_LOWER = 0.0, RING_JOINT_UPPER = 1.0;
-                static constexpr double PINKY_JOINT_LOWER = 0.0, PINKY_JOINT_UPPER = 1.0;
+                static constexpr double THUMB_JOINT1_LOWER = 0.0, THUMB_JOINT1_UPPER = 0.5146;
+                static constexpr double THUMB_JOINT2_LOWER = 0.0, THUMB_JOINT2_UPPER = 1.9189;
+                static constexpr double THUMB_JOINT3_LOWER = 0.0, THUMB_JOINT3_UPPER = 1.1339;
+                static constexpr double INDEX_JOINT_LOWER = 0.0, INDEX_JOINT_UPPER = 1.3607;
+                static constexpr double MIDDLE_JOINT_LOWER = 0.0, MIDDLE_JOINT_UPPER = 1.3607;
+                static constexpr double RING_JOINT_LOWER = 0.0, RING_JOINT_UPPER = 1.3607;
+                static constexpr double PINKY_JOINT_LOWER = 0.0, PINKY_JOINT_UPPER = 1.3607;
             };
             struct O6 {
-                static constexpr double THUMB_JOINT1_LOWER = 0.0, THUMB_JOINT1_UPPER = 1.0;
-                static constexpr double THUMB_JOINT2_LOWER = 0.0, THUMB_JOINT2_UPPER = 1.0;
-                static constexpr double INDEX_JOINT_LOWER = 0.0, INDEX_JOINT_UPPER = 1.0;
-                static constexpr double MIDDLE_JOINT_LOWER = 0.0, MIDDLE_JOINT_UPPER = 1.0;
-                static constexpr double RING_JOINT_LOWER = 0.0, RING_JOINT_UPPER = 1.0;
-                static constexpr double PINKY_JOINT_LOWER = 0.0, PINKY_JOINT_UPPER = 1.0;
+                static constexpr double THUMB_JOINT1_LOWER = 0.0, THUMB_JOINT1_UPPER = 0.58;
+                static constexpr double THUMB_JOINT2_LOWER = 0.0, THUMB_JOINT2_UPPER = 1.36;
+                static constexpr double INDEX_JOINT_LOWER = 0.0, INDEX_JOINT_UPPER = 1.60;
+                static constexpr double MIDDLE_JOINT_LOWER = 0.0, MIDDLE_JOINT_UPPER = 1.60;
+                static constexpr double RING_JOINT_LOWER = 0.0, RING_JOINT_UPPER = 1.60;
+                static constexpr double PINKY_JOINT_LOWER = 0.0, PINKY_JOINT_UPPER = 1.60;
             };
             struct L6 {
-                static constexpr double THUMB_JOINT1_LOWER = 0.0, THUMB_JOINT1_UPPER = 1.0;
-                static constexpr double THUMB_JOINT2_LOWER = 0.0, THUMB_JOINT2_UPPER = 1.0;
-                static constexpr double INDEX_JOINT_LOWER = 0.0, INDEX_JOINT_UPPER = 1.0;
-                static constexpr double MIDDLE_JOINT_LOWER = 0.0, MIDDLE_JOINT_UPPER = 1.0;
-                static constexpr double RING_JOINT_LOWER = 0.0, RING_JOINT_UPPER = 1.0;
-                static constexpr double PINKY_JOINT_LOWER = 0.0, PINKY_JOINT_UPPER = 1.0;
+                static constexpr double THUMB_JOINT1_LOWER = 0.0, THUMB_JOINT1_UPPER = 0.99;
+                static constexpr double THUMB_JOINT2_LOWER = 0.0, THUMB_JOINT2_UPPER = 1.39;
+                static constexpr double INDEX_JOINT_LOWER = 0.0, INDEX_JOINT_UPPER = 1.26;
+                static constexpr double MIDDLE_JOINT_LOWER = 0.0, MIDDLE_JOINT_UPPER = 1.26;
+                static constexpr double RING_JOINT_LOWER = 0.0, RING_JOINT_UPPER = 1.26;
+                static constexpr double PINKY_JOINT_LOWER = 0.0, PINKY_JOINT_UPPER = 1.26;
             };
         }
     }
