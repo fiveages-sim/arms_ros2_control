@@ -68,6 +68,8 @@ def launch_setup(context, *args, **kwargs):
     hand_controllers, hand_spawners = ocs2_common.setup_hand_controllers(ctx, enable_gripper)
     hand_names = [c["name"] for c in hand_controllers] if enable_gripper else []
 
+    ft_controllers, ft_spawners = ocs2_common.setup_ft_broadcasters(ctx)
+
     body_spawners = []
     joint_controller_names = ["ocs2_wbc_controller"]
     is_arm_controller_type = wbc_controller_type == "ocs2_arm_controller/Ocs2ArmController"
@@ -158,7 +160,7 @@ def launch_setup(context, *args, **kwargs):
         rviz_node=rviz_node,
         controller_stack_nodes=controller_stack_nodes,
         main_spawner=main_spawner,
-        extra_spawners=hand_spawners + body_spawners,
+        extra_spawners=hand_spawners + body_spawners + ft_spawners,
         optional_nodes=[arms_target_manager] if arms_target_manager else [],
     )
 
