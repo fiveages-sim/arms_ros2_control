@@ -8,6 +8,7 @@
 #include <cmath>
 #include <cctype>
 #include <map>
+#include <set>
 #include <arms_controller_common/utils/FSMStateTransitionValidator.h>
 
 namespace
@@ -1670,6 +1671,143 @@ namespace arms_rviz_control_plugin
         updateWaistControlsVisibility(shouldShowWaistControls());
     }
 
+    std::vector<std::string> JointControlPanel::getControllerJointOrderForCategory(
+        const std::string& category) const
+    {
+        // 面板可能早于 RViz ROS node 完成初始化。
+        // 没有 node 就无法创建参数客户端，因此保留当前从 joint_states 得到的顺序。
+        if (!node_)
+        {
+            return {};
+        }
+
+        // 优先使用该 UI 分类已发现的控制器。
+        // Body 分类如果还没有映射到控制器，则回退到分体控制使用的 body_joint_controller。
+        const auto controller_it = category_to_controller_.find(category);
+        const std::string controller =
+            (controller_it != category_to_controller_.end())
+                ? controller_it->second
+                : (category == "body" ? "body_joint_controller" : std::string());
+
+        // 没有明确控制器的分类无法提供权威关节顺序，保持现有显示顺序不变。
+        if (controller.empty())
+        {
+            return {};
+        }
+
+        try
+        {
+            // 控制器参数由生命周期控制器节点持有，例如 /body_joint_controller。
+            // joints 参数就是 ros2_control 解释 Float64MultiArray 数据时使用的有序关节列表。
+            // 这里不能直接复用 RViz 的 node_ 创建同步参数客户端：
+            // node_ 已经由 RViz 加入 executor，SyncParametersClient 内部再次 spin 会报
+            // “Node '/rviz' has already been added to an executor.”。
+            auto temp_node = std::make_shared<rclcpp::Node>("joint_order_param_checker");
+            auto param_client = std::make_shared<rclcpp::SyncParametersClient>(
+                temp_node, "/" + controller);
+
+            // 使用短等待，避免控制器尚未加载时阻塞 RViz 面板初始化。
+            if (!param_client->wait_for_service(std::chrono::milliseconds(100)))
+            {
+                RCLCPP_DEBUG(node_->get_logger(),
+                             "Parameter service for %s is not available; keeping joint_states order for %s",
+                             controller.c_str(), category.c_str());
+                return {};
+            }
+
+            // 某些控制器可能不提供 joints 参数。
+            // 这种情况下不改变现有行为，回退到 /joint_states 原始顺序。
+            if (!param_client->has_parameter("joints"))
+            {
+                RCLCPP_DEBUG(node_->get_logger(),
+                             "Controller %s has no joints parameter; keeping joint_states order for %s",
+                             controller.c_str(), category.c_str());
+                return {};
+            }
+
+            // 空 vector 表示没有可用的控制器顺序；
+            // 非空 vector 后续会用于仅重排匹配到的关节。
+            return param_client->get_parameter<std::vector<std::string>>("joints");
+        }
+        catch (const std::exception& e)
+        {
+            // 启动或关闭过程中控制器可能消失，参数调用可能抛异常。
+            // 保持 UI 可用，并保留旧顺序。
+            RCLCPP_WARN(node_->get_logger(),
+                        "Failed to read %s/joints for %s ordering: %s",
+                        controller.c_str(), category.c_str(), e.what());
+            return {};
+        }
+    }
+
+    std::vector<std::string> JointControlPanel::reorderJointsByControllerOrder(
+        const std::vector<std::string>& old_order,
+        const std::map<std::string, std::string>& joint_to_category,
+        const std::map<std::string, std::vector<std::string>>& category_order) const
+    {
+        // result 是最终面板内部顺序，后续会用于重建 category_to_joints_。
+        std::vector<std::string> result;
+        result.reserve(old_order.size());
+
+        // emitted 防止同一个关节被控制器顺序和 fallback 顺序重复加入。
+        std::set<std::string> emitted;
+
+        // handled_categories 保证每个带控制器顺序的分类只处理一次。
+        std::set<std::string> handled_categories;
+
+        for (const auto& joint_name : old_order)
+        {
+            // 用初始化阶段已经分类好的快照查询当前关节属于 Body/Head/Left/Right 等哪一类。
+            const auto cat_it = joint_to_category.find(joint_name);
+            const std::string category =
+                (cat_it != joint_to_category.end()) ? cat_it->second : std::string();
+
+            // 只有 category_order 中指定的分类才按控制器顺序重排。
+            const auto order_it = category_order.find(category);
+            if (order_it == category_order.end() || order_it->second.empty())
+            {
+                // 没有控制器顺序的分类保持 old_order 中的相对顺序。
+                if (emitted.insert(joint_name).second)
+                {
+                    result.push_back(joint_name);
+                }
+                continue;
+            }
+
+            if (handled_categories.insert(category).second)
+            {
+                // 先按控制器 joints 参数给出的权威顺序加入该分类的关节。
+                for (const auto& ordered_joint : order_it->second)
+                {
+                    // 只接受 joint_states 中真实存在且分类匹配的关节，避免参数中多余关节污染 UI。
+                    const auto ordered_cat_it = joint_to_category.find(ordered_joint);
+                    if (ordered_cat_it != joint_to_category.end() &&
+                        ordered_cat_it->second == category &&
+                        emitted.insert(ordered_joint).second)
+                    {
+                        result.push_back(ordered_joint);
+                    }
+                }
+
+                // 再把该分类中存在于 joint_states、但没有出现在控制器 joints 参数里的关节追加到末尾。
+                // 这样不会因为配置缺项导致 UI 丢失关节。
+                for (const auto& fallback_joint : old_order)
+                {
+                    const auto fallback_cat_it = joint_to_category.find(fallback_joint);
+                    if (fallback_cat_it != joint_to_category.end() &&
+                        fallback_cat_it->second == category &&
+                        emitted.insert(fallback_joint).second)
+                    {
+                        result.push_back(fallback_joint);
+                    }
+                }
+            }
+        }
+
+        // 返回新的全局 joint_names_ 顺序。调用方会据此重建所有 index 映射。
+        return result;
+    }
+
     void JointControlPanel::updateSpinboxRanges()
     {
         if (!joint_limits_manager_ || !joints_initialized_ || joint_spinboxes_.empty())
@@ -1752,9 +1890,43 @@ namespace arms_rviz_control_plugin
             category_to_joints_[category].push_back(joint_index);
         }
 
-        // joint_states 顺序常为字母序，导致灵巧手 UI 与 Float64MultiArray 与 ros2_control 关节序不一致
+        // joint_states 顺序常为字母序，导致 UI 与 Float64MultiArray 与 ros2_control 关节序不一致。
+        // 先保留一份分类快照，因为后续 joint_names_ 会被重排并重建分类映射。
         const auto joint_categories_snapshot = joint_to_category_;
+
+        // 保留原有灵巧手特殊排序逻辑，避免本次 Body 修复影响手部控制器顺序。
         joint_names_ = reorderJointsWithSortedDexterousHands(joint_names_, joint_categories_snapshot);
+
+        // 存放需要按控制器 joints 参数重排的分类；本次只处理 Body，避免影响 left/right/head 现有逻辑。
+        std::map<std::string, std::vector<std::string>> controller_joint_order;
+
+        // 从 /body_joint_controller 的 joints 参数读取控制器解释 Float64MultiArray 的顺序。
+        const auto body_order = getControllerJointOrderForCategory("body");
+        const bool has_body_joints = category_to_joints_.find("body") != category_to_joints_.end() &&
+            !category_to_joints_["body"].empty();
+        if (has_body_joints && body_order.empty())
+        {
+            // Body 的 Float64MultiArray 没有关节名，只能依赖控制器 joints 参数顺序。
+            // 如果启动早期参数服务还不可用，先不创建 UI，也不设置 joints_initialized_；
+            // 后续 /joint_states 到来时会重新进入 initializeJoints() 继续尝试。
+            if (status_label_)
+            {
+                status_label_->setText("等待 body_joint_controller joints 参数...");
+            }
+            return;
+        }
+        if (!body_order.empty())
+        {
+            // 只有读取成功时才启用 Body 重排；读取失败时保持原 joint_states 顺序。
+            controller_joint_order["body"] = body_order;
+            RCLCPP_INFO(node_->get_logger(),
+                        "Body joints will be displayed using controller joints parameter order (%zu joints)",
+                        body_order.size());
+        }
+
+        // 将 Body 分类的显示顺序改为控制器顺序，使 UI 显示、发送数组、current_target_joint 回填一致。
+        joint_names_ = reorderJointsByControllerOrder(
+            joint_names_, joint_categories_snapshot, controller_joint_order);
         joint_name_to_index_.clear();
         joint_to_category_.clear();
         category_to_joints_.clear();
@@ -1919,6 +2091,10 @@ namespace arms_rviz_control_plugin
         }
 
         joints_initialized_ = true;
+        if (status_label_)
+        {
+            status_label_->setText("请切换到支持关节控制的状态");
+        }
 
         // Set joint names in limits manager
         if (joint_limits_manager_)
