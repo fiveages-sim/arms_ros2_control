@@ -11,9 +11,7 @@
 #include <rclcpp/rclcpp.hpp>
 #include <tf2/exceptions.hpp>
 #include <tf2_geometry_msgs/tf2_geometry_msgs.hpp>
-#include <iostream>
 #include <fstream>
-#include <iomanip>
 
 #ifdef HAS_OCS2_WHEEL_HUMANOID
 #include <ocs2_wheel_humanoid/mode/SwitchedHumanoidReferenceManager.h>
@@ -27,9 +25,7 @@ namespace ocs2::controller_common
         Ocs2ReferenceTargetContext target_context)
         : ReferenceManagerDecorator(std::move(referenceManagerPtr)),
           topic_prefix_(std::move(topicPrefix)),
-          target_context_(std::move(target_context)),
-          logger_(rclcpp::get_logger("PoseBasedReferenceManager")),
-          trajectory_duration_(2.0), moveL_duration_(2.0)
+          target_context_(std::move(target_context))
     {
         dual_arm_mode_ = target_context_.dual_arm;
 
@@ -483,6 +479,50 @@ namespace ocs2::controller_common
     void PoseBasedReferenceManager::publishCurrentTargetsFromCache()
     {
         publishCurrentTargets();
+    }
+
+    void PoseBasedReferenceManager::setCoupledRightMarkerFromLeftPose(const vector_t& left_pose7_xyzw, bool publish)
+    {
+#ifndef HAS_OCS2_WHEEL_HUMANOID
+        (void)left_pose7_xyzw;
+        (void)publish;
+#else
+        if (!dual_arm_mode_ || left_pose7_xyzw.size() < 7) {
+            return;
+        }
+        auto* sw = dynamic_cast<::ocs2::wheel_humanoid::SwitchedHumanoidReferenceManager*>(referenceManagerPtr_.get());
+        if (sw == nullptr || !sw->hasCapturedCoupling()) {
+            return;
+        }
+        const scalar_t t = current_observation_.time;
+        if (!sw->isBimanualCoupled(t)) {
+            return;
+        }
+        const auto [relPos, relQuatRaw] = sw->getCouplingParameters(t);
+        Eigen::Quaternion<scalar_t> relQuat = relQuatRaw;
+        if (relQuat.norm() < static_cast<scalar_t>(1e-9)) {
+            return;
+        }
+        relQuat.normalize();
+
+        Eigen::Quaternion<scalar_t> leftQuat(left_pose7_xyzw(6), left_pose7_xyzw(3), left_pose7_xyzw(4),
+                                             left_pose7_xyzw(5));
+        if (leftQuat.norm() < static_cast<scalar_t>(1e-9)) {
+            return;
+        }
+        leftQuat.normalize();
+
+        const Eigen::Matrix<scalar_t, 3, 1> rightPos = left_pose7_xyzw.head<3>() + leftQuat * relPos;
+        const Eigen::Quaternion<scalar_t> rightQuat = (leftQuat * relQuat).normalized();
+        right_target_state_.head<3>() = rightPos;
+        right_target_state_(3) = rightQuat.x();
+        right_target_state_(4) = rightQuat.y();
+        right_target_state_(5) = rightQuat.z();
+        right_target_state_(6) = rightQuat.w();
+        if (publish) {
+            publishCurrentTargets("right");
+        }
+#endif
     }
 
     void PoseBasedReferenceManager::setCurrentObservation(
@@ -1906,19 +1946,6 @@ namespace ocs2::controller_common
             RCLCPP_WARN(logger_, "%s", response->message.c_str());
             return;
         }
-        //由于没有ocs2运行结束的反馈，先不加线程锁
-        // // 检查是否正在执行
-        // {
-        //     std::lock_guard<std::mutex> lock(left_service_state_.mutex);
-        //     if (left_service_state_.is_executing)
-        //     {
-        //         response->success = false;
-        //         response->message =
-        //             "The left arm is executing another circular arc trajectory. Please wait for it to complete";
-        //         RCLCPP_WARN(logger_, "%s", response->message.c_str());
-        //         return;
-        //     }
-        // }
 
         // 转换坐标系
         arms_ros2_control_msgs::msg::CircleMessage::SharedPtr base_frame_msg =
@@ -1966,19 +1993,6 @@ namespace ocs2::controller_common
             RCLCPP_WARN(logger_, "%s", response->message.c_str());
             return;
         }
-        //由于没有合适的反馈，暂时不加线程锁
-        // // 检查是否正在执行
-        // {
-        //     std::lock_guard<std::mutex> lock(right_service_state_.mutex);
-        //     if (right_service_state_.is_executing)
-        //     {
-        //         response->success = false;
-        //         response->message =
-        //             "The right arm is executing another circular arc trajectory. Please wait for it to complete";
-        //         RCLCPP_WARN(logger_, "%s", response->message.c_str());
-        //         return;
-        //     }
-        // }
 
         // 转换坐标系
         arms_ros2_control_msgs::msg::CircleMessage::SharedPtr base_frame_msg =
