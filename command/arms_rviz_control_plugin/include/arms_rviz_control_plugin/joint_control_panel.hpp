@@ -99,6 +99,16 @@ namespace arms_rviz_control_plugin
 
         void refreshWaistEnabledState();
 
+        // 读取指定 UI 分类对应控制器的 joints 参数，用作该分类的显示/发送顺序。
+        std::vector<std::string> getControllerJointOrderForCategory(const std::string& category) const;
+
+        // 按控制器提供的关节顺序重排面板内部 joint_names_；
+        // 没有控制器顺序的分类保持原来的 joint_states 顺序。
+        std::vector<std::string> reorderJointsByControllerOrder(
+            const std::vector<std::string>& old_order,
+            const std::map<std::string, std::string>& joint_to_category,
+            const std::map<std::string, std::vector<std::string>>& category_order) const;
+
         // ROS2
         rclcpp::Node::SharedPtr node_;
         rclcpp::Subscription<std_msgs::msg::Int32>::SharedPtr fsm_command_subscriber_;

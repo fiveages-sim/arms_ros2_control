@@ -38,6 +38,16 @@ namespace
 
         return true;
     }
+
+    bool isJointInPrefixGroup(const std::string& joint_name, const std::string& prefix)
+    {
+        if (prefix == "body")
+        {
+            return joint_name == "lift_joint" || joint_name.find("body") == 0;
+        }
+
+        return joint_name.find(prefix) == 0;
+    }
 }
 
 namespace arms_controller_common
@@ -1384,8 +1394,7 @@ namespace arms_controller_common
         size_t matching_count = 0;
         for (size_t i = 0; i < joint_names_.size(); ++i)
         {
-            // Check if joint name starts with the prefix
-            if (joint_names_[i].find(prefix) == 0)
+            if (isJointInPrefixGroup(joint_names_[i], prefix))
             {
                 joint_mask_[i] = true;
                 matching_count++;
@@ -1440,20 +1449,19 @@ namespace arms_controller_common
 
         for (const auto& joint_name : joint_names_)
         {
-            // Check if joint name starts with prefix (case-sensitive)
-            if (joint_name.find("left") == 0)
+            if (isJointInPrefixGroup(joint_name, "left"))
             {
                 has_left = true;
             }
-            if (joint_name.find("right") == 0)
+            if (isJointInPrefixGroup(joint_name, "right"))
             {
                 has_right = true;
             }
-            if (joint_name.find("body") == 0)
+            if (isJointInPrefixGroup(joint_name, "body"))
             {
                 has_body = true;
             }
-            if (joint_name.find("head") == 0)
+            if (isJointInPrefixGroup(joint_name, "head"))
             {
                 has_head = true;
             }
@@ -2361,7 +2369,8 @@ namespace arms_controller_common
         }
         else if (!waist_lifting_planer_->isBodyThreeJoint() && current_angles.size() >= 1)
         {
-            angles3d << current_angles(0), 0.0, 0.0;
+            const double current_pitch_angle = current_angles.size() >= 2 ? current_angles(1) : 0.0;
+            angles3d << current_angles(0), current_pitch_angle, 0.0;
         }
         else
         {

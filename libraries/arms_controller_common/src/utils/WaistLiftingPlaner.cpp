@@ -67,8 +67,7 @@ namespace arms_controller_common
             return resolveFeasibleLiftingEnd(init_joint_angle, start_pos, requested_end,
                                              max_reachable_pos);
         }
-        const auto [min_height, max_height] = getSingleJointHeightRange();
-        max_reachable_pos = (direction > 0.0) ? max_height : min_height;
+        max_reachable_pos = (direction > 0.0) ? single_joint_limit_upper_ : single_joint_limit_lower_;
         return true;
     }
 
@@ -307,8 +306,20 @@ namespace arms_controller_common
         }
         else
         {
-            // 对于单关节，直接规划关节角度
+            // 对于单关节，speedj 只规划 lift_joint；pitch 使用当前关节角保持连续。
             start_pos = init_joint_angle(0);
+            if (!calculateSingleJointPhi(init_joint_angle(1), phi_))
+            {
+                return false;
+            }
+            std::cout << "Waist lifting speedj init: "
+                << "single_joint_lift=" << start_pos
+                << ", phi=" << phi_
+                << ", target_speed=" << target_lifting_speed
+                << ", max_acc=" << max_lifting_acc
+                << ", max_jerk=" << max_lifting_jerk
+                << ", period=" << period
+                << std::endl;
         }
 
         if (std::abs(target_lifting_speed) > min_val)
@@ -366,6 +377,7 @@ namespace arms_controller_common
         speed_mode_stop_replanned_ = false;
 
         const double start_pos = waist_position_cache_;
+        // SINGLE_JOINT 停止路径沿用上一次 speed 初始化保存的 phi_，只对 lift_joint 减速。
 
 #ifdef HAS_LINA_PLANNING
         if (std::abs(target_lifting_speed - waist_velocity_cache_) <= min_val)
@@ -560,16 +572,28 @@ namespace arms_controller_common
         }
         else
         {
-            // curr_z/curr_phi 是接口语义空间值；IK 反解后统一用 raw joint limit 判断可达性。
+            // SINGLE_JOINT speed 模式直接在 raw lift_joint 空间规划；定距模式才使用 height 语义空间。
             double lift_joint_position = 0.0;
-            if (!singleJointIK(curr_z, lift_joint_position))
+            if (type_speed_)
             {
+                lift_joint_position = curr_z;
+                if (isSingleJointsOverLimts(lift_joint_position))
+                {
+                    std::cerr << "Failed single_joint lift raw limit: raw="
+                        << lift_joint_position << std::endl;
+                    return false;
+                }
+            }
+            else if (!singleJointIK(curr_z, lift_joint_position))
+            {
+                std::cerr << "Failed single_joint lift IK: height=" << curr_z << std::endl;
                 return false;
             }
 
             double pitch_joint_position = 0.0;
             if (!singleJointPitchIK(curr_phi, pitch_joint_position))
             {
+                std::cerr << "Failed single_joint pitch IK: phi=" << curr_phi << std::endl;
                 return false;
             }
 
