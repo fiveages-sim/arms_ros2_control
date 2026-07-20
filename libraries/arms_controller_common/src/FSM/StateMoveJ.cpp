@@ -2369,7 +2369,8 @@ namespace arms_controller_common
         }
         else if (!waist_lifting_planer_->isBodyThreeJoint() && current_angles.size() >= 1)
         {
-            angles3d << current_angles(0), 0.0, 0.0;
+            const double current_pitch_angle = current_angles.size() >= 2 ? current_angles(1) : 0.0;
+            angles3d << current_angles(0), current_pitch_angle, 0.0;
         }
         else
         {
