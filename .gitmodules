@@ -45,3 +45,7 @@
 	path = hardwares/can_ros2_control
 	url = git@github.com:fiveages-sim/can-ros2-control.git
 	branch = main
+[submodule "hardwares/arxlift2s_ros2_control"]
+	path = hardwares/arxlift2s_ros2_control
+	url = git@github.com:fiveages-sim/arxlift2s-ros2-control.git
+	branch = main

@@ -1,0 +1,19 @@
+<?xml version="1.0"?>
+<library path="arxlift2s_ros2_control">
+  <class name="arxlift2s_ros2_control/ArxX5Hardware"
+         type="arxlift2s_ros2_control::ArxX5Hardware"
+         base_class_type="hardware_interface::SystemInterface">
+    <description>
+      ARX X5 single-arm hardware interface (official InterfacesThread).
+      Instantiate twice for LIFT2S left (can1) and right (can3).
+    </description>
+  </class>
+  <class name="arxlift2s_ros2_control/ArxLiftHardware"
+         type="arxlift2s_ros2_control::ArxLiftHardware"
+         base_class_type="hardware_interface::SystemInterface">
+    <description>
+      ARX LIFT2S lift column only (official LiftHeadControlLoop on can5).
+      Does not export waist, head, or chassis interfaces.
+    </description>
+  </class>
+</library>

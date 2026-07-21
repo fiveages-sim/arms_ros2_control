@@ -1,0 +1,9 @@
+build/
+install/
+log/
+*.user
+.vscode/
+.idea/
+
+# Vendored official SDK binaries (tracked in this package)
+!third_party/**/*.so
