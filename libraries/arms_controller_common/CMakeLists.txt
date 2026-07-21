@@ -18,6 +18,7 @@ set(dependencies
         ament_index_cpp
         tf2_geometry_msgs
         tf2
+        tf2_ros
         geometry_msgs
         trajectory_msgs
         nav_msgs
