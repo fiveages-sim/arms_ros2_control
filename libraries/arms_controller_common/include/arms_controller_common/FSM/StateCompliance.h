@@ -1,7 +1,7 @@
 //
 // Common StateCompliance for Arm Controllers
 //
-// Force/position hybrid compliance control state.
+// Force outer-loop / stiff position inner-loop.
 // Entered from HOLD via fsm_command=5; returns to HOLD on fsm_command=2.
 //
 #pragma once
@@ -13,38 +13,23 @@
 #include <memory>
 #include <mutex>
 #include <array>
+#include <string>
 #include <rclcpp/rclcpp.hpp>
 #include <rclcpp_lifecycle/lifecycle_node.hpp>
 #include <geometry_msgs/msg/wrench_stamped.hpp>
+#include <tf2_ros/buffer.h>
+#include <tf2_ros/transform_listener.h>
 #include <Eigen/Dense>
 
 namespace arms_controller_common
 {
     /**
-     * @brief StateCompliance - Compliance / force-position hybrid control
+     * Pipeline (always on after enter):
+     *   FT_raw (sensor) − tool_gravity(world→sensor via TF) − zero_cal bias
+     *   → world/base → admittance → stiff position command.
      *
-     * Behavior (per cycle):
-     *  1. Position baseline: hold the joint positions captured on enter.
-     *  2. (Optional) Admittance drift: integrate the external wrench through a
-     *     Cartesian mass-damper law to compute a Cartesian offset dx, map it to
-     *     joints via damped-least-squares inverse Jacobian, and add it to the
-     *     held position so the arm "yields" along the direction of the applied
-     *     force (compliant behavior even on pure position interface hardware).
-     *  3. MIX mode: apply soft kp/kd (compliance_gains_) and gravity compensation.
-     *  4. Force feed-forward: convert the Cartesian wrench (in end-effector frame)
-     *     to the base frame using the current EE rotation, then apply
-     *     τ_ff = J^T · W_base on the effort interface (only in MIX mode).
-     *
-     * Subclasses (per controller) only need to override checkChange() to map
-     * fsm_command into the controller-specific next state.
-     *
-     * Coordinates:
-     *  - Subscribed wrench is assumed to be expressed in the EE frame
-     *    (frame_id == left_eef/right_eef). It is rotated into the base frame
-     *    before being multiplied by J^T (which is in LOCAL_WORLD_ALIGNED /
-     *    base frame).
-     *  - When no kinematics solver is supplied, the wrench feed-forward and
-     *    admittance drift are skipped (degrades gracefully to soft-hold).
+     * Tool model: left/right_dyn_param = [m, mx,my,mz(mm in tcp), I...]
+     * Gravity direction: world −Z (fallback base_link if world TF missing).
      */
     class StateCompliance : public FSMState
     {
@@ -59,12 +44,6 @@ namespace arms_controller_common
         void exit() override;
         FSMStateName checkChange() override;
 
-        /**
-         * @brief Override the wrench topics. Empty disables that side's feed-in.
-         * Must be called before enter() to take effect.
-         */
-        void setWrenchTopic(const std::string& left_topic, const std::string& right_topic);
-
     protected:
         std::shared_ptr<rclcpp_lifecycle::LifecycleNode> node_;
         std::shared_ptr<GravityCompensation> gravity_compensation_;
@@ -73,57 +52,73 @@ namespace arms_controller_common
     private:
         void updateParam();
         void setupWrenchSubscriptions();
-
-        // ---- helpers ----
-        // Returns true if a kinematics solver is configured and joint layout is dual-arm.
         bool kinematicsAvailable() const;
-
-        // Split the controller joint vector into left/right Eigen vectors.
         void splitJoints(const std::vector<double>& all,
                          Eigen::VectorXd& left, Eigen::VectorXd& right) const;
 
-        // Rotate a 6D wrench from EE frame to base frame using current EE rotation.
+        /** Tool gravity wrench in FT sensor frame: F = R^T (−mgẑ_world), τ = r_com×F. */
+        bool computeToolGravityWrenchInSensorFrame(
+            int side_index, Eigen::Matrix<double, 6, 1>& wrench_sensor) const;
+
         Eigen::Matrix<double, 6, 1> wrenchToBase(int side_index,
                                                   const std::array<double, 6>& wrench_ee) const;
-
-        // Compute J^T·W feed-forward joint torques for one side.
-        Eigen::VectorXd computeForceFeedforward(int side_index,
-                                                 const Eigen::Matrix<double, 6, 1>& wrench_base);
-
-        // Admittance: integrate Cartesian wrench -> Cartesian pose offset -> joint offset.
+        /** Integrate Mẍ+Dẋ=F with accumulated x; map q_offset = J⁺ x. Skip if no FT. */
         Eigen::VectorXd computeAdmittanceOffset(int side_index,
                                                  const Eigen::Matrix<double, 6, 1>& wrench_base,
                                                  double dt);
 
-        // Members
-        std::vector<double> hold_positions_;  // Joint positions captured on enter (baseline)
+        std::vector<double> hold_positions_;
 
-        // Compliance gains [kp, kd]; lower than hold/default gains for soft behavior
-        std::vector<double> compliance_gains_;
+        // Heavier M/D + deadband: FT noise must not chatter stiff position inner-loop.
+        std::vector<double> admittance_mass_{5.0, 5.0, 5.0, 0.5, 0.5, 0.5};
+        std::vector<double> admittance_damping_{80.0, 80.0, 80.0, 8.0, 8.0, 8.0};
+        double admittance_max_displacement_{0.05};  // total Cartesian |x| cap [m]/rad]
+        double force_deadband_{2.0};                // N
+        double torque_deadband_{0.15};              // Nm
+        double wrench_lpf_alpha_{0.15};             // EMA on tared wrench (0..1)
+        Eigen::Matrix<double, 6, 1> adm_vel_left_{Eigen::Matrix<double, 6, 1>::Zero()};
+        Eigen::Matrix<double, 6, 1> adm_vel_right_{Eigen::Matrix<double, 6, 1>::Zero()};
+        Eigen::Matrix<double, 6, 1> adm_pos_left_{Eigen::Matrix<double, 6, 1>::Zero()};
+        Eigen::Matrix<double, 6, 1> adm_pos_right_{Eigen::Matrix<double, 6, 1>::Zero()};
+        Eigen::Matrix<double, 6, 1> wrench_filt_left_{Eigen::Matrix<double, 6, 1>::Zero()};
+        Eigen::Matrix<double, 6, 1> wrench_filt_right_{Eigen::Matrix<double, 6, 1>::Zero()};
 
-        // Force feed-forward scale (0 disables; 1.0 = raw J^T·W)
-        double force_feedforward_scale_{1.0};
+        // Zero-cal (sensor-frame residual after gravity removal)
+        double zero_cal_duration_{1.0};
+        bool zero_cal_pending_{false};
+        bool zero_cal_running_{false};
+        bool zero_cal_done_{false};
+        rclcpp::Time zero_cal_start_;
+        long zero_cal_samples_left_{0};
+        long zero_cal_samples_right_{0};
+        std::array<double, 6> wrench_bias_left_{};
+        std::array<double, 6> wrench_bias_right_{};
+        std::array<double, 6> zero_cal_sum_left_{};
+        std::array<double, 6> zero_cal_sum_right_{};
 
-        // Admittance parameters (Cartesian mass-damper: M·ẍ + D·ẋ = W_ext)
-        bool admittance_enabled_{false};
-        std::vector<double> admittance_mass_{0.0, 0.0, 0.0, 0.0, 0.0, 0.0};     // [m_x, m_y, m_z, j_x, j_y, j_z]
-        std::vector<double> admittance_damping_{0.0, 0.0, 0.0, 0.0, 0.0, 0.0};
-        double admittance_max_displacement_{0.05};  // m / rad cap per DOF
-        // Per-side admittance state (linear/angular velocity in base frame)
-        Eigen::Matrix<double, 6, 1> adm_state_left_{Eigen::Matrix<double, 6, 1>::Zero()};
-        Eigen::Matrix<double, 6, 1> adm_state_right_{Eigen::Matrix<double, 6, 1>::Zero()};
-        rclcpp::Time last_admittance_time_;
+        // Tool load [m, mx,my,mz mm in tcp, ...]
+        std::vector<double> left_dyn_param_;
+        std::vector<double> right_dyn_param_;
+        double gravity_accel_{9.81};
 
-        // Optional external wrench feed-in
-        std::string left_wrench_topic_{"/left_arm_external_wrench"};
-        std::string right_wrench_topic_{"/right_arm_external_wrench"};
+        std::shared_ptr<tf2_ros::Buffer> tf_buffer_;
+        std::shared_ptr<tf2_ros::TransformListener> tf_listener_;
+        std::string gravity_frame_{"world"};  // vertical reference; fallback base_link
+        static constexpr const char* kLeftFtFrame = "left_ft_sensor_link";
+        static constexpr const char* kRightFtFrame = "right_ft_sensor_link";
+        static constexpr const char* kLeftTcpFrame = "left_tcp";
+        static constexpr const char* kRightTcpFrame = "right_tcp";
+        static constexpr const char* kLeftWrenchTopic = "/left_ft_broadcaster/wrench";
+        static constexpr const char* kRightWrenchTopic = "/right_ft_broadcaster/wrench";
+
         rclcpp::Subscription<geometry_msgs::msg::WrenchStamped>::SharedPtr left_wrench_sub_;
         rclcpp::Subscription<geometry_msgs::msg::WrenchStamped>::SharedPtr right_wrench_sub_;
         std::mutex wrench_mutex_;
         std::array<double, 6> left_wrench_{};
         std::array<double, 6> right_wrench_{};
+        bool left_ft_active_{false};
+        bool right_ft_active_{false};
 
-        // Per-side joint count (derived from kinematics when available, else 0)
         size_t left_joint_count_{0};
         size_t right_joint_count_{0};
     };
