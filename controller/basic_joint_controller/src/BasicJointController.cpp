@@ -137,20 +137,19 @@ namespace basic_joint_controller
             state_list_.movej = std::make_shared<StateMoveJ>(
                 ctrl_interfaces_, get_node(), joint_names_);
 
-            // COMPLIANCE: Cartesian force/position hybrid (fsm_command=5 from HOLD)
-            // Without ArmKinematics this degrades to soft joint hold.
-            auto_declare<std::vector<double>>("compliance_gains", {10.0, 1.0});
-            auto_declare<double>("compliance_force_ff_scale", 0.0);
-            auto_declare<double>("compliance_force_lpf_tau", 0.0);
-            auto_declare<std::vector<double>>("compliance_selection",
-                                              {0.0, 0.0, 1.0, 0.0, 0.0, 0.0});
+            // COMPLIANCE: force outer-loop + stiff position inner-loop (fsm_command=5)
             auto_declare<std::vector<double>>("compliance_admittance_mass",
-                                              {0.3, 0.3, 0.3, 0.05, 0.05, 0.05});
+                                              {5.0, 5.0, 5.0, 0.5, 0.5, 0.5});
             auto_declare<std::vector<double>>("compliance_admittance_damping",
-                                              {8.0, 8.0, 8.0, 0.8, 0.8, 0.8});
-            auto_declare<double>("compliance_admittance_max_displacement", 0.03);
-            auto_declare<double>("compliance_dls_damping", 0.05);
-            auto_declare<double>("compliance_dls_step_limit", 0.2);
+                                              {80.0, 80.0, 80.0, 8.0, 8.0, 8.0});
+            auto_declare<double>("compliance_admittance_max_displacement", 0.05);
+            auto_declare<double>("compliance_force_deadband", 2.0);
+            auto_declare<double>("compliance_torque_deadband", 0.15);
+            auto_declare<double>("compliance_wrench_lpf_alpha", 0.15);
+            auto_declare<double>("compliance_zero_cal_duration", 1.0);
+            auto_declare<double>("compliance_gravity_accel", 9.81);
+            auto_declare<std::vector<double>>("left_dyn_param", {});
+            auto_declare<std::vector<double>>("right_dyn_param", {});
             state_list_.compliance = std::make_shared<StateCompliance>(
                 ctrl_interfaces_, get_node());
 

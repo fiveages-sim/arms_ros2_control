@@ -55,6 +55,7 @@ def launch_setup(context, *args, **kwargs):
         context.launch_configurations.get("enable_gripper", "true").lower() == "true"
     )
     hand_controllers, hand_spawners = ocs2_common.setup_hand_controllers(ctx, enable_gripper)
+    _ft_controllers, ft_spawners = ocs2_common.setup_ft_broadcasters(ctx)
 
     ft_controllers, ft_spawners = ocs2_common.setup_ft_broadcasters(ctx)
 
