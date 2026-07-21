@@ -67,6 +67,7 @@ def launch_setup(context, *args, **kwargs):
     )
     hand_controllers, hand_spawners = ocs2_common.setup_hand_controllers(ctx, enable_gripper)
     hand_names = [c["name"] for c in hand_controllers] if enable_gripper else []
+    _ft_controllers, ft_spawners = ocs2_common.setup_ft_broadcasters(ctx)
 
     ft_controllers, ft_spawners = ocs2_common.setup_ft_broadcasters(ctx)
 

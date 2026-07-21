@@ -28,6 +28,7 @@ from robot_common_launch import (
     prepare_ros2_controllers_override_path,
     resolve_control_patch,
     resolve_control_sides,
+    resolve_ft_sides,
     resolve_profile_path,
     resolve_robot_variant,
     write_spawner_controller_param_file,
@@ -69,6 +70,7 @@ def build_ocs2_control_context(context) -> Ocs2ControlContext:
     control_left, control_right = resolve_control_sides(configs, profile)
     control_patch = resolve_control_patch(profile)
     robot_variant = resolve_robot_variant(configs, profile)
+    left_ft, right_ft = resolve_ft_sides(configs, profile)
 
     config, _path, meta = load_robot_config(
         robot_name,
@@ -78,6 +80,8 @@ def build_ocs2_control_context(context) -> Ocs2ControlContext:
         control_right=control_right,
         control_patch=control_patch,
         robot_variant=robot_variant,
+        left_ft=left_ft,
+        right_ft=right_ft,
     )
 
     return Ocs2ControlContext(
@@ -221,6 +225,25 @@ def setup_hand_controllers(
     return detect_and_spawn_controllers(
         ctx.config,
         ["hand", "gripper"],
+        robot_description=robot_description,
+        use_sim_time=ctx.use_sim_time,
+    )
+
+
+def setup_ft_broadcasters(
+    ctx: Ocs2ControlContext,
+) -> Tuple[List[dict], List[Node]]:
+    """Spawn left/right_ft_broadcaster when present in merged ros2_control config."""
+    robot_description = get_ros2_control_robot_description(
+        ctx.robot_name,
+        robot_type=ctx.robot_type,
+        hardware=ctx.hardware,
+        launch_configurations=ctx.launch_configurations,
+        robot_profile=ctx.profile_path or None,
+    )
+    return detect_and_spawn_controllers(
+        ctx.config,
+        ["ft_broadcaster"],
         robot_description=robot_description,
         use_sim_time=ctx.use_sim_time,
     )
