@@ -218,6 +218,13 @@ namespace ocs2::controller_common
                 node->create_publisher<geometry_msgs::msg::PoseStamped>(
                     "right_current_target", 1);
         }
+
+        if (target_context_.body_target_enabled)
+        {
+            body_target_publisher_ =
+                node->create_publisher<geometry_msgs::msg::PoseStamped>(
+                    "body_current_target", 1);
+        }
     }
 
     int PoseBasedReferenceManager::effectiveTargetStateDim() const
@@ -971,6 +978,7 @@ namespace ocs2::controller_common
         body_pose_7_xyzw_(6) = msg->orientation.w;
 
         updateTargetTrajectory();
+        publishCurrentTargets("body");
     }
 
     void PoseBasedReferenceManager::leftPoseStampedPoseCallback(
@@ -1061,6 +1069,7 @@ namespace ocs2::controller_common
         body_pose_7_xyzw_(6) = msg->orientation.w;
 
         updateBodyTrajectory(previous_body_target_state);
+        publishCurrentTargets("body");
     }
 
     void PoseBasedReferenceManager::processPoseStamped(
@@ -1647,13 +1656,14 @@ namespace ocs2::controller_common
     }
 
     void PoseBasedReferenceManager::publishCurrentTargets(
-        const std::string& arm_type)
+        const std::string& target_type)
     {
-        // 根据 arm_type 决定发布哪个臂的目标
-        bool publish_left =
-            (arm_type.empty() || arm_type == "both" || arm_type == "left");
-        bool publish_right =
-            (arm_type.empty() || arm_type == "both" || arm_type == "right");
+        const bool publish_left =
+            (target_type.empty() || target_type == "both" || target_type == "left");
+        const bool publish_right =
+            (target_type.empty() || target_type == "both" || target_type == "right");
+        const bool publish_body =
+            (target_type.empty() || target_type == "both" || target_type == "body");
 
         // 发布左臂当前目标
         if (publish_left)
@@ -1685,6 +1695,21 @@ namespace ocs2::controller_common
             right_target_msg.pose.orientation.z = right_target_state_(5);
             right_target_msg.pose.orientation.w = right_target_state_(6);
             right_target_publisher_->publish(right_target_msg);
+        }
+
+        if (target_context_.body_target_enabled && publish_body && body_target_publisher_)
+        {
+            geometry_msgs::msg::PoseStamped body_target_msg;
+            body_target_msg.header.stamp = clock_->now();
+            body_target_msg.header.frame_id = base_frame_;
+            body_target_msg.pose.position.x = body_pose_7_xyzw_(0);
+            body_target_msg.pose.position.y = body_pose_7_xyzw_(1);
+            body_target_msg.pose.position.z = body_pose_7_xyzw_(2);
+            body_target_msg.pose.orientation.x = body_pose_7_xyzw_(3);
+            body_target_msg.pose.orientation.y = body_pose_7_xyzw_(4);
+            body_target_msg.pose.orientation.z = body_pose_7_xyzw_(5);
+            body_target_msg.pose.orientation.w = body_pose_7_xyzw_(6);
+            body_target_publisher_->publish(body_target_msg);
         }
     }
 

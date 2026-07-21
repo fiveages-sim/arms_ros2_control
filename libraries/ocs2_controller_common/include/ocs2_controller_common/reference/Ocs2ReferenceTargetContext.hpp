@@ -21,6 +21,10 @@ struct Ocs2ReferenceTargetContext {
     /// each cycle (typically FK). If false, body block uses zero translation + identity quaternion ("empty" body target).
     bool body_pose_from_current_state{true};
 
+    /// Enables publication of the cached Cartesian body target.
+    /// Set by controllers that explicitly support body tracking EE.
+    bool body_target_enabled{false};
+
     static constexpr int kWheelHumanoidTargetStateDim = 21;
 };
 
