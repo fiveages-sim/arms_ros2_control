@@ -1,4 +1,5 @@
 #include "arms_controller_common/utils/CartesianTrajectoryManager.h"
+#include "arms_controller_common/utils/TrajectoryRecorder.h"
 #include <Eigen/Geometry>
 #include <arms_ros2_control_msgs/msg/linear_message.hpp>
 #include <iostream>
@@ -569,6 +570,17 @@ namespace arms_controller_common
             movel_point.quaternion_point.q.y, movel_point.quaternion_point.q.z);
         pose.setQuaternion(q);
 
+        auto& rec = arms_controller_common::TrajectoryRecorder::instance();
+        if (rec.enabled())
+        {
+            arms_controller_common::TrajSample cs;
+            cs.stamp_sec = last_sample_stamp_;
+            cs.position = {movel_point.cart_pos(0), movel_point.cart_pos(1), movel_point.cart_pos(2)};
+            cs.quat_xyzw = {movel_point.quaternion_point.q.x, movel_point.quaternion_point.q.y,
+                            movel_point.quaternion_point.q.z, movel_point.quaternion_point.q.w};
+            rec.appendCal(arm_name, cs);
+        }
+
         Eigen::VectorXd solution;
         ArmKinematics::SolutionInfo info;
         if (!arm_kinematics_->solveSingleArmIKWithInfo(
@@ -618,6 +630,17 @@ namespace arms_controller_common
             movec_point.quaternion_point.q.w, movec_point.quaternion_point.q.x,
             movec_point.quaternion_point.q.y, movec_point.quaternion_point.q.z);
         pose.setQuaternion(q);
+
+        auto& rec = arms_controller_common::TrajectoryRecorder::instance();
+        if (rec.enabled())
+        {
+            arms_controller_common::TrajSample cs;
+            cs.stamp_sec = last_sample_stamp_;
+            cs.position = {movec_point.cart_pos(0), movec_point.cart_pos(1), movec_point.cart_pos(2)};
+            cs.quat_xyzw = {movec_point.quaternion_point.q.x, movec_point.quaternion_point.q.y,
+                            movec_point.quaternion_point.q.z, movec_point.quaternion_point.q.w};
+            rec.appendCal(arm_name, cs);
+        }
 
         Eigen::VectorXd solution;
         ArmKinematics::SolutionInfo info;
