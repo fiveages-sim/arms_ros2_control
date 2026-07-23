@@ -101,6 +101,14 @@ namespace ocs2::mobile_manipulator
 
             auto_declare("movel_trajectory_duration", 2.0);
             auto_declare("movel_duration", 2.0);
+            auto_declare("movel_sample_interval", 0.04);
+            auto_declare("movel_max_linear_velocity", 0.3);
+            auto_declare("movel_max_linear_acceleration", 1.0);
+            auto_declare("movel_max_linear_jerk", 2.0);
+            auto_declare("movel_max_angular_velocity", 1.0);
+            auto_declare("movel_max_angular_acceleration", 2.0);
+            auto_declare("movel_max_angular_jerk", 4.0);
+            auto_declare("movel_auto_extend_duration", true);
 
             ocs2::controller_common::Ocs2ReferenceTargetContext ref_ctx;
             ref_ctx.dual_arm = interface_->dual_arm_;
