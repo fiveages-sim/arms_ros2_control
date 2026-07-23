@@ -56,6 +56,13 @@ public:
     /** Publish cached current targets for visualization/marker refresh, without modifying MPC targets. */
     void publishCurrentTargetsFromCache();
 
+    /**
+     * Under wheel-humanoid COUPLED: update only the right-arm marker/cache from a left pose + captured
+     * relative (matches BimanualCouplingConstraint when left is the measured EE). Does not push MPC
+     * TargetTrajectories.
+     */
+    void setCoupledRightMarkerFromLeftPose(const vector_t& left_pose7_xyzw, bool publish = true);
+
     /** Build full reference state for SwitchedHumanoidReferenceManager (dual arms + body). */
     static vector_t assembleWheelHumanoidTargetState(const vector_t& left_pose7_xyzw, const vector_t& right_pose7_xyzw,
                                                      const vector_t& body_pose7_xyzw);
@@ -102,7 +109,7 @@ private:
                                                const char* tag,
                                                vector_t& out_state) const;
 
-    void publishCurrentTargets(const std::string& arm_type = "");
+    void publishCurrentTargets(const std::string& target_type = "");
 
     /** Wheel-humanoid COUPLED: after updating one arm target, set the other from captured relative pose (matches WheelHumanoidTargetNode).
      *  Returns true if the opposite arm target was synchronized. */
@@ -128,6 +135,7 @@ private:
 
     rclcpp::Publisher<geometry_msgs::msg::PoseStamped>::SharedPtr left_target_publisher_;
     rclcpp::Publisher<geometry_msgs::msg::PoseStamped>::SharedPtr right_target_publisher_;
+    rclcpp::Publisher<geometry_msgs::msg::PoseStamped>::SharedPtr body_target_publisher_;
 
     std::shared_ptr<tf2_ros::Buffer> tf_buffer_;
     std::shared_ptr<tf2_ros::TransformListener> tf_listener_;

@@ -11,7 +11,6 @@
 #include <rclcpp/rclcpp.hpp>
 #include <tf2/exceptions.hpp>
 #include <tf2_geometry_msgs/tf2_geometry_msgs.hpp>
-#include <iostream>
 #include <fstream>
 #include <iomanip>
 #include <limits>
@@ -143,9 +142,7 @@ namespace ocs2::controller_common
         Ocs2ReferenceTargetContext target_context)
         : ReferenceManagerDecorator(std::move(referenceManagerPtr)),
           topic_prefix_(std::move(topicPrefix)),
-          target_context_(std::move(target_context)),
-          logger_(rclcpp::get_logger("PoseBasedReferenceManager")),
-          trajectory_duration_(2.0), moveL_duration_(2.0)
+          target_context_(std::move(target_context))
     {
         dual_arm_mode_ = target_context_.dual_arm;
 
@@ -337,6 +334,13 @@ namespace ocs2::controller_common
             right_target_publisher_ =
                 node->create_publisher<geometry_msgs::msg::PoseStamped>(
                     "right_current_target", 1);
+        }
+
+        if (target_context_.body_target_enabled)
+        {
+            body_target_publisher_ =
+                node->create_publisher<geometry_msgs::msg::PoseStamped>(
+                    "body_current_target", 1);
         }
     }
 
@@ -689,6 +693,50 @@ namespace ocs2::controller_common
     void PoseBasedReferenceManager::publishCurrentTargetsFromCache()
     {
         publishCurrentTargets();
+    }
+
+    void PoseBasedReferenceManager::setCoupledRightMarkerFromLeftPose(const vector_t& left_pose7_xyzw, bool publish)
+    {
+#ifndef HAS_OCS2_WHEEL_HUMANOID
+        (void)left_pose7_xyzw;
+        (void)publish;
+#else
+        if (!dual_arm_mode_ || left_pose7_xyzw.size() < 7) {
+            return;
+        }
+        auto* sw = dynamic_cast<::ocs2::wheel_humanoid::SwitchedHumanoidReferenceManager*>(referenceManagerPtr_.get());
+        if (sw == nullptr || !sw->hasCapturedCoupling()) {
+            return;
+        }
+        const scalar_t t = current_observation_.time;
+        if (!sw->isBimanualCoupled(t)) {
+            return;
+        }
+        const auto [relPos, relQuatRaw] = sw->getCouplingParameters(t);
+        Eigen::Quaternion<scalar_t> relQuat = relQuatRaw;
+        if (relQuat.norm() < static_cast<scalar_t>(1e-9)) {
+            return;
+        }
+        relQuat.normalize();
+
+        Eigen::Quaternion<scalar_t> leftQuat(left_pose7_xyzw(6), left_pose7_xyzw(3), left_pose7_xyzw(4),
+                                             left_pose7_xyzw(5));
+        if (leftQuat.norm() < static_cast<scalar_t>(1e-9)) {
+            return;
+        }
+        leftQuat.normalize();
+
+        const Eigen::Matrix<scalar_t, 3, 1> rightPos = left_pose7_xyzw.head<3>() + leftQuat * relPos;
+        const Eigen::Quaternion<scalar_t> rightQuat = (leftQuat * relQuat).normalized();
+        right_target_state_.head<3>() = rightPos;
+        right_target_state_(3) = rightQuat.x();
+        right_target_state_(4) = rightQuat.y();
+        right_target_state_(5) = rightQuat.z();
+        right_target_state_(6) = rightQuat.w();
+        if (publish) {
+            publishCurrentTargets("right");
+        }
+#endif
     }
 
     void PoseBasedReferenceManager::setCurrentObservation(
@@ -1156,6 +1204,7 @@ namespace ocs2::controller_common
         body_pose_7_xyzw_(6) = msg->orientation.w;
 
         updateTargetTrajectory();
+        publishCurrentTargets("body");
     }
 
     void PoseBasedReferenceManager::leftPoseStampedPoseCallback(
@@ -1246,6 +1295,7 @@ namespace ocs2::controller_common
         body_pose_7_xyzw_(6) = msg->orientation.w;
 
         updateBodyTrajectory(previous_body_target_state);
+        publishCurrentTargets("body");
     }
 
     void PoseBasedReferenceManager::processPoseStamped(
@@ -1755,13 +1805,14 @@ namespace ocs2::controller_common
     }
 
     void PoseBasedReferenceManager::publishCurrentTargets(
-        const std::string& arm_type)
+        const std::string& target_type)
     {
-        // 根据 arm_type 决定发布哪个臂的目标
-        bool publish_left =
-            (arm_type.empty() || arm_type == "both" || arm_type == "left");
-        bool publish_right =
-            (arm_type.empty() || arm_type == "both" || arm_type == "right");
+        const bool publish_left =
+            (target_type.empty() || target_type == "both" || target_type == "left");
+        const bool publish_right =
+            (target_type.empty() || target_type == "both" || target_type == "right");
+        const bool publish_body =
+            (target_type.empty() || target_type == "both" || target_type == "body");
 
         // 发布左臂当前目标
         if (publish_left)
@@ -1793,6 +1844,21 @@ namespace ocs2::controller_common
             right_target_msg.pose.orientation.z = right_target_state_(5);
             right_target_msg.pose.orientation.w = right_target_state_(6);
             right_target_publisher_->publish(right_target_msg);
+        }
+
+        if (target_context_.body_target_enabled && publish_body && body_target_publisher_)
+        {
+            geometry_msgs::msg::PoseStamped body_target_msg;
+            body_target_msg.header.stamp = clock_->now();
+            body_target_msg.header.frame_id = base_frame_;
+            body_target_msg.pose.position.x = body_pose_7_xyzw_(0);
+            body_target_msg.pose.position.y = body_pose_7_xyzw_(1);
+            body_target_msg.pose.position.z = body_pose_7_xyzw_(2);
+            body_target_msg.pose.orientation.x = body_pose_7_xyzw_(3);
+            body_target_msg.pose.orientation.y = body_pose_7_xyzw_(4);
+            body_target_msg.pose.orientation.z = body_pose_7_xyzw_(5);
+            body_target_msg.pose.orientation.w = body_pose_7_xyzw_(6);
+            body_target_publisher_->publish(body_target_msg);
         }
     }
 
@@ -2054,19 +2120,6 @@ namespace ocs2::controller_common
             RCLCPP_WARN(logger_, "%s", response->message.c_str());
             return;
         }
-        //由于没有ocs2运行结束的反馈，先不加线程锁
-        // // 检查是否正在执行
-        // {
-        //     std::lock_guard<std::mutex> lock(left_service_state_.mutex);
-        //     if (left_service_state_.is_executing)
-        //     {
-        //         response->success = false;
-        //         response->message =
-        //             "The left arm is executing another circular arc trajectory. Please wait for it to complete";
-        //         RCLCPP_WARN(logger_, "%s", response->message.c_str());
-        //         return;
-        //     }
-        // }
 
         // 转换坐标系
         arms_ros2_control_msgs::msg::CircleMessage::SharedPtr base_frame_msg =
@@ -2114,19 +2167,6 @@ namespace ocs2::controller_common
             RCLCPP_WARN(logger_, "%s", response->message.c_str());
             return;
         }
-        //由于没有合适的反馈，暂时不加线程锁
-        // // 检查是否正在执行
-        // {
-        //     std::lock_guard<std::mutex> lock(right_service_state_.mutex);
-        //     if (right_service_state_.is_executing)
-        //     {
-        //         response->success = false;
-        //         response->message =
-        //             "The right arm is executing another circular arc trajectory. Please wait for it to complete";
-        //         RCLCPP_WARN(logger_, "%s", response->message.c_str());
-        //         return;
-        //     }
-        // }
 
         // 转换坐标系
         arms_ros2_control_msgs::msg::CircleMessage::SharedPtr base_frame_msg =
