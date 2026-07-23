@@ -109,7 +109,7 @@ private:
                                                const char* tag,
                                                vector_t& out_state) const;
 
-    void publishCurrentTargets(const std::string& arm_type = "");
+    void publishCurrentTargets(const std::string& target_type = "");
 
     /** Wheel-humanoid COUPLED: after updating one arm target, set the other from captured relative pose (matches WheelHumanoidTargetNode).
      *  Returns true if the opposite arm target was synchronized. */
@@ -135,6 +135,7 @@ private:
 
     rclcpp::Publisher<geometry_msgs::msg::PoseStamped>::SharedPtr left_target_publisher_;
     rclcpp::Publisher<geometry_msgs::msg::PoseStamped>::SharedPtr right_target_publisher_;
+    rclcpp::Publisher<geometry_msgs::msg::PoseStamped>::SharedPtr body_target_publisher_;
 
     std::shared_ptr<tf2_ros::Buffer> tf_buffer_;
     std::shared_ptr<tf2_ros::TransformListener> tf_listener_;
@@ -148,6 +149,8 @@ private:
         double startTime{0.0};
         double duration{0.0};
         std::vector<vector_t> path;
+        /** Duration of each path segment. Each segment is a zero-to-zero velocity S-curve. */
+        std::vector<double> segmentDurations;
     };
 
     ArmReferenceBuffer left_arm_reference_buffer_;
@@ -157,6 +160,9 @@ private:
     static vector_t interpolatePose7(const vector_t& start, const vector_t& goal, double alpha);
     /** 按归一化进度 alpha∈[0,1] 在 7 维位姿路径上均匀分段采样；段内调用 interpolatePose7。 */
     static vector_t samplePose7Path(const std::vector<vector_t>& path, double alpha);
+    [[nodiscard]] double minimumPoseDuration(const vector_t& start, const vector_t& goal) const;
+    [[nodiscard]] double samplePoseProgress(const vector_t& start, const vector_t& goal,
+                                            double elapsed, double duration) const;
 
     void resetArmReferenceBuffer(ArmReferenceBuffer& buffer, const vector_t& pose, double time);
     /** 用 execute_path 的 waypoints 覆盖单臂 reference buffer（waypoints 不含起点）。
@@ -180,6 +186,14 @@ private:
 
     double trajectory_duration_{2.0};
     double moveL_duration_{2.0};
+    double moveL_sample_interval_{0.04};
+    double moveL_max_linear_velocity_{0.3};
+    double moveL_max_linear_acceleration_{1.0};
+    double moveL_max_linear_jerk_{2.0};
+    double moveL_max_angular_velocity_{1.0};
+    double moveL_max_angular_acceleration_{2.0};
+    double moveL_max_angular_jerk_{4.0};
+    bool moveL_auto_extend_duration_{true};
 
 #ifdef HAS_LINA_PLANNING
     std::shared_ptr<planning::CircularCurver> left_circle_curve_;
