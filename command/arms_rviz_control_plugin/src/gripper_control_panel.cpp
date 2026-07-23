@@ -39,8 +39,11 @@ namespace arms_rviz_control_plugin
         // Use RViz display context to get the node instead of creating a new one
         node_ = this->getDisplayContext()->getRosNodeAbstraction().lock()->get_raw_node();
 
-        // Declare parameter with empty default
-        node_->declare_parameter("hand_controllers", std::vector<std::string>());
+        // Launch may already inject hand_controllers via --params-file; only declare if missing
+        // (same pattern as JointControlPanel / OCS2FSMPanel).
+        if (!node_->has_parameter("hand_controllers")) {
+            node_->declare_parameter("hand_controllers", std::vector<std::string>());
+        }
         hand_controllers_ = node_->get_parameter("hand_controllers").as_string_array();
 
         if (hand_controllers_.empty())
