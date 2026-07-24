@@ -513,6 +513,25 @@ namespace arms_controller_common
         limits.tracking_frequency = tracking_frequency;
         limits.target_filter_alpha = target_filter_alpha;
 
+        // Streaming ONLINE targets call StateMoveJ::updateParam() at the input
+        // rate. Avoid validating, assigning and logging the same configuration
+        // on every 500 Hz target message while still allowing live parameter
+        // changes to take effect.
+        if (online_limits_configured_ &&
+            limits.min_velocity == online_limits_.min_velocity &&
+            limits.max_velocity == online_limits_.max_velocity &&
+            limits.min_acceleration == online_limits_.min_acceleration &&
+            limits.max_acceleration == online_limits_.max_acceleration &&
+            limits.max_jerk == online_limits_.max_jerk &&
+            limits.tracking_frequency == online_limits_.tracking_frequency &&
+            limits.target_filter_alpha == online_limits_.target_filter_alpha &&
+            position_tolerance == online_position_tolerance_ &&
+            velocity_tolerance == online_velocity_tolerance_ &&
+            acceleration_tolerance == online_acceleration_tolerance_)
+        {
+            return true;
+        }
+
         OnlineTrajectoryFilter validator;
         if (!validator.configure(limits) || !std::isfinite(position_tolerance) ||
             !std::isfinite(velocity_tolerance) || !std::isfinite(acceleration_tolerance) ||
@@ -532,6 +551,13 @@ namespace arms_controller_common
         online_position_tolerance_ = position_tolerance;
         online_velocity_tolerance_ = velocity_tolerance;
         online_acceleration_tolerance_ = acceleration_tolerance;
+        online_limits_configured_ = true;
+        RCLCPP_INFO(
+            logger_,
+            "Ruckig ONLINE configured: velocity=%.3f rad/s, acceleration=%.3f rad/s^2, "
+            "jerk=%.3f rad/s^3, target_alpha=%.3f "
+            "(movej_online_tracking_frequency is compatibility-only)",
+            max_velocity, max_acceleration, max_jerk, target_filter_alpha);
         return true;
     }
 

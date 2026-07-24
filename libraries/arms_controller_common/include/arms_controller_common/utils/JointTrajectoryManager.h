@@ -267,6 +267,7 @@ namespace arms_controller_common
         double online_position_tolerance_{1.0e-4};
         double online_velocity_tolerance_{1.0e-3};
         double online_acceleration_tolerance_{1.0e-2};
+        bool online_limits_configured_{false};
         std::vector<OnlineTrajectoryFilter> online_filters_;
 
         // 辅助函数

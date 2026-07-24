@@ -21,6 +21,7 @@ set(dependencies
         geometry_msgs
         trajectory_msgs
         arms_ros2_control_msgs
+        ruckig
 )
 
 find_package(ament_cmake REQUIRED)
@@ -81,6 +82,7 @@ target_link_libraries(${PROJECT_NAME} PUBLIC
         ${trajectory_msgs_TARGETS}
         ${arms_ros2_control_msgs_TARGETS}
         Eigen3::Eigen
+        ruckig::ruckig
 )
 
 # Conditionally link lina_planning if available

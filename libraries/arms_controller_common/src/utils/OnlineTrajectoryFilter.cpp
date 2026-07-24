@@ -1,8 +1,11 @@
 #include "arms_controller_common/utils/OnlineTrajectoryFilter.h"
 
 #include <algorithm>
+#include <array>
 #include <cmath>
 #include <limits>
+
+#include <ruckig/ruckig.hpp>
 
 namespace arms_controller_common
 {
@@ -69,49 +72,6 @@ namespace arms_controller_common
         requested_target_acceleration_ = std::isfinite(acceleration) ? acceleration : 0.0;
     }
 
-    double OnlineTrajectoryFilter::calculateDesiredJerk() const
-    {
-        const double frequency = limits_.tracking_frequency;
-        const double position_error = target_position_ - position_;
-        const double velocity_error = target_velocity_ - velocity_;
-        const double acceleration_error = target_acceleration_ - acceleration_;
-
-        // q''' = w^3 e + 3 w^2 e' + 3 w e'' gives three identical
-        // real closed-loop poles at -w for a stationary target: no overshoot
-        // in the unsaturated terminal response.
-        const double desired_jerk =
-            frequency * frequency * frequency * position_error +
-            3.0 * frequency * frequency * velocity_error +
-            3.0 * frequency * acceleration_error;
-        return std::isfinite(desired_jerk) ? desired_jerk : 0.0;
-    }
-
-    double OnlineTrajectoryFilter::enforceDiscreteLimits(double desired_jerk, double dt) const
-    {
-        double lower = -limits_.max_jerk;
-        double upper = limits_.max_jerk;
-
-        lower = std::max(lower, (limits_.min_acceleration - acceleration_) / dt);
-        upper = std::min(upper, (limits_.max_acceleration - acceleration_) / dt);
-
-        const double half_dt_squared = 0.5 * dt * dt;
-        lower = std::max(
-            lower,
-            (limits_.min_velocity - velocity_ - acceleration_ * dt) / half_dt_squared);
-        upper = std::min(
-            upper,
-            (limits_.max_velocity - velocity_ - acceleration_ * dt) / half_dt_squared);
-
-        if (lower <= upper)
-        {
-            return std::clamp(desired_jerk, lower, upper);
-        }
-
-        // This is only reachable if the supplied initial state is already too
-        // close to a limit to remain feasible in one sample. Prefer braking.
-        return std::clamp(-acceleration_ / dt, -limits_.max_jerk, limits_.max_jerk);
-    }
-
     double OnlineTrajectoryFilter::update(double dt)
     {
         if (!configured_ || !std::isfinite(dt) || dt <= kEpsilon)
@@ -126,17 +86,37 @@ namespace arms_controller_common
         target_acceleration_ += alpha *
                                 (requested_target_acceleration_ - target_acceleration_);
 
-        const double jerk = enforceDiscreteLimits(calculateDesiredJerk(), dt);
-        const double next_acceleration = std::clamp(
-            acceleration_ + dt * jerk,
-            limits_.min_acceleration,
-            limits_.max_acceleration);
-        const double next_velocity = std::clamp(
-            velocity_ + dt * (acceleration_ + next_acceleration) / 2.0,
-            limits_.min_velocity,
-            limits_.max_velocity);
-        const double next_position =
-            position_ + dt * (velocity_ + next_velocity) / 2.0;
+        ruckig::Ruckig<1> otg(dt);
+        ruckig::InputParameter<1> input;
+        ruckig::OutputParameter<1> output;
+
+        input.current_position = {position_};
+        input.current_velocity = {velocity_};
+        input.current_acceleration = {acceleration_};
+        input.target_position = {target_position_};
+        input.target_velocity = {target_velocity_};
+        input.target_acceleration = {target_acceleration_};
+        input.max_velocity = {limits_.max_velocity};
+        input.max_acceleration = {limits_.max_acceleration};
+        input.max_jerk = {limits_.max_jerk};
+        input.min_velocity = std::array<double, 1>{limits_.min_velocity};
+        input.min_acceleration = std::array<double, 1>{limits_.min_acceleration};
+        input.duration_discretization = ruckig::DurationDiscretization::Discrete;
+
+        const auto result = otg.update(input, output);
+        if (result < 0)
+        {
+            // Fail closed on an invalid or numerically infeasible state. Keep
+            // the last continuous command instead of emitting a discontinuity.
+            velocity_ = 0.0;
+            acceleration_ = 0.0;
+            last_jerk_ = 0.0;
+            return position_;
+        }
+
+        const double next_position = output.new_position[0];
+        const double next_velocity = output.new_velocity[0];
+        const double next_acceleration = output.new_acceleration[0];
 
         if (!std::isfinite(next_position) || !std::isfinite(next_velocity) ||
             !std::isfinite(next_acceleration))
@@ -147,10 +127,14 @@ namespace arms_controller_common
             return position_;
         }
 
+        const double previous_acceleration = acceleration_;
         position_ = next_position;
         velocity_ = next_velocity;
         acceleration_ = next_acceleration;
-        last_jerk_ = jerk;
+        last_jerk_ = std::clamp(
+            (next_acceleration - previous_acceleration) / dt,
+            -limits_.max_jerk,
+            limits_.max_jerk);
         return position_;
     }
 

@@ -5,13 +5,11 @@
 namespace arms_controller_common
 {
     /**
-     * @brief Stateful third-order online trajectory filter for one joint.
+     * @brief Stateful one-DoF Ruckig online trajectory generator.
      *
-     * The filter keeps position, velocity and acceleration continuous while a
-     * streaming position target changes. It follows the third-order state and
-     * constraint model from trajectory_online_planning/main.py, with a
-     * critically damped jerk command and target low-pass filtering to avoid the
-     * discrete bang-bang limit cycle at 100 Hz.
+     * The public interface remains compatible with the previous third-order
+     * filter, while each update replans from the retained position, velocity,
+     * and acceleration state under velocity, acceleration, and jerk limits.
      */
     class OnlineTrajectoryFilter
     {
@@ -23,6 +21,8 @@ namespace arms_controller_common
             double min_acceleration{-2.0};
             double max_acceleration{2.0};
             double max_jerk{10.0};
+            // Kept for ROS parameter/API compatibility; Ruckig does not use a
+            // feedback tracking frequency.
             double tracking_frequency{5.0};
             double target_filter_alpha{0.2};
         };
@@ -48,9 +48,6 @@ namespace arms_controller_common
         double lastJerk() const { return last_jerk_; }
 
     private:
-        double calculateDesiredJerk() const;
-        double enforceDiscreteLimits(double desired_jerk, double dt) const;
-
         Limits limits_{};
         bool configured_{false};
 
