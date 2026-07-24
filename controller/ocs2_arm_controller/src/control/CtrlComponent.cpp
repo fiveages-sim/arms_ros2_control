@@ -5,6 +5,7 @@
 #include "ocs2_arm_controller/control/CtrlComponent.h"
 #include "ocs2_arm_controller/Ocs2ArmController.h"
 #include <ament_index_cpp/get_package_share_directory.hpp>
+#include <arms_controller_common/utils/TrajectoryRecorder.h>
 #include <ocs2_mpc/MPC_MRT_Interface.h>
 #include <ocs2_ros_interfaces/common/RosMsgConversions.h>
 #include <ocs2_ddp/GaussNewtonDDP_MPC.h>
@@ -13,6 +14,7 @@
 #include <pinocchio/algorithm/rnea.hpp>
 #include <exception>
 #include <filesystem>
+#include <optional>
 
 namespace ocs2::mobile_manipulator
 {
@@ -22,14 +24,30 @@ namespace ocs2::mobile_manipulator
         rcl_interfaces::msg::SetParametersResult result;
         result.successful = true;
 
-        // Check if the 'speed' parameter was changed
+        // Apply dir before enabled so a same-batch update uses the new directory.
+        std::optional<bool> traj_record_enabled_update;
         for (const auto& param : parameters)
         {
             if (param.get_name() == "hardware_latency")
             {
-                hardware_latency_ = param.as_double(); // Update the speed variable
+                hardware_latency_ = param.as_double();
                 RCLCPP_INFO(node_->get_logger(), "Updated hardware_latency to: %f", hardware_latency_);
             }
+            else if (param.get_name() == "traj_record_dir")
+            {
+                traj_record_dir_ = param.as_string();
+            }
+            else if (param.get_name() == "traj_record_enabled")
+            {
+                traj_record_enabled_update = param.as_bool();
+            }
+        }
+        if (traj_record_enabled_update.has_value())
+        {
+            arms_controller_common::TrajectoryRecorder::instance()
+                .setEnabled(*traj_record_enabled_update, traj_record_dir_);
+            RCLCPP_INFO(node_->get_logger(), "traj_record_enabled=%d, dir=%s",
+                        *traj_record_enabled_update, traj_record_dir_.c_str());
         }
 
         return result;
@@ -81,6 +99,27 @@ namespace ocs2::mobile_manipulator
 
         visualizer_->publishSelfCollisionVisualization(observation_.state);
         visualizer_->publishEndEffectorPose(time, observation_.state);
+
+        auto& rec = arms_controller_common::TrajectoryRecorder::instance();
+        if (rec.enabled())
+        {
+            const double t = time.seconds();
+            const vector_t lp = visualizer_->computeEndEffectorPose(observation_.state);
+            arms_controller_common::TrajSample ls;
+            ls.stamp_sec = t;
+            ls.position = {lp(0), lp(1), lp(2)};
+            ls.quat_xyzw = {lp(3), lp(4), lp(5), lp(6)};
+            rec.appendReal("left", ls);
+            if (dual_arm_mode_)
+            {
+                const vector_t rp = visualizer_->computeRightEndEffectorPose(observation_.state);
+                arms_controller_common::TrajSample rs;
+                rs.stamp_sec = t;
+                rs.position = {rp(0), rp(1), rp(2)};
+                rs.quat_xyzw = {rp(3), rp(4), rp(5), rp(6)};
+                rec.appendReal("right", rs);
+            }
+        }
     }
 
     void CtrlComponent::evaluatePolicy(const rclcpp::Time& time)
@@ -127,6 +166,29 @@ namespace ocs2::mobile_manipulator
                 policy.timeTrajectory_,
                 policy.inputTrajectory_
             );
+
+            // Record MPC one-step-ahead prediction (pred) vs actual: stamp = predicted absolute time
+            {
+                auto& rec = arms_controller_common::TrajectoryRecorder::instance();
+                if (rec.enabled())
+                {
+                    arms_controller_common::TrajSample lps;
+                    lps.stamp_sec = future_time;
+                    const vector_t lpe = visualizer_->computeEndEffectorPose(future_state);
+                    lps.position = {lpe(0), lpe(1), lpe(2)};
+                    lps.quat_xyzw = {lpe(3), lpe(4), lpe(5), lpe(6)};
+                    rec.appendPred("left", lps);
+                    if (dual_arm_mode_)
+                    {
+                        arms_controller_common::TrajSample rps;
+                        rps.stamp_sec = future_time;
+                        const vector_t rpe = visualizer_->computeRightEndEffectorPose(future_state);
+                        rps.position = {rpe(0), rpe(1), rpe(2)};
+                        rps.quat_xyzw = {rpe(3), rpe(4), rpe(5), rpe(6)};
+                        rec.appendPred("right", rps);
+                    }
+                }
+            }
 
             // Extract joint positions from state and set as commands
             if (ctrl_interfaces_.control_mode_ == ControlMode::POSITION)

@@ -345,7 +345,7 @@ namespace arms_controller_common
         }
     }
 
-    void StateMoveJ::run(const rclcpp::Time& /*time*/, const rclcpp::Duration& period)
+    void StateMoveJ::run(const rclcpp::Time& time, const rclcpp::Duration& period)
     {
         std::lock_guard lock(target_mutex_);
 
@@ -586,6 +586,7 @@ namespace arms_controller_common
             std::vector<double> next_joint_pos;
 
             // 获取下一个关节位置
+            cartesian_manager_.setSampleStamp(time.seconds());
             if (cartesian_manager_.getNextJointPos(next_joint_pos))
             {
                 std::vector<double> full_joint_pos = mapToFullJointPositions(

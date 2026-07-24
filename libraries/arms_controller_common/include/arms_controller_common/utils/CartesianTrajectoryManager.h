@@ -44,6 +44,7 @@ namespace arms_controller_common
             const double period = 0.01);
 
         bool getNextJointPos(std::vector<double>& res);
+        void setSampleStamp(double t) { last_sample_stamp_ = t; }
 
         // 在 public 部分添加
         double getPlanningTime() const { return planningTime_; }
@@ -73,6 +74,7 @@ namespace arms_controller_common
         bool completed_ = false;
         std::string last_error_;
         double planningTime_ = 0.0;
+        double last_sample_stamp_{0.0};
 
         //辅助函数
         bool validateCircleMsg(
@@ -148,6 +150,8 @@ namespace arms_controller_common
             last_error_ = "lina_planning not found; no cartesian trajectory available";
             return false;
         }
+
+        void setSampleStamp(double /*t*/) {}
 
         double getPlanningTime() const { return planningTime_; }
         bool isCompleted() const { return completed_; }

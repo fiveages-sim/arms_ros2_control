@@ -26,6 +26,7 @@
 #include <std_msgs/msg/int32.hpp>
 
 #include <arms_controller_common/CtrlInterfaces.h>
+#include <arms_controller_common/utils/TrajectoryRecorder.h>
 
 namespace ocs2::mobile_manipulator
 {
@@ -58,6 +59,17 @@ namespace ocs2::mobile_manipulator
             cached_ob_state_ = auto_declare("cached_ob_state", true);
             joint_speed_threshold_ = auto_declare("joint_speed_threshold", 0.1);
             hardware_latency_ = auto_declare("hardware_latency", 0.2);
+            // Declare dir before enabled so both can be applied together from yaml/callback.
+            traj_record_dir_ = auto_declare("traj_record_dir", std::string("/tmp/traj_record"));
+            const bool traj_record_enabled = auto_declare("traj_record_enabled", false);
+            // Sync initial yaml/launch value (parameter callbacks do not fire on declare).
+            arms_controller_common::TrajectoryRecorder::instance()
+                .setEnabled(traj_record_enabled, traj_record_dir_);
+
+            parameter_callback_handle_ = node_->add_on_set_parameters_callback(
+                [this](const std::vector<rclcpp::Parameter>& parameters) {
+                    return on_parameter_change(parameters);
+                });
 
             robot_name_ = auto_declare("robot_name", std::string("cr5"));
             planning_urdf_variant_ = auto_declare("planning_urdf_variant", std::string(""));
@@ -206,6 +218,7 @@ namespace ocs2::mobile_manipulator
         rclcpp::Time last_execute_time_;
         vector_t cached_last_action_;
         double hardware_latency_;
+        std::string traj_record_dir_{"/tmp/traj_record"};
         rclcpp::node_interfaces::OnSetParametersCallbackHandle::SharedPtr parameter_callback_handle_;
         rcl_interfaces::msg::SetParametersResult on_parameter_change(
             const std::vector<rclcpp::Parameter>& parameters);

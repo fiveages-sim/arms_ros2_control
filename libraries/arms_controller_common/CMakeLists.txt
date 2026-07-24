@@ -41,6 +41,7 @@ set(ARMS_CONTROLLER_COMMON_SOURCES
         src/utils/JointTrajectoryManager.cpp
         src/utils/JointSpeedStopPlanner.cpp
         src/utils/WaistLiftingPlaner.cpp
+        src/utils/TrajectoryRecorder.cpp
         src/utils/Kinematics.cpp
 )
 
