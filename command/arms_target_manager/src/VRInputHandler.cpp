@@ -137,9 +137,12 @@ namespace arms_ros2_control::command
         sub_trigger_values_ = node_->create_subscription<geometry_msgs::msg::Twist>(
             "/xr/trigger_values", 10, triggerValuesCallback);
 
-        // 创建双臂目标位姿发布器（用于尺度校准后发送校准目标）
-        pub_dual_target_stamped_ = node_->create_publisher<nav_msgs::msg::Path>(
-            "/dual_target/stamped", 1);
+        // 双臂目标位姿发布器（仅双臂模式；用于尺度校准后发送校准目标）
+        if (pub_right_target_)
+        {
+            pub_dual_target_stamped_ = node_->create_publisher<nav_msgs::msg::Path>(
+                "/dual_target/stamped", 1);
+        }
 
         // 创建 FSM 命令发布器（使用通用工具类，自动处理command=100的特殊情况）
         auto pub_fsm_command = node_->create_publisher<std_msgs::msg::Int32>("/fsm_command", 10);
@@ -1667,33 +1670,36 @@ namespace arms_ros2_control::command
                                 left_target_pos.x(), left_target_pos.y(), left_target_pos.z(),
                                 right_target_pos.x(), right_target_pos.y(), right_target_pos.z());
 
-                    // 发布到 /dual_target/stamped
-                    nav_msgs::msg::Path dual_path;
-                    dual_path.header.stamp = node_->get_clock()->now();
-                    dual_path.header.frame_id = ee_frame_id_;
-                    dual_path.poses.resize(2);
-                    // 左臂（poses[0]）：位置用校准值，姿态保持机器人当前末端朝向
-                    dual_path.poses[0].header = dual_path.header;
-                    dual_path.poses[0].pose.position.x = left_target_pos.x();
-                    dual_path.poses[0].pose.position.y = left_target_pos.y();
-                    dual_path.poses[0].pose.position.z = left_target_pos.z();
-                    dual_path.poses[0].pose.orientation.x = robot_current_left_orientation_.x();
-                    dual_path.poses[0].pose.orientation.y = robot_current_left_orientation_.y();
-                    dual_path.poses[0].pose.orientation.z = robot_current_left_orientation_.z();
-                    dual_path.poses[0].pose.orientation.w = robot_current_left_orientation_.w();
-                    // 右臂（poses[1]）：位置用校准值，姿态保持机器人当前末端朝向
-                    dual_path.poses[1].header = dual_path.header;
-                    dual_path.poses[1].pose.position.x = right_target_pos.x();
-                    dual_path.poses[1].pose.position.y = right_target_pos.y();
-                    dual_path.poses[1].pose.position.z = right_target_pos.z();
-                    dual_path.poses[1].pose.orientation.x = robot_current_right_orientation_.x();
-                    dual_path.poses[1].pose.orientation.y = robot_current_right_orientation_.y();
-                    dual_path.poses[1].pose.orientation.z = robot_current_right_orientation_.z();
-                    dual_path.poses[1].pose.orientation.w = robot_current_right_orientation_.w();
-                    pub_dual_target_stamped_->publish(dual_path);
-                    RCLCPP_INFO(node_->get_logger(),
-                                "🕹️🕶️🕹️ [左组合键] 已发布校准目标到 /dual_target/stamped (frame: %s)",
-                                ee_frame_id_.c_str());
+                    // 发布到 /dual_target/stamped（仅双臂模式）
+                    if (pub_dual_target_stamped_)
+                    {
+                        nav_msgs::msg::Path dual_path;
+                        dual_path.header.stamp = node_->get_clock()->now();
+                        dual_path.header.frame_id = ee_frame_id_;
+                        dual_path.poses.resize(2);
+                        // 左臂（poses[0]）：位置用校准值，姿态保持机器人当前末端朝向
+                        dual_path.poses[0].header = dual_path.header;
+                        dual_path.poses[0].pose.position.x = left_target_pos.x();
+                        dual_path.poses[0].pose.position.y = left_target_pos.y();
+                        dual_path.poses[0].pose.position.z = left_target_pos.z();
+                        dual_path.poses[0].pose.orientation.x = robot_current_left_orientation_.x();
+                        dual_path.poses[0].pose.orientation.y = robot_current_left_orientation_.y();
+                        dual_path.poses[0].pose.orientation.z = robot_current_left_orientation_.z();
+                        dual_path.poses[0].pose.orientation.w = robot_current_left_orientation_.w();
+                        // 右臂（poses[1]）：位置用校准值，姿态保持机器人当前末端朝向
+                        dual_path.poses[1].header = dual_path.header;
+                        dual_path.poses[1].pose.position.x = right_target_pos.x();
+                        dual_path.poses[1].pose.position.y = right_target_pos.y();
+                        dual_path.poses[1].pose.position.z = right_target_pos.z();
+                        dual_path.poses[1].pose.orientation.x = robot_current_right_orientation_.x();
+                        dual_path.poses[1].pose.orientation.y = robot_current_right_orientation_.y();
+                        dual_path.poses[1].pose.orientation.z = robot_current_right_orientation_.z();
+                        dual_path.poses[1].pose.orientation.w = robot_current_right_orientation_.w();
+                        pub_dual_target_stamped_->publish(dual_path);
+                        RCLCPP_INFO(node_->get_logger(),
+                                    "🕹️🕶️🕹️ [左组合键] 已发布校准目标到 /dual_target/stamped (frame: %s)",
+                                    ee_frame_id_.c_str());
+                    }
                 }
                 else
                 {
@@ -1817,33 +1823,36 @@ namespace arms_ros2_control::command
                                 left_target_pos.x(), left_target_pos.y(), left_target_pos.z(),
                                 right_target_pos.x(), right_target_pos.y(), right_target_pos.z());
 
-                    // 发布到 /dual_target/stamped
-                    nav_msgs::msg::Path dual_path;
-                    dual_path.header.stamp = node_->get_clock()->now();
-                    dual_path.header.frame_id = ee_frame_id_;
-                    dual_path.poses.resize(2);
-                    // 左臂（poses[0]）：位置用校准值，姿态保持机器人当前末端朝向
-                    dual_path.poses[0].header = dual_path.header;
-                    dual_path.poses[0].pose.position.x = left_target_pos.x();
-                    dual_path.poses[0].pose.position.y = left_target_pos.y();
-                    dual_path.poses[0].pose.position.z = left_target_pos.z();
-                    dual_path.poses[0].pose.orientation.x = robot_current_left_orientation_.x();
-                    dual_path.poses[0].pose.orientation.y = robot_current_left_orientation_.y();
-                    dual_path.poses[0].pose.orientation.z = robot_current_left_orientation_.z();
-                    dual_path.poses[0].pose.orientation.w = robot_current_left_orientation_.w();
-                    // 右臂（poses[1]）：位置用校准值，姿态保持机器人当前末端朝向
-                    dual_path.poses[1].header = dual_path.header;
-                    dual_path.poses[1].pose.position.x = right_target_pos.x();
-                    dual_path.poses[1].pose.position.y = right_target_pos.y();
-                    dual_path.poses[1].pose.position.z = right_target_pos.z();
-                    dual_path.poses[1].pose.orientation.x = robot_current_right_orientation_.x();
-                    dual_path.poses[1].pose.orientation.y = robot_current_right_orientation_.y();
-                    dual_path.poses[1].pose.orientation.z = robot_current_right_orientation_.z();
-                    dual_path.poses[1].pose.orientation.w = robot_current_right_orientation_.w();
-                    pub_dual_target_stamped_->publish(dual_path);
-                    RCLCPP_INFO(node_->get_logger(),
-                                "🕹️🕶️🕹️ [右组合键] 已发布校准目标到 /dual_target/stamped (frame: %s)",
-                                ee_frame_id_.c_str());
+                    // 发布到 /dual_target/stamped（仅双臂模式）
+                    if (pub_dual_target_stamped_)
+                    {
+                        nav_msgs::msg::Path dual_path;
+                        dual_path.header.stamp = node_->get_clock()->now();
+                        dual_path.header.frame_id = ee_frame_id_;
+                        dual_path.poses.resize(2);
+                        // 左臂（poses[0]）：位置用校准值，姿态保持机器人当前末端朝向
+                        dual_path.poses[0].header = dual_path.header;
+                        dual_path.poses[0].pose.position.x = left_target_pos.x();
+                        dual_path.poses[0].pose.position.y = left_target_pos.y();
+                        dual_path.poses[0].pose.position.z = left_target_pos.z();
+                        dual_path.poses[0].pose.orientation.x = robot_current_left_orientation_.x();
+                        dual_path.poses[0].pose.orientation.y = robot_current_left_orientation_.y();
+                        dual_path.poses[0].pose.orientation.z = robot_current_left_orientation_.z();
+                        dual_path.poses[0].pose.orientation.w = robot_current_left_orientation_.w();
+                        // 右臂（poses[1]）：位置用校准值，姿态保持机器人当前末端朝向
+                        dual_path.poses[1].header = dual_path.header;
+                        dual_path.poses[1].pose.position.x = right_target_pos.x();
+                        dual_path.poses[1].pose.position.y = right_target_pos.y();
+                        dual_path.poses[1].pose.position.z = right_target_pos.z();
+                        dual_path.poses[1].pose.orientation.x = robot_current_right_orientation_.x();
+                        dual_path.poses[1].pose.orientation.y = robot_current_right_orientation_.y();
+                        dual_path.poses[1].pose.orientation.z = robot_current_right_orientation_.z();
+                        dual_path.poses[1].pose.orientation.w = robot_current_right_orientation_.w();
+                        pub_dual_target_stamped_->publish(dual_path);
+                        RCLCPP_INFO(node_->get_logger(),
+                                    "🕹️🕶️🕹️ [右组合键] 已发布校准目标到 /dual_target/stamped (frame: %s)",
+                                    ee_frame_id_.c_str());
+                    }
 
                 }
                 else

@@ -101,12 +101,22 @@ int main(int argc, char** argv)
     {
         // 创建统一的目标位姿发布器（在所有模块之前创建，供 ArmMarker 和 VRInputHandler 共享）
         // 队列长度统一为 1，只关心最新的目标位姿
+        // 右臂发布器仅在双臂模式创建，避免单臂时广告 /right_target*
         auto pub_left_target = node->create_publisher<geometry_msgs::msg::Pose>("left_target", 1);
-        auto pub_left_target_stamped = node->create_publisher<geometry_msgs::msg::PoseStamped>("left_target/stamped", 1);
-        auto pub_right_target = node->create_publisher<geometry_msgs::msg::Pose>("right_target", 1);
-        auto pub_right_target_stamped = node->create_publisher<geometry_msgs::msg::PoseStamped>("right_target/stamped", 1);
+        auto pub_left_target_stamped =
+            node->create_publisher<geometry_msgs::msg::PoseStamped>("left_target/stamped", 1);
+        rclcpp::Publisher<geometry_msgs::msg::Pose>::SharedPtr pub_right_target;
+        rclcpp::Publisher<geometry_msgs::msg::PoseStamped>::SharedPtr pub_right_target_stamped;
+        if (dual_arm_mode)
+        {
+            pub_right_target = node->create_publisher<geometry_msgs::msg::Pose>("right_target", 1);
+            pub_right_target_stamped =
+                node->create_publisher<geometry_msgs::msg::PoseStamped>("right_target/stamped", 1);
+        }
 
-        RCLCPP_INFO(node->get_logger(), "✅ Created unified target pose publishers (queue_size=1)");
+        RCLCPP_INFO(node->get_logger(),
+                    "✅ Created unified target pose publishers (queue_size=1, dual_arm=%s)",
+                    dual_arm_mode ? "true" : "false");
 
         auto target_manager = std::make_unique<ArmsTargetManager>(
             node, dual_arm_mode, control_base_frame, marker_fixed_frame,

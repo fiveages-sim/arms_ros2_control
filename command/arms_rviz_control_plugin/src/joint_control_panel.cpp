@@ -355,8 +355,7 @@ namespace arms_rviz_control_plugin
         available_categories_.clear();
         category_to_controller_.clear();
 
-        std::string wbc_controller; // ocs2_wbc_controller (handles left, right, body, head)
-        std::string arm_controller; // ocs2_arm_controller (handles left, right only)
+        std::string wbc_controller; // ocs2_wbc_controller（body/head 先登记；left/right 等关节名）
 
         for (const auto& controller : available_controllers_)
         {
@@ -389,46 +388,34 @@ namespace arms_rviz_control_plugin
             }
             else if (controller_lower.find("ocs2_wbc_controller") != std::string::npos)
             {
-                // ocs2_wbc_controller handles left, right, body, and head
+                // ocs2_wbc_controller 可覆盖 body/head/left/right。
+                // left/right 依赖关节名，等 initializeJoints() 再按实际侧别添加；
+                // 这里只先登记 body/head（若尚无专用控制器）。
                 wbc_controller = controller;
-                available_categories_.insert("left");
-                available_categories_.insert("right");
-                available_categories_.insert("body");
-                available_categories_.insert("head");
+                if (available_categories_.find("body") == available_categories_.end())
+                {
+                    available_categories_.insert("body");
+                }
+                if (available_categories_.find("head") == available_categories_.end())
+                {
+                    available_categories_.insert("head");
+                }
             }
-            else if (controller_lower.find("ocs2_arm_controller") != std::string::npos)
-            {
-                // ocs2_arm_controller handles left and right only (not body)
-                // Note: left/right categories will be added later based on actual joint names
-                arm_controller = controller;
-                // Don't add left/right categories here - wait for joint state to determine
-            }
+            // ocs2_arm_controller：left/right 同样延迟到 initializeJoints()
         }
 
-        // Map left, right, body, head to WBC controller if found
+        // Map body/head to WBC controller when no dedicated controller already claimed them.
+        // left/right are mapped later in initializeJoints() from joint-name sides.
         if (!wbc_controller.empty())
         {
-            category_to_controller_["left"] = wbc_controller;
-            category_to_controller_["right"] = wbc_controller;
-            // Only map body to WBC controller if not already mapped to a dedicated body controller
             if (category_to_controller_.find("body") == category_to_controller_.end())
             {
                 category_to_controller_["body"] = wbc_controller;
             }
-            // Only map head to WBC controller if not already mapped to a dedicated head controller
             if (category_to_controller_.find("head") == category_to_controller_.end())
             {
                 category_to_controller_["head"] = wbc_controller;
             }
-        }
-
-        // Map left and right to arm controller if found (and WBC controller not found)
-        // Note: For ocs2_arm_controller, left/right mapping will be done after joint state is received
-        // to determine if it's a single-arm or dual-arm robot
-        if (!arm_controller.empty() && wbc_controller.empty())
-        {
-            // Store arm_controller for later use, but don't map left/right yet
-            // Will be mapped in onJointStateReceived() after checking joint names
         }
 
         // Update category combo box options
@@ -444,14 +431,10 @@ namespace arms_rviz_control_plugin
             "/joint_states", rclcpp::SensorDataQoS(),
             std::bind(&JointControlPanel::onJointStateReceived, this, std::placeholders::_1));
 
-        // Subscribe to current target topics (to update spinboxes when target changes)
+        // Subscribe to left current target (right is created lazily when right joints exist)
         left_current_target_subscriber_ = node_->create_subscription<geometry_msgs::msg::PoseStamped>(
             "left_current_target", 10,
             std::bind(&JointControlPanel::onLeftCurrentTargetReceived, this, std::placeholders::_1));
-
-        right_current_target_subscriber_ = node_->create_subscription<geometry_msgs::msg::PoseStamped>(
-            "right_current_target", 10,
-            std::bind(&JointControlPanel::onRightCurrentTargetReceived, this, std::placeholders::_1));
 
         // Initialize publisher (will be updated when category changes)
         updatePublisher();
@@ -1956,6 +1939,23 @@ namespace arms_rviz_control_plugin
             !category_to_joints_["right"].empty();
         bool is_dual_arm_mode = has_left_joints || has_right_joints;
 
+        // Only advertise/subscribe right_current_target when the robot has a right arm.
+        if (has_right_joints)
+        {
+            if (!right_current_target_subscriber_)
+            {
+                right_current_target_subscriber_ = node_->create_subscription<geometry_msgs::msg::PoseStamped>(
+                    "right_current_target", 10,
+                    std::bind(&JointControlPanel::onRightCurrentTargetReceived, this, std::placeholders::_1));
+                RCLCPP_INFO(node_->get_logger(),
+                            "Subscribed to right_current_target (right arm joints detected)");
+            }
+        }
+        else
+        {
+            right_current_target_subscriber_.reset();
+        }
+
         // Create UI elements for each joint
         joint_row_layouts_.clear();
         joint_labels_.clear();
@@ -2109,53 +2109,55 @@ namespace arms_rviz_control_plugin
         // Try to parse limits from cached robot_description if available
         tryParseLimitsFromCache();
 
-        // For ocs2_arm_controller, check if we have left/right joints
-        // If yes, add left/right categories; if no, it's a single-arm robot
+        // left/right 分类统一延迟到关节名分类后添加（WBC 与 arm controller 同一套逻辑）
+        std::string wbc_controller;
         std::string arm_controller;
         for (const auto& controller : available_controllers_)
         {
             std::string controller_lower = controller;
             std::transform(controller_lower.begin(), controller_lower.end(),
                            controller_lower.begin(), ::tolower);
-            if (controller_lower.find("ocs2_arm_controller") != std::string::npos)
+            if (controller_lower.find("ocs2_wbc_controller") != std::string::npos)
+            {
+                wbc_controller = controller;
+            }
+            else if (controller_lower.find("ocs2_arm_controller") != std::string::npos)
             {
                 arm_controller = controller;
-                break;
             }
         }
 
-        // Use the has_left_joints and has_right_joints already declared above
+        // WBC 优先：同一套控制器既管全身也管左右臂位姿
+        const std::string& pose_arm_controller =
+            !wbc_controller.empty() ? wbc_controller : arm_controller;
 
-        // If we have ocs2_arm_controller and no left/right joints, it's a single-arm robot
-        // Don't add left/right categories
-        if (!arm_controller.empty() && !has_left_joints && !has_right_joints)
+        if (!pose_arm_controller.empty() && (has_left_joints || has_right_joints))
         {
-            RCLCPP_INFO(node_->get_logger(), "Detected single-arm robot (no left/right prefixes in joint names)");
-            // For single-arm, all joints go to the base topic
-            // No need to add left/right categories
-            // Update category options to reflect this (remove left/right if they were added earlier)
-            updateCategoryOptions();
-        }
-        // If we have left/right joints, add categories and mappings
-        else if (!arm_controller.empty() && (has_left_joints || has_right_joints))
-        {
-            RCLCPP_INFO(node_->get_logger(), "Detected dual-arm robot (found left/right prefixes in joint names)");
+            RCLCPP_INFO(node_->get_logger(),
+                        "Arm side categories from joint names (left=%s, right=%s, controller=%s)",
+                        has_left_joints ? "yes" : "no",
+                        has_right_joints ? "yes" : "no",
+                        pose_arm_controller.c_str());
             if (has_left_joints)
             {
                 available_categories_.insert("left");
-                category_to_controller_["left"] = arm_controller;
+                category_to_controller_["left"] = pose_arm_controller;
             }
             if (has_right_joints)
             {
                 available_categories_.insert("right");
-                category_to_controller_["right"] = arm_controller;
+                category_to_controller_["right"] = pose_arm_controller;
             }
-            // Update category options after adding left/right
             updateCategoryOptions();
         }
         else
         {
-            // Update category options to include left_hand and right_hand if they exist
+            if (!pose_arm_controller.empty())
+            {
+                RCLCPP_INFO(node_->get_logger(),
+                            "No left/right joint prefixes; skip Left/Right categories (controller=%s)",
+                            pose_arm_controller.c_str());
+            }
             updateCategoryOptions();
         }
 
