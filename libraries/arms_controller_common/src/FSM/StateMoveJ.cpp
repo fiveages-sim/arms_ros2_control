@@ -94,6 +94,21 @@ namespace arms_controller_common
         last_waist_turning_factor_ = 0.0;
         if (node_)
         {
+            const auto declare_online_parameter = [this](const char* name, double value)
+            {
+                if (!node_->has_parameter(name))
+                {
+                    node_->declare_parameter<double>(name, value);
+                }
+            };
+            declare_online_parameter("movej_online_max_velocity", 1.0);
+            declare_online_parameter("movej_online_max_acceleration", 2.0);
+            declare_online_parameter("movej_online_max_jerk", 10.0);
+            declare_online_parameter("movej_online_tracking_frequency", 5.0);
+            declare_online_parameter("movej_online_target_filter_alpha", 0.2);
+            declare_online_parameter("movej_online_position_tolerance", 1.0e-4);
+            declare_online_parameter("movej_online_velocity_tolerance", 1.0e-3);
+            declare_online_parameter("movej_online_acceleration_tolerance", 1.0e-2);
             declareCartesianDefaultParameters();
             current_target_joint_publisher_ =
                 arms_controller_common::utils::getOrCreateCurrentTargetJointPublisher(node_);
@@ -124,6 +139,19 @@ namespace arms_controller_common
         trajectory_manager_.setTrajectoryDuration(node_->get_parameter("movej_trajectory_duration").as_double());
         trajectory_manager_.setCommonJointBlendRatios(node_->get_parameter("movej_trajectory_blend_ratio").as_double());
         trajectory_manager_.setControllerFrequency(ctrl_interfaces_.frequency_);
+        const auto online_parameter = [this](const char* name, double fallback)
+        {
+            return node_->has_parameter(name) ? node_->get_parameter(name).as_double() : fallback;
+        };
+        trajectory_manager_.setOnlineLimits(
+            online_parameter("movej_online_max_velocity", 1.0),
+            online_parameter("movej_online_max_acceleration", 2.0),
+            online_parameter("movej_online_max_jerk", 10.0),
+            online_parameter("movej_online_tracking_frequency", 5.0),
+            online_parameter("movej_online_target_filter_alpha", 0.2),
+            online_parameter("movej_online_position_tolerance", 1.0e-4),
+            online_parameter("movej_online_velocity_tolerance", 1.0e-3),
+            online_parameter("movej_online_acceleration_tolerance", 1.0e-2));
         updateCartesianDefaults();
     }
 
@@ -1156,6 +1184,12 @@ namespace arms_controller_common
         }
 
         const std::vector<double> captured_target = target_pos;
+        if (interpolation_type_ == InterpolationType::ONLINE &&
+            trajectory_manager_.isOnlineMode())
+        {
+            setTargetPositionImpl(captured_target);
+            return;
+        }
         requestMotionOrDefer([this, captured_target]() { setTargetPositionImpl(captured_target); });
     }
 
@@ -1192,6 +1226,17 @@ namespace arms_controller_common
         target_pos_ = applyJointLimits(target_pos, "target position");
         has_target_ = true;
         publishCurrentTargetJoint(target_pos_);
+
+        // A streaming ONLINE target must not reset its q/v/a state. Only the
+        // reference changes; the control loop continues from the previous
+        // interpolated point.
+        if (interpolation_type_ == InterpolationType::ONLINE &&
+            trajectory_manager_.updateOnlineTarget(target_pos_))
+        {
+            interpolation_active_ = true;
+            return;
+        }
+
         interpolation_active_ = false;
         trajectory_manager_.reset();
     }
@@ -1212,6 +1257,12 @@ namespace arms_controller_common
 
         const std::string captured_prefix = prefix;
         const std::vector<double> captured_target = target_pos;
+        if (interpolation_type_ == InterpolationType::ONLINE &&
+            trajectory_manager_.isOnlineMode())
+        {
+            setTargetPositionImpl(captured_prefix, captured_target);
+            return;
+        }
         requestMotionOrDefer([this, captured_prefix, captured_target]()
         {
             setTargetPositionImpl(captured_prefix, captured_target);
@@ -1273,6 +1324,14 @@ namespace arms_controller_common
         use_prefix_filter_ = true;
         active_prefix_ = prefix;
         refreshHoldPositions();
+
+        if (interpolation_type_ == InterpolationType::ONLINE &&
+            trajectory_manager_.updateOnlineTarget(target_pos_))
+        {
+            interpolation_active_ = true;
+            return;
+        }
+
         interpolation_active_ = false;
         trajectory_manager_.reset();
     }

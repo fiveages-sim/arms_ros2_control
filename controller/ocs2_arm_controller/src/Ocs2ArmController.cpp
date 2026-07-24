@@ -207,6 +207,14 @@ namespace ocs2::mobile_manipulator
             auto_declare<double>("movej_tanh_scale", 3.0);
             auto_declare<double>("movej_trajectory_duration", 3.0);
             auto_declare<double>("movej_trajectory_blend_ratio", 0.0);
+            auto_declare<double>("movej_online_max_velocity", 1.0);
+            auto_declare<double>("movej_online_max_acceleration", 2.0);
+            auto_declare<double>("movej_online_max_jerk", 10.0);
+            auto_declare<double>("movej_online_tracking_frequency", 5.0);
+            auto_declare<double>("movej_online_target_filter_alpha", 0.2);
+            auto_declare<double>("movej_online_position_tolerance", 1.0e-4);
+            auto_declare<double>("movej_online_velocity_tolerance", 1.0e-3);
+            auto_declare<double>("movej_online_acceleration_tolerance", 1.0e-2);
 
             state_list_.movej = std::make_shared<StateMoveJ>(
                 ctrl_interfaces_, get_node(), joint_names_, gravity_compensation);

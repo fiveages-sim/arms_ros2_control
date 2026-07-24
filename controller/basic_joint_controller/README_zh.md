@@ -42,10 +42,18 @@ my_controller:
 
     # --- MoveJ ---
     movej_duration: 3.0
-    movej_interpolation_type: "tanh"  # "tanh" | "linear"
+    movej_interpolation_type: "tanh"  # "tanh" | "linear" | "doubles" | "online" | "none"
     movej_tanh_scale: 3.0
     movej_trajectory_duration: 3.0
     movej_trajectory_blend_ratio: 0.0
+    movej_online_max_velocity: 1.0          # rad/s
+    movej_online_max_acceleration: 2.0      # rad/s^2
+    movej_online_max_jerk: 10.0             # rad/s^3
+    movej_online_tracking_frequency: 5.0
+    movej_online_target_filter_alpha: 0.2
+    movej_online_position_tolerance: 1.0e-4
+    movej_online_velocity_tolerance: 1.0e-3
+    movej_online_acceleration_tolerance: 1.0e-2
 
     # --- 灵巧手 / 末端执行器开关与比例控制 ---
     # 需要 target_command_enabled: true

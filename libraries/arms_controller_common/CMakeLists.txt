@@ -39,6 +39,7 @@ set(ARMS_CONTROLLER_COMMON_SOURCES
         src/utils/GravityCompensation.cpp
         src/utils/JointLimitsManager.cpp
         src/utils/JointTrajectoryManager.cpp
+        src/utils/OnlineTrajectoryFilter.cpp
         src/utils/JointSpeedStopPlanner.cpp
         src/utils/WaistLiftingPlaner.cpp
         src/utils/Kinematics.cpp
@@ -96,6 +97,13 @@ target_link_libraries(${PROJECT_NAME} PRIVATE
         pthread
         rt
 )
+
+if(BUILD_TESTING)
+    find_package(ament_cmake_gtest REQUIRED)
+    ament_add_gtest(test_online_trajectory_filter
+            test/test_online_trajectory_filter.cpp)
+    target_link_libraries(test_online_trajectory_filter ${PROJECT_NAME})
+endif()
 
 
 install(

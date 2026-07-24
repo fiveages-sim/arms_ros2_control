@@ -14,6 +14,7 @@ namespace arms_controller_common
         TANH,
         LINEAR,
         DOUBLES,
+        ONLINE,
         NONE
     };
 
@@ -32,6 +33,8 @@ namespace arms_controller_common
             return "linear";
         case InterpolationType::DOUBLES:
             return "doubles";
+        case InterpolationType::ONLINE:
+            return "online";
         case InterpolationType::NONE:
             return "none";
         case InterpolationType::TANH:
@@ -61,6 +64,10 @@ namespace arms_controller_common
         {
             return InterpolationType::DOUBLES;
         }
+        if (t == "online")
+        {
+            return InterpolationType::ONLINE;
+        }
         if (t == "none")
         {
             return InterpolationType::NONE;
@@ -68,5 +75,4 @@ namespace arms_controller_common
         return fallback;
     }
 } // namespace arms_controller_common
-
 

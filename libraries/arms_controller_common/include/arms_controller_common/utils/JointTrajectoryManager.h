@@ -1,6 +1,7 @@
 #pragma once
 
 #include "arms_controller_common/utils/Interpolation.h"
+#include "arms_controller_common/utils/OnlineTrajectoryFilter.h"
 #include <vector>
 #include <memory>
 #include <rclcpp/rclcpp.hpp>
@@ -148,6 +149,24 @@ namespace arms_controller_common
          */
         void setCommonJointBlendRatios(double blend_ratios);
 
+        /** Configure the scalar limits used by ONLINE interpolation for every joint. */
+        bool setOnlineLimits(double max_velocity,
+                             double max_acceleration,
+                             double max_jerk,
+                             double tracking_frequency,
+                             double target_filter_alpha,
+                             double position_tolerance,
+                             double velocity_tolerance,
+                             double acceleration_tolerance);
+
+        /**
+         * Update a running ONLINE single-point target without resetting its
+         * position, velocity or acceleration state.
+         */
+        bool updateOnlineTarget(const std::vector<double>& target_pos);
+
+        bool isOnlineMode() const;
+
         /**
              * @brief Plan single target motion using lina_planning
              * @param start_pos Starting joint positions
@@ -178,12 +197,15 @@ namespace arms_controller_common
         {
             NONE, // Not initialized
             SINGLE_NODE, // Single-node trajectory
+            SINGLE_NODE_ONLINE, // Stateful online target tracking
             MULTI_NODE_BASIC, // Multi-node trajectory (basic segment-based interpolation)
             MULTI_NODE_ADVANCED // Multi-node trajectory (advanced lina_planning)
         };
 
         // Single-node trajectory computation
         std::vector<double> computeSingleNodePoint(double step_seconds);
+
+        std::vector<double> computeOnlinePoint(double step_seconds);
 
         // Multi-node trajectory computation - basic mode (segment-based)
         std::vector<double> computeMultiNodeBasic(double step_seconds);
@@ -239,6 +261,13 @@ namespace arms_controller_common
         // Multi-node trajectory duration (for automatic time calculation in lina planning)
         double trajectory_duration_ = 3.0; // Default 3 seconds
         double common_joint_blend_ratios = 0.0;
+
+        // Stateful online interpolation configuration and state.
+        OnlineTrajectoryFilter::Limits online_limits_{};
+        double online_position_tolerance_{1.0e-4};
+        double online_velocity_tolerance_{1.0e-3};
+        double online_acceleration_tolerance_{1.0e-2};
+        std::vector<OnlineTrajectoryFilter> online_filters_;
 
         // 辅助函数
         /**

@@ -72,7 +72,20 @@ namespace arms_controller_common
         period_ = (controller_frequency_ > 0.0) ? (1.0 / controller_frequency_) : 0.01;
 
         // Initialize based on interpolation type
-        if (type == InterpolationType::DOUBLES)
+        if (type == InterpolationType::ONLINE)
+        {
+            online_filters_.clear();
+            online_filters_.reserve(start_pos_.size());
+            for (size_t i = 0; i < start_pos_.size(); ++i)
+            {
+                OnlineTrajectoryFilter filter(online_limits_);
+                filter.reset(start_pos_[i]);
+                filter.setTarget(target_pos_[i]);
+                online_filters_.push_back(filter);
+            }
+            mode_ = TrajectoryMode::SINGLE_NODE_ONLINE;
+        }
+        else if (type == InterpolationType::DOUBLES)
         {
             if (areJointPositionsSame(start_pos_, target_pos_))
             {
@@ -206,8 +219,18 @@ namespace arms_controller_common
             segment_durations_.assign(num_segments, default_segment_duration);
         }
 
+        // ONLINE is intended for a continuously updated single target. Preserve
+        // the established linear behavior for multi-waypoint trajectories.
+        if (type == InterpolationType::ONLINE)
+        {
+            RCLCPP_WARN(logger_,
+                        "ONLINE interpolation does not support multi-node trajectories; "
+                        "using LINEAR interpolation for this trajectory");
+            interpolation_type_ = InterpolationType::LINEAR;
+            mode_ = TrajectoryMode::MULTI_NODE_BASIC;
+        }
         // Initialize based on interpolation type
-        if (type == InterpolationType::DOUBLES)
+        else if (type == InterpolationType::DOUBLES)
         {
             if (!isDoublesAvailable())
             {
@@ -340,7 +363,8 @@ namespace arms_controller_common
         if (completed_)
         {
             // Return final position
-            if (mode_ == TrajectoryMode::SINGLE_NODE)
+            if (mode_ == TrajectoryMode::SINGLE_NODE ||
+                mode_ == TrajectoryMode::SINGLE_NODE_ONLINE)
             {
                 return target_pos_;
             }
@@ -360,6 +384,9 @@ namespace arms_controller_common
         {
         case TrajectoryMode::SINGLE_NODE:
             result = computeSingleNodePoint(step_seconds);
+            break;
+        case TrajectoryMode::SINGLE_NODE_ONLINE:
+            result = computeOnlinePoint(step_seconds);
             break;
         case TrajectoryMode::MULTI_NODE_BASIC:
             result = computeMultiNodeBasic(step_seconds);
@@ -401,6 +428,7 @@ namespace arms_controller_common
         // Clear trajectory data
         start_pos_.clear();
         target_pos_.clear();
+        online_filters_.clear();
         waypoints_.clear();
         segment_durations_.clear();
         segment_progress_.clear();
@@ -466,6 +494,70 @@ namespace arms_controller_common
         common_joint_blend_ratios = std::clamp(blend_ratios, 0.0, 1.0);
     }
 
+    bool JointTrajectoryManager::setOnlineLimits(
+        double max_velocity,
+        double max_acceleration,
+        double max_jerk,
+        double tracking_frequency,
+        double target_filter_alpha,
+        double position_tolerance,
+        double velocity_tolerance,
+        double acceleration_tolerance)
+    {
+        OnlineTrajectoryFilter::Limits limits;
+        limits.min_velocity = -std::abs(max_velocity);
+        limits.max_velocity = std::abs(max_velocity);
+        limits.min_acceleration = -std::abs(max_acceleration);
+        limits.max_acceleration = std::abs(max_acceleration);
+        limits.max_jerk = std::abs(max_jerk);
+        limits.tracking_frequency = tracking_frequency;
+        limits.target_filter_alpha = target_filter_alpha;
+
+        OnlineTrajectoryFilter validator;
+        if (!validator.configure(limits) || !std::isfinite(position_tolerance) ||
+            !std::isfinite(velocity_tolerance) || !std::isfinite(acceleration_tolerance) ||
+            position_tolerance <= 0.0 || velocity_tolerance <= 0.0 ||
+            acceleration_tolerance <= 0.0)
+        {
+            RCLCPP_ERROR(logger_,
+                         "Invalid ONLINE interpolation limits: velocity=%.6f, acceleration=%.6f, "
+                         "jerk=%.6f, frequency=%.6f, alpha=%.6f, tolerances=[%.6g, %.6g, %.6g]",
+                         max_velocity, max_acceleration, max_jerk, tracking_frequency,
+                         target_filter_alpha, position_tolerance,
+                         velocity_tolerance, acceleration_tolerance);
+            return false;
+        }
+
+        online_limits_ = limits;
+        online_position_tolerance_ = position_tolerance;
+        online_velocity_tolerance_ = velocity_tolerance;
+        online_acceleration_tolerance_ = acceleration_tolerance;
+        return true;
+    }
+
+    bool JointTrajectoryManager::updateOnlineTarget(const std::vector<double>& target_pos)
+    {
+        if (mode_ != TrajectoryMode::SINGLE_NODE_ONLINE || !initialized_ ||
+            target_pos.size() != online_filters_.size())
+        {
+            return false;
+        }
+
+        target_pos_ = target_pos;
+        for (size_t i = 0; i < online_filters_.size(); ++i)
+        {
+            online_filters_[i].setTarget(target_pos_[i]);
+        }
+        completed_ = false;
+        percent_ = 0.0;
+        return true;
+    }
+
+    bool JointTrajectoryManager::isOnlineMode() const
+    {
+        return initialized_ && mode_ == TrajectoryMode::SINGLE_NODE_ONLINE;
+    }
+
     std::vector<double> JointTrajectoryManager::computeSingleNodePoint(double step_seconds)
     {
         std::vector<double> result;
@@ -522,6 +614,47 @@ namespace arms_controller_common
             }
         }
 
+        return result;
+    }
+
+    std::vector<double> JointTrajectoryManager::computeOnlinePoint(double step_seconds)
+    {
+        if (online_filters_.empty() || online_filters_.size() != target_pos_.size())
+        {
+            RCLCPP_ERROR(logger_, "ONLINE interpolation state is not initialized correctly");
+            return {};
+        }
+
+        const double dt = step_seconds > 0.0 ? step_seconds : period_;
+        if (!std::isfinite(dt) || dt <= 0.0)
+        {
+            RCLCPP_ERROR(logger_, "Invalid ONLINE interpolation step: %.9f", dt);
+            return {};
+        }
+
+        std::vector<double> result;
+        result.reserve(online_filters_.size());
+        bool all_settled = true;
+        for (auto& filter : online_filters_)
+        {
+            result.push_back(filter.update(dt));
+            all_settled = all_settled && filter.isSettled(
+                online_position_tolerance_,
+                online_velocity_tolerance_,
+                online_acceleration_tolerance_);
+        }
+
+        if (all_settled)
+        {
+            result = target_pos_;
+            completed_ = true;
+            percent_ = 1.0;
+        }
+        else
+        {
+            completed_ = false;
+            percent_ = 0.0;  // A streaming target has no fixed-duration progress.
+        }
         return result;
     }
 
