@@ -646,6 +646,16 @@ namespace arms_rviz_control_plugin
             return "right";
         }
 
+        // Unprefixed manipulator joints (joint1..jointN), e.g. arx5 / panthera single-arm.
+        // Must NOT fall through to "body": that triggers waiting on body_joint_controller
+        // forever and starves RViz's ROS executor (interactive markers never initialize).
+        if (joint_name_lower.size() > 5 &&
+            joint_name_lower.compare(0, 5, "joint") == 0 &&
+            std::isdigit(static_cast<unsigned char>(joint_name_lower[5])))
+        {
+            return "arm";
+        }
+
         // Default to body for all other joints
         return "body";
     }
@@ -1911,13 +1921,33 @@ namespace arms_rviz_control_plugin
         if (has_body_joints && body_order.empty())
         {
             // Body 的 Float64MultiArray 没有关节名，只能依赖控制器 joints 参数顺序。
-            // 如果启动早期参数服务还不可用，先不创建 UI，也不设置 joints_initialized_；
-            // 后续 /joint_states 到来时会重新进入 initializeJoints() 继续尝试。
-            if (status_label_)
+            // 仅当确实配置了 body 控制器时才等待；否则（单臂 joint1..N 误标为 body、
+            // 或纯手臂 demo）继续用 joint_states 顺序，避免每次回调 wait_for_service 卡死 RViz。
+            bool expect_body_controller = false;
+            for (const auto& controller : available_controllers_)
             {
-                status_label_->setText("等待 body_joint_controller joints 参数...");
+                std::string controller_lower = controller;
+                std::transform(controller_lower.begin(), controller_lower.end(),
+                               controller_lower.begin(), ::tolower);
+                if (controller_lower.find("body_joint") != std::string::npos)
+                {
+                    expect_body_controller = true;
+                    break;
+                }
             }
-            return;
+
+            if (expect_body_controller)
+            {
+                if (status_label_)
+                {
+                    status_label_->setText("等待 body_joint_controller joints 参数...");
+                }
+                return;
+            }
+
+            RCLCPP_WARN(node_->get_logger(),
+                        "Joints classified as 'body' but no body_joint_controller is configured; "
+                        "continuing with /joint_states order (single-arm / no-waist demo)");
         }
         if (!body_order.empty())
         {
