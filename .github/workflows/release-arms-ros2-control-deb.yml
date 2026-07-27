@@ -485,6 +485,8 @@ jobs:
             cmake \
             libeigen3-dev \
             libmodbus-dev \
+            libserialport-dev \
+            libyaml-cpp-dev \
             qtbase5-dev \
             qttools5-dev \
             libqt5svg5-dev \
