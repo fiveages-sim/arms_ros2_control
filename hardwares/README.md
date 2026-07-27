@@ -23,3 +23,8 @@ colcon build --packages-up-to dobot_ros2_control --symlink-install
 cd ~/ros2_ws
 colcon build --packages-up-to rokae_ros2_control --symlink-install
 ```
+## 6. Panthera ROS2 Control
+```bash
+cd ~/ros2_ws
+colcon build --packages-up-to panthera_ros2_control --symlink-install
+```
