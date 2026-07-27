@@ -806,11 +806,12 @@ jobs:
             deb_provides_line=$'Provides: arms-ros2-control-jazzy\n'
           fi
 
-          # Runtime system libs for ht_ros2_control (motor_cpp serial + YAML). Build-time
-          # equivalents come from rosdep; these ensure a clean deploy host can load the HI.
+          # Runtime/build helper libs for ht_ros2_control (motor_cpp). Use unversioned
+          # *-dev package names (same as upstream SDK docs) so apt resolves the right
+          # runtime SONAME for the install host; rosdep still handles CI build deps.
           deb_depends="ros-${ROS_DISTRO}-ros-base, ros-dev-tools, ${OCS2_PACKAGE_NAME}, ${COMMON_PACKAGE_NAME}, ros-${ROS_DISTRO}-ament-index-cpp, ros-${ROS_DISTRO}-angles, ros-${ROS_DISTRO}-controller-interface, ros-${ROS_DISTRO}-controller-manager, ros-${ROS_DISTRO}-geometry-msgs, ros-${ROS_DISTRO}-hardware-interface, ros-${ROS_DISTRO}-joy, ros-${ROS_DISTRO}-joint-state-broadcaster, ros-${ROS_DISTRO}-pluginlib, ros-${ROS_DISTRO}-rclcpp-action, ros-${ROS_DISTRO}-rclcpp-lifecycle, ros-${ROS_DISTRO}-rviz2, ros-${ROS_DISTRO}-sensor-msgs, ros-${ROS_DISTRO}-std-msgs, ros-${ROS_DISTRO}-tf2, ros-${ROS_DISTRO}-tf2-geometry-msgs, ros-${ROS_DISTRO}-tf2-ros, ros-${ROS_DISTRO}-urdf, ros-${ROS_DISTRO}-visualization-msgs"
           if [[ "${BUNDLE}" == "full" ]]; then
-            deb_depends+=", libserialport0, libyaml-cpp0.8"
+            deb_depends+=", libserialport-dev, libyaml-cpp-dev"
           fi
 
           cat > "$package_root/DEBIAN/control" <<EOF
