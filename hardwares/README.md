@@ -23,3 +23,8 @@ colcon build --packages-up-to dobot_ros2_control --symlink-install
 cd ~/ros2_ws
 colcon build --packages-up-to rokae_ros2_control --symlink-install
 ```
+## 6. HighTorque ROS2 Control
+```bash
+cd ~/ros2_ws
+colcon build --packages-up-to ht_ros2_control --symlink-install
+```
