@@ -7,6 +7,7 @@
 #include <algorithm>
 #include <cmath>
 #include <geometry_msgs/msg/pose_stamped.hpp>
+#include <geometry_msgs/msg/twist.hpp>
 #include <nav_msgs/msg/path.hpp>
 #include <rclcpp/rclcpp.hpp>
 #include <tf2/exceptions.hpp>
@@ -220,6 +221,16 @@ namespace ocs2::controller_common
             node->create_subscription<geometry_msgs::msg::PoseStamped>(
                 "left_target/stamped", 1, leftStampedCallback);
 
+        // 左臂速度流（手柄）：latch + dt 积分，立即更新目标
+        left_twist_subscriber_ = node->create_subscription<geometry_msgs::msg::Twist>(
+            "left_target/twist", 1,
+            [this](const geometry_msgs::msg::Twist::SharedPtr msg) { leftTwistCallback(msg); });
+
+        // 左臂一次相对位移 + moveL（TwistStamped：frame_id 区分基座/末端等）
+        left_relative_subscriber_ = node->create_subscription<geometry_msgs::msg::TwistStamped>(
+            "left_target/relative", 1,
+            [this](const geometry_msgs::msg::TwistStamped::SharedPtr msg) { leftRelativeCallback(msg); });
+
         // 右臂PoseStamped订阅者（仅双臂机器人）
         if (dual_arm_mode_)
         {
@@ -231,6 +242,14 @@ namespace ocs2::controller_common
             right_pose_stamped_subscriber_ =
                 node->create_subscription<geometry_msgs::msg::PoseStamped>(
                     "right_target/stamped", 1, rightStampedCallback);
+
+            right_twist_subscriber_ = node->create_subscription<geometry_msgs::msg::Twist>(
+                "right_target/twist", 1,
+                [this](const geometry_msgs::msg::Twist::SharedPtr msg) { rightTwistCallback(msg); });
+
+            right_relative_subscriber_ = node->create_subscription<geometry_msgs::msg::TwistStamped>(
+                "right_target/relative", 1,
+                [this](const geometry_msgs::msg::TwistStamped::SharedPtr msg) { rightRelativeCallback(msg); });
         }
         // body Pose订阅者：收到后立即更新（不插值）
         auto bodyCallback = [this](const geometry_msgs::msg::Pose::SharedPtr msg)
@@ -742,7 +761,21 @@ namespace ocs2::controller_common
     void PoseBasedReferenceManager::setCurrentObservation(
         const SystemObservation& observation)
     {
+        clearTwistLatchIfTimedOut();
+
+        double dt = 0.0;
+        if (has_observation_time_)
+        {
+            dt = observation.time - last_observation_time_;
+        }
         current_observation_ = observation;
+        last_observation_time_ = observation.time;
+        has_observation_time_ = true;
+
+        if (dt > 0.0 && dt < 1.0)
+        {
+            integrateLatchedTwists(dt);
+        }
     }
 
     void PoseBasedReferenceManager::updateTargetTrajectory()
@@ -1134,12 +1167,6 @@ namespace ocs2::controller_common
     void PoseBasedReferenceManager::leftPoseCallback(
         const geometry_msgs::msg::Pose::SharedPtr msg)
     {
-        if (isArmReferenceBufferActive(left_arm_reference_buffer_, current_observation_.time))
-        {
-            return;
-        }
-
-        // 转换pose到状态向量（单臂和双臂模式都使用前7维）
         vector_t target_state = vector_t::Zero(7);
         target_state(0) = msg->position.x;
         target_state(1) = msg->position.y;
@@ -1148,28 +1175,12 @@ namespace ocs2::controller_common
         target_state(4) = msg->orientation.y;
         target_state(5) = msg->orientation.z;
         target_state(6) = msg->orientation.w;
-
-        // 更新左臂target state缓存
-        left_target_state_ = target_state;
-
-        (void)syncWheelHumanoidCoupledOppositeArmIfNeeded(true);
-
-        // 更新target trajectory
-        updateTargetTrajectory();
-
-        // 发布当前目标
-        publishCurrentTargets();
+        applyLeftAbsoluteTarget(target_state, false);
     }
 
     void PoseBasedReferenceManager::rightPoseCallback(
         const geometry_msgs::msg::Pose::SharedPtr msg)
     {
-        if (isArmReferenceBufferActive(right_arm_reference_buffer_, current_observation_.time))
-        {
-            return;
-        }
-
-        // 转换pose到状态向量（右臂状态为7维）
         vector_t target_state = vector_t::Zero(7);
         target_state(0) = msg->position.x;
         target_state(1) = msg->position.y;
@@ -1178,17 +1189,7 @@ namespace ocs2::controller_common
         target_state(4) = msg->orientation.y;
         target_state(5) = msg->orientation.z;
         target_state(6) = msg->orientation.w;
-
-        // 更新右臂target state缓存
-        right_target_state_ = target_state;
-
-        (void)syncWheelHumanoidCoupledOppositeArmIfNeeded(false);
-
-        // 更新target trajectory
-        updateTargetTrajectory();
-
-        // 发布当前目标
-        publishCurrentTargets();
+        applyRightAbsoluteTarget(target_state, false);
     }
 
     void PoseBasedReferenceManager::bodyPoseCallback(
@@ -1207,28 +1208,30 @@ namespace ocs2::controller_common
         publishCurrentTargets("body");
     }
 
-    void PoseBasedReferenceManager::leftPoseStampedPoseCallback(
-        const geometry_msgs::msg::Pose::SharedPtr msg)
+    void PoseBasedReferenceManager::applyLeftAbsoluteTarget(const vector_t& goal7, bool interpolate)
     {
-        updateParam();
+        if (!interpolate)
+        {
+            // 立即目标（裸 left_target / VR / marker 连续）：抢占并取消进行中的 moveL，
+            // 否则在 stamped/relative 轨迹未结束前会静默丢弃，表现为不跟手。
+            resetArmReferenceBuffer(left_arm_reference_buffer_, goal7, current_observation_.time);
+            left_target_state_ = goal7;
+            (void)syncWheelHumanoidCoupledOppositeArmIfNeeded(true);
+            updateTargetTrajectory();
+            publishCurrentTargets();
+            return;
+        }
 
-        vector_t target_state = vector_t::Zero(7);
-        target_state(0) = msg->position.x;
-        target_state(1) = msg->position.y;
-        target_state(2) = msg->position.z;
-        target_state(3) = msg->orientation.x;
-        target_state(4) = msg->orientation.y;
-        target_state(5) = msg->orientation.z;
-        target_state(6) = msg->orientation.w;
+        updateParam();
 
         const double start_time = current_observation_.time;
         const vector_t previous_left_target_state = left_target_state_;
         const vector_t previous_right_target_state = right_target_state_;
 
         setArmReferenceBufferFromWaypoints(
-            left_arm_reference_buffer_, previous_left_target_state, {target_state},
+            left_arm_reference_buffer_, previous_left_target_state, {goal7},
             start_time, moveL_duration_);
-        left_target_state_ = target_state;
+        left_target_state_ = goal7;
 
         const bool coupled = syncWheelHumanoidCoupledOppositeArmIfNeeded(true);
         if (coupled && dual_arm_mode_)
@@ -1243,28 +1246,28 @@ namespace ocs2::controller_common
         publishCurrentTargets("left");
     }
 
-    void PoseBasedReferenceManager::rightPoseStampedPoseCallback(
-        const geometry_msgs::msg::Pose::SharedPtr msg)
+    void PoseBasedReferenceManager::applyRightAbsoluteTarget(const vector_t& goal7, bool interpolate)
     {
-        updateParam();
+        if (!interpolate)
+        {
+            resetArmReferenceBuffer(right_arm_reference_buffer_, goal7, current_observation_.time);
+            right_target_state_ = goal7;
+            (void)syncWheelHumanoidCoupledOppositeArmIfNeeded(false);
+            updateTargetTrajectory();
+            publishCurrentTargets();
+            return;
+        }
 
-        vector_t target_state = vector_t::Zero(7);
-        target_state(0) = msg->position.x;
-        target_state(1) = msg->position.y;
-        target_state(2) = msg->position.z;
-        target_state(3) = msg->orientation.x;
-        target_state(4) = msg->orientation.y;
-        target_state(5) = msg->orientation.z;
-        target_state(6) = msg->orientation.w;
+        updateParam();
 
         const double start_time = current_observation_.time;
         const vector_t previous_left_target_state = left_target_state_;
         const vector_t previous_right_target_state = right_target_state_;
 
         setArmReferenceBufferFromWaypoints(
-            right_arm_reference_buffer_, previous_right_target_state, {target_state},
+            right_arm_reference_buffer_, previous_right_target_state, {goal7},
             start_time, moveL_duration_);
-        right_target_state_ = target_state;
+        right_target_state_ = goal7;
 
         const bool coupled = syncWheelHumanoidCoupledOppositeArmIfNeeded(false);
         if (coupled && dual_arm_mode_)
@@ -1277,6 +1280,220 @@ namespace ocs2::controller_common
 
         rebuildTargetTrajectoriesFromActiveArmReferenceBuffers(start_time, moveL_duration_);
         publishCurrentTargets("right");
+    }
+
+    vector_t PoseBasedReferenceManager::composeTwistDelta(
+        const vector_t& base7, const geometry_msgs::msg::Twist& delta)
+    {
+        return integrateTwistVelocity(base7, delta, 1.0);
+    }
+
+    vector_t PoseBasedReferenceManager::integrateTwistVelocity(
+        const vector_t& base7, const geometry_msgs::msg::Twist& velocity, double dt)
+    {
+        vector_t out = base7;
+        out(0) += velocity.linear.x * dt;
+        out(1) += velocity.linear.y * dt;
+        out(2) += velocity.linear.z * dt;
+
+        const double d_roll = velocity.angular.x * dt;
+        const double d_pitch = velocity.angular.y * dt;
+        const double d_yaw = velocity.angular.z * dt;
+        if (std::abs(d_roll) > 1e-12 || std::abs(d_pitch) > 1e-12 || std::abs(d_yaw) > 1e-12)
+        {
+            Eigen::Quaterniond q(
+                base7(6), base7(3), base7(4), base7(5));
+            if (q.norm() < 1e-9)
+            {
+                q = Eigen::Quaterniond::Identity();
+            }
+            else
+            {
+                q.normalize();
+            }
+
+            const Eigen::AngleAxisd roll_angle(d_roll, Eigen::Vector3d::UnitX());
+            const Eigen::AngleAxisd pitch_angle(d_pitch, Eigen::Vector3d::UnitY());
+            const Eigen::AngleAxisd yaw_angle(d_yaw, Eigen::Vector3d::UnitZ());
+            const Eigen::Quaterniond dq = yaw_angle * pitch_angle * roll_angle;
+            q = (dq * q).normalized();
+            out(3) = q.x();
+            out(4) = q.y();
+            out(5) = q.z();
+            out(6) = q.w();
+        }
+        return out;
+    }
+
+    void PoseBasedReferenceManager::clearTwistLatchIfTimedOut()
+    {
+        const auto now = std::chrono::steady_clock::now();
+        if (left_twist_active_)
+        {
+            const double age = std::chrono::duration<double>(now - left_twist_stamp_).count();
+            if (age > kTwistTimeoutSec_)
+            {
+                left_twist_active_ = false;
+                left_latched_twist_ = geometry_msgs::msg::Twist{};
+            }
+        }
+        if (right_twist_active_)
+        {
+            const double age = std::chrono::duration<double>(now - right_twist_stamp_).count();
+            if (age > kTwistTimeoutSec_)
+            {
+                right_twist_active_ = false;
+                right_latched_twist_ = geometry_msgs::msg::Twist{};
+            }
+        }
+    }
+
+    void PoseBasedReferenceManager::integrateLatchedTwists(double dt)
+    {
+        bool updated = false;
+        if (left_twist_active_)
+        {
+            // 速度流与裸 left_target 同属立即语义：抢占 moveL buffer
+            if (isArmReferenceBufferActive(left_arm_reference_buffer_, current_observation_.time))
+            {
+                resetArmReferenceBuffer(left_arm_reference_buffer_, left_target_state_,
+                                        current_observation_.time);
+            }
+            left_target_state_ = integrateTwistVelocity(left_target_state_, left_latched_twist_, dt);
+            (void)syncWheelHumanoidCoupledOppositeArmIfNeeded(true);
+            updated = true;
+        }
+        if (dual_arm_mode_ && right_twist_active_)
+        {
+            if (isArmReferenceBufferActive(right_arm_reference_buffer_, current_observation_.time))
+            {
+                resetArmReferenceBuffer(right_arm_reference_buffer_, right_target_state_,
+                                        current_observation_.time);
+            }
+            right_target_state_ = integrateTwistVelocity(right_target_state_, right_latched_twist_, dt);
+            (void)syncWheelHumanoidCoupledOppositeArmIfNeeded(false);
+            updated = true;
+        }
+        if (updated)
+        {
+            updateTargetTrajectory();
+            publishCurrentTargets();
+        }
+    }
+
+    void PoseBasedReferenceManager::leftTwistCallback(
+        const geometry_msgs::msg::Twist::SharedPtr msg)
+    {
+        left_latched_twist_ = *msg;
+        left_twist_stamp_ = std::chrono::steady_clock::now();
+        const bool is_zero =
+            std::abs(msg->linear.x) < 1e-9 && std::abs(msg->linear.y) < 1e-9 &&
+            std::abs(msg->linear.z) < 1e-9 && std::abs(msg->angular.x) < 1e-9 &&
+            std::abs(msg->angular.y) < 1e-9 && std::abs(msg->angular.z) < 1e-9;
+        left_twist_active_ = !is_zero;
+    }
+
+    void PoseBasedReferenceManager::rightTwistCallback(
+        const geometry_msgs::msg::Twist::SharedPtr msg)
+    {
+        right_latched_twist_ = *msg;
+        right_twist_stamp_ = std::chrono::steady_clock::now();
+        const bool is_zero =
+            std::abs(msg->linear.x) < 1e-9 && std::abs(msg->linear.y) < 1e-9 &&
+            std::abs(msg->linear.z) < 1e-9 && std::abs(msg->angular.x) < 1e-9 &&
+            std::abs(msg->angular.y) < 1e-9 && std::abs(msg->angular.z) < 1e-9;
+        right_twist_active_ = !is_zero;
+    }
+
+    bool PoseBasedReferenceManager::twistStampedToBaseTwist(
+        const geometry_msgs::msg::TwistStamped& msg,
+        geometry_msgs::msg::Twist& out_twist_base) const
+    {
+        out_twist_base = msg.twist;
+        if (msg.header.frame_id.empty() || msg.header.frame_id == base_frame_)
+        {
+            return true;
+        }
+        if (!tf_buffer_)
+        {
+            RCLCPP_WARN(logger_, "Cannot transform relative twist from %s: TF buffer unavailable",
+                        msg.header.frame_id.c_str());
+            return false;
+        }
+        try
+        {
+            const geometry_msgs::msg::TransformStamped transform =
+                tf_buffer_->lookupTransform(base_frame_, msg.header.frame_id, tf2::TimePointZero);
+
+            geometry_msgs::msg::Vector3Stamped lin_in, lin_out, ang_in, ang_out;
+            lin_in.header = msg.header;
+            lin_in.vector = msg.twist.linear;
+            ang_in.header = msg.header;
+            ang_in.vector = msg.twist.angular;
+            tf2::doTransform(lin_in, lin_out, transform);
+            tf2::doTransform(ang_in, ang_out, transform);
+            out_twist_base.linear = lin_out.vector;
+            out_twist_base.angular = ang_out.vector;
+            return true;
+        }
+        catch (const tf2::TransformException& ex)
+        {
+            RCLCPP_WARN(logger_, "Cannot transform relative twist from %s to %s: %s",
+                        msg.header.frame_id.c_str(), base_frame_.c_str(), ex.what());
+            return false;
+        }
+    }
+
+    void PoseBasedReferenceManager::leftRelativeCallback(
+        const geometry_msgs::msg::TwistStamped::SharedPtr msg)
+    {
+        geometry_msgs::msg::Twist twist_base;
+        if (!twistStampedToBaseTwist(*msg, twist_base))
+        {
+            return;
+        }
+        const vector_t goal = composeTwistDelta(left_target_state_, twist_base);
+        applyLeftAbsoluteTarget(goal, true);
+    }
+
+    void PoseBasedReferenceManager::rightRelativeCallback(
+        const geometry_msgs::msg::TwistStamped::SharedPtr msg)
+    {
+        geometry_msgs::msg::Twist twist_base;
+        if (!twistStampedToBaseTwist(*msg, twist_base))
+        {
+            return;
+        }
+        const vector_t goal = composeTwistDelta(right_target_state_, twist_base);
+        applyRightAbsoluteTarget(goal, true);
+    }
+
+    void PoseBasedReferenceManager::leftPoseStampedPoseCallback(
+        const geometry_msgs::msg::Pose::SharedPtr msg)
+    {
+        vector_t target_state = vector_t::Zero(7);
+        target_state(0) = msg->position.x;
+        target_state(1) = msg->position.y;
+        target_state(2) = msg->position.z;
+        target_state(3) = msg->orientation.x;
+        target_state(4) = msg->orientation.y;
+        target_state(5) = msg->orientation.z;
+        target_state(6) = msg->orientation.w;
+        applyLeftAbsoluteTarget(target_state, true);
+    }
+
+    void PoseBasedReferenceManager::rightPoseStampedPoseCallback(
+        const geometry_msgs::msg::Pose::SharedPtr msg)
+    {
+        vector_t target_state = vector_t::Zero(7);
+        target_state(0) = msg->position.x;
+        target_state(1) = msg->position.y;
+        target_state(2) = msg->position.z;
+        target_state(3) = msg->orientation.x;
+        target_state(4) = msg->orientation.y;
+        target_state(5) = msg->orientation.z;
+        target_state(6) = msg->orientation.w;
+        applyRightAbsoluteTarget(target_state, true);
     }
 
     void PoseBasedReferenceManager::bodyPoseStampedPoseCallback(

@@ -23,8 +23,9 @@ int main(int argc, char** argv)
     std::string control_base_frame = node->declare_parameter("control_base_frame", "world");
     std::string marker_fixed_frame = node->declare_parameter("marker_fixed_frame", "base_link");
     std::string body_controller_name = node->declare_parameter("body_controller_name", "body_joint_controller");
-    double linear_scale = node->declare_parameter("linear_scale", 0.005);
-    double angular_scale = node->declare_parameter("angular_scale", 0.05);
+    double linear_scale = node->declare_parameter("linear_scale", 0.25);
+    double angular_scale = node->declare_parameter("angular_scale", 2.5);
+    double control_input_rate = node->declare_parameter("control_input_rate", 50.0);
     double vr_thumbstick_linear_scale = node->declare_parameter("vr_thumbstick_linear_scale", 0.005);
     double vr_thumbstick_angular_scale = node->declare_parameter("vr_thumbstick_angular_scale", 0.05);
     double vr_pose_scale = node->declare_parameter("vr_pose_scale", 1.0);
@@ -128,7 +129,7 @@ int main(int argc, char** argv)
 
         // 创建ControlInputHandler（传入hand_controllers参数）
         auto control_handler = std::make_unique<ControlInputHandler>(
-            node, target_manager.get(), linear_scale, angular_scale, hand_controllers);
+            node, target_manager.get(), linear_scale, angular_scale, control_input_rate, hand_controllers);
 
         // 创建VRInputHandler（如果启用，传入统一的发布器、hand_controllers 及 target_manager.yaml 的 scale 参数）
         std::unique_ptr<VRInputHandler> vr_handler = nullptr;

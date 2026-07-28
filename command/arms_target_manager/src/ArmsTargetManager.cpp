@@ -1273,7 +1273,8 @@ namespace arms_ros2_control::command
     void ArmsTargetManager::updateMarkerPoseIncremental(
         const std::string& armType,
         const std::array<double, 3>& positionDelta,
-        const std::array<double, 3>& rpyDelta)
+        const std::array<double, 3>& rpyDelta,
+        bool publish)
     {
         if (!isStateDisabled(current_controller_state_))
         {
@@ -1343,7 +1344,7 @@ namespace arms_ros2_control::command
             markPendingChanges();
         }
 
-        if (current_mode_ == MarkerState::CONTINUOUS)
+        if (publish && current_mode_ == MarkerState::CONTINUOUS)
         {
             arm_marker->publishTargetPose();
         }

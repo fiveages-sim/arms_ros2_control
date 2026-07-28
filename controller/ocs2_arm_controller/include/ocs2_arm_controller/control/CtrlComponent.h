@@ -47,6 +47,9 @@ namespace ocs2::mobile_manipulator
         return std::string("/tmp/ocs2_ros2/") + robot_pkg;
     }
 
+    /** Read model frame defaults from task.info (eeFrame=left, eeFrame1=right). */
+    FrameOverrides loadInfoFrameDefaults(const std::string& task_file);
+
     class CtrlComponent
     {
     public:
@@ -85,7 +88,20 @@ namespace ocs2::mobile_manipulator
                 auto_declare("ocs2_library_folder", defaultOcs2LibraryFolder(robot_pkg));
             const std::string urdf_file = resolvePlanningUrdfPath();
 
-            setupInterface(task_file, lib_folder, urdf_file);
+            // Frame params: YAML overrides task.info defaults; applied in-memory into Interface.
+            const auto info_frames = loadInfoFrameDefaults(task_file);
+            const std::string base_frame =
+                auto_declare("base_frame", info_frames.baseFrame);
+            const std::string left_ee_frame =
+                auto_declare("left_ee_frame", info_frames.eeFrame);
+            const std::string right_ee_frame =
+                auto_declare("right_ee_frame", info_frames.eeFrame1);
+            FrameOverrides frame_overrides;
+            frame_overrides.baseFrame = base_frame;
+            frame_overrides.eeFrame = left_ee_frame;
+            frame_overrides.eeFrame1 = right_ee_frame;
+
+            setupInterface(task_file, lib_folder, urdf_file, frame_overrides);
 
             dual_arm_mode_ = interface_->dual_arm_;
 
@@ -190,7 +206,8 @@ namespace ocs2::mobile_manipulator
     private:
         void setupInterface(const std::string& task_file,
                             const std::string& lib_folder,
-                            const std::string& urdf_file);
+                            const std::string& urdf_file,
+                            const FrameOverrides& frame_overrides = FrameOverrides{});
         void setupPublisher();
 
         /** Requires launch-injected xacro planning URDF (planning_urdf_path). */

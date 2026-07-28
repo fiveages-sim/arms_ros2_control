@@ -6,18 +6,32 @@
 #include "ocs2_arm_controller/Ocs2ArmController.h"
 #include <ament_index_cpp/get_package_share_directory.hpp>
 #include <arms_controller_common/utils/TrajectoryRecorder.h>
+#include <ocs2_core/misc/LoadData.h>
 #include <ocs2_mpc/MPC_MRT_Interface.h>
 #include <ocs2_ros_interfaces/common/RosMsgConversions.h>
 #include <ocs2_ddp/GaussNewtonDDP_MPC.h>
 #include <pinocchio/algorithm/frames.hpp>
 #include <pinocchio/algorithm/kinematics.hpp>
 #include <pinocchio/algorithm/rnea.hpp>
+#include <boost/property_tree/info_parser.hpp>
+#include <boost/property_tree/ptree.hpp>
 #include <exception>
 #include <filesystem>
 #include <optional>
 
 namespace ocs2::mobile_manipulator
 {
+    FrameOverrides loadInfoFrameDefaults(const std::string& task_file)
+    {
+        boost::property_tree::ptree pt;
+        boost::property_tree::read_info(task_file, pt);
+        FrameOverrides frames;
+        loadData::loadPtreeValue<std::string>(pt, frames.baseFrame, "model_information.baseFrame", false);
+        loadData::loadPtreeValue<std::string>(pt, frames.eeFrame, "model_information.eeFrame", false);
+        loadData::loadPtreeValue<std::string>(pt, frames.eeFrame1, "model_information.eeFrame1", false);
+        return frames;
+    }
+
     rcl_interfaces::msg::SetParametersResult CtrlComponent::on_parameter_change(
         const std::vector<rclcpp::Parameter>& parameters)
     {
@@ -56,10 +70,12 @@ namespace ocs2::mobile_manipulator
 
     void CtrlComponent::setupInterface(const std::string& task_file,
                                        const std::string& lib_folder,
-                                       const std::string& urdf_file)
+                                       const std::string& urdf_file,
+                                       const FrameOverrides& frame_overrides)
     {
-        // Create Mobile Manipulator interface
-        interface_ = std::make_shared<MobileManipulatorInterface>(task_file, lib_folder, urdf_file);
+        // Create Mobile Manipulator interface (frame overrides applied in-memory)
+        interface_ = std::make_shared<MobileManipulatorInterface>(
+            task_file, lib_folder, urdf_file, frame_overrides);
         task_file_ = task_file;
         urdf_file_ = urdf_file;
         // Setup publishers

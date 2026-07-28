@@ -11,6 +11,8 @@
 #include <mutex>
 #include <geometry_msgs/msg/pose.hpp>
 #include <geometry_msgs/msg/pose_stamped.hpp>
+#include <geometry_msgs/msg/twist.hpp>
+#include <geometry_msgs/msg/twist_stamped.hpp>
 #ifdef HAS_LINA_PLANNING
 #include <lina_planning/planning/path_planner/circular_curve.h>
 #endif
@@ -29,8 +31,14 @@
 namespace ocs2::controller_common {
 
 /**
- * Subscribes to pose/path topics and writes TargetTrajectories to the decorated ReferenceManager.
+ * Subscribes to pose/path/twist/relative topics and writes TargetTrajectories.
  * Uses Ocs2ReferenceTargetContext for dual-arm flag, base frame, and zero-input dimension.
+ *
+ * Inbound (left; right symmetric when dual):
+ * - left_target            Pose          immediate absolute (preempts active moveL)
+ * - left_target/stamped    PoseStamped   absolute moveL; frame_id non-base → TF→base
+ * - left_target/twist      Twist         velocity stream (m/s, rad/s), latch + dt integrate (preempts moveL)
+ * - left_target/relative   TwistStamped  one-shot SE(3) delta (m, rad) + moveL; frame_id selects base/EE/TF
  */
 class PoseBasedReferenceManager : public ReferenceManagerDecorator {
 public:
@@ -74,6 +82,10 @@ private:
     void bodyPoseCallback(geometry_msgs::msg::Pose::SharedPtr msg);
     void leftPoseStampedCallback(geometry_msgs::msg::PoseStamped::SharedPtr msg);
     void rightPoseStampedCallback(geometry_msgs::msg::PoseStamped::SharedPtr msg);
+    void leftTwistCallback(geometry_msgs::msg::Twist::SharedPtr msg);
+    void rightTwistCallback(geometry_msgs::msg::Twist::SharedPtr msg);
+    void leftRelativeCallback(geometry_msgs::msg::TwistStamped::SharedPtr msg);
+    void rightRelativeCallback(geometry_msgs::msg::TwistStamped::SharedPtr msg);
     void dualTargetStampedCallback(nav_msgs::msg::Path::SharedPtr msg);
     void bodyPoseStampedCallback(geometry_msgs::msg::PoseStamped::SharedPtr msg);
     void pathCallback(nav_msgs::msg::Path::SharedPtr msg);
@@ -98,6 +110,26 @@ private:
     void leftPoseStampedPoseCallback(geometry_msgs::msg::Pose::SharedPtr msg);
     void rightPoseStampedPoseCallback(geometry_msgs::msg::Pose::SharedPtr msg);
     void bodyPoseStampedPoseCallback(geometry_msgs::msg::Pose::SharedPtr msg);
+
+    /** Apply absolute 7D target [x,y,z,qx,qy,qz,qw]. interpolate=true uses moveL buffer path. */
+    void applyLeftAbsoluteTarget(const vector_t& goal7, bool interpolate);
+    void applyRightAbsoluteTarget(const vector_t& goal7, bool interpolate);
+
+    /** Compose one-shot relative Twist (linear=m, angular=rad RPY) onto base7. */
+    [[nodiscard]] static vector_t composeTwistDelta(const vector_t& base7,
+                                                    const geometry_msgs::msg::Twist& delta);
+
+    /** Express TwistStamped delta in base_frame_ (TF-rotate free vectors); empty/base frame_id = as-is. */
+    [[nodiscard]] bool twistStampedToBaseTwist(const geometry_msgs::msg::TwistStamped& msg,
+                                               geometry_msgs::msg::Twist& out_twist_base) const;
+
+    /** Integrate latched twist velocity (m/s, rad/s) for dt seconds onto base7. */
+    [[nodiscard]] static vector_t integrateTwistVelocity(const vector_t& base7,
+                                                         const geometry_msgs::msg::Twist& velocity,
+                                                         double dt);
+
+    void integrateLatchedTwists(double dt);
+    void clearTwistLatchIfTimedOut();
 
     void processPoseStamped(const geometry_msgs::msg::PoseStamped::SharedPtr& msg,
                             std::function<void(geometry_msgs::msg::Pose::SharedPtr)> callback);
@@ -127,6 +159,10 @@ private:
     rclcpp::Subscription<geometry_msgs::msg::Pose>::SharedPtr body_pose_subscriber_;
     rclcpp::Subscription<geometry_msgs::msg::PoseStamped>::SharedPtr left_pose_stamped_subscriber_;
     rclcpp::Subscription<geometry_msgs::msg::PoseStamped>::SharedPtr right_pose_stamped_subscriber_;
+    rclcpp::Subscription<geometry_msgs::msg::Twist>::SharedPtr left_twist_subscriber_;
+    rclcpp::Subscription<geometry_msgs::msg::Twist>::SharedPtr right_twist_subscriber_;
+    rclcpp::Subscription<geometry_msgs::msg::TwistStamped>::SharedPtr left_relative_subscriber_;
+    rclcpp::Subscription<geometry_msgs::msg::TwistStamped>::SharedPtr right_relative_subscriber_;
     rclcpp::Subscription<nav_msgs::msg::Path>::SharedPtr dual_target_stamped_subscriber_;
     rclcpp::Subscription<geometry_msgs::msg::PoseStamped>::SharedPtr body_pose_stamped_subscriber_;
     rclcpp::Subscription<nav_msgs::msg::Path>::SharedPtr path_subscriber_;
@@ -180,9 +216,19 @@ private:
     void rebuildTargetTrajectoriesFromArmReferenceBuffers(double start_time, double end_time);
 
     SystemObservation current_observation_;
+    bool has_observation_time_{false};
+    double last_observation_time_{0.0};
     vector_t left_target_state_;
     vector_t right_target_state_;
     vector_t body_pose_7_xyzw_;
+
+    geometry_msgs::msg::Twist left_latched_twist_{};
+    geometry_msgs::msg::Twist right_latched_twist_{};
+    bool left_twist_active_{false};
+    bool right_twist_active_{false};
+    std::chrono::steady_clock::time_point left_twist_stamp_{};
+    std::chrono::steady_clock::time_point right_twist_stamp_{};
+    static constexpr double kTwistTimeoutSec_{0.2};
 
     double trajectory_duration_{2.0};
     double moveL_duration_{2.0};

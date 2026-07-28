@@ -1,13 +1,13 @@
 # ArmsTargetManager
 
-机械臂目标管理器 - 提供3D交互式marker用于设置机械臂末端执行器的目标pose。
+机械臂目标管理器 - 提供 3D 交互式 marker、手柄适配与 VR 输入，用于设置末端目标。
 
 ## 功能特点
 
-- **3D交互式marker**：在RViz中显示可拖拽的marker
-- **单臂/双臂支持**：支持单臂和双臂模式
-- **实时pose发布**：拖拽marker时实时发布pose消息
-- **简单易用**：无需复杂配置，开箱即用
+- **3D 交互式 marker**：在 RViz 中拖拽设置绝对目标 pose
+- **单臂/双臂支持**
+- **手柄适配**：订阅 `control_input`（`Inputs`），发布 `*/twist` 速度流；marker 仅可视化
+- **VR**：仍发绝对 `left_target` / `right_target`（本阶段不迁相对话题）
 
 ## 使用方法
 
@@ -26,78 +26,84 @@ colcon build --packages-up-to arms_target_manager
 ros2 launch ocs2_arm_controller demo.launch.py robot:=cr5
 ```
 
-ArmsTargetManager 的参数处理逻辑已集成到 `robot_common_launch` 中，会在启动时自动：
-- 解析 task.info 文件检测 dual_arm_mode 和 control_base_frame
-- 自动检测 hand_controllers（如果启用 gripper）
-- 查找并加载配置文件
+### 3. 在 RViz 中查看
 
-### 3. 在RViz中查看
+1. 启动 RViz
+2. 添加 InteractiveMarkers 显示
+3. 设置 Fixed Frame 为配置的 frame_id
+4. 拖拽 marker 设置目标 pose
 
-1. 启动RViz
-2. 添加InteractiveMarkers显示
-3. 设置Fixed Frame为配置的frame_id
-4. 拖拽marker设置目标pose
+## PoseBasedReferenceManager 入站话题（左臂；右臂对称）
+
+| Topic | 消息 | 行为 | 主要客户端 |
+|-------|------|------|------------|
+| `left_target` | `geometry_msgs/Pose` | 立即绝对 | VR / marker 连续 |
+| `left_target/stamped` | `geometry_msgs/PoseStamped` | 绝对 **moveL**；`frame_id` 非 base 则 TF→base | RViz 绝对 |
+| `left_target/twist` | `geometry_msgs/Twist` | **速度流**（m/s、rad/s），latch + `dt` 积分 | **手柄** |
+| `left_target/relative` | `geometry_msgs/TwistStamped` | **一次相对位移**（m、rad）+ moveL；`frame_id` 选坐标系 | **RViz 相对基座/末端** |
+| `left_current_target` | `PoseStamped` | 当前指令目标反馈（`frame_id`=base） | RViz / 可视化 |
+
+要点：
+
+- `relative` 用 **TwistStamped**：`twist` 为位移增量；`header.frame_id` 为表达该增量的坐标系（base / EE link / 其它 TF）。非 base 时控制器将 `linear`/`angular` TF 旋到 base 再合成。
+- `twist` 话题仍为裸 `Twist`（速度语义，仅基座）。
+- `angular.{x,y,z}` 对应 roll / pitch / yaw（合成：`R' = RΔ(yaw)·RΔ(pitch)·RΔ(roll)·R`）。
+- `left_current_pose` / `left_current_target` 的 `frame_id` 是 **base（或 WBC 轮式 world）**，不是 EE link 名。
+
+### 控制器 frame 参数（加载时一次生效）
+
+`ocs2_arm_controller` / `ocs2_wbc_controller`：
+
+| 参数 | 默认 | 含义 |
+|------|------|------|
+| `base_frame` | task.info `baseFrame` | 模型/参考基座（可被 YAML 覆盖） |
+| `left_ee_frame` | task.info `eeFrame` | 左末端 tip（YAML 可改为 `left_tcp` 等） |
+| `right_ee_frame` | task.info `eeFrame1` | 右末端 tip |
+| `body_frame`（仅 WBC） | `bodyRelative.bodyLinkName` | 身体 link |
+
+- YAML 已配 → 用配置；未配 → 用 info，并写入 param 供外界读取。
+- 覆盖在 **Interface 构造时内存注入** `createManipulatorModelInfo`（不写临时 info），MPC 真正跟踪新 tip。
+- **不支持**像 `movel_duration` 那样运行时热改；改 tip 需重启控制器。
+
+RViz Joint Panel：绝对 / 相对基座 / 相对末端；相对基座填 `current_target`/`base_frame`；相对末端填 `left/right_ee_frame`。
 
 ## 参数说明
 
 ### 节点参数
-参数通过 OCS2 控制器 launch 文件自动配置，包括：
-- `dual_arm_mode`：是否双臂模式（从 task.info 自动检测）
-- `control_base_frame`：控制基坐标系（从 task.info 自动检测）
-- `marker_fixed_frame`：Marker 固定坐标系，默认为 "base_link"
-- `hand_controllers`：手部/夹爪控制器名称列表（从控制器配置自动检测）
+- `dual_arm_mode`、`control_base_frame`、`hand_controllers`：由 launch / task.info 自动配置
+- `marker_fixed_frame`：Marker 固定坐标系，默认 `base_link`
 
-### 配置文件查找逻辑
-配置文件会自动按以下优先级查找：
-1. **task_file 同目录下的 `target_manager.yaml`**（如果存在）
-2. **默认配置文件** `arms_target_manager/config/default.yaml`
+### YAML 配置（`config/default.yaml` 或 task 旁 `target_manager.yaml`）
 
-### YAML 配置参数
-- `linear_scale`：线性控制缩放因子，默认 0.005
-- `angular_scale`：角度控制缩放因子，默认 0.05
-- `vr_update_rate`：VR 更新频率（Hz），默认 500.0
-- `enable_vr`：是否启用 VR 输入处理，默认 true
+| 参数 | 含义 | 默认 |
+|------|------|------|
+| `linear_scale` | 手柄满杆最大线速度 **m/s** | `0.25` |
+| `angular_scale` | 手柄满杆最大角速度 **rad/s** | `2.5` |
+| `control_input_rate` | 上游 `control_input` 典型频率 Hz（手感对齐估算） | `50.0` |
+| `vr_thumbstick_linear_scale` | VR 摇杆线位移步进 m/step | `0.005` |
+| `vr_thumbstick_angular_scale` | VR 摇杆角位移步进 rad/step | `0.05` |
+| `enable_vr` | 是否启用 VR | `false` |
 
-## 发布主题
+### 手柄 scale 与现网手感对齐
 
-- `left_target`：左臂目标pose
-- `right_target`：右臂目标pose（仅双臂模式）
-
-## 订阅主题
-
-- `left_current_pose`：左臂当前pose（用于自动更新marker）
-- `right_current_pose`：右臂当前pose（仅双臂模式）
-
-## 与PoseBasedReferenceManager配合使用
-
-这个包专门设计用于与您的`PoseBasedReferenceManager`配合使用：
-
-1. 启动`ArmsTargetManager`节点
-2. 启动您的`PoseBasedReferenceManager`
-3. 在RViz中拖拽marker设置目标pose
-4. `ArmsTargetManager`发布pose消息
-5. `PoseBasedReferenceManager`接收消息并生成轨迹
-
-## 示例配置
-
-### YAML 配置文件示例 (config/default.yaml)
-```yaml
-/**:
-  ros__parameters:
-    # 线性控制缩放因子（用于手柄/键盘控制）
-    linear_scale: 0.005
-    
-    # 角度控制缩放因子（用于手柄/键盘控制）
-    angular_scale: 0.05
-    
-    # VR更新频率（Hz）
-    vr_update_rate: 500.0
-    
-    # 是否启用VR输入处理
-    enable_vr: true
+```text
+scale_vel ≈ scale_old * f
 ```
 
-注意：`dual_arm_mode` 和 `control_base_frame` 会自动从 `task_file` 中解析，不需要在 YAML 中配置。
+例：`scale_old = 0.005`、`f = 50` → `linear_scale = 0.25`。
+
+## 本包发布 / 订阅摘要
+
+**发布**
+
+- Marker / VR：`left_target`、`right_target`（绝对 Pose）
+- 手柄适配：`left_target/twist`、`right_target/twist`
+
+**订阅**
+
+- `control_input`（`arms_ros2_control_msgs/Inputs`）
+- `left_current_pose` / `right_current_pose`（更新 marker；frame_id=base）
+- VR 相关话题（启用时）
 
 ## 依赖
 
