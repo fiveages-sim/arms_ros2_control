@@ -30,13 +30,12 @@ namespace arxlift2s_ros2_control
 {
 
 /**
- * @brief LIFT2S lift-column ros2_control hardware interface.
+ * @brief LIFT2S lift-column ros2_control hardware interface (full_control MIX).
  *
  * Wraps official arx::LiftHeadControlLoop (libarx_lift_src.so) on can5.
- * Exports a single lift joint (height in meters). Does not export waist,
- * head, or chassis interfaces. On activate, chassis is parked once via
- * setChassisCmd(0,0,0,2); a background thread must call loop() periodically.
- * Does not wrap the topic-based lift_controller node.
+ * Always exports MIX command IFs (position/velocity/effort/kp/kd) so
+ * ocs2_wbc_controller can claim full_control. write() still drives height
+ * via setHeight(position); other command IFs are accepted but unused by SDK.
  */
 class ArxLiftHardware : public hardware_interface::SystemInterface
 {
@@ -69,13 +68,18 @@ private:
   // ---------- joint buffers (single DOF; scalars bound to export) ----------
   std::string lift_joint_name_;
   double lift_position_{0.0};
-  double lift_velocity_{0.0};  // no direct SDK quantity; keep 0 until derived
-  double lift_effort_{0.0};    // same
+  double lift_velocity_{0.0};
+  double lift_effort_{0.0};
   double lift_position_command_{0.0};
+  double lift_velocity_command_{0.0};
+  double lift_effort_command_{0.0};
+  double lift_kp_command_{0.0};
+  double lift_kd_command_{0.0};
 
   // ---------- config ----------
   std::string can_name_{"can5"};
   int robot_type_{0};  // arx::LiftHeadControlLoop::RobotType
+  std::string control_mode_{"full_control"};
 
   // ---------- SDK ----------
   std::shared_ptr<arx::LiftHeadControlLoop> lift_;

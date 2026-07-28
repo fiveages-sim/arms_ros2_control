@@ -23,35 +23,33 @@ and [modbus-ros2-control](https://github.com/fiveages-sim/modbus-ros2-control) (
 
 | Plugin | CAN | Notes |
 |--------|-----|-------|
-| `ArxX5Hardware` | `can1` / `can3` (param `can_interface`, alias `can_name`) | Instantiate ×2; MIX + `control_mode` |
-| `ArxLiftHardware` | `can5` | One `lift_joint` (m); `robot_type:=2` for LIFT2S |
+| `ArxX5Hardware` | `can1` / `can3` (param `can_interface`, alias `can_name`) | Instantiate ×2; **full_control only** |
+| `ArxLiftHardware` | `can5` | `lift_joint` MIX IFs; `write()` → `setHeight`; `robot_type:=2` |
 
 Does **not** export waist / head / chassis (lift activate still parks chassis).
 
-### ArxX5Hardware (Stanford, panthera-ht contract)
+### ArxX5Hardware (Stanford)
 
-URDF **always** declares MIX `position/velocity/effort/kp/kd`; `control_mode` only changes `write()`:
-
-| Mode | Default | Behavior |
-|------|---------|----------|
-| `full_control` | yes | pos+vel+effort → `set_joint_cmd`; MIT kp/kd from HI `joint_k/d_gains` |
-| `position` | no | position only; vel/torque=0; same HI gains |
-| `pd_control` | no | alias of `position` |
+URDF **always** declares MIX `position/velocity/effort/kp/kd`. Lift2S forces **`full_control`**
+(pos+vel+effort → `set_joint_cmd`; MIT kp/kd from HI `joint_k/d_gains`). `position` / `pd_control` are not supported here.
 
 | Param | Default | Notes |
 |-------|---------|-------|
 | `robot_model` | `X5` | |
 | `can_interface` | `can0` | LIFT2S: `can1` / `can3`; `can_name` accepted as alias |
-| `control_mode` | `full_control` | |
-| `joint_k_gains` / `joint_d_gains` | 6-vector | Dynamic via ros2 param / rqt |
+| `control_mode` | `full_control` | Other values warned and forced to `full_control` |
+| `joint_k_gains` / `joint_d_gains` | `[20×4, 10×2]` / `[3.5×4, 1×2]` | Field-tuned Lift2S; dynamic via ros2 param / rqt |
 | `gripper_kp` / `gripper_kd` | `5.0` / `0.2` | Gripper position-only |
 
-### ArxLiftHardware (official lift)
+### ArxLiftHardware (official lift, full_control MIX)
+
+Exports MIX command IFs so `ocs2_wbc_controller` can claim full_control. SDK path remains height position.
 
 | Param | Default | Notes |
 |-------|---------|-------|
 | `can_name` | `can5` | |
 | `robot_type` | `0` | **`2=LIFTS` for LIFT2S** |
+| `control_mode` | `full_control` | Informational; write always uses `setHeight` |
 
 ## Layout
 

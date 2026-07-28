@@ -166,16 +166,11 @@ hardware_interface::CallbackReturn ArxX5Hardware::on_init(
     }
     // Modes: URDF always exports MIX IFs; mode only changes write().
     //   full_control — OCS2 MIX pos/vel/effort; MIT kp/kd from HI joint_k/d_gains
-    //   position     — legacy real pos + joint_k/d_gains ≈ HT pd_control
-    //   pd_control   — HT-compatible alias → position
+    // Lift2S: full_control only (position/pd_control retired for this package).
     control_mode_ = get_node_param("control_mode", std::string("full_control"));
-    if (control_mode_ == "pd_control") {
-        control_mode_ = "position";
-    }
-    if (control_mode_ != "full_control" && control_mode_ != "position") {
+    if (control_mode_ != "full_control") {
         RCLCPP_WARN(get_logger(),
-            "Unknown control_mode '%s'; using 'full_control'. "
-            "Supported: full_control | position | pd_control",
+            "ArxX5Hardware (arxlift2s) ignores control_mode='%s'; forcing full_control",
             control_mode_.c_str());
         control_mode_ = "full_control";
     }
@@ -523,23 +518,18 @@ hardware_interface::return_type ArxX5Hardware::write(
             }
             cmd.pos[i] = pos;
 
-            if (isFullControl()) {
-                double vel = velocity_commands_[i];
-                if (!std::isfinite(vel)) {
-                    vel = 0.0;
-                    velocity_commands_[i] = 0.0;
-                }
-                double eff = effort_commands_[i];
-                if (!std::isfinite(eff)) {
-                    eff = 0.0;
-                    effort_commands_[i] = 0.0;
-                }
-                cmd.vel[i] = vel;
-                cmd.torque[i] = eff;
-            } else {
-                cmd.vel[i] = 0.0;
-                cmd.torque[i] = 0.0;
+            double vel = velocity_commands_[i];
+            if (!std::isfinite(vel)) {
+                vel = 0.0;
+                velocity_commands_[i] = 0.0;
             }
+            double eff = effort_commands_[i];
+            if (!std::isfinite(eff)) {
+                eff = 0.0;
+                effort_commands_[i] = 0.0;
+            }
+            cmd.vel[i] = vel;
+            cmd.torque[i] = eff;
         }
 
         if (has_gripper_ && gripper_joint_names_.size() >= 1) {
@@ -573,7 +563,7 @@ hardware_interface::return_type ArxX5Hardware::write(
                 kd_commands_[i] = kd[i];
             }
         }
-        applyGains(kp, kd, gripper_kp, gripper_kd, true);
+        applyGains(kp, kd, gripper_kp, gripper_kd, false);
 
         // Near-current timestamp → init_fixed (no interpolator lag) for high-rate OCS2.
         cmd.timestamp = controller_->get_timestamp();

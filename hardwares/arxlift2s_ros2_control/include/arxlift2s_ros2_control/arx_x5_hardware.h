@@ -38,10 +38,9 @@ namespace arxlift2s_ros2_control
  * Lift2S dual-arm: instantiate twice (can1 / can3). Official InterfacesThread
  * arm path is retired from this package; use this plugin for full_control MIX.
  *
- * Contract (panthera-ht aligned): URDF always declares MIX
- * position/velocity/effort/kp/kd; control_mode only changes write().
- *   full_control — pos+vel+effort; MIT kp/kd from HI joint_k/d_gains
- *   position / pd_control — position only (vel/torque=0); same HI gains
+ * Contract: URDF always declares MIX position/velocity/effort/kp/kd.
+ * Lift2S is full_control-only (pos+vel+effort; MIT kp/kd from joint_k/d_gains).
+ * position/pd_control are not supported in this package.
  *
  * Params: robot_model, can_interface (alias: can_name), control_mode,
  * joint_k_gains, joint_d_gains, gripper_kp, gripper_kd.
@@ -147,8 +146,6 @@ private:
   void applyGains(
     const std::vector<double> & kp, const std::vector<double> & kd,
     double gripper_kp, double gripper_kd, bool force = false);
-
-  bool isFullControl() const { return control_mode_ == "full_control"; }
 };
 
 }  // namespace arxlift2s_ros2_control

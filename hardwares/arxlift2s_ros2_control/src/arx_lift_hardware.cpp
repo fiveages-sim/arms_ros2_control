@@ -84,12 +84,25 @@ hardware_interface::CallbackReturn ArxLiftHardware::on_init(
   lift_velocity_ = 0.0;
   lift_effort_ = 0.0;
   lift_position_command_ = 0.0;
+  lift_velocity_command_ = 0.0;
+  lift_effort_command_ = 0.0;
+  lift_kp_command_ = 0.0;
+  lift_kd_command_ = 0.0;
+  control_mode_ = get_hw_param(info_, "control_mode", "full_control");
+  if (control_mode_ != "full_control") {
+    RCLCPP_WARN(
+      get_logger(),
+      "ArxLiftHardware ignores control_mode='%s'; Lift2S lift is full_control-only",
+      control_mode_.c_str());
+    control_mode_ = "full_control";
+  }
   lift_.reset();
 
   RCLCPP_INFO(
     get_logger(),
-    "ArxLiftHardware init: joint=%s can=%s robot_type=%d",
-    lift_joint_name_.c_str(), can_name_.c_str(), robot_type_);
+    "ArxLiftHardware init: joint=%s can=%s robot_type=%d control_mode=%s",
+    lift_joint_name_.c_str(), can_name_.c_str(), robot_type_,
+    control_mode_.c_str());
 
   return hardware_interface::CallbackReturn::SUCCESS;
 }
@@ -114,10 +127,25 @@ std::vector<hardware_interface::CommandInterface::SharedPtr>
 ArxLiftHardware::on_export_command_interfaces()
 {
   std::vector<hardware_interface::CommandInterface::SharedPtr> command_interfaces;
+  // Always export MIX so ocs2_wbc full_control can claim; write() uses position.
   command_interfaces.push_back(
     std::make_shared<hardware_interface::CommandInterface>(
       lift_joint_name_, hardware_interface::HW_IF_POSITION,
       &lift_position_command_));
+  command_interfaces.push_back(
+    std::make_shared<hardware_interface::CommandInterface>(
+      lift_joint_name_, hardware_interface::HW_IF_VELOCITY,
+      &lift_velocity_command_));
+  command_interfaces.push_back(
+    std::make_shared<hardware_interface::CommandInterface>(
+      lift_joint_name_, hardware_interface::HW_IF_EFFORT,
+      &lift_effort_command_));
+  command_interfaces.push_back(
+    std::make_shared<hardware_interface::CommandInterface>(
+      lift_joint_name_, "kp", &lift_kp_command_));
+  command_interfaces.push_back(
+    std::make_shared<hardware_interface::CommandInterface>(
+      lift_joint_name_, "kd", &lift_kd_command_));
   return command_interfaces;
 }
 
