@@ -16,11 +16,14 @@
 
 #include <hardware_interface/system_interface.hpp>
 #include <hardware_interface/types/hardware_interface_return_values.hpp>
+#include <rcl_interfaces/msg/set_parameters_result.hpp>
 #include <rclcpp/rclcpp.hpp>
 #include <rclcpp_lifecycle/state.hpp>
+#include <std_msgs/msg/float64_multi_array.hpp>
 
 #include "arx_lift_src/lift_head_control_loop.h"
 
+#include <algorithm>
 #include <atomic>
 #include <memory>
 #include <string>
@@ -30,12 +33,22 @@ namespace arxlift2s_ros2_control
 {
 
 /**
- * @brief LIFT2S lift-column ros2_control hardware interface (full_control MIX).
+ * @brief LIFT2S lift-column ros2_control hardware interface (Hybrid MIT only).
  *
- * Wraps official arx::LiftHeadControlLoop (libarx_lift_src.so) on can5.
- * Always exports MIX command IFs (position/velocity/effort/kp/kd) so
- * ocs2_wbc_controller can claim full_control. write() still drives height
- * via setHeight(position); other command IFs are accepted but unused by SDK.
+ * Wraps official arx::LiftHeadControlLoop (libarx_lift_src.so) on can5, but
+ * bypasses Soft-P via sendLiftHybrid(kp, kd, p, v, τ). Used for both
+ * split_body (body_joint_controller) and full_body (ocs2_wbc_controller).
+ *
+ * Unit contract:
+ * - ros2_control / URDF: **meters** (~0–0.48)
+ * - SDK getHeight / Hybrid pack: **motor radians** (~0–20)
+ * - Conversion: sdk_rad = meters * height_rad_per_meter (default 41.54)
+ *
+ * Live ROS params (controller_manager / HW node):
+ * - ``arx_lift.hybrid_kp`` / ``arx_lift.hybrid_kd`` (kd pack-clamped ≤5)
+ *
+ * Exports MIX command IFs so ocs2_wbc can claim full_control; Hybrid drive uses
+ * position (+ effort as τ feedforward add). Gains from arx_lift.hybrid_kp/kd only.
  */
 class ArxLiftHardware : public hardware_interface::SystemInterface
 {
@@ -65,7 +78,24 @@ public:
     const rclcpp::Time & time, const rclcpp::Duration & period) override;
 
 private:
-  // ---------- joint buffers (single DOF; scalars bound to export) ----------
+  void stop_loop_thread();
+  void setupDynamicParameters(double hybrid_kp, double hybrid_kd);
+  void sendHybridHoldOrTrack(double q_target_sdk, double v_d_sdk, double dt_s);
+
+  double rosToSdk(double ros_m) const
+  {
+    const double m = std::clamp(ros_m, 0.0, height_span_m_);
+    const double sdk = m * height_rad_per_meter_;
+    return std::clamp(sdk, 0.0, sdk_max_rad_);
+  }
+  double sdkToRos(double sdk_rad) const
+  {
+    if (height_rad_per_meter_ <= 0.0) {
+      return 0.0;
+    }
+    return sdk_rad / height_rad_per_meter_;
+  }
+
   std::string lift_joint_name_;
   double lift_position_{0.0};
   double lift_velocity_{0.0};
@@ -76,30 +106,40 @@ private:
   double lift_kp_command_{0.0};
   double lift_kd_command_{0.0};
 
-  // ---------- config ----------
   std::string can_name_{"can5"};
-  int robot_type_{0};  // arx::LiftHeadControlLoop::RobotType
-  std::string control_mode_{"full_control"};
-  // Official lift_controller soft-P tuning (required; SDK defaults are zero).
-  double lift_kp_{8.0};
-  double lift_max_vel_{0.10};
-  double gravity_compensation_torque_{-2.0};
+  int robot_type_{0};
+  double gravity_compensation_torque_{-1.8};
   double lift_max_torque_{15.0};
-  double max_height_m_{0.48};  // URDF / official joy clamp
-  // SDK setHeight/getHeight use motor radians; meters * scale ≈ motor.
-  // Empirically 41.54 (matches old Python header + field logs).
-  double height_to_motor_{41.54};
+  double cmd_ramp_vel_mps_{0.04};
 
-  void applyLiftSdkConfig();
-  double sdkHeightToMeters(double sdk_height) const;
-  double metersToSdkHeight(double height_m) const;
+  std::atomic<double> hybrid_kp_{5.0};
+  std::atomic<double> hybrid_kd_{2.0};
 
-  // ---------- SDK ----------
+  double height_rad_per_meter_{41.54};
+  double height_span_m_{0.48};
+  double sdk_max_rad_{20.0};
+
+  double ramp_q_sdk_{0.0};
+  bool ramp_initialized_{false};
+
   std::shared_ptr<arx::LiftHeadControlLoop> lift_;
 
-  // ---------- loop thread (SDK requires periodic loop(); decoupled from CM rate) ----------
   std::thread loop_thread_;
   std::atomic<bool> loop_running_{false};
+  std::atomic<bool> command_enabled_{false};
+  std::atomic<double> last_written_height_{0.0};
+  std::atomic<double> last_written_vel_{0.0};
+
+  std::atomic<double> motor_position_{0.0};
+  std::atomic<double> motor_velocity_{0.0};
+  std::atomic<double> motor_torque_{0.0};
+  std::atomic<double> motor_current_{0.0};
+  std::atomic<int> motor_online_{0};
+  std::atomic<int> motor_error_{0};
+  std::atomic<double> sdk_get_height_{0.0};
+
+  rclcpp::Publisher<std_msgs::msg::Float64MultiArray>::SharedPtr motor_pub_;
+  rclcpp::node_interfaces::OnSetParametersCallbackHandle::SharedPtr param_cb_;
 };
 
 }  // namespace arxlift2s_ros2_control

@@ -19,6 +19,7 @@
   <depend>pluginlib</depend>
   <depend>rclcpp</depend>
   <depend>rclcpp_lifecycle</depend>
+  <depend>std_msgs</depend>
   <depend>eigen</depend>
   <depend>orocos_kdl_vendor</depend>
   <depend>kdl_parser</depend>

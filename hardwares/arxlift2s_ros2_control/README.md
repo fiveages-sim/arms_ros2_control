@@ -5,7 +5,7 @@ ROS 2 Control hardware interfaces for **ARX LIFT2S**.
 | Subsystem | Plugin | Stack |
 |-----------|--------|-------|
 | Dual X5 arms | `arxlift2s_ros2_control/ArxX5Hardware` | **Stanford** `arx5-sdk` (`Arx5JointController`) |
-| Lift column | `arxlift2s_ros2_control/ArxLiftHardware` | Official `LiftHeadControlLoop` (`libarx_lift_src.so`) |
+| Lift column | `arxlift2s_ros2_control/ArxLiftHardware` | Official `.so` + **Hybrid MIT** (`sendLiftHybrid`; Soft-P retired) |
 
 Official **InterfacesThread** arm path (`libarx_x5_src`) is **retired** from this package.
 Layout follows [ht-ros2-control](https://github.com/fiveages-sim/ht-ros2-control) (`external/` SDK)
@@ -24,7 +24,7 @@ and [modbus-ros2-control](https://github.com/fiveages-sim/modbus-ros2-control) (
 | Plugin | CAN | Notes |
 |--------|-----|-------|
 | `ArxX5Hardware` | `can1` / `can3` (param `can_interface`, alias `can_name`) | Instantiate ×2; **full_control only** |
-| `ArxLiftHardware` | `can5` | `lift_joint` MIX IFs; `write()` → `setHeight`; `robot_type:=2` |
+| `ArxLiftHardware` | `can5` | Hybrid MIT; `sendLiftHybrid`; live `arx_lift.hybrid_kp/kd` |
 
 Does **not** export waist / head / chassis (lift activate still parks chassis).
 
@@ -41,21 +41,31 @@ URDF **always** declares MIX `position/velocity/effort/kp/kd`. Lift2S forces **`
 | `joint_k_gains` / `joint_d_gains` | `[20×4, 10×2]` / `[3.5×4, 1×2]` | Field-tuned Lift2S; dynamic via ros2 param / rqt |
 | `gripper_kp` / `gripper_kd` | `5.0` / `0.2` | Gripper position-only |
 
-### ArxLiftHardware (official lift, full_control MIX)
+### ArxLiftHardware (Hybrid MIT only; Soft-P retired)
 
-Exports MIX command IFs so `ocs2_wbc_controller` can claim full_control. SDK path remains height position.
+Bypasses Soft-P `setHeight`/`loop()` motion path. Background thread (~400 Hz) calls
+`sendLiftHybrid(kp, kd, p, v, τ)` on the official `.so` motor packer. Used for both
+**split_body** and **full_body**. Exports MIX command IFs so `ocs2_wbc` can claim;
+gains come from HI params (not controller `pd_gains`).
 
 | Param | Default | Notes |
 |-------|---------|-------|
 | `can_name` | `can5` | |
-| `robot_type` | `0` | **`2=LIFTS` for LIFT2S** |
-| `control_mode` | `full_control` | Informational; write always uses `setHeight` |
-| `lift_kp` | `8.0` | **Required** — SDK default is 0 (no motion) |
-| `lift_max_vel` | `0.10` | Ramp per ~400 Hz loop (official) |
-| `gravity_compensation_torque` | `-1.8` (LIFTS) | Hold bias; tune like official launch |
-| `lift_max_torque` | `15.0` | |
-| `max_height_m` | `0.48` | Command clamp; URDF prismatic upper ~0.46 m |
-| `height_to_motor` | `41.54` | **Required** — `setHeight`/`getHeight` are motor rad, not meters |
+| `robot_type` | `2` | **`2=LIFTS` for LIFT2S** |
+| `hybrid_kp` | `5.0` | Live: `arx_lift.hybrid_kp` |
+| `hybrid_kd` | `2.0` | Live: `arx_lift.hybrid_kd` (pack clamp ≤5) |
+| `gravity_compensation_torque` | `-1.8` | Base τ_ff; OCS2 effort IF added on top |
+| `lift_max_torque` | `15.0` | τ clamp |
+| `cmd_ramp_vel` | `0.12` (Lift2S xacro; code default `0.04`) | Command ramp [m/s] |
+| `max_height_m` / `height_span_m` | `0.48` | Command clamp |
+| `height_rad_per_meter` | `41.54` | meters ↔ SDK motor rad (`height_to_motor` alias) |
+| `sdk_max_rad` | `20.0` | |
+
+```bash
+# Hot-tune gains (node name: use ros2 param list | grep hybrid)
+ros2 param set /controller_manager arx_lift.hybrid_kp 6.0
+ros2 param set /controller_manager arx_lift.hybrid_kd 2.5
+```
 
 ## Layout
 

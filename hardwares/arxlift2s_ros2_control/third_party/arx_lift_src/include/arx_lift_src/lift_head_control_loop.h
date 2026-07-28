@@ -60,6 +60,43 @@ class LiftHeadControlLoop {
     }
   }
 
+  // Header-only accessors (inline; no new .so symbols).
+  HybridJointStatus getLiftMotorStatus()
+  {
+    return lift_motor_ ? lift_motor_->GetMotorMsg() : HybridJointStatus{};
+  }
+  bool isLiftMotorOnline()
+  {
+    return lift_motor_ && lift_motor_->online();
+  }
+  int getLiftMotorErrorCode()
+  {
+    return lift_motor_ ? lift_motor_->getErrorCode() : -1;
+  }
+
+  /** Swap double-buffered motor status (Soft-P update() does this). */
+  void exchangeLiftMotorMsg()
+  {
+    if (lift_motor_) {
+      lift_motor_->ExchangeMotorMsg();
+    }
+  }
+
+  /**
+   * Bypass Soft-P: pack Type3 Hybrid (kp,kd,p,v,t) and send on can.
+   * Position/velocity must be in **motor** frame (getHeight = -motor.position).
+   */
+  bool sendLiftHybrid(
+    double k_p, double k_d, double position, double velocity, double torque)
+  {
+    if (!lift_motor_) {
+      return false;
+    }
+    CanFrame frame =
+      lift_motor_->packMotorMsg(k_p, k_d, position, velocity, torque);
+    return socket_can_.ExchangeData(&frame);
+  }
+
  protected:
   double max_height_ = 20;
   double lift_motor_pos_des_{}, waist_motor_pos_des_{}, head_yaw_motor_pos_des_{},

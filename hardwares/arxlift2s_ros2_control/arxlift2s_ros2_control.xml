@@ -18,11 +18,12 @@
            type="arxlift2s_ros2_control::ArxLiftHardware"
            base_class_type="hardware_interface::SystemInterface">
         <description>
-            ARX LIFT2S lift-column SystemInterface (LiftHeadControlLoop / libarx_lift_src on CAN).
-            Exactly one joint (typically lift_joint); height unit meters.
-            Params: can_name (default can5), robot_type 0=LIFT / 1=X7S / 2=LIFTS (use 2 for LIFT2S).
-            Does not export waist, head, or chassis; activate parks chassis via setChassisCmd(0,0,0,2).
-            Background loop() thread ~400 Hz. Mutex: do not share CAN with official lift_controller nodes.
+            ARX LIFT2S lift-column SystemInterface (Hybrid MIT via LiftHeadControlLoop).
+            Exactly one joint (lift_joint); height in meters. Soft-P / setHeight path retired.
+            Drive: sendLiftHybrid(kp,kd,p,v,τ) ~400 Hz. Live params: arx_lift.hybrid_kp / hybrid_kd.
+            URDF: hybrid_kp, hybrid_kd, gravity_compensation_torque, height_rad_per_meter, robot_type=2.
+            Exports MIX IFs for ocs2_wbc; split body_joint uses position only. Parks chassis on activate.
+            Mutex: do not share can5 with official lift_controller.
         </description>
     </class>
 </library>
