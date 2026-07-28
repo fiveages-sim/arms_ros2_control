@@ -43,40 +43,22 @@ else()
   set(ARX5_LIB_DIR ${ARX5_SDK_DIR}/lib/x86_64)
 endif()
 
-# Vendored SOEM 1.4.0 (replaces conda-forge::soem)
-set(SOEM_DIR ${CMAKE_CURRENT_SOURCE_DIR}/external/SOEM)
-if(NOT EXISTS "${SOEM_DIR}/CMakeLists.txt")
+# Vendored prebuilt SOEM (libsoem.so) — runtime dep of Stanford libhardware.so
+if(CMAKE_SYSTEM_PROCESSOR MATCHES "arm.*|arm|aarch64")
+  set(SOEM_LIB_DIR ${CMAKE_CURRENT_SOURCE_DIR}/external/SOEM/lib/aarch64)
+else()
+  set(SOEM_LIB_DIR ${CMAKE_CURRENT_SOURCE_DIR}/external/SOEM/lib/x86_64)
+endif()
+set(SOEM_LIB ${SOEM_LIB_DIR}/libsoem.so)
+if(NOT EXISTS "${SOEM_LIB}")
   message(FATAL_ERROR
-    "SOEM not found at ${SOEM_DIR}. Clone v1.4.0:\n"
-    "  git clone --depth 1 --branch v1.4.0 "
-    "https://github.com/OpenEtherCATsociety/SOEM.git ${SOEM_DIR}")
+    "Prebuilt SOEM missing: ${SOEM_LIB}\n"
+    "  Place libsoem.so (SOEM v1.4.0) under external/SOEM/lib/<arch>/")
 endif()
-set(BUILD_TESTS FALSE CACHE BOOL "SOEM tests" FORCE)
-# Required: static libsoem linked into shared ArxJointController
+add_library(soem SHARED IMPORTED)
+set_target_properties(soem PROPERTIES IMPORTED_LOCATION "${SOEM_LIB}")
+
 set(CMAKE_POSITION_INDEPENDENT_CODE ON)
-# Soften vendored SOEM CMake (v1.4.0 enables -Werror; fails on modern GCC)
-# Build SHARED so runtime matches Stanford libhardware.so (needs libsoem.so)
-set(_soem_cmake ${SOEM_DIR}/CMakeLists.txt)
-file(READ "${_soem_cmake}" _soem_cmake_content)
-string(REPLACE "set(BUILD_TESTS TRUE)" "set(BUILD_TESTS FALSE)" _soem_cmake_content "${_soem_cmake_content}")
-string(REPLACE " -Werror" " -Wno-error" _soem_cmake_content "${_soem_cmake_content}")
-string(REPLACE "add_library(soem STATIC" "add_library(soem SHARED"
-  _soem_cmake_content "${_soem_cmake_content}")
-file(WRITE "${_soem_cmake}" "${_soem_cmake_content}")
-add_subdirectory(${SOEM_DIR} ${CMAKE_CURRENT_BINARY_DIR}/soem EXCLUDE_FROM_ALL)
-# SOEM is old C; silence pedantic-as-error on modern GCC
-if(TARGET soem)
-  set_target_properties(soem PROPERTIES
-    POSITION_INDEPENDENT_CODE ON
-    LIBRARY_OUTPUT_DIRECTORY ${CMAKE_CURRENT_BINARY_DIR}
-  )
-  target_compile_options(soem PRIVATE
-    -Wno-error
-    -Wno-pedantic
-    -Wno-error=pedantic
-    -Wno-error=stringop-truncation
-  )
-endif()
 
 add_library(ArxJointController SHARED
   ${ARX5_SDK_DIR}/src/app/joint_controller.cpp
@@ -97,12 +79,16 @@ target_link_libraries(ArxJointController PUBLIC
   fmt::fmt
   kdl_parser::kdl_parser
   ${orocos_kdl_LIBRARIES}
+  # Force DT_NEEDED: ArxJointController does not call SOEM APIs, but
+  # libhardware.so does; without this, --as-needed drops the link.
+  -Wl,--no-as-needed
   soem
+  -Wl,--as-needed
   Boost::container
 )
 set_target_properties(ArxJointController PROPERTIES
   POSITION_INDEPENDENT_CODE ON
-  BUILD_RPATH "${ARX5_LIB_DIR}"
+  BUILD_RPATH "${ARX5_LIB_DIR};${SOEM_LIB_DIR}"
   INSTALL_RPATH "$ORIGIN"
 )
 
@@ -140,7 +126,7 @@ ament_target_dependencies(${PROJECT_NAME}
   rclcpp_lifecycle
 )
 set_target_properties(${PROJECT_NAME} PROPERTIES
-  BUILD_RPATH "${ARX5_LIB_DIR};${ARX_LIFT_TP}"
+  BUILD_RPATH "${ARX5_LIB_DIR};${ARX_LIFT_TP};${SOEM_LIB_DIR}"
   INSTALL_RPATH "$ORIGIN"
   INSTALL_RPATH_USE_LINK_PATH TRUE
 )
@@ -165,13 +151,8 @@ install(FILES
   ${ARX5_LIB_DIR}/libhardware.so
   ${ARX5_LIB_DIR}/libsolver.so
   ${ARX_LIFT_LIB}
+  ${SOEM_LIB}
   DESTINATION lib
-)
-
-# Install SOEM shared library (required at runtime by Stanford libhardware.so)
-install(TARGETS soem
-  LIBRARY DESTINATION lib
-  ARCHIVE DESTINATION lib
 )
 
 install(FILES arxlift2s_ros2_control.xml

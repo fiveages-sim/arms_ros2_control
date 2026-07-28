@@ -14,7 +14,9 @@
 
 #include "arxlift2s_ros2_control/arx_lift_hardware.h"
 
+#include <algorithm>
 #include <chrono>
+#include <cmath>
 #include <pluginlib/class_list_macros.hpp>
 #include <stdexcept>
 #include <thread>
@@ -33,7 +35,54 @@ std::string get_hw_param(
   }
   return it->second;
 }
+
+double get_hw_param_double(
+  const hardware_interface::HardwareInfo & info, const std::string & key,
+  double default_value)
+{
+  const auto it = info.hardware_parameters.find(key);
+  if (it == info.hardware_parameters.end()) {
+    return default_value;
+  }
+  try {
+    return std::stod(it->second);
+  } catch (const std::exception &) {
+    return default_value;
+  }
+}
 }  // namespace
+
+void ArxLiftHardware::applyLiftSdkConfig()
+{
+  if (!lift_) {
+    return;
+  }
+  lift_->config_.lift_kp = lift_kp_;
+  lift_->config_.lift_max_vel = lift_max_vel_;
+  lift_->config_.gravity_compensation_torque = gravity_compensation_torque_;
+  lift_->config_.lift_max_torque = lift_max_torque_;
+  RCLCPP_INFO(
+    get_logger(),
+    "LiftHeadControlLoop config: lift_kp=%.3f gravity=%.3f max_vel=%.3f "
+    "max_torque=%.3f max_height_m=%.3f height_to_motor=%.2f",
+    lift_kp_, gravity_compensation_torque_, lift_max_vel_, lift_max_torque_,
+    max_height_m_, height_to_motor_);
+}
+
+double ArxLiftHardware::sdkHeightToMeters(double sdk_height) const
+{
+  // getHeight() returns negated motor radians; convert to meters.
+  if (height_to_motor_ <= 0.0) {
+    return 0.0;
+  }
+  return std::clamp(std::abs(sdk_height) / height_to_motor_, 0.0, max_height_m_);
+}
+
+double ArxLiftHardware::metersToSdkHeight(double height_m) const
+{
+  // setHeight() expects motor radians (not meters).
+  return std::clamp(height_m, 0.0, max_height_m_) * height_to_motor_;
+}
 
 ArxLiftHardware::~ArxLiftHardware()
 {
@@ -96,13 +145,24 @@ hardware_interface::CallbackReturn ArxLiftHardware::on_init(
       control_mode_.c_str());
     control_mode_ = "full_control";
   }
+  lift_kp_ = get_hw_param_double(info_, "lift_kp", 8.0);
+  lift_max_vel_ = get_hw_param_double(info_, "lift_max_vel", 0.10);
+  lift_max_torque_ = get_hw_param_double(info_, "lift_max_torque", 15.0);
+  max_height_m_ = get_hw_param_double(info_, "max_height_m", 0.48);
+  height_to_motor_ = get_hw_param_double(info_, "height_to_motor", 41.54);
+  // LIFTS (robot_type=2) field default; override via xacro if needed.
+  const double default_gravity = (robot_type_ == 2) ? -1.8 : -2.0;
+  gravity_compensation_torque_ =
+    get_hw_param_double(info_, "gravity_compensation_torque", default_gravity);
+
   lift_.reset();
 
   RCLCPP_INFO(
     get_logger(),
-    "ArxLiftHardware init: joint=%s can=%s robot_type=%d control_mode=%s",
+    "ArxLiftHardware init: joint=%s can=%s robot_type=%d control_mode=%s "
+    "lift_kp=%.1f max_vel=%.2f",
     lift_joint_name_.c_str(), can_name_.c_str(), robot_type_,
-    control_mode_.c_str());
+    control_mode_.c_str(), lift_kp_, lift_max_vel_);
 
   return hardware_interface::CallbackReturn::SUCCESS;
 }
@@ -161,12 +221,14 @@ hardware_interface::CallbackReturn ArxLiftHardware::on_activate(
     const auto type =
       static_cast<arx::LiftHeadControlLoop::RobotType>(robot_type_);
     lift_ = std::make_shared<arx::LiftHeadControlLoop>(can_name_.c_str(), type);
+    applyLiftSdkConfig();
 
     // Park chassis once (official timeout/stop semantics)
     lift_->setChassisCmd(0.0, 0.0, 0.0, 2);
 
-    lift_position_ = lift_->getHeight();
+    lift_position_ = sdkHeightToMeters(lift_->getHeight());
     lift_position_command_ = lift_position_;
+    lift_->setHeight(metersToSdkHeight(lift_position_command_));
     lift_velocity_ = 0.0;
     lift_effort_ = 0.0;
 
@@ -227,9 +289,15 @@ hardware_interface::return_type ArxLiftHardware::read(
   }
 
   try {
-    lift_position_ = lift_->getHeight();
+    const double sdk_height = lift_->getHeight();
+    lift_position_ = sdkHeightToMeters(sdk_height);
     lift_velocity_ = 0.0;
     lift_effort_ = 0.0;
+    RCLCPP_INFO_THROTTLE(
+      get_logger(), *get_clock(), 2000,
+      "ArxLiftHardware cmd=%.4f m (sdk=%.3f) feedback=%.4f m (sdk_raw=%.3f)",
+      lift_position_command_, metersToSdkHeight(lift_position_command_),
+      lift_position_, sdk_height);
     return hardware_interface::return_type::OK;
   } catch (const std::exception & e) {
     RCLCPP_ERROR_THROTTLE(
@@ -247,7 +315,7 @@ hardware_interface::return_type ArxLiftHardware::write(
   }
 
   try {
-    lift_->setHeight(lift_position_command_);
+    lift_->setHeight(metersToSdkHeight(lift_position_command_));
     return hardware_interface::return_type::OK;
   } catch (const std::exception & e) {
     RCLCPP_ERROR_THROTTLE(

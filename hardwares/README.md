@@ -3,7 +3,7 @@
 ## 1. ARX LIFT2S ROS2 Control (Stanford arms + official lift)
 ```bash
 cd ~/ros2_ws
-# Requires external/arx5-sdk symlink + external/SOEM (see arxlift2s_ros2_control/README.md)
+# Requires external/arx5-sdk symlink + external/SOEM/lib/<arch>/libsoem.so (see arxlift2s_ros2_control/README.md)
 colcon build --packages-up-to arxlift2s_ros2_control --symlink-install
 ```
 

@@ -80,6 +80,19 @@ private:
   std::string can_name_{"can5"};
   int robot_type_{0};  // arx::LiftHeadControlLoop::RobotType
   std::string control_mode_{"full_control"};
+  // Official lift_controller soft-P tuning (required; SDK defaults are zero).
+  double lift_kp_{8.0};
+  double lift_max_vel_{0.10};
+  double gravity_compensation_torque_{-2.0};
+  double lift_max_torque_{15.0};
+  double max_height_m_{0.48};  // URDF / official joy clamp
+  // SDK setHeight/getHeight use motor radians; meters * scale ≈ motor.
+  // Empirically 41.54 (matches old Python header + field logs).
+  double height_to_motor_{41.54};
+
+  void applyLiftSdkConfig();
+  double sdkHeightToMeters(double sdk_height) const;
+  double metersToSdkHeight(double height_m) const;
 
   // ---------- SDK ----------
   std::shared_ptr<arx::LiftHeadControlLoop> lift_;

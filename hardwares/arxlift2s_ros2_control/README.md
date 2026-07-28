@@ -50,6 +50,12 @@ Exports MIX command IFs so `ocs2_wbc_controller` can claim full_control. SDK pat
 | `can_name` | `can5` | |
 | `robot_type` | `0` | **`2=LIFTS` for LIFT2S** |
 | `control_mode` | `full_control` | Informational; write always uses `setHeight` |
+| `lift_kp` | `8.0` | **Required** — SDK default is 0 (no motion) |
+| `lift_max_vel` | `0.10` | Ramp per ~400 Hz loop (official) |
+| `gravity_compensation_torque` | `-1.8` (LIFTS) | Hold bias; tune like official launch |
+| `lift_max_torque` | `15.0` | |
+| `max_height_m` | `0.48` | Command clamp; URDF prismatic upper ~0.46 m |
+| `height_to_motor` | `41.54` | **Required** — `setHeight`/`getHeight` are motor rad, not meters |
 
 ## Layout
 
@@ -59,7 +65,7 @@ arxlift2s_ros2_control/
 ├── src/                    # ArxX5Hardware (Stanford) + ArxLiftHardware
 ├── external/
 │   ├── arx5-sdk/           # symlink or copy of Stanford SDK (required)
-│   └── SOEM/               # OpenEtherCAT SOEM v1.4.0 (conda-free)
+│   └── SOEM/lib/<arch>/    # prebuilt libsoem.so (SOEM v1.4.0)
 ├── third_party/arx_lift_src/   # official lift .so + headers
 ├── arxlift2s_ros2_control.xml
 ├── CMakeLists.txt
@@ -75,12 +81,10 @@ arxlift2s_ros2_control/
 mkdir -p external
 # Stanford SDK (example: workspace sibling)
 ln -sfn ../../../../arx-ros2-control/external/arx5-sdk external/arx5-sdk
-# SOEM (once)
-git clone --depth 1 --branch v1.4.0 \
-  https://github.com/OpenEtherCATsociety/SOEM.git external/SOEM
+# SOEM: vendored prebuilt only (external/SOEM/lib/x86_64/libsoem.so)
 ```
 
-No conda required.
+No conda / no SOEM source tree required.
 
 ## Mutual exclusion
 
