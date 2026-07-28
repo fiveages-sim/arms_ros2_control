@@ -2,11 +2,12 @@
 <?xml-model href="http://download.ros.org/schema/package_format3.xsd" schematypens="http://www.w3.org/2001/XMLSchema"?>
 <package format="3">
   <name>arxlift2s_ros2_control</name>
-  <version>0.1.0</version>
+  <version>0.2.0</version>
   <description>
     ROS2 Control hardware interfaces for ARX LIFT2S:
-    X5 dual arms (official InterfacesThread) and lift column (LiftHeadControlLoop).
-    Intended as an arms_ros2_control/hardwares submodule.
+    dual X5 arms via Stanford arx5-sdk (full_control MIX) and lift column via
+    official LiftHeadControlLoop. Official InterfacesThread arm path is retired.
+    Layout follows ht-ros2-control (external SDK) and modbus-style plugin XML.
   </description>
 
   <maintainer email="dev@fiveages.sim">FiveAges</maintainer>
@@ -18,6 +19,12 @@
   <depend>pluginlib</depend>
   <depend>rclcpp</depend>
   <depend>rclcpp_lifecycle</depend>
+  <depend>eigen</depend>
+  <depend>orocos_kdl_vendor</depend>
+  <depend>kdl_parser</depend>
+  <depend>spdlog_vendor</depend>
+  <depend>fmt</depend>
+  <depend>libboost-dev</depend>
 
   <export>
     <build_type>ament_cmake</build_type>

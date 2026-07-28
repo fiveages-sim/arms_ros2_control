@@ -1,101 +1,98 @@
 # arxlift2s_ros2_control
 
-ROS 2 Control hardware interfaces for **ARX LIFT2S** (official closed-source SDK).
+ROS 2 Control hardware interfaces for **ARX LIFT2S**.
 
-Designed to migrate as a submodule under
-[arms_ros2_control/hardwares](https://github.com/fiveages-sim/arms_ros2_control/tree/main/hardwares)
-alongside packages such as `dobot_ros2_control` and `arx_ros2_control`.
+| Subsystem | Plugin | Stack |
+|-----------|--------|-------|
+| Dual X5 arms | `arxlift2s_ros2_control/ArxX5Hardware` | **Stanford** `arx5-sdk` (`Arx5JointController`) |
+| Lift column | `arxlift2s_ros2_control/ArxLiftHardware` | Official `LiftHeadControlLoop` (`libarx_lift_src.so`) |
 
-> **Note:** This package uses the **LIFT official** `InterfacesThread` /
-> `LiftHeadControlLoop` path (`libarx_x5_src.so` / `libarx_lift_src.so`).
-> It is **not** the open-source [arx-ros2-control](https://github.com/fiveages-sim/arx-ros2-control)
-> (`Arx5JointController`) stack.
+Official **InterfacesThread** arm path (`libarx_x5_src`) is **retired** from this package.
+Layout follows [ht-ros2-control](https://github.com/fiveages-sim/ht-ros2-control) (`external/` SDK)
+and [modbus-ros2-control](https://github.com/fiveages-sim/modbus-ros2-control) (multi-plugin XML).
 
 ## Product boundary
 
-| Layer | Location | Role |
-|-------|----------|------|
-| Hardware plugins | this package | SystemInterface only; no whole-robot config/xacro |
-| Robot description + controller yaml | [`offical/description/arx_lift2s_description`](../../description/arx_lift2s_description) | `hardware:=real` wires the three systems below |
-| Controllers | arms_ros2_control (OCS2 / adaptive_gripper / basic_joint) | Unchanged; description supplies joints / params |
+| Layer | Role |
+|-------|------|
+| This package | SystemInterface plugins + vendored/linked SDKs only |
+| `arx_lift2s_description` | URDF / xacro wiring / controller yaml |
+| Controllers | OCS2 / adaptive_gripper / basic_joint |
 
 ## Plugins
 
-| Plugin | Class | Typical CAN | Role |
-|--------|-------|-------------|------|
-| `arxlift2s_ros2_control/ArxX5Hardware` | single X5 arm | `can1` / `can3` | Instantiate twice for dual arm |
-| `arxlift2s_ros2_control/ArxLiftHardware` | lift column | `can5` | One `lift_joint` (height, m) |
+| Plugin | CAN | Notes |
+|--------|-----|-------|
+| `ArxX5Hardware` | `can1` / `can3` (param `can_interface`, alias `can_name`) | Instantiate ×2; MIX + `control_mode` |
+| `ArxLiftHardware` | `can5` | One `lift_joint` (m); `robot_type:=2` for LIFT2S |
 
-Exports: dual-arm joints (+ optional gripper) + one lift joint.  
-Does **not** export waist / head / chassis (activate still parks chassis via `setChassisCmd(0,0,0,2)`).
+Does **not** export waist / head / chassis (lift activate still parks chassis).
 
-### Parameter contract
+### ArxX5Hardware (Stanford, panthera-ht contract)
 
-**ArxX5Hardware**
+URDF **always** declares MIX `position/velocity/effort/kp/kd`; `control_mode` only changes `write()`:
 
-| Param | Required | Default | Notes |
-|-------|----------|---------|-------|
-| `can_name` | yes | — | LIFT2S left `can1`, right `can3` |
-| `urdf_path` | yes | — | Official single-arm URDF for `InterfacesThread` (from description: `.../urdf/x5_sdk.urdf`) |
-| `end_type` | no | `0` | SDK end-effector type |
+| Mode | Default | Behavior |
+|------|---------|----------|
+| `full_control` | yes | pos+vel+effort → `set_joint_cmd`; MIT kp/kd from HI `joint_k/d_gains` |
+| `position` | no | position only; vel/torque=0; same HI gains |
+| `pd_control` | no | alias of `position` |
 
-Joints: exactly 6 non-gripper arm joints; optional one joint whose name contains `gripper` or `hand`.  
-Command: `position`. State: `position`, `velocity`, `effort`.  
-Gripper ↔ `setCatch`: ROS **m** (URDF `0～0.044`) ↔ SDK **catch `0～5`** (official: 0–5 ↔ 0–80 mm; see LIFT `03-ROS2-单臂X5-SDK.pdf`). HI scales `cmd_m/0.044*5` on write and `catch/5*0.044` on read. `setCatch` is sent only when a controller writes a finite gripper command (NaN = read-only). Arm joints: **rad** 1:1. Lift (other plugin): **meters** 1:1.
+| Param | Default | Notes |
+|-------|---------|-------|
+| `robot_model` | `X5` | |
+| `can_interface` | `can0` | LIFT2S: `can1` / `can3`; `can_name` accepted as alias |
+| `control_mode` | `full_control` | |
+| `joint_k_gains` / `joint_d_gains` | 6-vector | Dynamic via ros2 param / rqt |
+| `gripper_kp` / `gripper_kd` | `5.0` / `0.2` | Gripper position-only |
 
-**ArxLiftHardware**
+### ArxLiftHardware (official lift)
 
-| Param | Required | Default | Notes |
-|-------|----------|---------|-------|
-| `can_name` | no | `can5` | |
-| `robot_type` | no | `0` | `0=LIFT`, `1=X7S`, **`2=LIFTS` (LIFT2S)** |
-
-Joints: exactly one (name typically `lift_joint`). Height unit: **meters**.
+| Param | Default | Notes |
+|-------|---------|-------|
+| `can_name` | `can5` | |
+| `robot_type` | `0` | **`2=LIFTS` for LIFT2S** |
 
 ## Layout
 
 ```text
 arxlift2s_ros2_control/
 ├── include/arxlift2s_ros2_control/
-├── src/                              # ArxX5Hardware + ArxLiftHardware
-├── third_party/                      # vendored official SDK headers + .so
+├── src/                    # ArxX5Hardware (Stanford) + ArxLiftHardware
+├── external/
+│   ├── arx5-sdk/           # symlink or copy of Stanford SDK (required)
+│   └── SOEM/               # OpenEtherCAT SOEM v1.4.0 (conda-free)
+├── third_party/arx_lift_src/   # official lift .so + headers
 ├── arxlift2s_ros2_control.xml
 ├── CMakeLists.txt
 └── package.xml
 ```
 
-## SDK (`third_party/`)
+`third_party/arx_x5_src` is unused (legacy); safe to delete from checkouts later.
 
-Synced from the official LIFT controller packages:
+## External setup
 
-- Arm: `arx_x5_controller/lib/arx_x5_src` (+ `arx_hardware_interface` headers)
-- Lift: `arx_lift_controller/lib/arx_lift_src` (+ `arx_hardware_interface` headers)
+```bash
+# From this package directory
+mkdir -p external
+# Stanford SDK (example: workspace sibling)
+ln -sfn ../../../../arx-ros2-control/external/arx5-sdk external/arx5-sdk
+# SOEM (once)
+git clone --depth 1 --branch v1.4.0 \
+  https://github.com/OpenEtherCATsociety/SOEM.git external/SOEM
+```
 
-## Status
-
-Plugins implemented and buildable (`libarxlift2s_ros2_control.so`).  
-Wire via description: `ros2 launch arx_lift2s_description ocs2_real.launch.py hardware:=real`.
+No conda required.
 
 ## Mutual exclusion
 
-Do **not** run on the same CAN while these plugins are active:
+Do **not** share the same CAN with:
 
 - Official nodes: `X5Controller` / `lift_controller`
-- Open-source: `arx_ros2_control` (`ArxX5Hardware` / `HardwareArxBody`)
-
-## Arms bring-up checklist
-
-| Item | Requirement |
-|------|-------------|
-| Systems | Left arm / right arm / lift — three `ros2_control` systems |
-| Naming | Arm joints use `left_` / `right_` prefixes (match controller yaml) |
-| Gripper HI | `position` command + state; `effort` available for `adaptive_gripper_controller` |
-| Lift | Height in **meters** (~0–0.48) |
-| Mutex | Same CAN not shared with official nodes or open-source arx HI |
+- A second Stanford instance on the same interface (`arx_ros2_control` on can1/can3)
 
 ## Build
 
 ```bash
-# From a ROS2 workspace that contains this package under src/
 colcon build --packages-select arxlift2s_ros2_control --symlink-install
 ```

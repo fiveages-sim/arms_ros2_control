@@ -7,3 +7,9 @@ log/
 
 # Vendored official SDK binaries (tracked in this package)
 !third_party/**/*.so
+
+# Stanford SDK: provide via symlink/copy (see README)
+external/arx5-sdk
+
+# Optional: keep SOEM locally without committing (README clone instructions)
+# external/SOEM/
