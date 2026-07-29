@@ -23,16 +23,18 @@ namespace gripper_hardware_common
         static constexpr double DEFAULT_THRESHOLD = 0.01;
 
         /**
-         * @brief Check if command has changed significantly
+         * @brief Check if |current - last| / |last| >= threshold
          * 
          * @param current_command Current command value
          * @param last_command Last sent command value
-         * @param threshold Change threshold (default: 0.01 = 1%)
+         * @param threshold Relative change threshold (default: 0.01 = 1%)
          * @return true if change is significant enough to send command
          */
         static bool hasChanged(double current_command, double last_command, double threshold = DEFAULT_THRESHOLD)
         {
-            return std::abs(current_command - last_command) >= threshold;
+            if (std::abs(last_command) < 1e-12)
+                return current_command != last_command;
+            return std::abs(current_command - last_command) / std::abs(last_command) >= threshold;
         }
 
         /**
