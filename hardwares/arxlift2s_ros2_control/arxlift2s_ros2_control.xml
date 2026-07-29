@@ -18,12 +18,13 @@
            type="arxlift2s_ros2_control::ArxLiftHardware"
            base_class_type="hardware_interface::SystemInterface">
         <description>
-            ARX LIFT2S lift-column SystemInterface (Hybrid MIT via LiftHeadControlLoop).
-            Exactly one joint (lift_joint); height in meters. Soft-P / setHeight path retired.
-            Drive: sendLiftHybrid(kp,kd,p,v,τ) ~400 Hz. Live params: arx_lift.hybrid_kp / hybrid_kd.
-            URDF: hybrid_kp, hybrid_kd, gravity_compensation_torque, height_rad_per_meter, robot_type=2.
-            Exports MIX IFs for ocs2_wbc; split body_joint uses position only. Parks chassis on activate.
-            Mutex: do not share can5 with official lift_controller.
+            ARX LIFT2S lift-column SystemInterface (Soft-P or Hybrid MIT via LiftHeadControlLoop).
+            Exactly one joint (lift_joint); height in meters.
+            Modes: soft_p (setHeight/loop) | hybrid (sendLiftHybrid ~400 Hz).
+            Live params: arx_lift.motor_mode, soft_p_kp, hybrid_kp, hybrid_kd.
+            URDF: lift_motor_mode, soft_p_kp, hybrid_kp, hybrid_kd, gravity_compensation_torque,
+            height_rad_per_meter, robot_type=2. Exports MIX IFs for ocs2_wbc.
+            Parks chassis on activate. Mutex: do not share can5 with official lift_controller.
         </description>
     </class>
 </library>

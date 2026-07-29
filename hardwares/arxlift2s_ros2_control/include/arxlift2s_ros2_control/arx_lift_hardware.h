@@ -33,26 +33,32 @@ namespace arxlift2s_ros2_control
 {
 
 /**
- * @brief LIFT2S lift-column ros2_control hardware interface (Hybrid MIT only).
+ * @brief LIFT2S lift-column ros2_control hardware interface.
  *
- * Wraps official arx::LiftHeadControlLoop (libarx_lift_src.so) on can5, but
- * bypasses Soft-P via sendLiftHybrid(kp, kd, p, v, τ). Used for both
- * split_body (body_joint_controller) and full_body (ocs2_wbc_controller).
+ * Wraps official arx::LiftHeadControlLoop (libarx_lift_src.so) on can5.
  *
  * Unit contract:
  * - ros2_control / URDF: **meters** (~0–0.48)
  * - SDK getHeight / Hybrid pack: **motor radians** (~0–20)
  * - Conversion: sdk_rad = meters * height_rad_per_meter (default 41.54)
  *
- * Live ROS params (controller_manager / HW node):
- * - ``arx_lift.hybrid_kp`` / ``arx_lift.hybrid_kd`` (kd pack-clamped ≤5)
+ * Motor modes (URDF ``lift_motor_mode`` + live ``arx_lift.motor_mode``):
+ * - ``soft_p`` — Soft-P ``setHeight`` / ``loop()``; gain ``arx_lift.soft_p_kp``
+ * - ``hybrid`` — Hybrid MIT ``sendLiftHybrid``; gains ``arx_lift.hybrid_kp/kd``
+ *   (kd pack-clamped ≤5)
  *
- * Exports MIX command IFs so ocs2_wbc can claim full_control; Hybrid drive uses
- * position (+ effort as τ feedforward add). Gains from arx_lift.hybrid_kp/kd only.
+ * Exports MIX command IFs so ocs2_wbc can claim full_control; Soft-P / Hybrid
+ * drive uses position (+ effort as τ feedforward add in Hybrid).
  */
 class ArxLiftHardware : public hardware_interface::SystemInterface
 {
 public:
+  enum class MotorMode : int
+  {
+    SoftP = 0,
+    Hybrid = 1,
+  };
+
   ArxLiftHardware() = default;
   ~ArxLiftHardware() override;
 
@@ -79,8 +85,12 @@ public:
 
 private:
   void stop_loop_thread();
-  void setupDynamicParameters(double hybrid_kp, double hybrid_kd);
-  void sendHybridHoldOrTrack(double q_target_sdk, double v_d_sdk, double dt_s);
+  static bool parseMotorMode(const std::string & raw, MotorMode & out);
+  static const char * motorModeName(MotorMode mode);
+  void setupDynamicParameters(
+    const std::string & initial_mode, double soft_p_kp, double hybrid_kp,
+    double hybrid_kd);
+  void sendHybridHoldOrTrack(double q_target_sdk, double dt_s);
 
   double rosToSdk(double ros_m) const
   {
@@ -109,11 +119,18 @@ private:
   std::string can_name_{"can5"};
   int robot_type_{0};
   double gravity_compensation_torque_{-1.8};
+  double lift_max_vel_{0.20};
   double lift_max_torque_{15.0};
   double cmd_ramp_vel_mps_{0.04};
 
+  // Separate Soft-P / Hybrid gains (live: arx_lift.soft_p_kp / hybrid_kp / hybrid_kd).
+  std::atomic<double> soft_p_kp_{8.0};
   std::atomic<double> hybrid_kp_{5.0};
   std::atomic<double> hybrid_kd_{2.0};
+
+  std::string motor_mode_param_{"soft_p"};
+  std::atomic<int> motor_mode_{static_cast<int>(MotorMode::SoftP)};
+  int last_applied_mode_{-1};
 
   double height_rad_per_meter_{41.54};
   double height_span_m_{0.48};
