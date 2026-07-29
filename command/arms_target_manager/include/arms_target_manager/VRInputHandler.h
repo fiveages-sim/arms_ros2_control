@@ -159,6 +159,25 @@ namespace arms_ros2_control::command
         void processRightThumbstickAxes();
 
         /**
+         * 处理底盘模式下的摇杆轴值
+         * 默认：左摇杆→底盘平移, 右摇杆X→底盘转向(angular.z), 右摇杆Y忽略
+         * 按住右握把（修饰符）：左摇杆仍控底盘平移, 右摇杆X→腰部旋转, 右摇杆Y→腰部升降
+         */
+        void processChassisAxes();
+
+        /**
+         * 切换底盘控制模式（case 20 触发）
+         * 进入：清零并停止末端摇杆累积；退出：清零底盘与腰部命令
+         */
+        void toggleChassisMode();
+
+        /**
+         * 把 /cmd_vel、waist_lifting_command、waist_turning_command 三个话题各发一次 0
+         * 用于退出底盘模式、disable、enabled 变 false 等场景，防止残留运动
+         */
+        void resetChassisAndWaistCommands();
+
+        /**
          * 按钮事件回调函数（处理按钮事件数字）
          * @param msg Int32消息，包含按钮事件数字 (0=无事件, 1-6=按钮按下, 7=镜像模式切换, 9=左扳机, 10=右扳机)
          */
@@ -330,6 +349,11 @@ namespace arms_ros2_control::command
         // 机器人 current_pose 订阅已移除，改为在 arms_target_manager_node 中统一处理
         // FSM命令订阅已移除，改为在 arms_target_manager_node 中统一处理
 
+        // 底盘控制模式相关发布器（case 20 触发的底盘/腰部控制）
+        rclcpp::Publisher<geometry_msgs::msg::Twist>::SharedPtr pub_cmd_vel_;
+        rclcpp::Publisher<std_msgs::msg::Float64>::SharedPtr pub_waist_lifting_;
+        rclcpp::Publisher<std_msgs::msg::Float64>::SharedPtr pub_waist_turning_;
+
         // VR pose参数
         Eigen::Matrix4d left_ee_pose_ = Eigen::Matrix4d::Identity();
         Eigen::Matrix4d right_ee_pose_ = Eigen::Matrix4d::Identity();
@@ -367,6 +391,9 @@ namespace arms_ros2_control::command
         std::atomic<bool> right_arm_paused_; // 右臂是否暂停更新（B按键控制）
         std::atomic<bool> left_grip_mode_; // 左摇杆控制模式：false=XY平移, true=Z轴+Yaw
         std::atomic<bool> right_grip_mode_; // 右摇杆控制模式：false=XY平移, true=Z轴+Yaw
+        std::atomic<bool> chassis_mode_; // true = 底盘控制模式, false = 末端控制模式（case 20 切换）
+        std::atomic<bool> left_grip_active_{false};  // 左握把实时状态（预留，当前 chassis 逻辑未使用）
+        std::atomic<bool> right_grip_active_{false}; // 右握把实时状态（chassis 模式下用作腰部控制修饰符）
         std::atomic<int32_t> current_fsm_state_; // 当前FSM状态：1=HOME, 2=HOLD, 3=OCS2, 100=REST
 
         // VR base poses（摇杆按下时存储）
@@ -425,6 +452,12 @@ namespace arms_ros2_control::command
         double vr_thumbstick_linear_scale_; // 摇杆位置缩放因子（单位 m/step）
         double vr_thumbstick_angular_scale_; // 摇杆旋转缩放因子（单位 rad/step）
         double vr_pose_scale_;  // 手柄位姿位置缩放因子（左右共用，可由组合键动态校准）
+
+        // 底盘/腰部控制硬编码速度比例（后续可参数化，参考 joystick_teleop.cpp）
+        static constexpr double chassis_linear_scale_ = 0.25;   // 底盘线速度比例
+        static constexpr double chassis_angular_scale_ = 0.5;   // 底盘角速度比例
+        static constexpr double waist_lifting_scale_ = 1.0;     // 腰部升降 factor（控制器内部 clamp 到 [-1,1]，>1 无意义）
+        static constexpr double waist_turning_scale_ = 1.0;     // 腰部旋转 factor（同上）
 
         // 参考link名称（用于将VR头显/手柄关联到机器人某个link），从target_manager.yaml读取，默认"base_link"
         std::string reference_link_;

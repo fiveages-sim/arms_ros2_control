@@ -47,6 +47,7 @@ namespace arms_ros2_control::command
           , right_arm_paused_(false)
           , left_grip_mode_(false)
           , right_grip_mode_(false)
+          , chassis_mode_(false)
           , current_fsm_state_(2)  // 默认HOLD状态
           , hand_controllers_(handControllers)
           , left_gripper_open_(false)
@@ -149,11 +150,20 @@ namespace arms_ros2_control::command
         fsm_command_publisher_ = std::make_unique<arms_controller_common::FSMCommandPublisher>(
             node_, pub_fsm_command);
 
+        // 底盘控制模式相关发布器（case 20 触发）
+        pub_cmd_vel_ = node_->create_publisher<geometry_msgs::msg::Twist>("/cmd_vel", 10);
+        pub_waist_lifting_ = node_->create_publisher<std_msgs::msg::Float64>(
+            "/body_joint_controller/waist_lifting_command", 10);
+        pub_waist_turning_ = node_->create_publisher<std_msgs::msg::Float64>(
+            "/body_joint_controller/waist_turning_command", 10);
+
         // 注意：FSM命令订阅已移除，改为在 arms_target_manager_node 中统一处理
         // 这样可以避免与 ArmsTargetManager 的订阅冲突
         // FSM状态更新现在通过 fsmCommandCallback() 方法由外部调用
 
         RCLCPP_INFO(node_->get_logger(), "🕹️🕶️🕹️ VRInputHandler created");
+        RCLCPP_INFO(node_->get_logger(),
+                    "🕹️🕶️🕹️ Chassis mode (case 20 = L+R thumbstick): L.stick→chassis XY, R.stick→waist lift/turn");
         RCLCPP_INFO(node_->get_logger(), "🕹️🕶️🕹️ Subscribed to button event topic: /xr/controller_state (Int32)");
         RCLCPP_INFO(node_->get_logger(), "🕹️🕶️🕹️ Subscribed to thumbstick axes topic: /xr/thumbstick_axes (ThumbstickAxes)");
         RCLCPP_INFO(node_->get_logger(), "🕹️🕶️🕹️ Subscribed to trigger values topic: /xr/trigger_values (linear.x=left, angular.x=right)");
@@ -403,6 +413,13 @@ namespace arms_ros2_control::command
     {
         enabled_.store(false);
         RCLCPP_INFO(node_->get_logger(), "🕹️🕶️🕹️ VR control DISABLED!");
+
+        // 禁用 VR 控制时，若处于底盘模式则退出并清零底盘/腰部命令，防止残留运动
+        if (chassis_mode_.load())
+        {
+            chassis_mode_.store(false);
+        }
+        resetChassisAndWaistCommands();
     }
 
     void VRInputHandler::robotLeftPoseCallback(const geometry_msgs::msg::PoseStamped::SharedPtr msg)
@@ -916,11 +933,23 @@ namespace arms_ros2_control::command
         // 存储右摇杆轴值（从 angular.x/y 读取）
         right_thumbstick_axes_.x() = msg->angular.x;
         right_thumbstick_axes_.y() = msg->angular.y;
+
+        // 读取左右握把实时状态（xr_target_node 复用 linear.z / angular.z 携带，1.0=按下）
+        // 末端控制路径不消费握把状态（末端用下降沿事件 case 2/5），仅 chassis 模式用作修饰符
+        left_grip_active_.store(msg->linear.z > 0.5);
+        right_grip_active_.store(msg->angular.z > 0.5);
+
+        // 底盘控制模式分流：进入该模式后摇杆不再驱动末端，改为驱动底盘/腰部
+        if (chassis_mode_.load())
+        {
+            processChassisAxes();
+            return;
+        }
         
-        // 处理左摇杆轴值
+        // 处理左摇杆轴值（末端控制）
         processLeftThumbstickAxes();
         
-        // 处理右摇杆轴值
+        // 处理右摇杆轴值（末端控制）
         processRightThumbstickAxes();
     }
 
@@ -1115,6 +1144,97 @@ namespace arms_ros2_control::command
         }
     }
 
+    void VRInputHandler::processChassisAxes()
+    {
+        // VR 手柄轴值约定（Pico）：Y 轴往前推是负数，与机器人"正数=向前/向右"相反，
+        // 因此 chassis 模式下对四个轴值统一取负，使方向语义与 joystick_teleop.cpp 对齐。
+        const double left_x = -left_thumbstick_axes_.x();
+        const double left_y = -left_thumbstick_axes_.y();
+        const double right_x = -right_thumbstick_axes_.x();
+        const double right_y = -right_thumbstick_axes_.y();
+
+        // 底盘平移：左摇杆 Y → linear.x（前后），左摇杆 X → linear.y（左右，全向底盘）
+        auto cmd_vel = geometry_msgs::msg::Twist();
+        cmd_vel.linear.x  = left_y * chassis_linear_scale_;
+        cmd_vel.linear.y  = left_x * chassis_linear_scale_;
+        cmd_vel.linear.z  = 0.0;
+        cmd_vel.angular.x = 0.0;
+        cmd_vel.angular.y = 0.0;
+
+        // 腰部命令默认为 0（每次都 publish 含 0，避免松开摇杆后 latch 残留）
+        // 注：VR 端 xr_target_node 已对摇杆值应用过死区（deadzone=0.1），
+        // 这里不再加额外阈值，直接用摇杆值，与 cmd_vel 路径保持一致。
+        auto waist_lifting = std_msgs::msg::Float64();
+        auto waist_turning = std_msgs::msg::Float64();
+
+        const bool right_grip = right_grip_active_.load();
+        if (right_grip)
+        {
+            // 修饰符模式（按住右握把）：右摇杆 X → 腰部旋转，右摇杆 Y → 腰部升降
+            cmd_vel.angular.z = 0.0; // 修饰符模式下不发底盘转向
+            waist_lifting.data = right_y * waist_lifting_scale_;
+            // 腰部旋转方向对齐 joystick_teleop.cpp（D-pad 右 → 负命令），
+            // 摇杆右拨 → right_x>0 → 命令为负 → 腰部右转
+            waist_turning.data = -right_x * waist_turning_scale_;
+        }
+        else
+        {
+            // 默认模式：右摇杆 X → 底盘转向 angular.z，右摇杆 Y 忽略
+            cmd_vel.angular.z = right_x * chassis_angular_scale_;
+            // waist_lifting / waist_turning 保持 0（已在上方初始化）
+        }
+
+        pub_cmd_vel_->publish(cmd_vel);
+        pub_waist_lifting_->publish(waist_lifting);
+        pub_waist_turning_->publish(waist_turning);
+
+        RCLCPP_DEBUG(node_->get_logger(),
+                     "🕹️ [Chassis] grip=%d L.xy=(%.3f,%.3f) R.xy=(%.3f,%.3f) → cmd_vel(lin=%.3f,%.3f ang=%.3f) waist(lift=%.3f turn=%.3f)",
+                     right_grip ? 1 : 0,
+                     left_thumbstick_axes_.x(), left_thumbstick_axes_.y(),
+                     right_thumbstick_axes_.x(), right_thumbstick_axes_.y(),
+                     cmd_vel.linear.x, cmd_vel.linear.y, cmd_vel.angular.z,
+                     waist_lifting.data, waist_turning.data);
+    }
+
+    void VRInputHandler::resetChassisAndWaistCommands()
+    {
+        // 三个话题各发一次 0，防止底盘/腰部残留运动
+        auto zero_vel = geometry_msgs::msg::Twist();
+        pub_cmd_vel_->publish(zero_vel);
+
+        auto zero_float = std_msgs::msg::Float64();
+        zero_float.data = 0.0;
+        pub_waist_lifting_->publish(zero_float);
+        pub_waist_turning_->publish(zero_float);
+    }
+
+    void VRInputHandler::toggleChassisMode()
+    {
+        const bool new_mode = !chassis_mode_.load();
+        chassis_mode_.store(new_mode);
+
+        if (new_mode)
+        {
+            // 进入底盘模式：先清零末端摇杆累积偏移（避免退出时跳变），
+            // 再清零底盘/腰部命令（确保从静止开始）
+            left_thumbstick_offset_ = Eigen::Vector3d::Zero();
+            right_thumbstick_offset_ = Eigen::Vector3d::Zero();
+            left_thumbstick_yaw_offset_ = 0.0;
+            right_thumbstick_yaw_offset_ = 0.0;
+            resetChassisAndWaistCommands();
+
+            RCLCPP_INFO(node_->get_logger(),
+                        "🔘 [case 20] 切换到 CHASSIS 模式（左摇杆→底盘XY，右摇杆→腰部升降/旋转）");
+        }
+        else
+        {
+            // 退出底盘模式：先停底盘/腰部，再恢复末端摇杆逻辑
+            resetChassisAndWaistCommands();
+            RCLCPP_INFO(node_->get_logger(),
+                        "🔘 [case 20] 退出 CHASSIS 模式，恢复末端控制");
+        }
+    }
 
     void VRInputHandler::processButtonEvent(const std_msgs::msg::Int32::SharedPtr msg)
     {
@@ -1885,6 +2005,18 @@ namespace arms_ros2_control::command
                 RCLCPP_INFO(node_->get_logger(),
                             "🔘 [左Y+右B组合键] 扳机手部控制模式切换为: %s，已先同步左右手张开",
                             new_mode ? "比例控制(0~1，按压深度控制闭合)" : "开关控制(0/1，按一下开/关)");
+                break;
+            }
+            case 20: // 左摇杆 + 右摇杆同时按下（切换底盘/末端控制模式）
+            {
+                // 仅在 VR 控制已启用时才允许切换
+                if (!enabled_.load())
+                {
+                    RCLCPP_WARN(node_->get_logger(),
+                                "🔘 [case 20] 忽略 - VR 控制未启用（enabled_=false）");
+                    break;
+                }
+                toggleChassisMode();
                 break;
             }
             case 0:  // 无事件
