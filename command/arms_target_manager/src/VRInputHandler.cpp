@@ -58,6 +58,15 @@ namespace arms_ros2_control::command
           , vr_pose_scale_(vr_pose_scale)
           , reference_link_(reference_link)
     {
+        // 创建 controller topology 检测 client 和启动期重试 timer
+        list_controllers_client_ =
+            node_->create_client<ListControllers>(
+                "/controller_manager/list_controllers");
+
+        control_topology_timer_ = node_->create_wall_timer(
+            std::chrono::seconds(1),
+            [this]() { detectControlTopology(); });
+
         // 初始化 TF 组件（用于在 reference_link 与末端 frame 之间进行坐标变换）
         tf_buffer_ = std::make_shared<tf2_ros::Buffer>(node_->get_clock());
         tf_listener_ = std::make_shared<tf2_ros::TransformListener>(*tf_buffer_);
@@ -2023,6 +2032,112 @@ namespace arms_ros2_control::command
             default:
                 // 无按钮事件
                 break;
+        }
+    }
+
+    void VRInputHandler::detectControlTopology()
+    {
+        constexpr auto response_timeout = std::chrono::seconds(3);
+        const auto now = std::chrono::steady_clock::now();
+
+        if (pending_topology_request_)
+        {
+            if (pending_topology_request_->wait_for(std::chrono::seconds(0)) ==
+                std::future_status::ready)
+            {
+                try
+                {
+                    const auto response = pending_topology_request_->get();
+                    bool split_active = false;
+                    bool full_active = false;
+                    for (const auto& controller : response->controller)
+                    {
+                        if (controller.state != "active")
+                        {
+                            continue;
+                        }
+                        split_active |= controller.name == "ocs2_arm_controller";
+                        full_active |= controller.name == "ocs2_wbc_controller";
+                    }
+
+                    ControlTopology next = ControlTopology::UNKNOWN;
+                    if (full_active && !split_active)
+                    {
+                        next = ControlTopology::FULL_BODY;
+                    }
+                    else if (split_active && !full_active)
+                    {
+                        next = ControlTopology::SPLIT_BODY;
+                    }
+                    else if (split_active && full_active)
+                    {
+                        RCLCPP_ERROR_THROTTLE(
+                            node_->get_logger(), *node_->get_clock(), 5000,
+                            "Cannot determine VR control topology: "
+                            "both main controllers are active");
+                    }
+
+                    const auto previous = control_topology_.exchange(next);
+                    if (previous != next)
+                    {
+                        const char* name =
+                            next == ControlTopology::FULL_BODY ? "FULL_BODY" :
+                            next == ControlTopology::SPLIT_BODY ? "SPLIT_BODY" :
+                            "UNKNOWN";
+                        RCLCPP_INFO(
+                            node_->get_logger(),
+                            "VR control topology changed to %s", name);
+                    }
+
+                    if (next != ControlTopology::UNKNOWN)
+                    {
+                        control_topology_timer_->cancel();
+                    }
+                }
+                catch (const std::exception& error)
+                {
+                    control_topology_.store(ControlTopology::UNKNOWN);
+                    RCLCPP_WARN_THROTTLE(
+                        node_->get_logger(), *node_->get_clock(), 5000,
+                        "Failed to read controller topology response: %s",
+                        error.what());
+                }
+
+                pending_topology_request_.reset();
+            }
+            else if (now >= topology_request_deadline_)
+            {
+                list_controllers_client_->remove_pending_request(
+                    pending_topology_request_->request_id);
+                pending_topology_request_.reset();
+                control_topology_.store(ControlTopology::UNKNOWN);
+                RCLCPP_WARN_THROTTLE(
+                    node_->get_logger(), *node_->get_clock(), 5000,
+                    "Controller topology request timed out; retrying");
+            }
+            return;
+        }
+
+        if (!list_controllers_client_->service_is_ready())
+        {
+            control_topology_.store(ControlTopology::UNKNOWN);
+            return;
+        }
+
+        try
+        {
+            auto request = std::make_shared<ListControllers::Request>();
+            pending_topology_request_.emplace(
+                list_controllers_client_->async_send_request(request));
+            topology_request_deadline_ = now + response_timeout;
+        }
+        catch (const std::exception& error)
+        {
+            pending_topology_request_.reset();
+            control_topology_.store(ControlTopology::UNKNOWN);
+            RCLCPP_WARN_THROTTLE(
+                node_->get_logger(), *node_->get_clock(), 5000,
+                "Failed to send controller topology request: %s", error.what());
         }
     }
 

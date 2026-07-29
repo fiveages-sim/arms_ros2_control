@@ -21,6 +21,8 @@
 #include <nav_msgs/msg/path.hpp>
 #include <tf2_ros/buffer.hpp>
 #include <tf2_ros/transform_listener.hpp>
+#include <controller_manager_msgs/srv/list_controllers.hpp>
+#include <optional>
 #include "arms_target_manager/ArmsTargetManager.h"
 #include "arms_controller_common/utils/FSMCommandPublisher.h"
 
@@ -87,6 +89,28 @@ namespace arms_ros2_control::command
          * @return true如果启用镜像模式，false否则
          */
         bool isMirrorMode() const { return mirror_mode_.load(); }
+
+        enum class ControlTopology
+        {
+            UNKNOWN,
+            SPLIT_BODY,
+            FULL_BODY,
+        };
+
+        ControlTopology controlTopology() const noexcept
+        {
+            return control_topology_.load();
+        }
+
+        bool isSplitBodyMode() const noexcept
+        {
+            return controlTopology() == ControlTopology::SPLIT_BODY;
+        }
+
+        bool isFullBodyMode() const noexcept
+        {
+            return controlTopology() == ControlTopology::FULL_BODY;
+        }
 
         /**
          * 检查节点是否存在
@@ -321,6 +345,17 @@ namespace arms_ros2_control::command
                                          const Eigen::Quaterniond& robotBaseOri,
                                          Eigen::Vector3d& resultPos,
                                          Eigen::Quaterniond& resultOri);
+
+        using ListControllers = controller_manager_msgs::srv::ListControllers;
+
+        void detectControlTopology();
+
+        rclcpp::Client<ListControllers>::SharedPtr list_controllers_client_;
+        rclcpp::TimerBase::SharedPtr control_topology_timer_;
+        std::atomic<ControlTopology> control_topology_{ControlTopology::UNKNOWN};
+        std::optional<rclcpp::Client<ListControllers>::FutureAndRequestId>
+            pending_topology_request_;
+        std::chrono::steady_clock::time_point topology_request_deadline_{};
 
         // ROS组件
         rclcpp::Node::SharedPtr node_;
