@@ -429,6 +429,9 @@ namespace arms_ros2_control::command
         std::atomic<bool> chassis_mode_; // true = 底盘控制模式, false = 末端控制模式（case 20 切换）
         std::atomic<bool> left_grip_active_{false};  // 左握把实时状态（预留，当前 chassis 逻辑未使用）
         std::atomic<bool> right_grip_active_{false}; // 右握把实时状态（chassis 模式下用作腰部控制修饰符）
+        // FULL_BODY 下左握把方向组合的安全锁存：
+        // 松开握把后仍保持抑制，直到左摇杆 X/Y 都回到 0.3 内。
+        std::atomic<bool> left_grip_direction_suppressed_{false};
         std::atomic<int32_t> current_fsm_state_; // 当前FSM状态：1=HOME, 2=HOLD, 3=OCS2, 100=REST
 
         // VR base poses（摇杆按下时存储）

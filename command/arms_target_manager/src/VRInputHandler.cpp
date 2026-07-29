@@ -173,6 +173,10 @@ namespace arms_ros2_control::command
         RCLCPP_INFO(node_->get_logger(), "🕹️🕶️🕹️ VRInputHandler created");
         RCLCPP_INFO(node_->get_logger(),
                     "🕹️🕶️🕹️ Chassis mode (case 20 = L+R thumbstick): L.stick→chassis XY, R.stick→waist lift/turn");
+        RCLCPP_INFO(
+            node_->get_logger(),
+            "🕹️🕶️🕹️ FULL_BODY reserved direction events: "
+            "left grip + left stick UP/DOWN/LEFT/RIGHT = case 21/22/23/24");
         RCLCPP_INFO(node_->get_logger(), "🕹️🕶️🕹️ Subscribed to button event topic: /xr/controller_state (Int32)");
         RCLCPP_INFO(node_->get_logger(), "🕹️🕶️🕹️ Subscribed to thumbstick axes topic: /xr/thumbstick_axes (ThumbstickAxes)");
         RCLCPP_INFO(node_->get_logger(), "🕹️🕶️🕹️ Subscribed to trigger values topic: /xr/trigger_values (linear.x=left, angular.x=right)");
@@ -947,6 +951,38 @@ namespace arms_ros2_control::command
         // 末端控制路径不消费握把状态（末端用下降沿事件 case 2/5），仅 chassis 模式用作修饰符
         left_grip_active_.store(msg->linear.z > 0.5);
         right_grip_active_.store(msg->angular.z > 0.5);
+
+        constexpr double direction_reset_threshold = 0.3;
+
+        if (!isFullBodyMode())
+        {
+            // 拓扑离开 FULL_BODY 时不保留组合抑制状态。
+            left_grip_direction_suppressed_.store(false);
+        }
+        else
+        {
+            if (left_grip_active_.load())
+            {
+                left_grip_direction_suppressed_.store(true);
+            }
+
+            const bool left_thumbstick_centered =
+                std::abs(left_thumbstick_axes_.x()) <= direction_reset_threshold &&
+                std::abs(left_thumbstick_axes_.y()) <= direction_reset_threshold;
+
+            if (left_grip_direction_suppressed_.load() &&
+                !left_grip_active_.load() &&
+                left_thumbstick_centered)
+            {
+                left_grip_direction_suppressed_.store(false);
+            }
+
+            if (left_grip_direction_suppressed_.load())
+            {
+                // 防止组合输入以及“先松握把、后松摇杆”误驱动末端或底盘。
+                left_thumbstick_axes_.setZero();
+            }
+        }
 
         // 底盘控制模式分流：进入该模式后摇杆不再驱动末端，改为驱动底盘/腰部
         if (chassis_mode_.load())
@@ -2026,6 +2062,33 @@ namespace arms_ros2_control::command
                     break;
                 }
                 toggleChassisMode();
+                break;
+            }
+            case 21: // 左握把 + 左摇杆向上
+            case 22: // 左握把 + 左摇杆向下
+            case 23: // 左握把 + 左摇杆向左
+            case 24: // 左握把 + 左摇杆向右
+            {
+                if (!isFullBodyMode())
+                {
+                    const char* topology =
+                        isSplitBodyMode() ? "SPLIT_BODY" : "UNKNOWN";
+                    RCLCPP_WARN_THROTTLE(
+                        node_->get_logger(), *node_->get_clock(), 2000,
+                        "🔘 [case %d] 忽略身体模式方向事件：当前拓扑为 %s",
+                        msg->data, topology);
+                    break;
+                }
+
+                const char* direction =
+                    msg->data == 21 ? "UP" :
+                    msg->data == 22 ? "DOWN" :
+                    msg->data == 23 ? "LEFT" : "RIGHT";
+
+                RCLCPP_INFO(
+                    node_->get_logger(),
+                    "🔘 [case %d] FULL_BODY 身体模式方向预留事件：%s",
+                    msg->data, direction);
                 break;
             }
             case 0:  // 无事件
