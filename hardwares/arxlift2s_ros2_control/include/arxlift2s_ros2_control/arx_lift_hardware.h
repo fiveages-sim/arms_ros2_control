@@ -89,7 +89,7 @@ private:
   static const char * motorModeName(MotorMode mode);
   void setupDynamicParameters(
     const std::string & initial_mode, double soft_p_kp, double hybrid_kp,
-    double hybrid_kd);
+    double hybrid_kd, bool status_debug);
   void sendHybridHoldOrTrack(double q_target_sdk, double dt_s);
 
   double rosToSdk(double ros_m) const
@@ -157,6 +157,9 @@ private:
 
   rclcpp::Publisher<std_msgs::msg::Float64MultiArray>::SharedPtr motor_pub_;
   rclcpp::node_interfaces::OnSetParametersCallbackHandle::SharedPtr param_cb_;
+
+  /** Periodic write() status log (live: ``status_debug`` on lift HI node). */
+  std::atomic<bool> status_debug_{false};
 };
 
 }  // namespace arxlift2s_ros2_control

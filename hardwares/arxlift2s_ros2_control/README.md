@@ -23,23 +23,55 @@ and [modbus-ros2-control](https://github.com/fiveages-sim/modbus-ros2-control) (
 
 | Plugin | CAN | Notes |
 |--------|-----|-------|
-| `ArxX5Hardware` | `can1` / `can3` (param `can_interface`, alias `can_name`) | Instantiate ×2; **full_control only** |
+| `ArxX5Hardware` | `can1` / `can3` (param `can_interface`, alias `can_name`) | Instantiate ×2; `full_control` \| `position` (live) |
 | `ArxLiftHardware` | `can5` | soft_p / hybrid; live `arx_lift.motor_mode` + gains |
 
 Does **not** export waist / head / chassis (lift activate still parks chassis).
 
-### ArxX5Hardware (Stanford)
+### ArxX5Hardware (Stanford; panthera-ht-aligned)
 
-URDF **always** declares MIX `position/velocity/effort/kp/kd`. Lift2S forces **`full_control`**
-(pos+vel+effort → `set_joint_cmd`; MIT kp/kd from HI `joint_k/d_gains`). `position` / `pd_control` are not supported here.
+URDF **always** declares MIX `position/velocity/effort/kp/kd`. `control_mode` only
+changes `write()` (same contract as [panthera-ht](https://github.com/fiveages-sim/open-deploy-ws/tree/panthera-ht) / HT):
+
+| Mode | `set_joint_cmd` | MIT kp/kd |
+|------|-----------------|-----------|
+| `full_control` | pos + vel + effort (OCS2 MIX) | HI `joint_k/d_gains` |
+| `position` | pos only (vel=0, torque=0 by default; 可选 position_forward_effort=true 保留 effort 前馈) | HI `joint_k/d_gains` |
+
+`control_mode` 与增益都在**臂 HI 节点**上调（与 `control_mode` 同一套 rqt / `ros2 param`）：
+
+```bash
+# Nodes: /arx_lift2s_left_system  /arx_lift2s_right_system
+ros2 param set /arx_lift2s_left_system control_mode position
+ros2 param set /arx_lift2s_left_system joint_k_gains "[80.0, 70.0, 70.0, 30.0, 30.0, 20.0]"
+ros2 param set /arx_lift2s_left_system joint_d_gains "[2.0, 2.0, 2.0, 1.0, 1.0, 0.7]"
+
+# Periodic status log (default off)
+ros2 param set /arx_lift2s_left_system status_debug true
+ros2 param set /arx_lift2s_right_system status_debug true
+```
+
+启动默认：改 xacro `joint_k_gains` / `control_mode`（或 launch `xacro_control_mode:=...`）后重启。
 
 | Param | Default | Notes |
 |-------|---------|-------|
 | `robot_model` | `X5` | |
 | `can_interface` | `can0` | LIFT2S: `can1` / `can3`; `can_name` accepted as alias |
-| `control_mode` | `full_control` | Other values warned and forced to `full_control` |
-| `joint_k_gains` / `joint_d_gains` | `[20×4, 10×2]` / `[3.5×4, 1×2]` | Field-tuned Lift2S; dynamic via ros2 param / rqt |
+| `control_mode` | `full_control` | Live on arm HI node |
+| `joint_k_gains` / `joint_d_gains` | mode-dependent xacro | Live on arm HI node |
 | `gripper_kp` / `gripper_kd` | `5.0` / `0.2` | Gripper position-only |
+| `joint_k_gains_full_control` / `joint_d_gains_full_control` | mode dependent | full_control 时使用的 MIT kp/kd（control_mode 切换会自动应用） |
+| `joint_k_gains_position` / `joint_d_gains_position` | mode dependent | position 时使用的 MIT kp/kd（control_mode 切换会自动应用） |
+| `joint_k_gains` / `joint_d_gains` | backward-compatible | 旧参数名：只覆盖“当前 control_mode”的那套 gains |
+| `position_forward_effort` | `false` | `position` 下是否把 effort 转成 torque |
+| `status_debug` | `false` | 2 Hz write() status + gain log; live on arm HI node |
+
+**Default MIT gains (xacro):**
+
+| Mode | `joint_k_gains` | `joint_d_gains` |
+|------|-----------------|-----------------|
+| `full_control` | `[20, 20, 20, 20, 10, 10]` | `[3.5, 3.5, 3.5, 3.5, 1.0, 1.0]` |
+| `position` | `[80, 70, 70, 30, 30, 20]` | `[2.0, 2.0, 2.0, 1.0, 1.0, 0.7]` (= arx-ros2-control) |
 
 ### ArxLiftHardware (soft_p | hybrid)
 
@@ -70,6 +102,7 @@ Used for both **split_body** and **full_body**. Exports MIX command IFs so
 | `max_height_m` / `height_span_m` | `0.48` | Command clamp |
 | `height_rad_per_meter` | `41.54` | meters ↔ SDK motor rad (`height_to_motor` alias) |
 | `sdk_max_rad` | `20.0` | |
+| `status_debug` | `false` | 2 Hz write() status log; live on lift HI node |
 
 ```bash
 # Switch mode / hot-tune (node: ros2 param list | grep arx_lift)
@@ -78,6 +111,9 @@ ros2 param set /controller_manager arx_lift.soft_p_kp 10.0
 ros2 param set /controller_manager arx_lift.motor_mode hybrid
 ros2 param set /controller_manager arx_lift.hybrid_kp 50.0
 ros2 param set /controller_manager arx_lift.hybrid_kd 1.0
+
+# Periodic status log (default off; 2 s throttle when on)
+ros2 param set /arx_lift2s_lift_system status_debug true
 ```
 
 ## Layout

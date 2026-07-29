@@ -42,6 +42,23 @@ std::string get_hw_param(
   return it->second;
 }
 
+bool parse_bool_param(
+  const hardware_interface::HardwareInfo & info, const std::string & key,
+  bool default_value, bool & out)
+{
+  const std::string raw = get_hw_param(info, key, "");
+  if (raw.empty()) {
+    out = default_value;
+    return true;
+  }
+  std::string s = raw;
+  for (char & c : s) {
+    c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+  }
+  out = (s == "true" || s == "1" || s == "yes" || s == "on");
+  return true;
+}
+
 bool parse_double_param(
   const hardware_interface::HardwareInfo & info, const std::string & key,
   double default_value, double & out, const rclcpp::Logger & logger)
@@ -61,19 +78,14 @@ bool parse_double_param(
   }
 }
 
-std::string toLower(std::string s)
-{
-  for (char & c : s) {
-    c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
-  }
-  return s;
-}
-
 }  // namespace
 
 bool ArxLiftHardware::parseMotorMode(const std::string & raw, MotorMode & out)
 {
-  const std::string s = toLower(raw);
+  std::string s = raw;
+  for (char & c : s) {
+    c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+  }
   if (s == "soft_p" || s == "softp" || s == "soft-p") {
     out = MotorMode::SoftP;
     return true;
@@ -92,7 +104,7 @@ const char * ArxLiftHardware::motorModeName(MotorMode mode)
 
 void ArxLiftHardware::setupDynamicParameters(
   const std::string & initial_mode, double soft_p_kp, double hybrid_kp,
-  double hybrid_kd)
+  double hybrid_kd, bool status_debug)
 {
   auto node = get_node();
   if (!node) {
@@ -118,10 +130,20 @@ void ArxLiftHardware::setupDynamicParameters(
     }
   };
 
+  auto declare_or_set_bool = [&](const char * name, bool value) {
+    if (!node->has_parameter(name)) {
+      node->declare_parameter<bool>(name, value);
+    } else {
+      node->set_parameter(rclcpp::Parameter(name, value));
+    }
+  };
+
   declare_or_set_string(kMotorModeParam, initial_mode);
   declare_or_set_double(kSoftPKpParam, soft_p_kp);
   declare_or_set_double(kHybridKpParam, hybrid_kp);
   declare_or_set_double(kHybridKdParam, hybrid_kd);
+  declare_or_set_bool("status_debug", status_debug);
+  status_debug_.store(status_debug);
 
   auto parse_nonneg = [](const rclcpp::Parameter & p, double & out,
                          std::string & reason, const char * label) -> bool {
@@ -190,6 +212,16 @@ void ArxLiftHardware::setupDynamicParameters(
           }
           hybrid_kd_.store(v);
           RCLCPP_INFO(get_logger(), "%s -> %.3f", kHybridKdParam, v);
+        } else if (name == "status_debug") {
+          if (p.get_type() != rclcpp::ParameterType::PARAMETER_BOOL) {
+            result.successful = false;
+            result.reason = "status_debug must be a bool";
+            return result;
+          }
+          status_debug_.store(p.as_bool());
+          RCLCPP_INFO(
+            get_logger(), "status_debug -> %s",
+            status_debug_.load() ? "true" : "false");
         }
       }
       return result;
@@ -197,9 +229,10 @@ void ArxLiftHardware::setupDynamicParameters(
 
   RCLCPP_INFO(
     get_logger(),
-    "Dynamic params: %s=%s %s=%.3f %s=%.3f %s=%.3f",
+    "Dynamic params: %s=%s %s=%.3f %s=%.3f %s=%.3f status_debug=%s",
     kMotorModeParam, initial_mode.c_str(), kSoftPKpParam, soft_p_kp,
-    kHybridKpParam, hybrid_kp, kHybridKdParam, hybrid_kd);
+    kHybridKpParam, hybrid_kp, kHybridKdParam, hybrid_kd,
+    status_debug ? "true" : "false");
 }
 
 void ArxLiftHardware::sendHybridHoldOrTrack(double q_target_sdk, double dt_s)
@@ -354,10 +387,7 @@ hardware_interface::CallbackReturn ArxLiftHardware::on_init(
       return hardware_interface::CallbackReturn::ERROR;
     }
   } else if (!get_hw_param(info_, "kp", "").empty()) {
-    if (!parse_double_paramarx@arx:~$ echo "arx:123456" | sudo chpasswd
-      无效的密码： 密码少于 8 个字符
-      arx@arx:~$ 
-      (info_, "kp", 8.0, soft_p_kp, get_logger())) {
+    if (!parse_double_param(info_, "kp", 8.0, soft_p_kp, get_logger())) {
       return hardware_interface::CallbackReturn::ERROR;
     }
   }
@@ -411,6 +441,12 @@ hardware_interface::CallbackReturn ArxLiftHardware::on_init(
   }
   motor_mode_.store(static_cast<int>(mode));
   motor_mode_param_ = motorModeName(mode);
+
+  {
+    bool dbg = false;
+    parse_bool_param(info_, "status_debug", false, dbg);
+    status_debug_.store(dbg);
+  }
 
   lift_position_ = 0.0;
   lift_velocity_ = 0.0;
@@ -501,7 +537,7 @@ hardware_interface::CallbackReturn ArxLiftHardware::on_activate(
 
     setupDynamicParameters(
       motor_mode_param_, soft_p_kp_.load(), hybrid_kp_.load(),
-      hybrid_kd_.load());
+      hybrid_kd_.load(), status_debug_.load());
 
     if (auto node = get_node()) {
       motor_pub_ = node->create_publisher<std_msgs::msg::Float64MultiArray>(
@@ -684,17 +720,19 @@ hardware_interface::return_type ArxLiftHardware::write(
   const std::string err_code_str =
     (err_code >= 0 && err_code < 256) ? std::to_string(err_code) : "n/a";
   const auto mode = static_cast<MotorMode>(motor_mode_.load());
-  RCLCPP_INFO_THROTTLE(
-    get_logger(), *get_clock(), 2000,
-    "ArxLiftHardware mode=%s cmd=%.4f m feedback=%.4f m err=%.4f m | "
-    "sdk_rad=%.4f motor_pos=%.4f "
-    "vel_rad=%.4f torq=%.4f curr=%.4f online=%d err_code=%s "
-    "(last q=%.4f v=%.4f rad/s, soft_p_kp=%.3f hybrid_kp=%.3f hybrid_kd=%.3f)",
-    motorModeName(mode), lift_position_command_, lift_position_, err, sdk_h,
-    motor_pos, motor_velocity_.load(), motor_torque_.load(),
-    motor_current_.load(), motor_online_.load(), err_code_str.c_str(),
-    last_written_height_.load(), last_written_vel_.load(), soft_p_kp_.load(),
-    hybrid_kp_.load(), hybrid_kd_.load());
+  if (status_debug_.load()) {
+    RCLCPP_INFO_THROTTLE(
+      get_logger(), *get_clock(), 2000,
+      "ArxLiftHardware mode=%s cmd=%.4f m feedback=%.4f m err=%.4f m | "
+      "sdk_rad=%.4f motor_pos=%.4f "
+      "vel_rad=%.4f torq=%.4f curr=%.4f online=%d err_code=%s "
+      "(last q=%.4f v=%.4f rad/s, soft_p_kp=%.3f hybrid_kp=%.3f hybrid_kd=%.3f)",
+      motorModeName(mode), lift_position_command_, lift_position_, err, sdk_h,
+      motor_pos, motor_velocity_.load(), motor_torque_.load(),
+      motor_current_.load(), motor_online_.load(), err_code_str.c_str(),
+      last_written_height_.load(), last_written_vel_.load(), soft_p_kp_.load(),
+      hybrid_kp_.load(), hybrid_kd_.load());
+  }
 
   if (motor_pub_) {
     std_msgs::msg::Float64MultiArray msg;

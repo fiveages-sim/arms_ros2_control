@@ -36,11 +36,18 @@ namespace arxlift2s_ros2_control
  * @brief Single X5 arm SystemInterface (Stanford arx5-sdk / Arx5JointController).
  *
  * Lift2S dual-arm: instantiate twice (can1 / can3). Official InterfacesThread
- * arm path is retired from this package; use this plugin for full_control MIX.
+ * arm path is retired from this package.
  *
- * Contract: URDF always declares MIX position/velocity/effort/kp/kd.
- * Lift2S is full_control-only (pos+vel+effort; MIT kp/kd from joint_k/d_gains).
- * position/pd_control are not supported in this package.
+ * Contract (aligned with panthera-ht / arx-ros2-control): URDF always declares
+ * MIX position/velocity/effort/kp/kd; ``control_mode`` only changes ``write()``.
+ *
+ * Modes (URDF + live ROS param ``control_mode``, same rqt path as gains):
+ * - ``full_control`` — MIX pos+vel+effort (OCS2)
+ * - ``position`` — position only (vel=0); by default torque/effort=0 (strict reference).
+ *   Optionally, set ``position_forward_effort=true`` to forward OCS2 effort as torque feedforward.
+ *
+ * MIT kp/kd from live ``joint_k_gains`` / ``joint_d_gains`` on this HI node
+ * (xacro defaults at start; rqt / ``ros2 param set`` hot-tune).
  *
  * Params: robot_model, can_interface (alias: can_name), control_mode,
  * joint_k_gains, joint_d_gains, gripper_kp, gripper_kd.
@@ -97,6 +104,13 @@ private:
 
   std::vector<double> joint_k_gains_;
   std::vector<double> joint_d_gains_;
+
+  // Two gain sets kept in memory; active gains follow control_mode_.
+  std::vector<double> joint_k_gains_full_control_;
+  std::vector<double> joint_d_gains_full_control_;
+  std::vector<double> joint_k_gains_position_;
+  std::vector<double> joint_d_gains_position_;
+
   mutable std::mutex gains_mutex_;
   double gripper_kp_{5.0};
   double gripper_kd_{0.2};
@@ -146,6 +160,19 @@ private:
   void applyGains(
     const std::vector<double> & kp, const std::vector<double> & kd,
     double gripper_kp, double gripper_kd, bool force = false);
+
+  /** Normalize raw mode string; returns empty if unsupported. */
+  static std::string normalizeControlMode(const std::string & raw);
+  bool isFullControl() const;
+
+  /** Periodic status / gain logs (live: ``status_debug`` on arm HI node). */
+  std::atomic<bool> status_debug_{false};
+
+  /**
+   * If true, in ``position`` mode we forward OCS2 effort as torque feedforward.
+   * If false, we match arx-ros2-control / panthera-ht "position" semantics (torque=0).
+   */
+  std::atomic<bool> position_forward_effort_{false};
 };
 
 }  // namespace arxlift2s_ros2_control

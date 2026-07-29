@@ -7,10 +7,12 @@
             ARX X5 single-arm SystemInterface (Stanford arx5-sdk / Arx5JointController).
             Instantiate once per arm for LIFT2S: left can1, right can3.
             Params: robot_model (default X5), can_interface (alias can_name),
-            control_mode full_control|position|pd_control,
-            joint_k_gains, joint_d_gains, gripper_kp, gripper_kd.
+            control_mode full_control|position (live-switchable),
+            joint_k_gains, joint_d_gains, gripper_kp, gripper_kd (live).
             Always exports MIX position/velocity/effort/kp/kd; control_mode selects write()
-            (same contract as panthera-ht). Gripper stays position-only.
+            (same contract as panthera-ht). In position, velocity is ignored and (by default)
+            torque/effort is set to 0; if you set ``position_forward_effort=true`` effort is
+            forwarded as torque feedforward. Gripper stays position-only.
             Official InterfacesThread arm path is retired from this package.
         </description>
     </class>
