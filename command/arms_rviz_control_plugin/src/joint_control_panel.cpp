@@ -1668,13 +1668,13 @@ namespace arms_rviz_control_plugin
             return {};
         }
 
-        // 优先使用该 UI 分类已发现的控制器。
-        // Body 分类如果还没有映射到控制器，则回退到分体控制使用的 body_joint_controller。
+        // 只使用该 UI 分类已发现的控制器，避免在不包含 Body 控制器的场景
+        // （例如独立手部控制）中误查 /body_joint_controller。
         const auto controller_it = category_to_controller_.find(category);
         const std::string controller =
             (controller_it != category_to_controller_.end())
                 ? controller_it->second
-                : (category == "body" ? "body_joint_controller" : std::string());
+                : std::string();
 
         // 没有明确控制器的分类无法提供权威关节顺序，保持现有显示顺序不变。
         if (controller.empty())
@@ -1893,14 +1893,12 @@ namespace arms_rviz_control_plugin
             !category_to_joints_["body"].empty();
         if (has_body_joints && body_order.empty())
         {
-            // Body 的 Float64MultiArray 没有关节名，只能依赖控制器 joints 参数顺序。
-            // 如果启动早期参数服务还不可用，先不创建 UI，也不设置 joints_initialized_；
-            // 后续 /joint_states 到来时会重新进入 initializeJoints() 继续尝试。
-            if (status_label_)
-            {
-                status_label_->setText("等待 body_joint_controller joints 参数...");
-            }
-            return;
+            // 未发现 Body 控制器或暂时无法读取其 joints 参数时，不阻塞面板初始化。
+            // 保持 /joint_states 的原始顺序；若用于 Float64MultiArray 控制，
+            // 启动配置仍应提供对应控制器及其 joints 参数以保证发送顺序一致。
+            RCLCPP_WARN(node_->get_logger(),
+                        "Body joints are present but no controller joints order is available; "
+                        "using joint_states order");
         }
         if (!body_order.empty())
         {
