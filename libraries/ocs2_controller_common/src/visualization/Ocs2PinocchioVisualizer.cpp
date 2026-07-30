@@ -3,7 +3,6 @@
 //
 
 #include "ocs2_controller_common/visualization/Ocs2PinocchioVisualizer.h"
-#include <limits>
 #include <fstream>
 #include <string>
 #include <ocs2_ros_interfaces/common/RosMsgHelpers.h>
@@ -18,16 +17,13 @@ namespace ocs2::controller_common
         : node_(node),
           pinocchio_interface_(std::move(pinocchio_interface)),
           config_(std::move(config)),
-          enable_self_collision_(true),
-          dual_arm_mode_(false),
-          robot_name_(config_.robot_name),
+          dual_arm_mode_(config_.dual_arm),
           base_frame_(config_.base_frame),
           urdf_file_(config_.urdf_file),
           trajectory_line_width_(0.005),
           left_arm_color_({0.0, 0.4470, 0.7410}),
           right_arm_color_({0.6350, 0.0780, 0.1840})
     {
-        dual_arm_mode_ = config_.dual_arm;
     }
 
     void Ocs2PinocchioVisualizer::initialize()
@@ -91,29 +87,26 @@ namespace ocs2::controller_common
                 const scalar_t activationDistance = config_.self_collision_activation_distance;
                 geometry_visualization_ = std::make_unique<GeometryInterfaceVisualization>(
                     pinocchio_interface_, std::move(*geometry_opt), base_frame_, activationDistance);
-
-                enable_self_collision_ = true;
                 RCLCPP_INFO(node_->get_logger(),
                             "Self-collision visualization initialized (activation distance: %.3f m)", activationDistance);
             }
             else
             {
-                enable_self_collision_ = false;
                 RCLCPP_INFO(node_->get_logger(),
                             "No Pinocchio geometry provided, self-collision visualization disabled");
             }
         }
         catch (const std::exception& e)
         {
+            geometry_visualization_.reset();
             RCLCPP_WARN(node_->get_logger(),
                         "Failed to initialize self-collision visualization: %s, self-collision visualization disabled",
                         e.what());
-            enable_self_collision_ = false;
         }
 
         RCLCPP_INFO(node_->get_logger(), "Ocs2PinocchioVisualizer initialization completed");
         RCLCPP_INFO(node_->get_logger(), "Self-collision visualization: %s",
-                    enable_self_collision_ ? "enabled" : "disabled");
+                    geometry_visualization_ ? "enabled" : "disabled");
     }
 
     void Ocs2PinocchioVisualizer::updateEndEffectorTrajectory(const PrimalSolution& policy)
@@ -257,6 +250,7 @@ namespace ocs2::controller_common
         }
         try
         {
+            std::lock_guard<std::mutex> lock(self_collision_mutex_);
             geometry_visualization_->publishDistances(state);
         }
         catch (const std::exception& e)
@@ -267,10 +261,13 @@ namespace ocs2::controller_common
         }
     }
 
-    bool Ocs2PinocchioVisualizer::isCollisionDetected(scalar_t threshold) const
+    bool Ocs2PinocchioVisualizer::checkSelfCollision(const vector_t& state, scalar_t threshold) const
     {
+        // publishDistances updates the distance cache and may publish markers.
+        publishSelfCollisionVisualization(state);
         if (geometry_visualization_)
         {
+            std::lock_guard<std::mutex> lock(self_collision_mutex_);
             return geometry_visualization_->isCollisionDetected(threshold);
         }
         return false;

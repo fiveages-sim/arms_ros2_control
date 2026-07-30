@@ -43,10 +43,6 @@ namespace ocs2::mobile_manipulator
     StateOCS2::~StateOCS2()
     {
         stopMpcThread();
-        if (ctrl_comp_)
-        {
-            ctrl_comp_->stopVisualizationThread();
-        }
     }
 
     void StateOCS2::enter()
@@ -75,21 +71,17 @@ namespace ocs2::mobile_manipulator
             }
         }
 
-        // Ensure previous workers are fully stopped before starting new ones.
+        // Ensure previous MPC worker is fully stopped before starting a new one.
         if (mpc_running_ || !mpc_thread_finished_.load())
         {
             stopMpcThread();
-        }
-        if (ctrl_comp_ && !ctrl_comp_->isVisualizationThreadFinished())
-        {
-            ctrl_comp_->stopVisualizationThread();
         }
 
         ctrl_comp_->resetMpc();
         collision_detected_ = false;
         last_mpc_time_ = node_->now();
 
-        ctrl_comp_->startVisualizationThread(thread_sleep_duration_ms_);
+        // Kick viz snapshot after reset (viz thread owned by controller activate lifetime).
         ctrl_comp_->requestVisualizationUpdate();
         mpc_thread_should_stop_ = false;
         mpc_thread_finished_ = false;
@@ -103,7 +95,6 @@ namespace ocs2::mobile_manipulator
         if (!ctrl_comp_->initialPolicyReceived())
         {
             mpc_update_requested_ = true;
-            ctrl_comp_->requestVisualizationUpdate();
             ctrl_comp_->holdLastSentPositions();
             return;
         }
@@ -111,7 +102,7 @@ namespace ocs2::mobile_manipulator
         if (ctrl_comp_->interface_->isSelfCollisionEnabled() && !collision_detected_)
         {
             const scalar_t minimumDistance = ctrl_comp_->interface_->getSelfCollisionMinimumDistance();
-            if (ctrl_comp_->isCollisionDetected(minimumDistance))
+            if (ctrl_comp_->checkSelfCollisionOnObservation(minimumDistance))
             {
                 collision_detected_ = true;
                 RCLCPP_WARN(node_->get_logger(),
@@ -123,7 +114,6 @@ namespace ocs2::mobile_manipulator
         if ((time - last_mpc_time_).seconds() >= mpc_period_)
         {
             mpc_update_requested_ = true;
-            ctrl_comp_->requestVisualizationUpdate();
             last_mpc_time_ = time;
         }
 
@@ -132,22 +122,15 @@ namespace ocs2::mobile_manipulator
 
     void StateOCS2::beginExit()
     {
-        // RT-safe: only signal workers to stop. Join happens in tryFinishExit().
+        // RT-safe: only signal MPC worker to stop. Join happens in tryFinishExit().
+        // Visualization thread is owned by the controller activate lifetime — do not stop here.
         mpc_update_requested_ = false;
         mpc_thread_should_stop_ = true;
-        if (ctrl_comp_)
-        {
-            ctrl_comp_->requestStopVisualizationThread();
-        }
     }
 
     bool StateOCS2::tryFinishExit()
     {
         if (mpc_running_ && !mpc_thread_finished_.load())
-        {
-            return false;
-        }
-        if (ctrl_comp_ && !ctrl_comp_->isVisualizationThreadFinished())
         {
             return false;
         }
@@ -161,10 +144,9 @@ namespace ocs2::mobile_manipulator
 
         if (ctrl_comp_)
         {
-            ctrl_comp_->joinVisualizationThread();
             ctrl_comp_->clearTrajectoryVisualization();
         }
-        RCLCPP_INFO(node_->get_logger(), "OCS2 state exited successfully, worker threads stopped");
+        RCLCPP_INFO(node_->get_logger(), "OCS2 state exited successfully, MPC thread stopped");
         return true;
     }
 

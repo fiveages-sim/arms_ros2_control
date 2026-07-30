@@ -9,7 +9,6 @@
 #include <atomic>
 #include <functional>
 #include <memory>
-#include <mutex>
 #include <string>
 #include <thread>
 #include <vector>
@@ -112,7 +111,6 @@ namespace ocs2::mobile_manipulator
 
             {
                 ocs2::controller_common::Ocs2VisualizerConfig viz_cfg;
-                viz_cfg.robot_name = robot_name_;
                 viz_cfg.urdf_file = urdf_file;
                 viz_cfg.dual_arm = interface_->dual_arm_;
                 const auto& minfo = interface_->getManipulatorModelInfo();
@@ -141,7 +139,7 @@ namespace ocs2::mobile_manipulator
             auto_declare("movel_max_angular_jerk", 4.0);
             auto_declare("movel_auto_extend_duration", true);
 
-            ocs2::controller_common::Ocs2ReferenceTargetContext ref_ctx;
+            controller_common::Ocs2ReferenceTargetContext ref_ctx;
             ref_ctx.dual_arm = interface_->dual_arm_;
             ref_ctx.base_frame = interface_->getManipulatorModelInfo().baseFrame;
             ref_ctx.input_dim = interface_->getManipulatorModelInfo().inputDim;
@@ -169,6 +167,8 @@ namespace ocs2::mobile_manipulator
             cached_last_action_ = observation_.state;
         }
 
+        ~CtrlComponent() { stopVisualizationThread(); }
+
         void updateObservation(const rclcpp::Time& time);
         void evaluatePolicy(const rclcpp::Time& time);
         /** Reset observation/targets and MPC node. Does NOT block for the first policy (RT-safe). */
@@ -182,17 +182,17 @@ namespace ocs2::mobile_manipulator
         void publishCachedCurrentTargets() const;
 
         /**
-         * Observation FK / self-collision / EE pose viz at MPC cadence on a dedicated thread.
-         * Call start/stop from StateOCS2 enter/exit; requestVisualizationUpdate() when requesting MPC.
+         * Self-collision markers + traj recording at MPC cadence on a dedicated thread
+         * (not RT update). Detection stays sync on RT for FSM safety.
+         * Start on controller activate, stop on deactivate. Request updates via
+         * maybeRequestVisualizationUpdate() from the common control path (all FSM states).
          */
-        void startVisualizationThread(int thread_sleep_ms);
-        /** Signal stop only (RT-safe). Pair with joinVisualizationThread after finished. */
-        void requestStopVisualizationThread();
-        [[nodiscard]] bool isVisualizationThreadFinished() const;
-        void joinVisualizationThread();
-        /** Blocking stop: request + join (destructor / sync paths). */
+        void startVisualizationThread(int thread_sleep_ms, double visualization_period_sec);
+        /** Blocking stop: request + join (destructor / deactivate). */
         void stopVisualizationThread();
         void requestVisualizationUpdate();
+        /** Throttle requestVisualizationUpdate to visualization_period_sec (MPC rate). */
+        void maybeRequestVisualizationUpdate(const rclcpp::Time& time);
 
         // Visualization management
         void clearTrajectoryVisualization();
@@ -200,9 +200,15 @@ namespace ocs2::mobile_manipulator
         // Torque calculation for force control
         vector_t calculateStaticTorques() const;
 
-        // Collision detection (uses cached values from visualization, no extra computation)
-        // @param threshold: Distance threshold to consider as collision (default 0.0 = actual penetration)
-        bool isCollisionDetected(scalar_t threshold = 0.0) const;
+        /** Sync check on full OCS2 state via publishDistances (may also publish markers). */
+        bool checkSelfCollision(const vector_t& state, scalar_t threshold = 0.0) const;
+        /**
+         * Sync check using last commanded joints (and current observation base pose if any).
+         * Intended for MOVEJ safety so collision follows command, not lagged measurement.
+         */
+        bool checkSelfCollisionOnCommand(scalar_t threshold = 0.0) const;
+        /** Sync check using current observation_.state (measured). For OCS2 FSM. */
+        bool checkSelfCollisionOnObservation(scalar_t threshold = 0.0) const;
 
         // Publish FSM command to stop all controllers
         // @param command: FSM command value (typically 2 for HOLD)
@@ -217,7 +223,7 @@ namespace ocs2::mobile_manipulator
         // MPC components
         std::unique_ptr<MPC_BASE> mpc_;
         std::unique_ptr<MPC_MRT_Interface> mpc_mrt_interface_;
-        std::shared_ptr<ocs2::controller_common::PoseBasedReferenceManager> pose_reference_manager_;
+        std::shared_ptr<controller_common::PoseBasedReferenceManager> pose_reference_manager_;
 
         // Observation state
         SystemObservation observation_;
@@ -246,9 +252,19 @@ namespace ocs2::mobile_manipulator
         std::unique_ptr<ocs2::controller_common::Ocs2PinocchioVisualizer> visualizer_;
 
         // Visualization worker (MPC-rate, off RT update path)
+        struct VisualizationSnapshot
+        {
+            SystemObservation observation;
+            bool has_pred{false};
+            double pred_time{0.0};
+            vector_t pred_state;
+        };
+
         void visualizationThreadLoop();
-        void runVisualizationOnce(const SystemObservation& obs, const rclcpp::Time& stamp,
-                                  bool has_pred, double pred_time, const vector_t& pred_state);
+        void runVisualizationOnce(const VisualizationSnapshot& snap);
+        void requestStopVisualizationThread();
+        [[nodiscard]] bool isVisualizationThreadFinished() const;
+        void joinVisualizationThread();
 
         std::thread visualization_thread_;
         std::atomic_bool visualization_running_{false};
@@ -256,12 +272,14 @@ namespace ocs2::mobile_manipulator
         std::atomic_bool visualization_thread_finished_{true};
         std::atomic_bool visualization_update_requested_{false};
         int visualization_thread_sleep_ms_{2};
-        std::mutex visualization_mutex_;
-        SystemObservation visualization_observation_;
-        rclcpp::Time visualization_stamp_{0, 0, RCL_ROS_TIME};
-        bool visualization_has_pred_{false};
-        double visualization_pred_time_{0.0};
-        vector_t visualization_pred_state_;
+        double visualization_period_sec_{0.05};
+        rclcpp::Time last_visualization_request_time_{0, 0, RCL_ROS_TIME};
+        /** Published via atomic_store/load only (RT → viz handoff, no mutex). */
+        std::shared_ptr<VisualizationSnapshot> visualization_snapshot_;
+        /** RT-only staging for pred samples; folded into snapshot in requestVisualizationUpdate(). */
+        bool pending_viz_has_pred_{false};
+        double pending_viz_pred_time_{0.0};
+        vector_t pending_viz_pred_state_;
 
         // Configuration
         std::string robot_name_;

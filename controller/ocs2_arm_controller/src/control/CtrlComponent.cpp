@@ -114,9 +114,8 @@ namespace ocs2::mobile_manipulator
             pose_reference_manager_->setCurrentObservation(observation_);
         }
 
-        // Lightweight EE/body pose: must keep streaming in HOLD too so markers can follow
-        // measured EE before first OCS2 enter (and after mid-moveL HOLD). Heavy self-collision
-        // / traj recording stays on the MPC-rate visualization thread.
+        // RT: lightweight EE pose only. Self-collision markers + traj: viz thread.
+        // FSM safety: sync checkSelfCollision* (not the old async isCollisionDetected cache).
         if (visualizer_)
         {
             visualizer_->publishEndEffectorPose(time, observation_.state);
@@ -164,12 +163,10 @@ namespace ocs2::mobile_manipulator
                 policy.inputTrajectory_
             );
 
-            {
-                std::lock_guard<std::mutex> lock(visualization_mutex_);
-                visualization_has_pred_ = true;
-                visualization_pred_time_ = future_time;
-                visualization_pred_state_ = future_state;
-            }
+            // RT-only staging; folded into atomic snapshot in requestVisualizationUpdate().
+            pending_viz_has_pred_ = true;
+            pending_viz_pred_time_ = future_time;
+            pending_viz_pred_state_ = future_state;
 
             // Trajectory markers: same RT thread as updatePolicy/getPolicy (MRT-safe).
             if (visualizer_)
@@ -339,13 +336,14 @@ namespace ocs2::mobile_manipulator
         mpc_mrt_interface_->advanceMpc();
     }
 
-    void CtrlComponent::startVisualizationThread(int thread_sleep_ms)
+    void CtrlComponent::startVisualizationThread(int thread_sleep_ms, double visualization_period_sec)
     {
         if (visualization_running_)
         {
             return;
         }
         visualization_thread_sleep_ms_ = std::max(1, thread_sleep_ms);
+        visualization_period_sec_ = std::max(0.001, visualization_period_sec);
         visualization_thread_should_stop_ = false;
         visualization_thread_finished_ = false;
         visualization_running_ = true;
@@ -388,12 +386,30 @@ namespace ocs2::mobile_manipulator
 
     void CtrlComponent::requestVisualizationUpdate()
     {
-        {
-            std::lock_guard<std::mutex> lock(visualization_mutex_);
-            visualization_observation_ = observation_;
-            visualization_stamp_ = node_->now();
-        }
+        auto snap = std::make_shared<VisualizationSnapshot>();
+        snap->observation = observation_;
+        snap->has_pred = pending_viz_has_pred_;
+        snap->pred_time = pending_viz_pred_time_;
+        snap->pred_state = std::move(pending_viz_pred_state_);
+        pending_viz_has_pred_ = false;
+        pending_viz_pred_time_ = 0.0;
+        std::atomic_store_explicit(&visualization_snapshot_, std::move(snap), std::memory_order_release);
         visualization_update_requested_ = true;
+    }
+
+    void CtrlComponent::maybeRequestVisualizationUpdate(const rclcpp::Time& time)
+    {
+        if (!visualization_running_)
+        {
+            return;
+        }
+        if (last_visualization_request_time_.nanoseconds() != 0 &&
+            (time - last_visualization_request_time_).seconds() < visualization_period_sec_)
+        {
+            return;
+        }
+        requestVisualizationUpdate();
+        last_visualization_request_time_ = time;
     }
 
     void CtrlComponent::visualizationThreadLoop()
@@ -405,23 +421,13 @@ namespace ocs2::mobile_manipulator
         {
             if (visualization_update_requested_.load())
             {
-                SystemObservation obs;
-                rclcpp::Time stamp(0, 0, RCL_ROS_TIME);
-                bool has_pred = false;
-                double pred_time = 0.0;
-                vector_t pred_state;
-                {
-                    std::lock_guard<std::mutex> lock(visualization_mutex_);
-                    obs = visualization_observation_;
-                    stamp = visualization_stamp_;
-                    has_pred = visualization_has_pred_;
-                    pred_time = visualization_pred_time_;
-                    pred_state = visualization_pred_state_;
-                    visualization_has_pred_ = false;
-                }
+                auto snap = std::atomic_load_explicit(&visualization_snapshot_, std::memory_order_acquire);
                 try
                 {
-                    runVisualizationOnce(obs, stamp, has_pred, pred_time, pred_state);
+                    if (snap)
+                    {
+                        runVisualizationOnce(*snap);
+                    }
                 }
                 catch (const std::exception& e)
                 {
@@ -436,16 +442,16 @@ namespace ocs2::mobile_manipulator
         RCLCPP_DEBUG(node_->get_logger(), "Visualization thread stopped");
     }
 
-    void CtrlComponent::runVisualizationOnce(const SystemObservation& obs, const rclcpp::Time& /*stamp*/,
-                                             bool has_pred, double pred_time, const vector_t& pred_state)
+    void CtrlComponent::runVisualizationOnce(const VisualizationSnapshot& snap)
     {
+        const auto& obs = snap.observation;
         if (!visualizer_ || obs.state.size() == 0)
         {
             return;
         }
 
+        // Self-collision markers only; FSM safety uses sync checkSelfCollision*.
         visualizer_->publishSelfCollisionVisualization(obs.state);
-        // EE pose is published every RT cycle in updateObservation (incl. HOLD).
 
         auto& rec = arms_controller_common::TrajectoryRecorder::instance();
         if (rec.enabled())
@@ -467,19 +473,19 @@ namespace ocs2::mobile_manipulator
                 rec.appendReal("right", rs);
             }
 
-            if (has_pred && pred_state.size() > 0)
+            if (snap.has_pred && snap.pred_state.size() > 0)
             {
                 arms_controller_common::TrajSample lps;
-                lps.stamp_sec = pred_time;
-                const vector_t lpe = visualizer_->computeEndEffectorPose(pred_state);
+                lps.stamp_sec = snap.pred_time;
+                const vector_t lpe = visualizer_->computeEndEffectorPose(snap.pred_state);
                 lps.position = {lpe(0), lpe(1), lpe(2)};
                 lps.quat_xyzw = {lpe(3), lpe(4), lpe(5), lpe(6)};
                 rec.appendPred("left", lps);
                 if (dual_arm_mode_)
                 {
                     arms_controller_common::TrajSample rps;
-                    rps.stamp_sec = pred_time;
-                    const vector_t rpe = visualizer_->computeRightEndEffectorPose(pred_state);
+                    rps.stamp_sec = snap.pred_time;
+                    const vector_t rpe = visualizer_->computeRightEndEffectorPose(snap.pred_state);
                     rps.position = {rpe(0), rpe(1), rpe(2)};
                     rps.quat_xyzw = {rpe(3), rpe(4), rpe(5), rpe(6)};
                     rec.appendPred("right", rps);
@@ -526,10 +532,29 @@ namespace ocs2::mobile_manipulator
                                Eigen::VectorXd::Zero(pinocchio_model.nv));
     }
 
-    bool CtrlComponent::isCollisionDetected(scalar_t threshold) const
+    bool CtrlComponent::checkSelfCollision(const vector_t& state, scalar_t threshold) const
     {
-        // Reuse the cached value from visualization (no extra computation)
-        return visualizer_->isCollisionDetected(threshold);
+        if (!visualizer_)
+        {
+            return false;
+        }
+        return visualizer_->checkSelfCollision(state, threshold);
+    }
+
+    bool CtrlComponent::checkSelfCollisionOnCommand(scalar_t threshold) const
+    {
+        vector_t q = observation_.state;
+        const auto& cmd = ctrl_interfaces_.last_sent_joint_positions_;
+        for (size_t i = 0; i < joint_names_.size() && i < cmd.size() && i < static_cast<size_t>(q.size()); ++i)
+        {
+            q[static_cast<Eigen::Index>(i)] = cmd[i];
+        }
+        return checkSelfCollision(q, threshold);
+    }
+
+    bool CtrlComponent::checkSelfCollisionOnObservation(scalar_t threshold) const
+    {
+        return checkSelfCollision(observation_.state, threshold);
     }
 
     void CtrlComponent::publishFsmCommand(int32_t command) const
