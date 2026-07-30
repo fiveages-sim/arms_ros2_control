@@ -22,6 +22,7 @@
 
 #include "app/joint_controller.h"
 
+#include <atomic>
 #include <cmath>
 #include <memory>
 #include <mutex>
@@ -50,7 +51,8 @@ namespace arxlift2s_ros2_control
  * (xacro defaults at start; rqt / ``ros2 param set`` hot-tune).
  *
  * Params: robot_model, can_interface (alias: can_name), control_mode,
- * joint_k_gains, joint_d_gains, gripper_kp, gripper_kd.
+ * joint_k_gains, joint_d_gains, gripper_kp, gripper_kd,
+ * shutdown_return_home / shutdown_home / shutdown_home_velocity / timeout.
  */
 class ArxX5Hardware : public hardware_interface::SystemInterface
 {
@@ -165,6 +167,11 @@ private:
   static std::string normalizeControlMode(const std::string & raw);
   bool isFullControl() const;
 
+  /** Ordered exit: optional interpolate to home, then set_to_damping (idempotent). */
+  void enterSafeExit(bool allow_return_home);
+  void moveToShutdownHomeThenDamping();
+  void enterDampingOnly();
+
   /** Periodic status / gain logs (live: ``status_debug`` on arm HI node). */
   std::atomic<bool> status_debug_{false};
 
@@ -173,6 +180,13 @@ private:
    * If false, we match arx-ros2-control / panthera-ht "position" semantics (torque=0).
    */
   std::atomic<bool> position_forward_effort_{false};
+
+  // Deactivate/shutdown: interpolate to home then damping (default: damping only).
+  bool shutdown_return_home_{false};
+  std::vector<double> shutdown_home_;
+  double shutdown_home_velocity_{0.3};
+  double shutdown_home_timeout_sec_{2.0};
+  std::atomic<bool> safe_exit_done_{false};
 };
 
 }  // namespace arxlift2s_ros2_control

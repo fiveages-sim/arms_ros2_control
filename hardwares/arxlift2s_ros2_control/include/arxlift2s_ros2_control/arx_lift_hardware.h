@@ -71,12 +71,16 @@ public:
   hardware_interface::CallbackReturn on_activate(
     const rclcpp_lifecycle::State & previous_state) override;
 
-  /** @brief 停止循环并底盘停车；保留 lift_ 避免 CAN 线程崩溃。 */
+  /** @brief 可选降高 + soft stop 后停循环；保留 lift_ 避免 CAN 线程崩溃。 */
   hardware_interface::CallbackReturn on_deactivate(
     const rclcpp_lifecycle::State & previous_state) override;
 
-  /** @brief 关闭资源；同样不销毁 lift_。 */
+  /** @brief 有序退出（幂等）；同样不销毁 lift_。 */
   hardware_interface::CallbackReturn on_shutdown(
+    const rclcpp_lifecycle::State & previous_state) override;
+
+  /** @brief 故障：仅 soft stop，不降高度。 */
+  hardware_interface::CallbackReturn on_error(
     const rclcpp_lifecycle::State & previous_state) override;
 
   /** @brief 导出升降 position/velocity/effort 状态接口。 */
@@ -116,6 +120,11 @@ private:
    * @param dt_s 本周期时间步（秒）
    */
   void sendHybridHoldOrTrack(double q_target_sdk, double dt_s);
+
+  /** @brief 有序退出：可选降高 + soft stop，再停线程（幂等）。 */
+  void enterSafeExit(bool allow_return_home);
+  void softStopLift();
+  void interpolateLiftToShutdownHeight();
 
   /** @brief ROS 米 → SDK 电机弧度。 */
   double rosToSdk(double ros_m) const
@@ -188,6 +197,14 @@ private:
 
   /** @brief write() 周期状态日志开关（节点参数 ``status_debug``）。 */
   std::atomic<bool> status_debug_{false};
+
+  // Deactivate: optional ramp to height then soft stop (default: soft stop only).
+  bool shutdown_return_home_{false};
+  double shutdown_height_m_{0.0};
+  double shutdown_home_velocity_{0.10};
+  double shutdown_home_timeout_sec_{2.0};
+  std::atomic<bool> safe_exit_done_{false};
+  std::atomic<bool> soft_stop_active_{false};  ///< loop 发阻尼/零刚度包
 };
 
 }  // namespace arxlift2s_ros2_control

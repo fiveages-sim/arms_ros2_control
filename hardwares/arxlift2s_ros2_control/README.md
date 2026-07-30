@@ -65,6 +65,9 @@ ros2 param set /arx_lift2s_right_system status_debug true
 | `joint_k_gains` / `joint_d_gains` | backward-compatible | 旧参数名：只覆盖“当前 control_mode”的那套 gains |
 | `position_forward_effort` | `false` | `position` 下是否把 effort 转成 torque |
 | `status_debug` | `false` | 2 Hz write() status + gain log; live on arm HI node |
+| `shutdown_return_home` | `false` | Ctrl+C：先插值到 `shutdown_home` 再阻尼；默认仅 `set_to_damping` |
+| `shutdown_home` | home_1 单臂段 | 6 joints CSV；对齐 `common.yaml` |
+| `shutdown_home_velocity` / `timeout` | `0.3` rad/s / `2.0` s | 插值时长 clamp ≈1–2 s |
 
 **Default MIT gains (xacro):**
 
@@ -102,6 +105,8 @@ soft_p/hybrid 下上层写的 vel/effort 均不下发电机。
 | `height_rad_per_meter` | `41.54` | meters ↔ SDK motor rad (`height_to_motor` alias) |
 | `sdk_max_rad` | `20.0` | |
 | `status_debug` | `false` | 2 Hz write() status log; live on lift HI node |
+| `shutdown_return_home` | `false` | Ctrl+C：先斜坡到 `shutdown_height_m` 再 soft-stop；默认仅 soft-stop |
+| `shutdown_height_m` / `velocity` / `timeout` | `0.0` / `0.10` m/s / `2.0` s | 回落须在 `stop_loop_thread` 之前 |
 
 ```bash
 # Switch mode / hot-tune (node: ros2 param list | grep arx_lift)

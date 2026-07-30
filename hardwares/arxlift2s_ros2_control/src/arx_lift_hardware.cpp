@@ -518,6 +518,30 @@ hardware_interface::CallbackReturn ArxLiftHardware::on_init(
     status_debug_.store(dbg);
   }
 
+  parse_bool_param(info_, "shutdown_return_home", false, shutdown_return_home_);
+  if (!parse_double_param(
+      info_, "shutdown_height_m", 0.0, shutdown_height_m_, get_logger()) ||
+    !parse_double_param(
+      info_, "shutdown_home_velocity", 0.10, shutdown_home_velocity_,
+      get_logger()) ||
+    !parse_double_param(
+      info_, "shutdown_home_timeout", 2.0, shutdown_home_timeout_sec_,
+      get_logger()))
+  {
+    return hardware_interface::CallbackReturn::ERROR;
+  }
+  if (!std::isfinite(shutdown_home_velocity_) || shutdown_home_velocity_ <= 0.0) {
+    shutdown_home_velocity_ = 0.10;
+  }
+  if (!std::isfinite(shutdown_home_timeout_sec_) ||
+    shutdown_home_timeout_sec_ <= 0.0)
+  {
+    shutdown_home_timeout_sec_ = 2.0;
+  }
+  shutdown_height_m_ = std::clamp(shutdown_height_m_, 0.0, span_m);
+  safe_exit_done_ = false;
+  soft_stop_active_ = false;
+
   lift_position_ = 0.0;
   lift_velocity_ = 0.0;
   lift_effort_ = 0.0;
@@ -536,10 +560,11 @@ hardware_interface::CallbackReturn ArxLiftHardware::on_init(
     get_logger(),
     "ArxLiftHardware init: joint=%s can=%s robot_type=%d "
     "motor_mode=%s soft_p_kp=%.3f hybrid_kp=%.3f hybrid_kd=%.3f "
-    "gravity=%.3f ramp=%.3f m/s",
+    "gravity=%.3f ramp=%.3f m/s shutdown_return_home=%s height=%.3f",
     lift_joint_name_.c_str(), can_name_.c_str(), robot_type_,
     motor_mode_param_.c_str(), soft_p_kp_.load(), hybrid_kp_.load(),
-    hybrid_kd_.load(), gravity_compensation_torque_.load(), cmd_ramp_vel_mps_);
+    hybrid_kd_.load(), gravity_compensation_torque_.load(), cmd_ramp_vel_mps_,
+    shutdown_return_home_ ? "true" : "false", shutdown_height_m_);
 
   return hardware_interface::CallbackReturn::SUCCESS;
 }
@@ -634,6 +659,8 @@ hardware_interface::CallbackReturn ArxLiftHardware::on_activate(
     command_enabled_ = false;  // 校准完成前不跟踪外部指令
     last_applied_mode_ = -1;
     ramp_initialized_ = false;
+    safe_exit_done_ = false;
+    soft_stop_active_ = false;
     using namespace std::chrono_literals;
     // 后台控制循环：斜坡跟踪 + soft_p/hybrid 下发 + 刷新状态缓冲
     loop_thread_ = std::thread([this]() {
@@ -655,7 +682,31 @@ hardware_interface::CallbackReturn ArxLiftHardware::on_activate(
             dt_s = 0.05;
           }
 
-          if (!command_enabled_.load()) {
+          if (soft_stop_active_.load()) {
+            // Soft stop at height: keep gravity τ_ff (τ=0 while elevated buzzes/drops).
+            // hybrid: kp≈0 + kd + gravity; soft_p: hold current height.
+            const double q_hold = sdk_get_height_.load();
+            ramp_q_sdk_ = q_hold;
+            const int mode_i = motor_mode_.load();
+            if (mode_i == static_cast<int>(MotorMode::SoftP)) {
+              lift_->config_.lift_kp = soft_p_kp_.load();
+              lift_->config_.gravity_compensation_torque =
+                gravity_compensation_torque_.load();
+              lift_->setHeight(q_hold);
+              lift_->loop();
+            } else {
+              const double hy_kd =
+                std::min(std::max(hybrid_kd_.load(), 0.5), kHybridKdMax);
+              const double t_ff = std::clamp(
+                gravity_compensation_torque_.load(), -lift_max_torque_,
+                lift_max_torque_);
+              lift_->read();
+              lift_->exchangeLiftMotorMsg();
+              lift_->sendLiftHybrid(0.0, hy_kd, -q_hold, 0.0, t_ff);
+            }
+            last_written_height_.store(q_hold);
+            last_written_vel_.store(0.0);
+          } else if (!command_enabled_.load()) {
             // 校准 / 停车：始终 Soft-P loop()
             lift_->config_.lift_kp = soft_p_kp_.load();
             lift_->loop();
@@ -770,43 +821,156 @@ hardware_interface::CallbackReturn ArxLiftHardware::on_activate(
 }
 
 /**
- * @brief 停循环、底盘停车；不销毁 lift_（避免 CAN 线程崩溃影响臂 HI 收尾）。
+ * @brief 可选降高 + soft stop，再停循环、底盘停车；不销毁 lift_。
  */
 hardware_interface::CallbackReturn ArxLiftHardware::on_deactivate(
   const rclcpp_lifecycle::State & /*previous_state*/)
 {
-  stop_loop_thread();
+  RCLCPP_INFO(get_logger(), "ArxLiftHardware on_deactivate: enterSafeExit");
+  enterSafeExit(/*allow_return_home=*/true);
   param_cb_.reset();
-
-  if (lift_) {
-    try {
-      lift_->setChassisCmd(0.0, 0.0, 0.0, 2);
-    } catch (const std::exception & e) {
-      RCLCPP_WARN(
-        get_logger(), "Chassis park on deactivate failed: %s", e.what());
-    }
-  }
-
-  // 重要：此处不要 reset/销毁 lift_。
-  // 关闭时销毁 LiftHeadControlLoop 可能在厂商 SocketCAN 收包路径触发
-  // "pure virtual method called"，导致进程 abort，臂 HI 无法完成回 home。
-  // 对象随进程退出（或 ~ArxLiftHardware）释放即可。
   motor_pub_.reset();
   RCLCPP_INFO(get_logger(), "ArxLiftHardware deactivated");
   return hardware_interface::CallbackReturn::SUCCESS;
 }
 
 /**
- * @brief 停循环；同样保留 lift_ 存活，避免 CAN 线程崩溃。
+ * @brief 有序退出（幂等）；同样保留 lift_ 存活，避免 CAN 线程崩溃。
  */
 hardware_interface::CallbackReturn ArxLiftHardware::on_shutdown(
   const rclcpp_lifecycle::State & /*previous_state*/)
 {
-  stop_loop_thread();
+  RCLCPP_INFO(get_logger(), "ArxLiftHardware on_shutdown: enterSafeExit");
+  enterSafeExit(/*allow_return_home=*/true);
   param_cb_.reset();
   motor_pub_.reset();
-  RCLCPP_INFO(get_logger(), "ArxLiftHardware shutdown (lift SDK left alive to avoid CAN thread crash)");
+  RCLCPP_INFO(
+    get_logger(),
+    "ArxLiftHardware shutdown (lift SDK left alive to avoid CAN thread crash)");
   return hardware_interface::CallbackReturn::SUCCESS;
+}
+
+/**
+ * @brief 故障：仅 soft stop + 停线程，不降高度。
+ */
+hardware_interface::CallbackReturn ArxLiftHardware::on_error(
+  const rclcpp_lifecycle::State & /*previous_state*/)
+{
+  RCLCPP_ERROR(get_logger(), "ArxLiftHardware on_error: soft stop only");
+  enterSafeExit(/*allow_return_home=*/false);
+  param_cb_.reset();
+  motor_pub_.reset();
+  return hardware_interface::CallbackReturn::SUCCESS;
+}
+
+void ArxLiftHardware::enterSafeExit(bool allow_return_home)
+{
+  if (safe_exit_done_.exchange(true)) {
+    return;
+  }
+
+  try {
+    if (allow_return_home && shutdown_return_home_ && loop_running_.load() &&
+      lift_)
+    {
+      interpolateLiftToShutdownHeight();
+    }
+    softStopLift();
+  } catch (const std::exception & e) {
+    RCLCPP_ERROR(
+      get_logger(), "enterSafeExit failed: %s; forcing soft stop + stop thread",
+      e.what());
+    try {
+      softStopLift();
+    } catch (...) {
+    }
+  }
+
+  stop_loop_thread();
+  soft_stop_active_ = false;
+
+  if (lift_) {
+    try {
+      lift_->setChassisCmd(0.0, 0.0, 0.0, 2);
+    } catch (const std::exception & e) {
+      RCLCPP_WARN(get_logger(), "Chassis park on safe exit failed: %s", e.what());
+    }
+  }
+}
+
+void ArxLiftHardware::interpolateLiftToShutdownHeight()
+{
+  if (!lift_ || !loop_running_.load()) {
+    return;
+  }
+
+  const double goal =
+    std::clamp(shutdown_height_m_, 0.0, height_span_m_);
+  const double start = lift_position_;
+  const double travel = std::abs(goal - start);
+  constexpr double kMinDurationSec = 0.5;
+  const double speed = std::max(0.02, std::abs(shutdown_home_velocity_));
+  const double duration_sec = std::clamp(
+    std::max(travel / speed, kMinDurationSec),
+    kMinDurationSec,
+    std::max(kMinDurationSec, shutdown_home_timeout_sec_));
+
+  RCLCPP_WARN(
+    get_logger(),
+    "Shutdown interpolate lift: %.3f -> %.3f m, travel=%.3f, duration=%.2fs "
+    "(ramp<=%.2f m/s)",
+    start, goal, travel, duration_sec, speed);
+
+  if (travel <= 0.01) {
+    RCLCPP_INFO(get_logger(), "Lift already near shutdown height");
+    lift_position_command_ = goal;
+    return;
+  }
+
+  // Temporarily use shutdown velocity for the ramp while loop_thread_ tracks.
+  const double old_ramp = cmd_ramp_vel_mps_;
+  cmd_ramp_vel_mps_ = std::min(speed, lift_max_vel_);
+  lift_position_command_ = goal;
+  command_enabled_ = true;
+
+  const auto t0 = std::chrono::steady_clock::now();
+  constexpr auto kPoll = std::chrono::milliseconds(20);
+  constexpr double kTolM = 0.015;
+  while (loop_running_.load()) {
+    const double elapsed =
+      std::chrono::duration<double>(std::chrono::steady_clock::now() - t0)
+        .count();
+    if (elapsed >= duration_sec) {
+      break;
+    }
+    if (std::abs(lift_position_ - goal) <= kTolM) {
+      break;
+    }
+    std::this_thread::sleep_for(kPoll);
+  }
+
+  cmd_ramp_vel_mps_ = old_ramp;
+  RCLCPP_INFO(
+    get_logger(),
+    "Lift shutdown interpolate done (feedback=%.3f m, goal=%.3f m)",
+    lift_position_, goal);
+}
+
+void ArxLiftHardware::softStopLift()
+{
+  if (!lift_ || !loop_running_.load()) {
+    return;
+  }
+
+  // Hold current height; hybrid path uses kp≈0 / τ=0 via soft_stop_active_.
+  lift_position_command_ = lift_position_;
+  RCLCPP_INFO(
+    get_logger(),
+    "Lift soft stop (mode=%s, hold=%.3f m)",
+    motorModeName(static_cast<MotorMode>(motor_mode_.load())),
+    lift_position_command_);
+  soft_stop_active_ = true;
+  std::this_thread::sleep_for(std::chrono::milliseconds(250));
 }
 
 /**
