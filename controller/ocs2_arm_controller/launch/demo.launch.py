@@ -51,6 +51,8 @@ def launch_setup(context, *args, **kwargs):
     hand_controllers, hand_spawners = ocs2_common.setup_hand_controllers(ctx, enable_gripper)
     hand_names = [c["name"] for c in hand_controllers] if enable_gripper else []
 
+    ft_controllers, ft_spawners = ocs2_common.setup_ft_broadcasters(ctx)
+
     info_file_name = extract_info_file_name_from_config(ctx.config, launch_mode="demo")
     robot_pkg_path = get_robot_package_path(ctx.robot_name)
     if robot_pkg_path is None:
@@ -90,7 +92,7 @@ def launch_setup(context, *args, **kwargs):
         rviz_node=rviz_node,
         controller_stack_nodes=controller_stack_nodes,
         main_spawner=main_spawner,
-        extra_spawners=hand_spawners,
+        extra_spawners=hand_spawners + ft_spawners,
         optional_nodes=[arms_target_manager] if arms_target_manager else [],
     )
 
