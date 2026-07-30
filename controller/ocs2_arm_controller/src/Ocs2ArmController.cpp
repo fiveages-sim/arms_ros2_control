@@ -265,17 +265,39 @@ namespace ocs2::mobile_manipulator
                 ctrl_interfaces_, get_node(), joint_names_, gravity_compensation);
             state_list_.movej->setKinematicsSolver(kinematics_);
 
-            // COMPLIANCE: force outer-loop + stiff position inner-loop (fsm_command=5)
-            auto_declare<std::vector<double>>("compliance_admittance_mass",
-                                              {5.0, 5.0, 5.0, 0.5, 0.5, 0.5});
-            auto_declare<std::vector<double>>("compliance_admittance_damping",
-                                              {80.0, 80.0, 80.0, 8.0, 8.0, 8.0});
-            auto_declare<double>("compliance_admittance_max_displacement", 0.05);
-            auto_declare<double>("compliance_force_deadband", 2.0);
-            auto_declare<double>("compliance_torque_deadband", 0.15);
+            // COMPLIANCE: hybrid force/position control (fsm_command=5)
+            auto_declare<std::vector<double>>("compliance_task_selection",
+                                              {1.0, 0.0, 0.0, 0.0, 0.0, 0.0});
+            auto_declare<std::vector<double>>("compliance_hybrid_pos_stiffness",
+                                              {20.0, 20.0, 20.0, 10.0, 10.0, 10.0});
+            auto_declare<std::vector<double>>("compliance_hybrid_pos_damping",
+                                              {0.0, 0.0, 0.0, 0.0, 0.0, 0.0});
+            auto_declare<double>("compliance_hybrid_pos_ki", 0.0);
+            auto_declare<double>("compliance_hybrid_pos_ki_max", 0.02);
+            auto_declare<std::vector<double>>("compliance_hybrid_force_damping",
+                                              {5000.0, 5000.0, 5000.0, 250.0, 250.0, 250.0});
+            auto_declare<double>("compliance_hybrid_force_ki", 2.0);
+            auto_declare<double>("compliance_hybrid_force_ki_max", 10.0);
+            auto_declare<double>("compliance_hybrid_force_deadband", 0.5);
+            auto_declare<std::vector<double>>("compliance_force_setpoint",
+                                              {0.0, 0.0, 0.0, 0.0, 0.0, 0.0});
+            auto_declare<double>("compliance_force_feedback_sign", -1.0);
+            auto_declare<std::vector<double>>("compliance_hybrid_cart_vmax",
+                                              {0.15, 0.15, 0.15, 0.6, 0.6, 0.6});
+            auto_declare<double>("compliance_hybrid_force_xmax_lin", 0.2);
+            auto_declare<double>("compliance_hybrid_force_xmax_ang", 0.3);
+            auto_declare<double>("compliance_hybrid_joint_vmax", 0.8);
+            auto_declare<double>("compliance_hybrid_joint_limit_margin", 0.02);
+            auto_declare<double>("compliance_hybrid_dls_lambda", 0.05);
             auto_declare<double>("compliance_wrench_lpf_alpha", 0.15);
-            auto_declare<double>("compliance_zero_cal_duration", 1.0);
+            auto_declare<double>("compliance_zero_cal_duration", 10.0);
+            auto_declare<double>("compliance_zero_cal_settle", 0.2);
+            auto_declare<double>("compliance_zero_cal_still_vel", 0.02);
             auto_declare<double>("compliance_gravity_accel", 9.81);
+            auto_declare<double>("compliance_ft_timeout_sec", 0.2);
+            auto_declare<bool>("compliance_teleop_enable", true);
+            auto_declare<std::string>("compliance_teleop_base_frame", "base_link");
+            auto_declare<std::string>("compliance_gravity_frame", "world");
             auto_declare<std::vector<double>>("left_dyn_param", {});
             auto_declare<std::vector<double>>("right_dyn_param", {});
             state_list_.compliance = std::make_shared<StateCompliance>(

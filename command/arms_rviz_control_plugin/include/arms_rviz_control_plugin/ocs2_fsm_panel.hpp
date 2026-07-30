@@ -49,8 +49,13 @@ private Q_SLOTS:
   void onHoldToHome();
   void onHoldToMoveJ();
   void onMoveJToHold();
+  void onHoldToCompliance();
+  void onComplianceToHold();
   void onSwitchPose();
   void onSwitchPoseReleased();
+  void onComplianceSoft();
+  void onComplianceMedium();
+  void onComplianceHard();
 
   // WBC control slots
   void onBaseToggled();
@@ -61,12 +66,21 @@ private Q_SLOTS:
   void onHomePoseTrackingToggled();
 
 private:
+  enum class ComplianceStiffnessPreset
+  {
+    Soft = 0,
+    Medium = 1,
+    Hard = 2
+  };
+
   // FSM related methods
   void publishCommand(int32_t command);
   void updateStatusDisplay();
   void updateButtonVisibility();
   void setCurrentState(const std::string& state);
   void onFsmCommandReceived(const std_msgs::msg::Int32::SharedPtr msg);
+  void applyComplianceStiffnessPreset(ComplianceStiffnessPreset preset);
+  void updateCompliancePresetButtonStyles();
 
   // WBC related methods
   bool wbc_available_ = false;
@@ -144,8 +158,17 @@ private:
   std::unique_ptr<QPushButton> hold_to_home_btn_;
   std::unique_ptr<QPushButton> hold_to_movej_btn_;
   std::unique_ptr<QPushButton> movej_to_hold_btn_;
+  std::unique_ptr<QPushButton> hold_to_compliance_btn_;
+  std::unique_ptr<QPushButton> compliance_to_hold_btn_;
+  std::unique_ptr<QWidget> compliance_preset_row_;
+  std::unique_ptr<QPushButton> compliance_soft_btn_;
+  std::unique_ptr<QPushButton> compliance_medium_btn_;
+  std::unique_ptr<QPushButton> compliance_hard_btn_;
   std::unique_ptr<QPushButton> switch_pose_btn_;
   std::unique_ptr<QLabel> current_state_label_;
+
+  ComplianceStiffnessPreset compliance_preset_ = ComplianceStiffnessPreset::Medium;
+  rclcpp::AsyncParametersClient::SharedPtr ocs2_param_client_;
 
   // WBC UI Elements
   std::unique_ptr<QWidget> wbc_container_;  // Container that shows/hides based on mode

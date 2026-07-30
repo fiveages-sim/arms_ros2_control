@@ -5,7 +5,6 @@
 #include "basic_joint_controller/BasicJointController.h"
 #include "basic_joint_controller/FSM/StateHold.h"
 #include "basic_joint_controller/FSM/StateMoveJ.h"
-#include "basic_joint_controller/FSM/StateCompliance.h"
 #include <eigen3/Eigen/Dense>
 #include <arms_controller_common/FSM/StateHome.h>
 
@@ -136,22 +135,6 @@ namespace basic_joint_controller
 
             state_list_.movej = std::make_shared<StateMoveJ>(
                 ctrl_interfaces_, get_node(), joint_names_);
-
-            // COMPLIANCE: force outer-loop + stiff position inner-loop (fsm_command=5)
-            auto_declare<std::vector<double>>("compliance_admittance_mass",
-                                              {5.0, 5.0, 5.0, 0.5, 0.5, 0.5});
-            auto_declare<std::vector<double>>("compliance_admittance_damping",
-                                              {80.0, 80.0, 80.0, 8.0, 8.0, 8.0});
-            auto_declare<double>("compliance_admittance_max_displacement", 0.05);
-            auto_declare<double>("compliance_force_deadband", 2.0);
-            auto_declare<double>("compliance_torque_deadband", 0.15);
-            auto_declare<double>("compliance_wrench_lpf_alpha", 0.15);
-            auto_declare<double>("compliance_zero_cal_duration", 1.0);
-            auto_declare<double>("compliance_gravity_accel", 9.81);
-            auto_declare<std::vector<double>>("left_dyn_param", {});
-            auto_declare<std::vector<double>>("right_dyn_param", {});
-            state_list_.compliance = std::make_shared<StateCompliance>(
-                ctrl_interfaces_, get_node());
 
             target_command_enabled_ = auto_declare<bool>("target_command_enabled", false);
             target_command_close_config_ = auto_declare<int32_t>("target_command_close_config", 1);
@@ -733,8 +716,6 @@ namespace basic_joint_controller
             return state_list_.hold;
         case FSMStateName::MOVEJ:
             return state_list_.movej;
-        case FSMStateName::COMPLIANCE:
-            return state_list_.compliance;
         default:
             return state_list_.invalid;
         }
