@@ -118,9 +118,12 @@ int main(int argc, char** argv)
                     "✅ Created unified target pose publishers (queue_size=1, dual_arm=%s)",
                     dual_arm_mode ? "true" : "false");
 
+        // disable_auto_update_states: marker visible + user-owned pose.
+        // 3=OCS2, 5=COMPLIANCE — without 5, Compliance made markers
+        // scale=0.001 / alpha=0 (invisible) and blocked teleop from RViz.
         auto target_manager = std::make_unique<ArmsTargetManager>(
             node, dual_arm_mode, control_base_frame, marker_fixed_frame,
-            20.0, std::vector<int32_t>{3}, 0.05);
+            20.0, std::vector<int32_t>{3, 5}, 0.05);
 
         // 初始化（传入统一的发布器）
         target_manager->initialize(pub_left_target, pub_left_target_stamped,

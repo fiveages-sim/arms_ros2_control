@@ -29,4 +29,10 @@
     base_class_type="rviz_common::Panel">
     <description>WBC current state display panel</description>
   </class>
+  <class
+    name="arms_rviz_control_plugin/ComplianceForcePanel"
+    type="arms_rviz_control_plugin::ComplianceForcePanel"
+    base_class_type="rviz_common::Panel">
+    <description>COMPLIANCE force setpoint / measured force / force-axis selection panel</description>
+  </class>
 </library>

@@ -34,6 +34,8 @@ Panels:
     Name: GripperControlPanel
     left_gripper_open: false
     right_gripper_open: false
+  - Class: arms_rviz_control_plugin/ComplianceForcePanel
+    Name: ComplianceForcePanel
 Visualization Manager:
   Class: ""
   Displays:
@@ -405,6 +407,8 @@ Visualization Manager:
     Saved: ~
 Window Geometry:
   Displays:
+    collapsed: false
+  ComplianceForcePanel:
     collapsed: false
   GripperControlPanel:
     collapsed: false

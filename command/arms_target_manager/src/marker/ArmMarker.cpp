@@ -71,39 +71,36 @@ namespace arms_ros2_control::command
             current_target_topic, 10,
             [this](const geometry_msgs::msg::PoseStamped::ConstSharedPtr msg)
             {
-                // 更新 frame_id
+                // Always keep frame_id for stamped publish; never clobber the
+                // user-dragged pose while in OCS2/COMPLIANCE (same rule as
+                // left_current_pose / updateFromTopic).
                 current_target_frame_id_ = msg->header.frame_id;
                 latest_current_target_pose_ = *msg;
                 has_latest_current_target_pose_ = true;
 
-                // 获取消息的 frame_id
-                std::string source_frame_id = msg->header.frame_id;
-                
-                // 如果 frame_id 为空，跳过更新
+                if (state_check_callback_ && !state_check_callback_())
+                {
+                    return;
+                }
+
+                const std::string& source_frame_id = msg->header.frame_id;
                 if (source_frame_id.empty())
                 {
                     return;
                 }
 
-                // 冷却机制检查：只有当超过1秒不是由marker这边发送的指令，才允许topic的数据来更新marker位置
+                // Cooldown after marker send: avoid snapping pose back to cmd.
                 auto now = node_->now();
-                if (last_marker_command_time_.seconds() > 0)  // 如果曾经发送过指令
+                if (last_marker_command_time_.seconds() > 0)
                 {
-                    auto time_since_last_command = (now - last_marker_command_time_).seconds();
-                    if (time_since_last_command < 1.0)  // 如果距离上次marker发送指令不足1秒，跳过更新
+                    const double dt = (now - last_marker_command_time_).seconds();
+                    if (dt < 1.0)
                     {
                         return;
                     }
                 }
 
-                // 转换 pose 到 marker 的坐标系（frame_id_）
-                geometry_msgs::msg::Pose transformed_pose = transformPose(
-                    msg->pose, source_frame_id, frame_id_);
-
-                // 更新内部 pose 存储
-                pose_ = transformed_pose;
-
-                // 调用更新回调，通知外部更新可视化
+                pose_ = transformPose(msg->pose, source_frame_id, frame_id_);
                 if (update_callback_)
                 {
                     update_callback_(getMarkerName(), pose_);

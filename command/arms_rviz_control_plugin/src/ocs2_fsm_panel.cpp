@@ -109,7 +109,7 @@ namespace arms_rviz_control_plugin
         switch_pose_btn_->setStyleSheet(buttonStyle("#FF5722"));
         button_layout->addWidget(switch_pose_btn_.get());
 
-        // HOLD → OCS2 和 HOLD → MOVEJ 同一行
+        // HOLD → OCS2, MOVEJ, COMPLIANCE 同一行
         auto* hold_to_row = new QHBoxLayout();
         hold_to_row->setSpacing(2);
         hold_to_ocs2_btn_ = std::make_unique<QPushButton>("OCS2", this);
@@ -118,6 +118,9 @@ namespace arms_rviz_control_plugin
         hold_to_movej_btn_ = std::make_unique<QPushButton>("MOVEJ", this);
         hold_to_movej_btn_->setStyleSheet(buttonStyle("#009688"));
         hold_to_row->addWidget(hold_to_movej_btn_.get());
+        hold_to_compliance_btn_ = std::make_unique<QPushButton>("COMPLIANCE", this);
+        hold_to_compliance_btn_->setStyleSheet(buttonStyle("#4CAF50"));
+        hold_to_row->addWidget(hold_to_compliance_btn_.get());
         button_layout->addLayout(hold_to_row);
 
         // OCS2 → HOLD 和 MOVEJ → HOLD 同一行
@@ -130,6 +133,38 @@ namespace arms_rviz_control_plugin
         movej_to_hold_btn_->setStyleSheet(buttonStyle("#FF9800"));
         to_hold_row->addWidget(movej_to_hold_btn_.get());
         button_layout->addLayout(to_hold_row);
+
+        // COMPLIANCE → HOLD (command = 2)
+        compliance_to_hold_btn_ = std::make_unique<QPushButton>("HOLD", this);
+        compliance_to_hold_btn_->setStyleSheet(buttonStyle("#FF9800"));
+        button_layout->addWidget(compliance_to_hold_btn_.get());
+
+        // COMPLIANCE stiffness presets: 软 / 中 / 硬
+        compliance_preset_row_ = std::make_unique<QWidget>(this);
+        auto* preset_layout = new QHBoxLayout(compliance_preset_row_.get());
+        preset_layout->setContentsMargins(0, scaled(2), 0, 0);
+        preset_layout->setSpacing(2);
+        auto* preset_label = new QLabel("刚度:", compliance_preset_row_.get());
+        preset_label->setStyleSheet(QString("QLabel { font-size: %1px; }").arg(scaled(12)));
+        compliance_soft_btn_ = std::make_unique<QPushButton>("软", this);
+        compliance_medium_btn_ = std::make_unique<QPushButton>("中", this);
+        compliance_hard_btn_ = std::make_unique<QPushButton>("硬", this);
+        compliance_soft_btn_->setCheckable(true);
+        compliance_medium_btn_->setCheckable(true);
+        compliance_hard_btn_->setCheckable(true);
+        compliance_soft_btn_->setToolTip(
+            "软：位姿跟踪更柔、力轴更顺从（低 K / 低 D）");
+        compliance_medium_btn_->setToolTip(
+            "中：默认刚度（控制器默认参数）");
+        compliance_hard_btn_->setToolTip(
+            "硬：位姿跟踪更刚、力轴更硬（高 K / 高 D）");
+        preset_layout->addWidget(preset_label);
+        preset_layout->addWidget(compliance_soft_btn_.get());
+        preset_layout->addWidget(compliance_medium_btn_.get());
+        preset_layout->addWidget(compliance_hard_btn_.get());
+        button_layout->addWidget(compliance_preset_row_.get());
+        compliance_preset_row_->setVisible(false);
+        updateCompliancePresetButtonStyles();
 
         // HOLD → HOME (command = 1)
         hold_to_home_btn_ = std::make_unique<QPushButton>("HOME", this);
@@ -319,6 +354,11 @@ namespace arms_rviz_control_plugin
         connect(ocs2_to_hold_btn_.get(), &QPushButton::clicked, this, &OCS2FSMPanel::onOCS2ToHold);
         connect(hold_to_movej_btn_.get(), &QPushButton::clicked, this, &OCS2FSMPanel::onHoldToMoveJ);
         connect(movej_to_hold_btn_.get(), &QPushButton::clicked, this, &OCS2FSMPanel::onMoveJToHold);
+        connect(hold_to_compliance_btn_.get(), &QPushButton::clicked, this, &OCS2FSMPanel::onHoldToCompliance);
+        connect(compliance_to_hold_btn_.get(), &QPushButton::clicked, this, &OCS2FSMPanel::onComplianceToHold);
+        connect(compliance_soft_btn_.get(), &QPushButton::clicked, this, &OCS2FSMPanel::onComplianceSoft);
+        connect(compliance_medium_btn_.get(), &QPushButton::clicked, this, &OCS2FSMPanel::onComplianceMedium);
+        connect(compliance_hard_btn_.get(), &QPushButton::clicked, this, &OCS2FSMPanel::onComplianceHard);
         connect(hold_to_home_btn_.get(), &QPushButton::clicked, this, &OCS2FSMPanel::onHoldToHome);
         connect(switch_pose_btn_.get(), &QPushButton::clicked, this, &OCS2FSMPanel::onSwitchPose);
 
@@ -369,6 +409,10 @@ namespace arms_rviz_control_plugin
         // Create FSM command publisher
         fsm_command_publisher_ = node_->create_publisher<std_msgs::msg::Int32>(
             "/fsm_command", 10);
+
+        // Parameter client for COMPLIANCE soft/medium/hard presets
+        ocs2_param_client_ = std::make_shared<rclcpp::AsyncParametersClient>(
+            node_, "/ocs2_arm_controller");
 
         // Create subscriber to listen for FSM command changes
         fsm_command_subscriber_ = node_->create_subscription<std_msgs::msg::Int32>(
@@ -433,6 +477,141 @@ namespace arms_rviz_control_plugin
         setCurrentState("HOLD");
     }
 
+    void OCS2FSMPanel::onHoldToCompliance()
+    {
+        publishCommand(5);
+        setCurrentState("COMPLIANCE");
+    }
+
+    void OCS2FSMPanel::onComplianceToHold()
+    {
+        publishCommand(2);
+        setCurrentState("HOLD");
+    }
+
+    void OCS2FSMPanel::onComplianceSoft()
+    {
+        applyComplianceStiffnessPreset(ComplianceStiffnessPreset::Soft);
+    }
+
+    void OCS2FSMPanel::onComplianceMedium()
+    {
+        applyComplianceStiffnessPreset(ComplianceStiffnessPreset::Medium);
+    }
+
+    void OCS2FSMPanel::onComplianceHard()
+    {
+        applyComplianceStiffnessPreset(ComplianceStiffnessPreset::Hard);
+    }
+
+    void OCS2FSMPanel::updateCompliancePresetButtonStyles()
+    {
+        auto style_for = [](bool selected, const QString& color) {
+            if (selected)
+            {
+                return QString(
+                    "QPushButton { background-color: %1; color: white; font-weight: bold; "
+                    "font-size: %2px; border: 2px solid #212121; }")
+                    .arg(color)
+                    .arg(scaled(13));
+            }
+            return QString(
+                "QPushButton { background-color: %1; color: white; font-weight: bold; "
+                "font-size: %2px; opacity: 0.85; }")
+                .arg(color)
+                .arg(scaled(13));
+        };
+
+        const bool soft = compliance_preset_ == ComplianceStiffnessPreset::Soft;
+        const bool medium = compliance_preset_ == ComplianceStiffnessPreset::Medium;
+        const bool hard = compliance_preset_ == ComplianceStiffnessPreset::Hard;
+
+        if (compliance_soft_btn_)
+        {
+            compliance_soft_btn_->setChecked(soft);
+            compliance_soft_btn_->setStyleSheet(style_for(soft, "#8BC34A"));
+        }
+        if (compliance_medium_btn_)
+        {
+            compliance_medium_btn_->setChecked(medium);
+            compliance_medium_btn_->setStyleSheet(style_for(medium, "#4CAF50"));
+        }
+        if (compliance_hard_btn_)
+        {
+            compliance_hard_btn_->setChecked(hard);
+            compliance_hard_btn_->setStyleSheet(style_for(hard, "#2E7D32"));
+        }
+    }
+
+    void OCS2FSMPanel::applyComplianceStiffnessPreset(ComplianceStiffnessPreset preset)
+    {
+        compliance_preset_ = preset;
+        updateCompliancePresetButtonStyles();
+
+        // Soft: more compliant. Medium: controller defaults. Hard: stiffer tracking.
+        // Force damping D: v = F_err/D → larger D = harder against external force.
+        std::vector<double> k_pos;
+        std::vector<double> d_force;
+        std::vector<double> cart_vmax;
+        double joint_vmax = 0.8;
+        const char* name = "中";
+
+        switch (preset)
+        {
+            case ComplianceStiffnessPreset::Soft:
+                name = "软";
+                k_pos = {8.0, 8.0, 8.0, 4.0, 4.0, 4.0};
+                d_force = {1500.0, 1500.0, 1500.0, 80.0, 80.0, 80.0};
+                cart_vmax = {0.10, 0.10, 0.10, 0.45, 0.45, 0.45};
+                joint_vmax = 0.5;
+                break;
+            case ComplianceStiffnessPreset::Hard:
+                name = "硬";
+                k_pos = {45.0, 45.0, 45.0, 22.0, 22.0, 22.0};
+                d_force = {12000.0, 12000.0, 12000.0, 600.0, 600.0, 600.0};
+                cart_vmax = {0.20, 0.20, 0.20, 0.80, 0.80, 0.80};
+                joint_vmax = 1.0;
+                break;
+            case ComplianceStiffnessPreset::Medium:
+            default:
+                name = "中";
+                k_pos = {20.0, 20.0, 20.0, 10.0, 10.0, 10.0};
+                d_force = {5000.0, 5000.0, 5000.0, 250.0, 250.0, 250.0};
+                cart_vmax = {0.15, 0.15, 0.15, 0.60, 0.60, 0.60};
+                joint_vmax = 0.8;
+                break;
+        }
+
+        if (!ocs2_param_client_)
+        {
+            RCLCPP_WARN(node_->get_logger(),
+                        "COMPLIANCE preset '%s' skipped: param client not ready", name);
+            return;
+        }
+
+        if (!ocs2_param_client_->service_is_ready())
+        {
+            RCLCPP_WARN(node_->get_logger(),
+                        "COMPLIANCE preset '%s': /ocs2_arm_controller params not ready",
+                        name);
+            return;
+        }
+
+        std::vector<rclcpp::Parameter> params = {
+            rclcpp::Parameter("compliance_hybrid_pos_stiffness", k_pos),
+            rclcpp::Parameter("compliance_hybrid_force_damping", d_force),
+            rclcpp::Parameter("compliance_hybrid_cart_vmax", cart_vmax),
+            rclcpp::Parameter("compliance_hybrid_joint_vmax", joint_vmax),
+        };
+
+        auto future = ocs2_param_client_->set_parameters(params);
+        RCLCPP_INFO(node_->get_logger(),
+                    "COMPLIANCE stiffness preset → %s "
+                    "(K_lin=%.0f D_lin=%.0f vmax=%.2f j_vmax=%.2f)",
+                    name, k_pos[0], d_force[0], cart_vmax[0], joint_vmax);
+        (void)future;
+    }
+
     void OCS2FSMPanel::onSwitchPose()
     {
         if (!switch_pose_pressed_)
@@ -476,6 +655,12 @@ namespace arms_rviz_control_plugin
             ocs2_to_hold_btn_->setVisible(false);
             movej_to_hold_btn_->setVisible(false);
             hold_to_home_btn_->setVisible(false);
+            hold_to_compliance_btn_->setVisible(false);
+            compliance_to_hold_btn_->setVisible(false);
+            if (compliance_preset_row_)
+            {
+                compliance_preset_row_->setVisible(false);
+            }
             home_to_hold_btn_->setVisible(true);
             home_to_hold_btn_->setEnabled(true);
             switch_pose_btn_->setVisible(true);
@@ -496,12 +681,19 @@ namespace arms_rviz_control_plugin
             switch_pose_btn_->setVisible(false);
             ocs2_to_hold_btn_->setVisible(false);
             movej_to_hold_btn_->setVisible(false);
+            compliance_to_hold_btn_->setVisible(false);
+            if (compliance_preset_row_)
+            {
+                compliance_preset_row_->setVisible(false);
+            }
             hold_to_home_btn_->setVisible(true);
             hold_to_home_btn_->setEnabled(true);
             hold_to_ocs2_btn_->setVisible(true);
             hold_to_ocs2_btn_->setEnabled(true);
             hold_to_movej_btn_->setVisible(true);
             hold_to_movej_btn_->setEnabled(true);
+            hold_to_compliance_btn_->setVisible(true);
+            hold_to_compliance_btn_->setEnabled(true);
 
             // Hide WBC controls in HOLD mode (if available)
             if (wbc_container_)
@@ -533,6 +725,12 @@ namespace arms_rviz_control_plugin
                 hold_to_movej_btn_->setVisible(false);
                 movej_to_hold_btn_->setVisible(false);
                 hold_to_home_btn_->setVisible(false);
+                hold_to_compliance_btn_->setVisible(false);
+                compliance_to_hold_btn_->setVisible(false);
+                if (compliance_preset_row_)
+                {
+                    compliance_preset_row_->setVisible(false);
+                }
 
                 ocs2_to_hold_btn_->setVisible(true);
                 ocs2_to_hold_btn_->setEnabled(true);
@@ -554,10 +752,43 @@ namespace arms_rviz_control_plugin
             hold_to_home_btn_->setVisible(false);
             ocs2_to_hold_btn_->setVisible(false);
             hold_to_movej_btn_->setVisible(false);
+            hold_to_compliance_btn_->setVisible(false);
+            compliance_to_hold_btn_->setVisible(false);
+            if (compliance_preset_row_)
+            {
+                compliance_preset_row_->setVisible(false);
+            }
             movej_to_hold_btn_->setVisible(true);
             movej_to_hold_btn_->setEnabled(true);
 
             // Hide WBC controls in MOVEJ mode
+            if (wbc_container_)
+            {
+                wbc_container_->setVisible(false);
+            }
+        }
+        else if (current_state_ == "COMPLIANCE")
+        {
+            // Show button group: COMPLIANCE → HOLD + soft/medium/hard presets
+            button_group_->setVisible(true);
+
+            home_to_hold_btn_->setVisible(false);
+            switch_pose_btn_->setVisible(false);
+            hold_to_ocs2_btn_->setVisible(false);
+            hold_to_movej_btn_->setVisible(false);
+            ocs2_to_hold_btn_->setVisible(false);
+            movej_to_hold_btn_->setVisible(false);
+            hold_to_home_btn_->setVisible(false);
+            hold_to_compliance_btn_->setVisible(false);
+
+            compliance_to_hold_btn_->setVisible(true);
+            compliance_to_hold_btn_->setEnabled(true);
+            if (compliance_preset_row_)
+            {
+                compliance_preset_row_->setVisible(true);
+            }
+            updateCompliancePresetButtonStyles();
+
             if (wbc_container_)
             {
                 wbc_container_->setVisible(false);
@@ -575,6 +806,12 @@ namespace arms_rviz_control_plugin
             ocs2_to_hold_btn_->setVisible(false);
             movej_to_hold_btn_->setVisible(false);
             hold_to_home_btn_->setVisible(false);
+            hold_to_compliance_btn_->setVisible(false);
+            compliance_to_hold_btn_->setVisible(false);
+            if (compliance_preset_row_)
+            {
+                compliance_preset_row_->setVisible(false);
+            }
 
             if (wbc_container_)
             {
@@ -591,9 +828,15 @@ namespace arms_rviz_control_plugin
 
     void OCS2FSMPanel::setCurrentState(const std::string& state)
     {
+        const bool entering_compliance =
+            (state == "COMPLIANCE" && current_state_ != "COMPLIANCE");
         current_state_ = state;
         current_state_label_->setText(QString::fromStdString(state));
         updateButtonVisibility();
+        if (entering_compliance)
+        {
+            applyComplianceStiffnessPreset(compliance_preset_);
+        }
     }
 
     void OCS2FSMPanel::load(const rviz_common::Config& config)

@@ -612,13 +612,17 @@ namespace arms_ros2_control::command
 
         if (marker_type == "left_arm" && left_arm_marker_ && shouldShowLeftArmMarker())
         {
+            // Publish the marker's current pose (what RViz shows), both stamped
+            // and unstamped so ComplianceEngine / OCS2 always receive it.
             left_arm_marker_->publishTargetPose(true, true);
+            left_arm_marker_->publishTargetPose(true, false);
             return;
         }
 
         if (marker_type == "right_arm" && right_arm_marker_ && shouldShowRightArmMarker())
         {
             right_arm_marker_->publishTargetPose(true, true);
+            right_arm_marker_->publishTargetPose(true, false);
             return;
         }
     }

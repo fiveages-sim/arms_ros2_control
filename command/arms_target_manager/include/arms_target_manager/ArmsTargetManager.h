@@ -44,7 +44,10 @@ namespace arms_ros2_control::command
             std::string frameId = "world",
             std::string markerFixedFrame = "base_footprint",
             double publishRate = 20.0,
-            const std::vector<int32_t>& disableAutoUpdateStates = {3},
+            // States where the interactive marker is visible/draggable and is
+            // NOT auto-overwritten by left/right_current_pose:
+            //   3 = OCS2, 5 = COMPLIANCE (same teleop marker UX).
+            const std::vector<int32_t>& disableAutoUpdateStates = {3, 5},
             double markerUpdateInterval = 0.05);
 
         ~ArmsTargetManager() = default;
