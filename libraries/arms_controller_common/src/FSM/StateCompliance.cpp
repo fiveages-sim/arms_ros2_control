@@ -1,192 +1,849 @@
 //
-// Common StateCompliance Implementation
+// Common StateCompliance — first-order hybrid force/position control
 //
-// Enter → zero_cal + world-frame tool gravity → force outer / stiff position inner.
-//
-
 #include "arms_controller_common/FSM/StateCompliance.h"
 
 #include <algorithm>
 #include <cmath>
+#include <cstdio>
 #include <utility>
 
 #include <tf2/exceptions.h>
+#include <tf2_geometry_msgs/tf2_geometry_msgs.hpp>
 
 namespace arms_controller_common
 {
-    StateCompliance::StateCompliance(CtrlInterfaces& ctrl_interfaces,
-                                     std::shared_ptr<rclcpp_lifecycle::LifecycleNode> node,
-                                     const std::shared_ptr<GravityCompensation>& gravity_compensation,
-                                     const std::shared_ptr<ArmKinematics>& kinematics)
+    StateCompliance::StateCompliance(
+        CtrlInterfaces& ctrl_interfaces,
+        std::shared_ptr<rclcpp_lifecycle::LifecycleNode> node,
+        const std::shared_ptr<GravityCompensation>& gravity_compensation,
+        const std::shared_ptr<ArmKinematics>& kinematics)
         : FSMState(FSMStateName::COMPLIANCE, "COMPLIANCE", ctrl_interfaces),
           node_(std::move(node)),
           gravity_compensation_(gravity_compensation),
           kinematics_(kinematics)
     {
+        arms_[0].wrench_topic = kDefaultWrenchTopic[0];
+        arms_[1].wrench_topic = kDefaultWrenchTopic[1];
         if (kinematics_)
         {
-            left_joint_count_ = kinematics_->getLeftArmJointCount();
-            right_joint_count_ = kinematics_->getRightArmJointCount();
+            arms_[0].joint_count = kinematics_->getLeftArmJointCount();
+            arms_[1].joint_count = kinematics_->getRightArmJointCount();
         }
         if (node_)
         {
-            tf_buffer_ = std::make_shared<tf2_ros::Buffer>(node_->get_clock());
+            tf_buffer_   = std::make_shared<tf2_ros::Buffer>(node_->get_clock());
             tf_listener_ = std::make_shared<tf2_ros::TransformListener>(*tf_buffer_);
+        }
+    }
+
+    FSMStateName StateCompliance::checkChange()
+    {
+        switch (ctrl_interfaces_.fsm_command_)
+        {
+        case 2:  return FSMStateName::HOLD;
+        default: return FSMStateName::COMPLIANCE;
         }
     }
 
     void StateCompliance::updateParam()
     {
-        if (!node_)
-        {
-            return;
-        }
+        if (!node_) return;
 
-        auto get_double = [this](const std::string& name, double fallback) -> double
-        {
-            try
-            {
-                return node_->get_parameter(name).get_value<double>();
-            }
-            catch (...)
-            {
-                return fallback;
-            }
+        auto get_double = [this](const std::string& n, double d) -> double {
+            try { return node_->get_parameter(n).get_value<double>(); }
+            catch (...) { return d; }
+        };
+        auto get_bool = [this](const std::string& n, bool b) -> bool {
+            try { return node_->get_parameter(n).as_bool(); }
+            catch (...) { return b; }
+        };
+        auto get_array = [this](const std::string& n, std::vector<double>& v) {
+            try {
+                const auto p = node_->get_parameter(n).as_double_array();
+                if (p.size() == v.size()) v = p;
+            } catch (...) {}
         };
 
-        admittance_max_displacement_ =
-            get_double("compliance_admittance_max_displacement", admittance_max_displacement_);
-        force_deadband_ = get_double("compliance_force_deadband", force_deadband_);
-        torque_deadband_ = get_double("compliance_torque_deadband", torque_deadband_);
+        get_array("compliance_task_selection", task_selection_);
+        get_array("compliance_hybrid_pos_stiffness", hybrid_pos_stiffness_);
+        get_array("compliance_hybrid_pos_damping", hybrid_pos_damping_);
+        hybrid_pos_ki_     = get_double("compliance_hybrid_pos_ki", hybrid_pos_ki_);
+        hybrid_pos_ki_max_ = get_double("compliance_hybrid_pos_ki_max", hybrid_pos_ki_max_);
+        get_array("compliance_hybrid_force_damping", hybrid_force_damping_);
+        hybrid_force_ki_       = get_double("compliance_hybrid_force_ki", hybrid_force_ki_);
+        hybrid_force_ki_max_   = get_double("compliance_hybrid_force_ki_max", hybrid_force_ki_max_);
+        hybrid_force_deadband_ = get_double("compliance_hybrid_force_deadband", hybrid_force_deadband_);
+        get_array("compliance_force_setpoint", force_setpoint_);
+        force_feedback_sign_ = get_double("compliance_force_feedback_sign", force_feedback_sign_);
+
+        get_array("compliance_hybrid_cart_vmax", hybrid_cart_vmax_);
+        hybrid_force_xmax_lin_ = get_double("compliance_hybrid_force_xmax_lin", hybrid_force_xmax_lin_);
+        hybrid_force_xmax_ang_ = get_double("compliance_hybrid_force_xmax_ang", hybrid_force_xmax_ang_);
+
+        hybrid_joint_vmax_         = get_double("compliance_hybrid_joint_vmax", hybrid_joint_vmax_);
+        hybrid_joint_limit_margin_ = get_double("compliance_hybrid_joint_limit_margin", hybrid_joint_limit_margin_);
+        hybrid_dls_lambda_         = get_double("compliance_hybrid_dls_lambda", hybrid_dls_lambda_);
+
         wrench_lpf_alpha_ = std::clamp(
             get_double("compliance_wrench_lpf_alpha", wrench_lpf_alpha_), 0.01, 1.0);
-        zero_cal_duration_ = std::max(0.05, get_double("compliance_zero_cal_duration", 1.0));
-        gravity_accel_ = get_double("compliance_gravity_accel", 9.81);
 
-        try
-        {
-            admittance_mass_ = node_->get_parameter("compliance_admittance_mass").as_double_array();
-        }
-        catch (...)
-        {
-        }
-        try
-        {
-            admittance_damping_ =
-                node_->get_parameter("compliance_admittance_damping").as_double_array();
-        }
-        catch (...)
-        {
-        }
-        try
-        {
-            left_dyn_param_ = node_->get_parameter("left_dyn_param").as_double_array();
-        }
-        catch (...)
-        {
-        }
-        try
-        {
-            right_dyn_param_ = node_->get_parameter("right_dyn_param").as_double_array();
-        }
-        catch (...)
-        {
-        }
+        zero_cal_duration_  = get_double("compliance_zero_cal_duration", zero_cal_duration_);
+        zero_cal_settle_    = get_double("compliance_zero_cal_settle", zero_cal_settle_);
+        zero_cal_still_vel_ = get_double("compliance_zero_cal_still_vel", zero_cal_still_vel_);
+
+        try { arms_[0].dyn_param = node_->get_parameter("left_dyn_param").as_double_array(); }
+        catch (...) {}
+        try { arms_[1].dyn_param = node_->get_parameter("right_dyn_param").as_double_array(); }
+        catch (...) {}
+        gravity_accel_ = get_double("compliance_gravity_accel", gravity_accel_);
+
+        teleop_enable_ = get_bool("compliance_teleop_enable", teleop_enable_);
+        try {
+            teleop_base_frame_ = node_->get_parameter("compliance_teleop_base_frame").as_string();
+        } catch (...) {}
+        ft_timeout_sec_ = get_double("compliance_ft_timeout_sec", ft_timeout_sec_);
+        try {
+            gravity_frame_ = node_->get_parameter("compliance_gravity_frame").as_string();
+        } catch (...) {}
     }
 
     void StateCompliance::setupWrenchSubscriptions()
     {
-        if (!node_)
+        if (!node_) return;
+
+        auto qos = rclcpp::SensorDataQoS();
+        for (int s = 0; s < 2; ++s)
         {
-            return;
+            auto& a = arms_[s];
+            a.wrench_sub.reset();
+            if (a.wrench_topic.empty()) continue;
+            a.wrench_sub = node_->create_subscription<geometry_msgs::msg::WrenchStamped>(
+                a.wrench_topic, qos,
+                [this, s](const geometry_msgs::msg::WrenchStamped::SharedPtr msg)
+                {
+                    std::lock_guard<std::mutex> lk(wrench_mutex_);
+                    auto& arr = arms_[s].wrench;
+                    arr[0] = msg->wrench.force.x;
+                    arr[1] = msg->wrench.force.y;
+                    arr[2] = msg->wrench.force.z;
+                    arr[3] = msg->wrench.torque.x;
+                    arr[4] = msg->wrench.torque.y;
+                    arr[5] = msg->wrench.torque.z;
+                    arms_[s].ft_active = true;
+                    arms_[s].ft_stamp  = msg->header.stamp;
+                });
+        }
+    }
+
+    void StateCompliance::setupTeleopSubscriptions()
+    {
+        if (!node_) return;
+
+        auto qos = rclcpp::SensorDataQoS();
+        for (int s = 0; s < 2; ++s)
+        {
+            auto& a = arms_[s];
+            a.target_sub.reset();
+            a.target_stamped_sub.reset();
+            a.pose_pub.reset();
+            a.target_pub.reset();
+
+            a.target_sub = node_->create_subscription<geometry_msgs::msg::Pose>(
+                kTargetTopic[s], qos,
+                [this, s](const geometry_msgs::msg::Pose::SharedPtr msg) {
+                    std::lock_guard<std::mutex> lk(teleop_mutex_);
+                    arms_[s].pending_pose = *msg;
+                    arms_[s].pending_pose_valid = true;
+                });
+
+            a.target_stamped_sub = node_->create_subscription<geometry_msgs::msg::PoseStamped>(
+                kTargetStampedTopic[s], qos,
+                [this, s](const geometry_msgs::msg::PoseStamped::SharedPtr msg) {
+                    geometry_msgs::msg::Pose pose_base;
+                    if (stampedPoseToBase(*msg, pose_base))
+                    {
+                        std::lock_guard<std::mutex> lk(teleop_mutex_);
+                        arms_[s].pending_pose = pose_base;
+                        arms_[s].pending_pose_valid = true;
+                    }
+                });
+
+            a.pose_pub = node_->create_publisher<geometry_msgs::msg::PoseStamped>(
+                kCurrentPoseTopic[s], 10);
+            a.target_pub = node_->create_publisher<geometry_msgs::msg::PoseStamped>(
+                kCurrentTargetTopic[s], 10);
         }
 
-        auto cb = [this](bool is_left, const geometry_msgs::msg::WrenchStamped::SharedPtr msg)
+        force_status_pub_ = node_->create_publisher<
+            arms_ros2_control_msgs::msg::ComplianceForceStatus>(
+            "compliance_force_status", 10);
+    }
+
+    void StateCompliance::enter()
+    {
+        updateParam();
+
+        const size_t nj = ctrl_interfaces_.joint_position_state_interface_.size();
+        hold_positions_.resize(nj);
+        for (size_t i = 0; i < nj; ++i)
+        {
+            hold_positions_[i] = ctrl_interfaces_.last_sent_joint_positions_.size() > i
+                ? ctrl_interfaces_.last_sent_joint_positions_[i] : 0.0;
+        }
+
+        if (kinematicsAvailable())
+        {
+            const RobotState state = makeRobotState(/*measured=*/false);
+            for (int s = 0; s < 2; ++s)
+            {
+                if (arms_[s].joint_count > 0)
+                    arms_[s].cmd_pose = kinematics_->computeSingleEndEffectorPose(state, kArmName[s]);
+            }
+        }
+
+        for (auto& a : arms_) a.resetControlState();
+        zero_cal_pending_ = true;
+        zero_cal_running_ = false;
+        zero_cal_done_    = false;
+        measured_joint_vel_max_ = 0.0;
+        q_meas_prev_all_.resize(0);
+
+        if (kinematics_)
+        {
+            kinematics_->getJointLimits("left",  arms_[0].joint_lower, arms_[0].joint_upper);
+            kinematics_->getJointLimits("right", arms_[1].joint_lower, arms_[1].joint_upper);
+        }
+
+        setupWrenchSubscriptions();
+        setupTeleopSubscriptions();
+
+        if (node_)
+        {
+            RCLCPP_INFO(node_->get_logger(),
+                        "COMPLIANCE (first-order hybrid): entered. "
+                        "sel=[%.0f %.0f %.0f %.0f %.0f %.0f], "
+                        "Fd=[%.1f %.1f %.1f] N, zero_cal=%.1f s, "
+                        "kin=%s (L=%zu R=%zu)",
+                        task_selection_[0], task_selection_[1], task_selection_[2],
+                        task_selection_[3], task_selection_[4], task_selection_[5],
+                        force_setpoint_.empty() ? 0.0 : force_setpoint_[0],
+                        force_setpoint_.size() > 1 ? force_setpoint_[1] : 0.0,
+                        force_setpoint_.size() > 2 ? force_setpoint_[2] : 0.0,
+                        zero_cal_duration_,
+                        kinematicsAvailable() ? "ok" : "MISSING",
+                        arms_[0].joint_count, arms_[1].joint_count);
+        }
+    }
+
+    void StateCompliance::exit()
+    {
+        for (auto& a : arms_) a.resetIo();
+        force_status_pub_.reset();
+    }
+
+    void StateCompliance::run(const rclcpp::Time& time, const rclcpp::Duration& period)
+    {
+        updateParam();
+        const double dt = period.seconds();
+
+        // ── FT freshness ──
+        if (node_)
+        {
+            const rclcpp::Time now = node_->now();
+            std::lock_guard<std::mutex> lk(wrench_mutex_);
+            for (auto& a : arms_)
+            {
+                if (!a.ft_active) continue;
+                try {
+                    if ((now - a.ft_stamp).seconds() > ft_timeout_sec_) {
+                        a.ft_active = false;
+                        RCLCPP_WARN_THROTTLE(
+                            node_->get_logger(), *node_->get_clock(), 2000,
+                            "COMPLIANCE FT stale (>%.0f ms)", ft_timeout_sec_ * 1000.0);
+                    }
+                } catch (...) { a.ft_active = false; }
+            }
+        }
+
+        std::array<std::array<double, 6>, 2> raw{};
         {
             std::lock_guard<std::mutex> lk(wrench_mutex_);
-            auto& wrench = is_left ? left_wrench_ : right_wrench_;
-            wrench[0] = msg->wrench.force.x;
-            wrench[1] = msg->wrench.force.y;
-            wrench[2] = msg->wrench.force.z;
-            wrench[3] = msg->wrench.torque.x;
-            wrench[4] = msg->wrench.torque.y;
-            wrench[5] = msg->wrench.torque.z;
-            if (is_left)
+            for (int s = 0; s < 2; ++s) raw[s] = arms_[s].wrench;
+        }
+
+        // ── Measured joint velocity (for zero-cal stillness) ──
+        {
+            const auto& pos_if = ctrl_interfaces_.joint_position_state_interface_;
+            const size_t npos = pos_if.size();
+            if (npos > 0 && q_meas_prev_all_.size() == static_cast<Eigen::Index>(npos) && dt > 1e-6)
             {
-                left_ft_active_ = true;
+                double vmax = 0.0;
+                for (size_t i = 0; i < npos; ++i)
+                {
+                    const double q = pos_if[i].get().get_optional().value_or(0.0);
+                    vmax = std::max(vmax, std::abs(
+                        q - q_meas_prev_all_(static_cast<Eigen::Index>(i))) / dt);
+                    q_meas_prev_all_(static_cast<Eigen::Index>(i)) = q;
+                }
+                measured_joint_vel_max_ = 0.5 * vmax + 0.5 * measured_joint_vel_max_;
             }
-            else
+            else if (npos > 0)
             {
-                right_ft_active_ = true;
+                q_meas_prev_all_.resize(static_cast<Eigen::Index>(npos));
+                for (size_t i = 0; i < npos; ++i)
+                    q_meas_prev_all_(static_cast<Eigen::Index>(i)) =
+                        pos_if[i].get().get_optional().value_or(0.0);
+                measured_joint_vel_max_ = 0.0;
             }
+        }
+
+        // ── Tool gravity + net wrench ──
+        Eigen::Matrix<double, 6, 1> w_grav[2] = {
+            Eigen::Matrix<double, 6, 1>::Zero(),
+            Eigen::Matrix<double, 6, 1>::Zero()};
+        std::array<std::array<double, 6>, 2> net = raw;
+        for (int s = 0; s < 2; ++s)
+        {
+            if (!arms_[s].ft_active) continue;
+            if (computeToolGravityWrenchInSensorFrame(s, w_grav[s]))
+                for (int i = 0; i < 6; ++i) net[s][i] -= w_grav[s](i);
+        }
+
+        // ── Zero-cal (FT tare; does NOT block position teleop) ──
+        if (zero_cal_pending_ && (arms_[0].ft_active || arms_[1].ft_active))
+        {
+            zero_cal_pending_ = false;
+            zero_cal_running_ = true;
+            zero_cal_start_   = time;
+            RCLCPP_INFO(node_->get_logger(),
+                        "COMPLIANCE zero_cal started (%.2f s). Keep arm still.", zero_cal_duration_);
+        }
+        if (zero_cal_pending_ && !arms_[0].ft_active && !arms_[1].ft_active)
+        {
+            if (zero_cal_start_.nanoseconds() == 0)
+                zero_cal_start_ = time;
+            else if ((time - zero_cal_start_).seconds() > 2.0)
+            {
+                zero_cal_pending_ = false;
+                zero_cal_done_ = true;
+                RCLCPP_WARN(node_->get_logger(),
+                            "COMPLIANCE: no FT within 2 s — continuing with "
+                            "position teleop only (force axes inactive until FT).");
+            }
+        }
+        if (zero_cal_running_)
+        {
+            const double elapsed = (time - zero_cal_start_).seconds();
+            if (elapsed >= zero_cal_settle_ &&
+                measured_joint_vel_max_ < zero_cal_still_vel_)
+            {
+                for (int s = 0; s < 2; ++s)
+                {
+                    for (int i = 0; i < 6; ++i)
+                        arms_[s].zero_cal_sum[i] += net[s][i];
+                    ++arms_[s].zero_cal_samples;
+                }
+            }
+            if (elapsed >= zero_cal_duration_)
+            {
+                if (arms_[0].zero_cal_samples < 10 && elapsed < 3.0 * zero_cal_duration_)
+                {
+                    RCLCPP_WARN_THROTTLE(node_->get_logger(), *node_->get_clock(), 1000,
+                                         "COMPLIANCE zero_cal: too few still samples (%ld) — extending...",
+                                         arms_[0].zero_cal_samples);
+                }
+                else
+                {
+                    for (int s = 0; s < 2; ++s)
+                    {
+                        if (arms_[s].zero_cal_samples <= 0) continue;
+                        for (int i = 0; i < 6; ++i)
+                            arms_[s].wrench_bias[i] = arms_[s].zero_cal_sum[i] /
+                                static_cast<double>(arms_[s].zero_cal_samples);
+                    }
+                    zero_cal_running_ = false;
+                    zero_cal_done_    = true;
+                    RCLCPP_INFO(node_->get_logger(),
+                                "COMPLIANCE zero_cal done (%ld samples). "
+                                "Bias L=[%.3f %.3f %.3f] R=[%.3f %.3f %.3f] N.",
+                                arms_[0].zero_cal_samples,
+                                arms_[0].wrench_bias[0], arms_[0].wrench_bias[1], arms_[0].wrench_bias[2],
+                                arms_[1].wrench_bias[0], arms_[1].wrench_bias[1], arms_[1].wrench_bias[2]);
+                }
+            }
+        }
+
+        // ── Tare → contact wrench in base ──
+        Eigen::Matrix<double, 6, 1> contact_wrench[2];
+        for (int s = 0; s < 2; ++s)
+        {
+            std::array<double, 6> tared = net[s];
+            for (int i = 0; i < 6; ++i) tared[i] -= arms_[s].wrench_bias[i];
+            contact_wrench[s] = arms_[s].ft_active
+                ? wrenchToBase(s, tared)
+                : Eigen::Matrix<double, 6, 1>::Zero();
+        }
+
+        // ── Teleop targets ──
+        if (teleop_enable_)
+        {
+            geometry_msgs::msg::Pose pending[2];
+            bool have[2] = {false, false};
+            {
+                std::lock_guard<std::mutex> lk(teleop_mutex_);
+                for (int s = 0; s < 2; ++s)
+                {
+                    if (!arms_[s].pending_pose_valid) continue;
+                    pending[s] = arms_[s].pending_pose;
+                    arms_[s].pending_pose_valid = false;
+                    have[s] = true;
+                }
+            }
+            for (int s = 0; s < 2; ++s)
+            {
+                if (!have[s]) continue;
+                if (!updateTargetFromPose(s == 0, pending[s]))
+                    RCLCPP_WARN_THROTTLE(node_->get_logger(), *node_->get_clock(), 1000,
+                                         "COMPLIANCE teleop: %s target REJECTED (kin=%s)",
+                                         kArmName[s],
+                                         kinematicsAvailable() ? "ok" : "MISSING");
+            }
+        }
+
+        // ── Hybrid control ──
+        if (kinematicsAvailable())
+        {
+            stepHybridControl(true,  dt, contact_wrench[0]);
+            stepHybridControl(false, dt, contact_wrench[1]);
+        }
+        else
+        {
+            RCLCPP_WARN_THROTTLE(
+                node_->get_logger(), *node_->get_clock(), 2000,
+                "COMPLIANCE: kinematics unavailable (L=%zu R=%zu) — not moving",
+                arms_[0].joint_count, arms_[1].joint_count);
+        }
+
+        // ── Emit position commands ──
+        const size_t N = std::min(
+            ctrl_interfaces_.joint_position_command_interface_.size(),
+            hold_positions_.size());
+        for (size_t i = 0; i < N; ++i)
+        {
+            double cmd = hold_positions_[i];
+            const bool la = i < arms_[0].joint_count;
+            const Eigen::Index ai = static_cast<Eigen::Index>(
+                la ? i : i - arms_[0].joint_count);
+            const auto& lo = la ? arms_[0].joint_lower : arms_[1].joint_lower;
+            const auto& hi = la ? arms_[0].joint_upper : arms_[1].joint_upper;
+            if (ai >= 0 && ai < lo.size() && ai < hi.size() && lo(ai) < hi(ai))
+            {
+                cmd = std::clamp(cmd,
+                    lo(ai) + hybrid_joint_limit_margin_,
+                    hi(ai) - hybrid_joint_limit_margin_);
+            }
+            if (!std::isfinite(cmd))
+            {
+                cmd = i < ctrl_interfaces_.last_sent_joint_positions_.size()
+                          ? ctrl_interfaces_.last_sent_joint_positions_[i] : cmd;
+            }
+            ctrl_interfaces_.setJointPositionCommand(i, cmd);
+        }
+
+        // ── MIX gravity feed-forward ──
+        if (ctrl_interfaces_.control_mode_ == ControlMode::MIX && gravity_compensation_)
+        {
+            std::vector<double> current_positions;
+            current_positions.reserve(
+                ctrl_interfaces_.joint_position_state_interface_.size());
+            for (const auto& si : ctrl_interfaces_.joint_position_state_interface_)
+                current_positions.push_back(si.get().get_optional().value_or(0.0));
+
+            const std::vector<double> static_torques =
+                gravity_compensation_->calculateStaticTorques(current_positions);
+
+            for (size_t i = 0;
+                 i < ctrl_interfaces_.joint_force_command_interface_.size() &&
+                 i < static_torques.size();
+                 ++i)
+            {
+                std::ignore = ctrl_interfaces_.joint_force_command_interface_[i]
+                                  .get().set_value(static_torques[i]);
+            }
+
+            if (ctrl_interfaces_.default_gains_.size() >= 2)
+            {
+                const double kp = ctrl_interfaces_.default_gains_[0];
+                const double kd = ctrl_interfaces_.default_gains_[1];
+                for (auto& kp_if : ctrl_interfaces_.joint_kp_command_interface_)
+                    std::ignore = kp_if.get().set_value(kp);
+                for (auto& kd_if : ctrl_interfaces_.joint_kd_command_interface_)
+                    std::ignore = kd_if.get().set_value(kd);
+            }
+        }
+
+        // ── Diagnostics ──
+        if (node_)
+        {
+            RCLCPP_INFO_THROTTLE(
+                node_->get_logger(), *node_->get_clock(), 3000,
+                "COMPLIANCE status: zero_cal=%s FT(L=%s R=%s) "
+                "force_setpoint=%.1f N I_L=%.1f F_filt_L=%.2f N",
+                zero_cal_done_ ? "DONE" :
+                    (zero_cal_running_ ? "running" : "waiting_FT"),
+                arms_[0].ft_active ? "on" : "OFF",
+                arms_[1].ft_active ? "on" : "OFF",
+                force_setpoint_.empty() ? 0.0 : force_setpoint_[0],
+                arms_[0].force_integral(0),
+                arms_[0].wrench_filt(0));
+        }
+        if (node_ && kinematicsAvailable())
+        {
+            auto log_arm = [&](const char* tag, const Eigen::Matrix<double, 6, 1>& wrench,
+                               const ArmSide& a)
+            {
+                Eigen::Vector3d de = Eigen::Vector3d::Zero();
+                if (a.target_valid) de = a.target.position - a.cmd_pose.position;
+                double pos_err = 0, force_err = 0;
+                for (int i = 0; i < 3; ++i)
+                    (task_selection_[i] > 0.5 ? force_err : pos_err) += de(i) * de(i);
+
+                double ang_err = 0, ang_pos = 0, ang_force = 0;
+                if (a.target_valid)
+                {
+                    const auto Rr = a.target.rotationMatrix * a.cmd_pose.rotationMatrix.transpose();
+                    const double ca = std::clamp((Rr.trace() - 1.0) * 0.5, -1.0, 1.0);
+                    const double ang = std::acos(ca);
+                    Eigen::Vector3d rv = Eigen::Vector3d::Zero();
+                    if (ang > 1e-9) {
+                        rv << Rr(2,1)-Rr(1,2), Rr(0,2)-Rr(2,0), Rr(1,0)-Rr(0,1);
+                        const double s2 = 2.0 * std::sin(ang);
+                        if (std::abs(s2) > 1e-9) rv /= s2;
+                        rv *= ang;
+                    }
+                    ang_err = rv.norm();
+                    for (int i = 0; i < 3; ++i)
+                        (task_selection_[i+3] > 0.5 ? ang_force : ang_pos) += rv(i) * rv(i);
+                }
+                const double kR = 180.0 / M_PI;
+                RCLCPP_INFO_THROTTLE(
+                    node_->get_logger(), *node_->get_clock(), 200,
+                    "COMPLIANCE %s: F=[%.2f %.2f %.2f]N M=[%.2f %.2f %.2f]Nm "
+                    "pos=%.1fmm force=%.1fmm ang=%.1fdeg ang_p=%.1fdeg ang_f=%.1fdeg "
+                    "disp_lin=[%.3f %.3f %.3f]mm disp_ang=[%.2f %.2f %.2f]deg",
+                    tag, wrench(0),wrench(1),wrench(2), wrench(3),wrench(4),wrench(5),
+                    std::sqrt(pos_err)*1e3, std::sqrt(force_err)*1e3,
+                    ang_err*kR, std::sqrt(ang_pos)*kR, std::sqrt(ang_force)*kR,
+                    std::abs(a.force_disp(0))*1e3, std::abs(a.force_disp(1))*1e3,
+                    std::abs(a.force_disp(2))*1e3,
+                    std::abs(a.force_disp(3))*kR, std::abs(a.force_disp(4))*kR,
+                    std::abs(a.force_disp(5))*kR);
+            };
+            log_arm("L", contact_wrench[0], arms_[0]);
+            log_arm("R", contact_wrench[1], arms_[1]);
+        }
+
+        // ── Publish TCP / teleop target for RViz ──
+        if (node_)
+        {
+            auto pub_pose = [this](const EndEffectorPose& pose,
+                                   const rclcpp::Publisher<geometry_msgs::msg::PoseStamped>::SharedPtr& pub)
+            {
+                if (!pub) return;
+                geometry_msgs::msg::PoseStamped msg;
+                msg.header.stamp = node_->now();
+                msg.header.frame_id = teleop_base_frame_.empty() ? "base_link" : teleop_base_frame_;
+                msg.pose.position.x = pose.position.x();
+                msg.pose.position.y = pose.position.y();
+                msg.pose.position.z = pose.position.z();
+                Eigen::Quaterniond q(pose.rotationMatrix);
+                msg.pose.orientation.x = q.x();
+                msg.pose.orientation.y = q.y();
+                msg.pose.orientation.z = q.z();
+                msg.pose.orientation.w = q.w();
+                pub->publish(msg);
+            };
+            for (int s = 0; s < 2; ++s)
+            {
+                pub_pose(arms_[s].cmd_pose, arms_[s].pose_pub);
+                pub_pose(arms_[s].target_valid ? arms_[s].target : arms_[s].cmd_pose,
+                         arms_[s].target_pub);
+            }
+        }
+
+        // ── Force status (~20 Hz) ──
+        if (force_status_pub_)
+        {
+            const bool first = last_force_status_pub_.nanoseconds() == 0;
+            if (first || (time - last_force_status_pub_).seconds() >= 0.05)
+            {
+                arms_ros2_control_msgs::msg::ComplianceForceStatus msg;
+                msg.header.stamp = time;
+                msg.header.frame_id =
+                    teleop_base_frame_.empty() ? "base_link" : teleop_base_frame_;
+                for (int i = 0; i < 6; ++i)
+                {
+                    msg.task_selection[i] =
+                        i < static_cast<int>(task_selection_.size()) ? task_selection_[i] : 0.0;
+                    msg.force_setpoint[i] =
+                        i < static_cast<int>(force_setpoint_.size()) ? force_setpoint_[i] : 0.0;
+                    msg.force_measured_left[i] =
+                        force_feedback_sign_ * arms_[0].wrench_filt(i);
+                    msg.force_measured_right[i] =
+                        force_feedback_sign_ * arms_[1].wrench_filt(i);
+                }
+                msg.left_ft_active = arms_[0].ft_active;
+                msg.right_ft_active = arms_[1].ft_active;
+                msg.zero_cal_done = zero_cal_done_;
+                msg.force_feedback_sign = force_feedback_sign_;
+                force_status_pub_->publish(msg);
+                last_force_status_pub_ = time;
+            }
+        }
+    }
+
+    void StateCompliance::stepHybridControl(
+        bool is_left, double dt,
+        const Eigen::Matrix<double, 6, 1>& contact_wrench)
+    {
+        if (dt <= 1e-6 || !kinematicsAvailable()) return;
+
+        ArmSide& a = arm(is_left);
+        const size_t offset = is_left ? 0 : arms_[0].joint_count;
+        const size_t nq = a.joint_count;
+        if (nq == 0 || offset + nq > hold_positions_.size()) return;
+
+        auto S = [&](int i) -> double {
+            return i < static_cast<int>(task_selection_.size()) ? task_selection_[i] : 0.0;
         };
 
-        left_wrench_sub_ = node_->create_subscription<geometry_msgs::msg::WrenchStamped>(
-            kLeftWrenchTopic, rclcpp::SystemDefaultsQoS(),
-            [cb](const geometry_msgs::msg::WrenchStamped::SharedPtr msg) { cb(true, msg); });
-        right_wrench_sub_ = node_->create_subscription<geometry_msgs::msg::WrenchStamped>(
-            kRightWrenchTopic, rclcpp::SystemDefaultsQoS(),
-            [cb](const geometry_msgs::msg::WrenchStamped::SharedPtr msg) { cb(false, msg); });
+        // Actual FK/Jacobian (closes loop around real robot)
+        RobotState state_actual = makeRobotState(/*measured=*/true);
+
+        const EndEffectorPose cur =
+            kinematics_->computeSingleEndEffectorPose(state_actual, kArmName[is_left ? 0 : 1]);
+        const EndEffectorPose tgt = a.target_valid ? a.target : cur;
+        // Orientation error uses commanded FK (rotation barely affected by sag)
+        const Eigen::Matrix3d R_cur_for_rot = a.cmd_pose.rotationMatrix;
+
+        const Eigen::MatrixXd J = kinematics_->computeJacobian(
+            state_actual, kArmName[is_left ? 0 : 1]);
+        if (J.rows() < 6 || J.cols() != static_cast<Eigen::Index>(nq) || !J.allFinite())
+            return;
+
+        a.wrench_filt = wrench_lpf_alpha_ * contact_wrench +
+                        (1.0 - wrench_lpf_alpha_) * a.wrench_filt;
+
+        Eigen::Matrix<double, 6, 1> v_des = Eigen::Matrix<double, 6, 1>::Zero();
+
+        // Position axes: v = K/(1+D)·Δx + I
+        {
+            const double ki_dt = hybrid_pos_ki_ * dt;
+            const Eigen::Vector3d dp = tgt.position - cur.position;
+            for (int i = 0; i < 3; ++i) {
+                if (S(i) > 0.5) continue;
+                const double K = i < static_cast<int>(hybrid_pos_stiffness_.size())
+                                     ? hybrid_pos_stiffness_[i] : 20.0;
+                const double D = i < static_cast<int>(hybrid_pos_damping_.size())
+                                     ? std::max(0.0, hybrid_pos_damping_[i]) : 0.0;
+                a.pos_integral(i) += ki_dt * dp(i);
+                a.pos_integral(i) = std::clamp(
+                    a.pos_integral(i), -hybrid_pos_ki_max_, hybrid_pos_ki_max_);
+                v_des(i) = (K / (1.0 + D)) * dp(i) + a.pos_integral(i);
+            }
+
+            const Eigen::Matrix3d R_rel = tgt.rotationMatrix * R_cur_for_rot.transpose();
+            const double cos_a = std::clamp((R_rel.trace() - 1.0) * 0.5, -1.0, 1.0);
+            const double angle = std::acos(cos_a);
+            Eigen::Vector3d rotvec = Eigen::Vector3d::Zero();
+            if (angle > 1e-9) {
+                rotvec << R_rel(2,1)-R_rel(1,2), R_rel(0,2)-R_rel(2,0), R_rel(1,0)-R_rel(0,1);
+                const double s2 = 2.0 * std::sin(angle);
+                if (std::abs(s2) > 1e-9) rotvec /= s2;
+                rotvec *= angle;
+            }
+            for (int i = 0; i < 3; ++i) {
+                if (S(i+3) > 0.5) continue;
+                const double K = i+3 < static_cast<int>(hybrid_pos_stiffness_.size())
+                                     ? hybrid_pos_stiffness_[i+3] : 10.0;
+                const double D = i+3 < static_cast<int>(hybrid_pos_damping_.size())
+                                     ? std::max(0.0, hybrid_pos_damping_[i+3]) : 0.0;
+                a.pos_integral(i+3) += ki_dt * rotvec(i);
+                a.pos_integral(i+3) = std::clamp(
+                    a.pos_integral(i+3), -hybrid_pos_ki_max_, hybrid_pos_ki_max_);
+                v_des(i+3) = (K / (1.0 + D)) * rotvec(i) + a.pos_integral(i+3);
+            }
+        }
+
+        // Force axes: v = (F_err + I) / D
+        {
+            const bool ft_ok = zero_cal_done_ && a.ft_active;
+            for (int i = 0; i < 6; ++i) {
+                if (S(i) < 0.5) continue;
+                if (!ft_ok) { v_des(i) = 0.0; continue; }
+
+                const double F_des = i < static_cast<int>(force_setpoint_.size())
+                                         ? force_setpoint_[i] : 0.0;
+                const double f_err = F_des - force_feedback_sign_ * a.wrench_filt(i);
+                const double D = i < static_cast<int>(hybrid_force_damping_.size())
+                                     ? hybrid_force_damping_[i] : (i < 3 ? 2000.0 : 100.0);
+
+                if (std::abs(f_err) >= hybrid_force_deadband_)
+                {
+                    a.force_integral(i) += hybrid_force_ki_ * dt * f_err;
+                    a.force_integral(i) = std::clamp(
+                        a.force_integral(i), -hybrid_force_ki_max_, hybrid_force_ki_max_);
+                }
+                v_des(i) = (f_err + a.force_integral(i)) / std::max(D, 1e-3);
+
+                // Idle force axis: blend teleop position tracking
+                if (std::abs(f_err) < hybrid_force_deadband_ && a.target_valid && i < 3)
+                {
+                    const double e_pos = tgt.position(i) - cur.position(i);
+                    if (std::abs(e_pos) > 1e-6)
+                    {
+                        const double K = i < static_cast<int>(hybrid_pos_stiffness_.size())
+                                             ? hybrid_pos_stiffness_[i] : 20.0;
+                        v_des(i) += K * e_pos;
+                    }
+                }
+            }
+
+            if (node_)
+            {
+                std::string axes;
+                for (int i = 0; i < 6; ++i)
+                {
+                    if (S(i) < 0.5) continue;
+                    const double F_des = i < static_cast<int>(force_setpoint_.size())
+                                             ? force_setpoint_[i] : 0.0;
+                    const double F_meas = force_feedback_sign_ * a.wrench_filt(i);
+                    char buf[128];
+                    std::snprintf(buf, sizeof(buf),
+                                  "  F%d: set=%.2f meas=%.2f err=%.2f int=%.2f v=%.4f",
+                                  i, F_des, F_meas, F_des - F_meas,
+                                  a.force_integral(i), v_des(i));
+                    axes += buf;
+                }
+                if (!axes.empty())
+                {
+                    RCLCPP_INFO_THROTTLE(
+                        node_->get_logger(), *node_->get_clock(), 2000,
+                        "COMPLIANCE force_ctl_%s: zero_cal=%d ft_ok=%d dt=%.4f%s",
+                        is_left ? "L" : "R",
+                        (int)zero_cal_done_, (int)ft_ok, dt, axes.c_str());
+                }
+            }
+        }
+
+        for (int i = 0; i < 6; ++i) {
+            const double vmax = i < static_cast<int>(hybrid_cart_vmax_.size())
+                                    ? hybrid_cart_vmax_[i] : (i < 3 ? 0.05 : 0.3);
+            v_des(i) = std::clamp(v_des(i), -vmax, vmax);
+        }
+
+        // Force-axis displacement soft limit
+        for (int i = 0; i < 6; ++i) {
+            if (S(i) < 0.5) { a.force_disp(i) = 0.0; continue; }
+            const double xmax = i < 3 ? hybrid_force_xmax_lin_ : hybrid_force_xmax_ang_;
+            const double margin = 0.1 * xmax;
+            const double proposed = a.force_disp(i) + v_des(i) * dt;
+            if (std::abs(proposed) > xmax)
+                v_des(i) = (std::copysign(xmax, proposed) - a.force_disp(i)) / dt;
+            else if (std::abs(proposed) > xmax - margin)
+                v_des(i) *= std::clamp((xmax - std::abs(proposed)) / margin, 0.0, 1.0);
+            a.force_disp(i) += v_des(i) * dt;
+            a.force_disp(i) = std::clamp(a.force_disp(i), -xmax, xmax);
+        }
+
+        const Eigen::MatrixXd JJt = J * J.transpose();
+        const Eigen::MatrixXd reg = JJt + hybrid_dls_lambda_ * hybrid_dls_lambda_ *
+            Eigen::MatrixXd::Identity(JJt.rows(), JJt.cols());
+        Eigen::VectorXd qdot = J.transpose() * reg.ldlt().solve(v_des);
+        if (!qdot.allFinite()) return;
+
+        for (Eigen::Index i = 0; i < static_cast<Eigen::Index>(nq); ++i)
+            qdot(i) = std::clamp(qdot(i), -hybrid_joint_vmax_, hybrid_joint_vmax_);
+
+        for (size_t i = 0; i < nq; ++i) {
+            const Eigen::Index ai = static_cast<Eigen::Index>(i);
+            const double old = hold_positions_[offset + i];
+            double new_pos = old + qdot(ai) * dt;
+            if (ai < a.joint_lower.size() && ai < a.joint_upper.size() &&
+                a.joint_lower(ai) < a.joint_upper(ai))
+            {
+                const double lo = a.joint_lower(ai) + hybrid_joint_limit_margin_;
+                const double hi = a.joint_upper(ai) - hybrid_joint_limit_margin_;
+                const double clamped = std::clamp(new_pos, lo, hi);
+                if (clamped != new_pos) qdot(ai) = (clamped - old) / dt;
+                new_pos = clamped;
+            }
+            hold_positions_[offset + i] = new_pos;
+        }
+
+        a.cmd_pose = kinematics_->computeSingleEndEffectorPose(
+            makeRobotState(/*measured=*/false), kArmName[is_left ? 0 : 1]);
     }
 
     bool StateCompliance::kinematicsAvailable() const
     {
-        return kinematics_ != nullptr && left_joint_count_ > 0 && right_joint_count_ > 0;
+        return kinematics_ != nullptr &&
+               (arms_[0].joint_count > 0 || arms_[1].joint_count > 0);
     }
 
-    void StateCompliance::splitJoints(const std::vector<double>& all,
-                                       Eigen::VectorXd& left, Eigen::VectorXd& right) const
+    RobotState StateCompliance::makeRobotState(bool measured) const
     {
-        left.resize(static_cast<Eigen::Index>(left_joint_count_));
-        right.resize(static_cast<Eigen::Index>(right_joint_count_));
-        for (size_t i = 0; i < left_joint_count_ && i < all.size(); ++i)
+        RobotState state(arms_[0].joint_count, arms_[1].joint_count);
+        const size_t total = arms_[0].joint_count + arms_[1].joint_count;
+        Eigen::VectorXd q_all(static_cast<Eigen::Index>(total));
+        const auto& pos_if = ctrl_interfaces_.joint_position_state_interface_;
+        for (size_t i = 0; i < total; ++i)
         {
-            left(static_cast<Eigen::Index>(i)) = all[i];
+            const double fallback = i < hold_positions_.size() ? hold_positions_[i] : 0.0;
+            if (measured && i < pos_if.size())
+                q_all(static_cast<Eigen::Index>(i)) =
+                    pos_if[i].get().get_optional().value_or(fallback);
+            else
+                q_all(static_cast<Eigen::Index>(i)) = fallback;
         }
-        for (size_t i = 0; i < right_joint_count_ && (left_joint_count_ + i) < all.size(); ++i)
-        {
-            right(static_cast<Eigen::Index>(i)) = all[left_joint_count_ + i];
-        }
+        if (arms_[0].joint_count > 0)
+            state.leftArmJoints = q_all.head(static_cast<Eigen::Index>(arms_[0].joint_count));
+        if (arms_[1].joint_count > 0)
+            state.rightArmJoints = q_all.tail(static_cast<Eigen::Index>(arms_[1].joint_count));
+        return state;
     }
 
     bool StateCompliance::computeToolGravityWrenchInSensorFrame(
         int side_index, Eigen::Matrix<double, 6, 1>& wrench_sensor) const
     {
         wrench_sensor.setZero();
-        if (!tf_buffer_)
-        {
-            return false;
-        }
+        if (!tf_buffer_ || side_index < 0 || side_index > 1) return false;
 
-        const std::vector<double>& dyn =
-            (side_index == 0) ? left_dyn_param_ : right_dyn_param_;
-        if (dyn.size() < 4 || dyn[0] < 1e-6)
-        {
-            return false;
-        }
+        const auto& dyn = arms_[side_index].dyn_param;
+        if (dyn.size() < 4 || dyn[0] < 1e-6) return false;
+
         const double mass = dyn[0];
-        // Load ID: COM in tcp [mm] → m
         const Eigen::Vector3d com_tcp(dyn[1] * 1e-3, dyn[2] * 1e-3, dyn[3] * 1e-3);
-
-        const char* tcp_frame = (side_index == 0) ? kLeftTcpFrame : kRightTcpFrame;
-        const char* sensor_frame = (side_index == 0) ? kLeftFtFrame : kRightFtFrame;
 
         geometry_msgs::msg::TransformStamped tf_sensor_from_tcp;
         geometry_msgs::msg::TransformStamped tf_world_from_sensor;
         try
         {
             tf_sensor_from_tcp =
-                tf_buffer_->lookupTransform(sensor_frame, tcp_frame, tf2::TimePointZero);
+                tf_buffer_->lookupTransform(kFtFrame[side_index], kTcpFrame[side_index],
+                                            tf2::TimePointZero);
             try
             {
                 tf_world_from_sensor =
-                    tf_buffer_->lookupTransform(gravity_frame_, sensor_frame, tf2::TimePointZero);
+                    tf_buffer_->lookupTransform(gravity_frame_, kFtFrame[side_index],
+                                                tf2::TimePointZero);
             }
             catch (const tf2::TransformException&)
             {
-                // world may be absent; base_link Z ≈ vertical when robot stands upright
                 tf_world_from_sensor =
-                    tf_buffer_->lookupTransform("base_link", sensor_frame, tf2::TimePointZero);
+                    tf_buffer_->lookupTransform("base_link", kFtFrame[side_index],
+                                                tf2::TimePointZero);
             }
         }
         catch (const tf2::TransformException&)
@@ -202,7 +859,6 @@ namespace arms_controller_common
                              tf_sensor_from_tcp.transform.translation.z);
         const Eigen::Vector3d com_s = R_st * com_tcp + t_st;
 
-        // Gravity free vector: world −Z → sensor
         const auto& q_ws = tf_world_from_sensor.transform.rotation;
         Eigen::Matrix3d R_ws =
             Eigen::Quaterniond(q_ws.w, q_ws.x, q_ws.y, q_ws.z).toRotationMatrix();
@@ -215,30 +871,27 @@ namespace arms_controller_common
     }
 
     Eigen::Matrix<double, 6, 1>
-    StateCompliance::wrenchToBase(int side_index, const std::array<double, 6>& wrench_ee) const
+    StateCompliance::wrenchToBase(int side_index,
+                                   const std::array<double, 6>& wrench_ee) const
     {
         Eigen::Matrix<double, 6, 1> w_base;
-        for (int i = 0; i < 6; ++i)
-        {
-            w_base(i) = wrench_ee[i];
-        }
+        for (int i = 0; i < 6; ++i) w_base(i) = wrench_ee[i];
+        if (side_index < 0 || side_index > 1) return w_base;
 
-        // Prefer TF: gravity_frame/base ← sensor (same axes as admittance)
         if (tf_buffer_)
         {
-            const char* sensor_frame = (side_index == 0) ? kLeftFtFrame : kRightFtFrame;
             try
             {
                 geometry_msgs::msg::TransformStamped tf;
                 try
                 {
                     tf = tf_buffer_->lookupTransform(
-                        gravity_frame_, sensor_frame, tf2::TimePointZero);
+                        gravity_frame_, kFtFrame[side_index], tf2::TimePointZero);
                 }
                 catch (const tf2::TransformException&)
                 {
                     tf = tf_buffer_->lookupTransform(
-                        "base_link", sensor_frame, tf2::TimePointZero);
+                        "base_link", kFtFrame[side_index], tf2::TimePointZero);
                 }
                 const auto& q = tf.transform.rotation;
                 Eigen::Matrix3d R =
@@ -248,386 +901,70 @@ namespace arms_controller_common
                 w_base << (R * f), (R * t);
                 return w_base;
             }
-            catch (const tf2::TransformException&)
-            {
-            }
+            catch (const tf2::TransformException&) {}
         }
 
-        if (!kinematics_)
-        {
-            return w_base;
-        }
+        if (!kinematics_) return w_base;
 
-        RobotState state(left_joint_count_, right_joint_count_);
-        std::vector<double> current(left_joint_count_ + right_joint_count_, 0.0);
-        size_t n = ctrl_interfaces_.joint_position_state_interface_.size();
-        for (size_t i = 0; i < n && i < current.size(); ++i)
-        {
-            current[i] =
-                ctrl_interfaces_.joint_position_state_interface_[i].get().get_optional().value_or(0.0);
-        }
-        Eigen::VectorXd left, right;
-        splitJoints(current, left, right);
-        state.leftArmJoints = left;
-        state.rightArmJoints = right;
-
-        const std::string ee_name = (side_index == 0) ? "left_eef" : "right_eef";
         try
         {
-            auto pose = kinematics_->computeFramePose(state, ee_name);
-            Eigen::Matrix3d R = pose.rotationMatrix;
+            auto pose = kinematics_->computeFramePose(
+                makeRobotState(/*measured=*/true),
+                side_index == 0 ? "left_eef" : "right_eef");
             Eigen::Vector3d f_ee(wrench_ee[0], wrench_ee[1], wrench_ee[2]);
             Eigen::Vector3d t_ee(wrench_ee[3], wrench_ee[4], wrench_ee[5]);
-            w_base << (R * f_ee), (R * t_ee);
+            w_base << (pose.rotationMatrix * f_ee), (pose.rotationMatrix * t_ee);
         }
-        catch (...)
-        {
-        }
+        catch (...) {}
+
         return w_base;
     }
 
-    Eigen::VectorXd
-    StateCompliance::computeAdmittanceOffset(int side_index,
-                                              const Eigen::Matrix<double, 6, 1>& wrench_base,
-                                              double dt)
+    bool StateCompliance::stampedPoseToBase(
+        const geometry_msgs::msg::PoseStamped& msg,
+        geometry_msgs::msg::Pose& pose_base) const
     {
-        const Eigen::Index nq = static_cast<Eigen::Index>(
-            (side_index == 0) ? left_joint_count_ : right_joint_count_);
-        auto& vel = (side_index == 0) ? adm_vel_left_ : adm_vel_right_;
-        auto& pos = (side_index == 0) ? adm_pos_left_ : adm_pos_right_;
-        auto& w_filt = (side_index == 0) ? wrench_filt_left_ : wrench_filt_right_;
+        if (!tf_buffer_) return false;
 
-        const bool got_ft = (side_index == 0) ? left_ft_active_ : right_ft_active_;
-        if (!got_ft || !kinematicsAvailable() || dt <= 1e-6)
+        const std::string target_frame = teleop_base_frame_.empty()
+                                             ? "base_link" : teleop_base_frame_;
+        if (msg.header.frame_id == target_frame)
         {
-            vel.setZero();
-            pos.setZero();
-            w_filt.setZero();
-            return Eigen::VectorXd::Zero(nq);
+            pose_base = msg.pose;
+            return true;
         }
 
-        // Low-pass tared wrench, then deadband (noise / residual must not drive)
-        w_filt = wrench_lpf_alpha_ * wrench_base + (1.0 - wrench_lpf_alpha_) * w_filt;
-        Eigen::Matrix<double, 6, 1> w = w_filt;
-        for (int i = 0; i < 3; ++i)
+        geometry_msgs::msg::TransformStamped tf;
+        try
         {
-            if (std::abs(w(i)) < force_deadband_)
-            {
-                w(i) = 0.0;
-            }
+            tf = tf_buffer_->lookupTransform(
+                target_frame, msg.header.frame_id, msg.header.stamp,
+                rclcpp::Duration::from_seconds(0.1));
         }
-        for (int i = 3; i < 6; ++i)
+        catch (const tf2::TransformException&)
         {
-            if (std::abs(w(i)) < torque_deadband_)
-            {
-                w(i) = 0.0;
-            }
+            return false;
         }
 
-        Eigen::DiagonalMatrix<double, 6> M, D;
-        for (int i = 0; i < 6; ++i)
-        {
-            double m = (i < static_cast<int>(admittance_mass_.size())) ? admittance_mass_[i] : 5.0;
-            double d = (i < static_cast<int>(admittance_damping_.size())) ? admittance_damping_[i] : 80.0;
-            M.diagonal()(i) = std::max(m, 1e-3);
-            D.diagonal()(i) = std::max(d, 1e-3);
-        }
-
-        // M v̇ + D v = F  → accumulate Cartesian offset x (not one-step dx only)
-        Eigen::Matrix<double, 6, 1> accel = M.inverse() * (w - D * vel);
-        vel = vel + dt * accel;
-        constexpr double vmax_lin = 0.08;
-        constexpr double vmax_ang = 0.4;
-        for (int i = 0; i < 3; ++i)
-        {
-            vel(i) = std::clamp(vel(i), -vmax_lin, vmax_lin);
-        }
-        for (int i = 3; i < 6; ++i)
-        {
-            vel(i) = std::clamp(vel(i), -vmax_ang, vmax_ang);
-        }
-        pos = pos + vel * dt;
-        for (int i = 0; i < 6; ++i)
-        {
-            pos(i) = std::clamp(pos(i), -admittance_max_displacement_, admittance_max_displacement_);
-        }
-
-        std::vector<double> current(left_joint_count_ + right_joint_count_, 0.0);
-        size_t n = ctrl_interfaces_.joint_position_state_interface_.size();
-        for (size_t i = 0; i < n && i < current.size(); ++i)
-        {
-            current[i] =
-                ctrl_interfaces_.joint_position_state_interface_[i].get().get_optional().value_or(0.0);
-        }
-        Eigen::VectorXd left, right;
-        splitJoints(current, left, right);
-        RobotState state(left_joint_count_, right_joint_count_);
-        state.leftArmJoints = left;
-        state.rightArmJoints = right;
-
-        const std::string arm = (side_index == 0) ? "left" : "right";
-        Eigen::MatrixXd J = kinematics_->computeJacobian(state, arm);
-        if (J.cols() == 0)
-        {
-            return Eigen::VectorXd::Zero(nq);
-        }
-
-        const double lambda = 0.05;
-        Eigen::MatrixXd JJt =
-            J * J.transpose() + lambda * lambda * Eigen::Matrix<double, 6, 6>::Identity();
-        return J.transpose() * JJt.inverse() * pos;
+        tf2::doTransform(msg.pose, pose_base, tf);
+        return true;
     }
 
-    void StateCompliance::enter()
+    bool StateCompliance::updateTargetFromPose(
+        bool is_left, const geometry_msgs::msg::Pose& pose_base)
     {
-        updateParam();
+        if (!kinematicsAvailable()) return false;
 
-        size_t num_joints = ctrl_interfaces_.joint_position_state_interface_.size();
-        hold_positions_.resize(num_joints);
-        for (size_t i = 0; i < num_joints; ++i)
-        {
-            hold_positions_[i] = ctrl_interfaces_.last_sent_joint_positions_[i];
-        }
+        EndEffectorPose tgt;
+        tgt.position << pose_base.position.x, pose_base.position.y, pose_base.position.z;
+        tgt.setQuaternion(Eigen::Quaterniond(pose_base.orientation.w,
+                                              pose_base.orientation.x,
+                                              pose_base.orientation.y,
+                                              pose_base.orientation.z).normalized());
 
-        adm_vel_left_.setZero();
-        adm_vel_right_.setZero();
-        adm_pos_left_.setZero();
-        adm_pos_right_.setZero();
-        wrench_filt_left_.setZero();
-        wrench_filt_right_.setZero();
-        wrench_bias_left_.fill(0.0);
-        wrench_bias_right_.fill(0.0);
-        zero_cal_sum_left_.fill(0.0);
-        zero_cal_sum_right_.fill(0.0);
-        zero_cal_samples_left_ = 0;
-        zero_cal_samples_right_ = 0;
-        zero_cal_pending_ = true;
-        zero_cal_running_ = false;
-        zero_cal_done_ = false;
-        left_ft_active_ = false;
-        right_ft_active_ = false;
-
-        setupWrenchSubscriptions();
-
-        const double m_l = left_dyn_param_.size() >= 1 ? left_dyn_param_[0] : 0.0;
-        const double m_r = right_dyn_param_.size() >= 1 ? right_dyn_param_[0] : 0.0;
-        RCLCPP_INFO(node_->get_logger(),
-                    "COMPLIANCE: force outer + stiff position inner. "
-                    "zero_cal=%.2fs; tool_gravity world-Z (m_L=%.3f kg, m_R=%.3f kg); "
-                    "kinematics=%s",
-                    zero_cal_duration_, m_l, m_r,
-                    kinematicsAvailable() ? "ok" : "MISSING");
-        if (m_l < 1e-6 && m_r < 1e-6)
-        {
-            RCLCPP_WARN(node_->get_logger(),
-                        "COMPLIANCE: left/right_dyn_param mass is zero — "
-                        "tool gravity TF skipped; only zero_cal bias will be removed. "
-                        "Set hardware.left_dyn_param in robot.local.yaml.");
-        }
-    }
-
-    void StateCompliance::run(const rclcpp::Time& time, const rclcpp::Duration& period)
-    {
-        updateParam();
-        const double dt = period.seconds();
-
-        std::array<double, 6> raw_left{}, raw_right{};
-        {
-            std::lock_guard<std::mutex> lk(wrench_mutex_);
-            raw_left = left_wrench_;
-            raw_right = right_wrench_;
-        }
-
-        // 1) Tool gravity in sensor frame (world −Z via TF)
-        Eigen::Matrix<double, 6, 1> w_grav_l = Eigen::Matrix<double, 6, 1>::Zero();
-        Eigen::Matrix<double, 6, 1> w_grav_r = Eigen::Matrix<double, 6, 1>::Zero();
-        bool grav_ok_l = false;
-        bool grav_ok_r = false;
-        if (left_ft_active_)
-        {
-            grav_ok_l = computeToolGravityWrenchInSensorFrame(0, w_grav_l);
-        }
-        if (right_ft_active_)
-        {
-            grav_ok_r = computeToolGravityWrenchInSensorFrame(1, w_grav_r);
-        }
-
-        std::array<double, 6> net_left = raw_left;
-        std::array<double, 6> net_right = raw_right;
-        if (grav_ok_l)
-        {
-            for (int i = 0; i < 6; ++i)
-            {
-                net_left[i] -= w_grav_l(i);
-            }
-        }
-        if (grav_ok_r)
-        {
-            for (int i = 0; i < 6; ++i)
-            {
-                net_right[i] -= w_grav_r(i);
-            }
-        }
-
-        // 2) Zero-cal: average residual after gravity removal (no contact)
-        if (zero_cal_pending_ && (left_ft_active_ || right_ft_active_))
-        {
-            zero_cal_pending_ = false;
-            zero_cal_running_ = true;
-            zero_cal_start_ = time;
-            RCLCPP_INFO(node_->get_logger(),
-                        "COMPLIANCE zero_cal started (%.2fs). Keep arm still, no contact. "
-                        "FT L=%s R=%s",
-                        zero_cal_duration_,
-                        left_ft_active_ ? "yes" : "no",
-                        right_ft_active_ ? "yes" : "no");
-        }
-
-        if (zero_cal_running_)
-        {
-            for (int i = 0; i < 6; ++i)
-            {
-                zero_cal_sum_left_[i] += net_left[i];
-                zero_cal_sum_right_[i] += net_right[i];
-            }
-            ++zero_cal_samples_left_;
-            ++zero_cal_samples_right_;
-
-            if ((time - zero_cal_start_).seconds() >= zero_cal_duration_)
-            {
-                for (int i = 0; i < 6; ++i)
-                {
-                    if (zero_cal_samples_left_ > 0)
-                    {
-                        wrench_bias_left_[i] =
-                            zero_cal_sum_left_[i] / static_cast<double>(zero_cal_samples_left_);
-                    }
-                    if (zero_cal_samples_right_ > 0)
-                    {
-                        wrench_bias_right_[i] =
-                            zero_cal_sum_right_[i] / static_cast<double>(zero_cal_samples_right_);
-                    }
-                }
-                zero_cal_running_ = false;
-                zero_cal_done_ = true;
-
-                const double bias_f = std::sqrt(
-                    wrench_bias_left_[0] * wrench_bias_left_[0] +
-                    wrench_bias_left_[1] * wrench_bias_left_[1] +
-                    wrench_bias_left_[2] * wrench_bias_left_[2]);
-                const double mg =
-                    (left_dyn_param_.size() >= 1 ? left_dyn_param_[0] : 0.0) * gravity_accel_;
-                RCLCPP_INFO(node_->get_logger(),
-                            "COMPLIANCE zero_cal done (%ld samples). "
-                            "Bias_s L=[%.3f,%.3f,%.3f, %.3f,%.3f,%.3f] (|F|=%.2f N). "
-                            "tool_gravity L=%s (mg=%.2f N). Force outer-loop ACTIVE.",
-                            zero_cal_samples_left_,
-                            wrench_bias_left_[0], wrench_bias_left_[1], wrench_bias_left_[2],
-                            wrench_bias_left_[3], wrench_bias_left_[4], wrench_bias_left_[5],
-                            bias_f,
-                            grav_ok_l ? "OK" : "FAIL",
-                            mg);
-                if (left_dyn_param_.size() >= 1 && left_dyn_param_[0] > 1e-6 && !grav_ok_l)
-                {
-                    RCLCPP_WARN(node_->get_logger(),
-                                "COMPLIANCE tool gravity TF failed "
-                                "(need %s←%s and world/base_link←%s).",
-                                kLeftFtFrame, kLeftTcpFrame, kLeftFtFrame);
-                }
-            }
-        }
-
-        // Hold stiff position during zero_cal; enable admittance after done
-        Eigen::VectorXd adm_left = Eigen::VectorXd::Zero(static_cast<Eigen::Index>(left_joint_count_));
-        Eigen::VectorXd adm_right = Eigen::VectorXd::Zero(static_cast<Eigen::Index>(right_joint_count_));
-
-        if (zero_cal_done_ && kinematicsAvailable())
-        {
-            std::array<double, 6> tared_left = net_left;
-            std::array<double, 6> tared_right = net_right;
-            for (int i = 0; i < 6; ++i)
-            {
-                tared_left[i] -= wrench_bias_left_[i];
-                tared_right[i] -= wrench_bias_right_[i];
-            }
-            adm_left = computeAdmittanceOffset(0, wrenchToBase(0, tared_left), dt);
-            adm_right = computeAdmittanceOffset(1, wrenchToBase(1, tared_right), dt);
-        }
-
-        for (size_t i = 0;
-             i < ctrl_interfaces_.joint_position_command_interface_.size() && i < hold_positions_.size();
-             ++i)
-        {
-            double cmd = hold_positions_[i];
-            if (zero_cal_done_ && kinematicsAvailable())
-            {
-                if (i < left_joint_count_)
-                {
-                    cmd += adm_left.size() > static_cast<Eigen::Index>(i)
-                               ? adm_left(static_cast<Eigen::Index>(i)) : 0.0;
-                }
-                else
-                {
-                    size_t idx = i - left_joint_count_;
-                    cmd += adm_right.size() > static_cast<Eigen::Index>(idx)
-                               ? adm_right(static_cast<Eigen::Index>(idx)) : 0.0;
-                }
-            }
-            ctrl_interfaces_.setJointPositionCommand(i, cmd);
-        }
-
-        if (ctrl_interfaces_.control_mode_ == ControlMode::MIX)
-        {
-            if (ctrl_interfaces_.default_gains_.size() >= 2)
-            {
-                const double kp = ctrl_interfaces_.default_gains_[0];
-                const double kd = ctrl_interfaces_.default_gains_[1];
-                for (auto& iface : ctrl_interfaces_.joint_kp_command_interface_)
-                {
-                    std::ignore = iface.get().set_value(kp);
-                }
-                for (auto& iface : ctrl_interfaces_.joint_kd_command_interface_)
-                {
-                    std::ignore = iface.get().set_value(kd);
-                }
-            }
-            if (gravity_compensation_)
-            {
-                std::vector<double> q;
-                q.reserve(ctrl_interfaces_.joint_position_state_interface_.size());
-                for (auto& iface : ctrl_interfaces_.joint_position_state_interface_)
-                {
-                    q.push_back(iface.get().get_optional().value_or(0.0));
-                }
-                const auto tau_g = gravity_compensation_->calculateStaticTorques(q);
-                for (size_t i = 0;
-                     i < ctrl_interfaces_.joint_force_command_interface_.size() && i < tau_g.size();
-                     ++i)
-                {
-                    std::ignore =
-                        ctrl_interfaces_.joint_force_command_interface_[i].get().set_value(tau_g[i]);
-                }
-            }
-        }
-    }
-
-    void StateCompliance::exit()
-    {
-        left_wrench_sub_.reset();
-        right_wrench_sub_.reset();
-        zero_cal_pending_ = false;
-        zero_cal_running_ = false;
-        zero_cal_done_ = false;
-    }
-
-    FSMStateName StateCompliance::checkChange()
-    {
-        switch (ctrl_interfaces_.fsm_command_)
-        {
-            case 2:
-                return FSMStateName::HOLD;
-            default:
-                return FSMStateName::COMPLIANCE;
-        }
+        ArmSide& a = arm(is_left);
+        a.target = tgt;
+        a.target_valid = true;
+        return true;
     }
 } // namespace arms_controller_common
