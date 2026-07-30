@@ -24,14 +24,12 @@ namespace ocs2::mobile_manipulator
         mpc_period_ = mpc_params.mpc_period_sec;
         thread_sleep_duration_ms_ = mpc_params.thread_sleep_ms;
 
-        // Check if self-collision is enabled in config file
         const bool selfCollisionEnabled = ctrl_comp_->interface_->isSelfCollisionEnabled();
         if (selfCollisionEnabled)
         {
-            // Get minimum distance from interface (same as in info file)
             const scalar_t minimumDistance = ctrl_comp_->interface_->getSelfCollisionMinimumDistance();
-            RCLCPP_INFO(node_->get_logger(), 
-                "Self-collision enabled: will switch to HOLD when distance <= %.4f m (minimumDistance from config)", 
+            RCLCPP_INFO(node_->get_logger(),
+                "Self-collision enabled: will switch to HOLD when distance <= %.4f m (minimumDistance from config)",
                 minimumDistance);
         }
         else
@@ -44,23 +42,24 @@ namespace ocs2::mobile_manipulator
 
     StateOCS2::~StateOCS2()
     {
-        // Ensure thread is properly stopped when destructing
         stopMpcThread();
+        if (ctrl_comp_)
+        {
+            ctrl_comp_->stopVisualizationThread();
+        }
     }
 
     void StateOCS2::enter()
     {
-        // Set OCS2 gains only in MIX control mode (kp, kd available)
         if (ctrl_interfaces_.control_mode_ == ControlMode::MIX)
         {
             if (ctrl_interfaces_.pd_gains_.size() >= 2)
             {
-                double kp = ctrl_interfaces_.pd_gains_[0]; // Position gain
-                double kd = ctrl_interfaces_.pd_gains_[1]; // Velocity gain
+                double kp = ctrl_interfaces_.pd_gains_[0];
+                double kd = ctrl_interfaces_.pd_gains_[1];
 
                 RCLCPP_INFO(node_->get_logger(), "Setting OCS2 gains: kp=%.2f, kd=%.2f", kp, kd);
 
-                // Set kp and kd gains for all joints
                 for (size_t i = 0; i < ctrl_interfaces_.joint_kp_command_interface_.size(); ++i)
                 {
                     std::ignore = ctrl_interfaces_.joint_kp_command_interface_[i].get().set_value(kp);
@@ -76,113 +75,159 @@ namespace ocs2::mobile_manipulator
             }
         }
 
+        // Ensure previous workers are fully stopped before starting new ones.
+        if (mpc_running_ || !mpc_thread_finished_.load())
+        {
+            stopMpcThread();
+        }
+        if (ctrl_comp_ && !ctrl_comp_->isVisualizationThreadFinished())
+        {
+            ctrl_comp_->stopVisualizationThread();
+        }
+
         ctrl_comp_->resetMpc();
-
-        // Reset collision detection flag
         collision_detected_ = false;
-
-        // Reset time
         last_mpc_time_ = node_->now();
 
-        // Start MPC update thread
+        ctrl_comp_->startVisualizationThread(thread_sleep_duration_ms_);
+        ctrl_comp_->requestVisualizationUpdate();
         mpc_thread_should_stop_ = false;
+        mpc_thread_finished_ = false;
         mpc_running_ = true;
+        mpc_update_requested_ = true;
         mpc_thread_ = std::thread(&StateOCS2::mpcUpdateThread, this);
     }
 
     void StateOCS2::run(const rclcpp::Time& time, const rclcpp::Duration& /* period */)
     {
-        // Check for collision if self-collision is enabled in config (uses cached value from visualization, no extra computation)
+        if (!ctrl_comp_->initialPolicyReceived())
+        {
+            mpc_update_requested_ = true;
+            ctrl_comp_->requestVisualizationUpdate();
+            ctrl_comp_->holdLastSentPositions();
+            return;
+        }
+
         if (ctrl_comp_->interface_->isSelfCollisionEnabled() && !collision_detected_)
         {
-            // Use minimumDistance from config file as threshold (same as selfCollision.minimumDistance)
             const scalar_t minimumDistance = ctrl_comp_->interface_->getSelfCollisionMinimumDistance();
             if (ctrl_comp_->isCollisionDetected(minimumDistance))
             {
                 collision_detected_ = true;
-                RCLCPP_WARN(node_->get_logger(), 
+                RCLCPP_WARN(node_->get_logger(),
                     "Collision detected! Distance <= minimumDistance: %.4f m. Will switch to HOLD state.",
                     minimumDistance);
             }
         }
 
-        // Check if MPC update is needed
         if ((time - last_mpc_time_).seconds() >= mpc_period_)
         {
-            // Set MPC update flag
             mpc_update_requested_ = true;
+            ctrl_comp_->requestVisualizationUpdate();
             last_mpc_time_ = time;
         }
 
-        // Execute policy evaluation (continue even during collision detection for smooth transition)
         ctrl_comp_->evaluatePolicy(time);
+    }
+
+    void StateOCS2::beginExit()
+    {
+        // RT-safe: only signal workers to stop. Join happens in tryFinishExit().
+        mpc_update_requested_ = false;
+        mpc_thread_should_stop_ = true;
+        if (ctrl_comp_)
+        {
+            ctrl_comp_->requestStopVisualizationThread();
+        }
+    }
+
+    bool StateOCS2::tryFinishExit()
+    {
+        if (mpc_running_ && !mpc_thread_finished_.load())
+        {
+            return false;
+        }
+        if (ctrl_comp_ && !ctrl_comp_->isVisualizationThreadFinished())
+        {
+            return false;
+        }
+
+        if (mpc_thread_.joinable())
+        {
+            mpc_thread_.join();
+        }
+        mpc_running_ = false;
+        mpc_thread_finished_ = true;
+
+        if (ctrl_comp_)
+        {
+            ctrl_comp_->joinVisualizationThread();
+            ctrl_comp_->clearTrajectoryVisualization();
+        }
+        RCLCPP_INFO(node_->get_logger(), "OCS2 state exited successfully, worker threads stopped");
+        return true;
     }
 
     void StateOCS2::exit()
     {
-        stopMpcThread();
-        ctrl_comp_->clearTrajectoryVisualization();
-        RCLCPP_INFO(node_->get_logger(), "OCS2 state exited successfully, MPC update thread stopped");
+        // Synchronous fallback (destructor / callers that don't use async CHANGE).
+        beginExit();
+        while (!tryFinishExit())
+        {
+            std::this_thread::sleep_for(std::chrono::milliseconds(1));
+        }
     }
 
     void StateOCS2::mpcUpdateThread()
     {
-        RCLCPP_INFO(node_->get_logger(), "MPC update thread started");
+        RCLCPP_DEBUG(node_->get_logger(), "MPC update thread started");
 
         while (!mpc_thread_should_stop_.load())
         {
-            // Check if MPC update is needed
             if (mpc_update_requested_.load())
             {
                 try
                 {
+                    // Only advanceMpc here. Never call getPolicy()/updatePolicy() on this
+                    // thread — MRT active policy is not thread-safe (see MRT_BASE.h).
                     ctrl_comp_->advanceMpc();
-                    mpc_update_requested_ = false; // Clear flag
+                    mpc_update_requested_ = false;
                 }
                 catch (const std::exception& e)
                 {
                     RCLCPP_ERROR(node_->get_logger(), "Error in MPC update: %s", e.what());
-                    mpc_update_requested_ = false; // Clear flag even on error
+                    mpc_update_requested_ = false;
                 }
             }
 
-            // Brief sleep to avoid busy waiting
             std::this_thread::sleep_for(std::chrono::milliseconds(thread_sleep_duration_ms_));
         }
 
-        RCLCPP_INFO(node_->get_logger(), "MPC update thread stopped");
+        mpc_thread_finished_ = true;
+        RCLCPP_DEBUG(node_->get_logger(), "MPC update thread stopped");
     }
 
     void StateOCS2::stopMpcThread()
     {
-        if (mpc_running_)
+        mpc_thread_should_stop_ = true;
+        mpc_update_requested_ = false;
+        if (mpc_thread_.joinable())
         {
-            // Set stop flag
-            mpc_thread_should_stop_ = true;
-
-            // Wait for thread to finish
-            if (mpc_thread_.joinable())
-            {
-                mpc_thread_.join();
-            }
-
-            mpc_running_ = false;
-            RCLCPP_INFO(node_->get_logger(), "MPC update thread stopped successfully");
+            mpc_thread_.join();
         }
+        mpc_running_ = false;
+        mpc_thread_finished_ = true;
     }
 
     FSMStateName StateOCS2::checkChange()
     {
-        // Check if collision was detected - switch to HOLD for safety
         if (collision_detected_)
         {
-            // Publish fsm_command=2 to stop all other controllers
             ctrl_comp_->publishFsmCommand(2);
             RCLCPP_WARN(node_->get_logger(), "Published fsm_command=2 to stop all controllers");
             return FSMStateName::HOLD;
         }
 
-        // Check FSM command for state transition
         switch (ctrl_interfaces_.fsm_command_)
         {
         case 2: return FSMStateName::HOLD;

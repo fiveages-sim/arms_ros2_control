@@ -74,12 +74,47 @@ namespace ocs2::mobile_manipulator
         }
         else if (mode_ == FSMMode::CHANGE)
         {
-            current_state_->exit();
-            current_state_ = next_state_;
-            current_state_->enter();
-            publishCurrentFsmState();
-            mode_ = FSMMode::NORMAL;
-            ctrl_interfaces_.fsm_command_ = 0;
+            // OCS2 joins MPC/viz threads — must not block a single RT update cycle.
+            if (current_state_->needsAsyncExit())
+            {
+                if (!async_exit_started_)
+                {
+                    current_state_->beginExit();
+                    async_exit_started_ = true;
+                    ctrl_comp_->holdLastSentPositions();
+                }
+                else if (current_state_->tryFinishExit())
+                {
+                    current_state_ = next_state_;
+                    current_state_->enter();
+                    publishCurrentFsmState();
+                    // Republish after FSM is OCS2 so ArmsTargetManager applies setPose (HOLD skips it).
+                    if (current_state_->state_name == FSMStateName::OCS2)
+                    {
+                        ctrl_comp_->publishCachedCurrentTargets();
+                    }
+                    async_exit_started_ = false;
+                    mode_ = FSMMode::NORMAL;
+                    ctrl_interfaces_.fsm_command_ = 0;
+                }
+                else
+                {
+                    ctrl_comp_->holdLastSentPositions();
+                }
+            }
+            else
+            {
+                current_state_->exit();
+                current_state_ = next_state_;
+                current_state_->enter();
+                publishCurrentFsmState();
+                if (current_state_->state_name == FSMStateName::OCS2)
+                {
+                    ctrl_comp_->publishCachedCurrentTargets();
+                }
+                mode_ = FSMMode::NORMAL;
+                ctrl_interfaces_.fsm_command_ = 0;
+            }
         }
 
         return controller_interface::return_type::OK;

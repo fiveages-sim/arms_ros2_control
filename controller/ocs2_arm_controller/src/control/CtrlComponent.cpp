@@ -17,6 +17,7 @@
 #include <boost/property_tree/ptree.hpp>
 #include <exception>
 #include <filesystem>
+#include <chrono>
 #include <optional>
 
 namespace ocs2::mobile_manipulator
@@ -113,28 +114,12 @@ namespace ocs2::mobile_manipulator
             pose_reference_manager_->setCurrentObservation(observation_);
         }
 
-        visualizer_->publishSelfCollisionVisualization(observation_.state);
-        visualizer_->publishEndEffectorPose(time, observation_.state);
-
-        auto& rec = arms_controller_common::TrajectoryRecorder::instance();
-        if (rec.enabled())
+        // Lightweight EE/body pose: must keep streaming in HOLD too so markers can follow
+        // measured EE before first OCS2 enter (and after mid-moveL HOLD). Heavy self-collision
+        // / traj recording stays on the MPC-rate visualization thread.
+        if (visualizer_)
         {
-            const double t = time.seconds();
-            const vector_t lp = visualizer_->computeEndEffectorPose(observation_.state);
-            arms_controller_common::TrajSample ls;
-            ls.stamp_sec = t;
-            ls.position = {lp(0), lp(1), lp(2)};
-            ls.quat_xyzw = {lp(3), lp(4), lp(5), lp(6)};
-            rec.appendReal("left", ls);
-            if (dual_arm_mode_)
-            {
-                const vector_t rp = visualizer_->computeRightEndEffectorPose(observation_.state);
-                arms_controller_common::TrajSample rs;
-                rs.stamp_sec = t;
-                rs.position = {rp(0), rp(1), rp(2)};
-                rs.quat_xyzw = {rp(3), rp(4), rp(5), rp(6)};
-                rec.appendReal("right", rs);
-            }
+            visualizer_->publishEndEffectorPose(time, observation_.state);
         }
     }
 
@@ -159,54 +144,40 @@ namespace ocs2::mobile_manipulator
         mpc_observation_publisher_->publish(observation_msg);
 
         size_t planned_mode = 0;
-        // Evaluate MPC policy
-        mpc_mrt_interface_->evaluatePolicy(time.seconds(), observation_.state, optimized_state_, optimized_input_,
-                                           planned_mode);
         try
         {
-            // Get complete trajectory from MPC policy
+            // initialPolicyReceived() can be true while active policy is still null
+            // (policy only in buffer until updatePolicy() swaps). Guard the whole path.
+            mpc_mrt_interface_->evaluatePolicy(time.seconds(), observation_.state, optimized_state_, optimized_input_,
+                                               planned_mode);
             const auto& policy = mpc_mrt_interface_->getPolicy();
 
-            // Calculate future time point (using configurable time offset)
             double future_time = observation_.time + future_time_offset_ / ctrl_interfaces_.frequency_;
-
-            // Use linear interpolation to get state at future time point
             vector_t future_state = LinearInterpolation::interpolate(
                 future_time,
                 policy.timeTrajectory_,
                 policy.stateTrajectory_
             );
-
             vector_t future_input = LinearInterpolation::interpolate(
                 future_time,
                 policy.timeTrajectory_,
                 policy.inputTrajectory_
             );
 
-            // Record MPC one-step-ahead prediction (pred) vs actual: stamp = predicted absolute time
             {
-                auto& rec = arms_controller_common::TrajectoryRecorder::instance();
-                if (rec.enabled())
-                {
-                    arms_controller_common::TrajSample lps;
-                    lps.stamp_sec = future_time;
-                    const vector_t lpe = visualizer_->computeEndEffectorPose(future_state);
-                    lps.position = {lpe(0), lpe(1), lpe(2)};
-                    lps.quat_xyzw = {lpe(3), lpe(4), lpe(5), lpe(6)};
-                    rec.appendPred("left", lps);
-                    if (dual_arm_mode_)
-                    {
-                        arms_controller_common::TrajSample rps;
-                        rps.stamp_sec = future_time;
-                        const vector_t rpe = visualizer_->computeRightEndEffectorPose(future_state);
-                        rps.position = {rpe(0), rpe(1), rpe(2)};
-                        rps.quat_xyzw = {rpe(3), rpe(4), rpe(5), rpe(6)};
-                        rec.appendPred("right", rps);
-                    }
-                }
+                std::lock_guard<std::mutex> lock(visualization_mutex_);
+                visualization_has_pred_ = true;
+                visualization_pred_time_ = future_time;
+                visualization_pred_state_ = future_state;
             }
 
-            // Extract joint positions from state and set as commands
+            // Trajectory markers: same RT thread as updatePolicy/getPolicy (MRT-safe).
+            if (visualizer_)
+            {
+                visualizer_->updateEndEffectorTrajectory(policy);
+                visualizer_->publishEndEffectorTrajectory(node_->now());
+            }
+
             if (ctrl_interfaces_.control_mode_ == ControlMode::POSITION)
             {
                 for (size_t i = 0; i < joint_names_.size() && i < static_cast<size_t>(future_state.size()); ++i)
@@ -218,7 +189,6 @@ namespace ocs2::mobile_manipulator
             }
             else if (ctrl_interfaces_.control_mode_ == ControlMode::MIX)
             {
-                // Calculate static torques for force control
                 vector_t static_torques = calculateStaticTorques();
 
                 for (size_t i = 0; i < joint_names_.size() && i < static_cast<size_t>(static_torques.size()); ++i)
@@ -244,24 +214,10 @@ namespace ocs2::mobile_manipulator
         }
         catch (const std::exception& e)
         {
-            RCLCPP_WARN(node_->get_logger(), "Failed to get trajectory, falling back to integration: %s", e.what());
-            // Fallback to integration method
-            vector_t current_positions(joint_names_.size());
-            for (size_t i = 0; i < joint_names_.size(); ++i)
-            {
-                auto value = ctrl_interfaces_.joint_position_state_interface_[i].get().get_optional();
-                current_positions(i) = value.value_or(0.0);
-            }
-
-            double dt = 1.0 / ctrl_interfaces_.frequency_;
-            for (size_t i = 0; i < joint_names_.size() && i < static_cast<size_t>(optimized_input_.size()); ++i)
-            {
-                double new_position = current_positions(i) + optimized_input_(i) * dt;
-                ctrl_interfaces_.setJointPositionCommand(i, new_position);
-            }
+            RCLCPP_WARN_THROTTLE(node_->get_logger(), *node_->get_clock(), 1000,
+                                 "Policy not ready / trajectory eval failed, holding: %s", e.what());
+            holdLastSentPositions();
         }
-        visualizer_->updateEndEffectorTrajectory(mpc_mrt_interface_->getPolicy());
-        visualizer_->publishEndEffectorTrajectory(node_->now());
     }
 
     void CtrlComponent::resetMpc()
@@ -304,6 +260,8 @@ namespace ocs2::mobile_manipulator
                 pose_reference_manager_->setCurrentObservation(observation_);
                 pose_reference_manager_->setCurrentEndEffectorPoses(left_initial_ee_state, right_initial_ee_state,
                                                                     false);
+                // Explicit enter publish: markers subscribe to *_current_target.
+                pose_reference_manager_->publishCurrentTargetsFromCache();
             }
 
             // Dual arm mode: create target trajectory containing two end effectors
@@ -336,6 +294,7 @@ namespace ocs2::mobile_manipulator
                 pose_reference_manager_->setCurrentObservation(observation_);
                 vector_t zero_pose = vector_t::Zero(7);
                 pose_reference_manager_->setCurrentEndEffectorPoses(initial_ee_state, zero_pose, false);
+                pose_reference_manager_->publishCurrentTargetsFromCache();
             }
 
             // Initialize TargetTrajectories - use end effector position and orientation
@@ -344,22 +303,189 @@ namespace ocs2::mobile_manipulator
                                                      {observation_.input});
         }
 
-        // Set initial observation and target trajectory
+        // Set initial observation and target trajectory (non-blocking).
+        // Waiting for initialPolicyReceived() must happen on the MPC worker thread —
+        // blocking here runs inside controller_manager::update and causes overruns.
         mpc_mrt_interface_->reset();
         mpc_mrt_interface_->setCurrentObservation(observation_);
         mpc_mrt_interface_->resetMpcNode(target_trajectories);
+        RCLCPP_INFO(node_->get_logger(),
+                    "MPC reset complete; waiting for initial policy on MPC thread");
+    }
 
-        RCLCPP_INFO(node_->get_logger(), "Waiting for the initial policy ...");
-        while (!mpc_mrt_interface_->initialPolicyReceived())
+    bool CtrlComponent::initialPolicyReceived() const
+    {
+        return mpc_mrt_interface_ && mpc_mrt_interface_->initialPolicyReceived();
+    }
+
+    void CtrlComponent::holdLastSentPositions() const
+    {
+        for (size_t i = 0; i < joint_names_.size() && i < ctrl_interfaces_.last_sent_joint_positions_.size(); ++i)
         {
-            advanceMpc();
-            rclcpp::WallRate(interface_->mpcSettings().mrtDesiredFrequency_).sleep();
+            ctrl_interfaces_.setJointPositionCommand(i, ctrl_interfaces_.last_sent_joint_positions_[i]);
+        }
+    }
+
+    void CtrlComponent::publishCachedCurrentTargets() const
+    {
+        if (pose_reference_manager_)
+        {
+            pose_reference_manager_->publishCurrentTargetsFromCache();
         }
     }
 
     void CtrlComponent::advanceMpc()
     {
         mpc_mrt_interface_->advanceMpc();
+    }
+
+    void CtrlComponent::startVisualizationThread(int thread_sleep_ms)
+    {
+        if (visualization_running_)
+        {
+            return;
+        }
+        visualization_thread_sleep_ms_ = std::max(1, thread_sleep_ms);
+        visualization_thread_should_stop_ = false;
+        visualization_thread_finished_ = false;
+        visualization_running_ = true;
+        // Do not set visualization_update_requested_ here — caller must call
+        // requestVisualizationUpdate() after observation_ is ready (e.g. post-resetMpc),
+        // otherwise the first snapshot can be empty/stale.
+        visualization_thread_ = std::thread(&CtrlComponent::visualizationThreadLoop, this);
+    }
+
+    void CtrlComponent::requestStopVisualizationThread()
+    {
+        if (!visualization_running_)
+        {
+            visualization_thread_finished_ = true;
+            return;
+        }
+        visualization_thread_should_stop_ = true;
+    }
+
+    bool CtrlComponent::isVisualizationThreadFinished() const
+    {
+        return visualization_thread_finished_.load();
+    }
+
+    void CtrlComponent::joinVisualizationThread()
+    {
+        if (visualization_thread_.joinable())
+        {
+            visualization_thread_.join();
+        }
+        visualization_running_ = false;
+        visualization_thread_finished_ = true;
+    }
+
+    void CtrlComponent::stopVisualizationThread()
+    {
+        requestStopVisualizationThread();
+        joinVisualizationThread();
+    }
+
+    void CtrlComponent::requestVisualizationUpdate()
+    {
+        {
+            std::lock_guard<std::mutex> lock(visualization_mutex_);
+            visualization_observation_ = observation_;
+            visualization_stamp_ = node_->now();
+        }
+        visualization_update_requested_ = true;
+    }
+
+    void CtrlComponent::visualizationThreadLoop()
+    {
+        RCLCPP_DEBUG(node_->get_logger(),
+                     "Visualization thread started (sleep=%d ms, MPC-rate)",
+                     visualization_thread_sleep_ms_);
+        while (!visualization_thread_should_stop_.load())
+        {
+            if (visualization_update_requested_.load())
+            {
+                SystemObservation obs;
+                rclcpp::Time stamp(0, 0, RCL_ROS_TIME);
+                bool has_pred = false;
+                double pred_time = 0.0;
+                vector_t pred_state;
+                {
+                    std::lock_guard<std::mutex> lock(visualization_mutex_);
+                    obs = visualization_observation_;
+                    stamp = visualization_stamp_;
+                    has_pred = visualization_has_pred_;
+                    pred_time = visualization_pred_time_;
+                    pred_state = visualization_pred_state_;
+                    visualization_has_pred_ = false;
+                }
+                try
+                {
+                    runVisualizationOnce(obs, stamp, has_pred, pred_time, pred_state);
+                }
+                catch (const std::exception& e)
+                {
+                    RCLCPP_WARN_THROTTLE(node_->get_logger(), *node_->get_clock(), 2000,
+                                         "Visualization update failed: %s", e.what());
+                }
+                visualization_update_requested_ = false;
+            }
+            std::this_thread::sleep_for(std::chrono::milliseconds(visualization_thread_sleep_ms_));
+        }
+        visualization_thread_finished_ = true;
+        RCLCPP_DEBUG(node_->get_logger(), "Visualization thread stopped");
+    }
+
+    void CtrlComponent::runVisualizationOnce(const SystemObservation& obs, const rclcpp::Time& /*stamp*/,
+                                             bool has_pred, double pred_time, const vector_t& pred_state)
+    {
+        if (!visualizer_ || obs.state.size() == 0)
+        {
+            return;
+        }
+
+        visualizer_->publishSelfCollisionVisualization(obs.state);
+        // EE pose is published every RT cycle in updateObservation (incl. HOLD).
+
+        auto& rec = arms_controller_common::TrajectoryRecorder::instance();
+        if (rec.enabled())
+        {
+            const double t = obs.time;
+            const vector_t lp = visualizer_->computeEndEffectorPose(obs.state);
+            arms_controller_common::TrajSample ls;
+            ls.stamp_sec = t;
+            ls.position = {lp(0), lp(1), lp(2)};
+            ls.quat_xyzw = {lp(3), lp(4), lp(5), lp(6)};
+            rec.appendReal("left", ls);
+            if (dual_arm_mode_)
+            {
+                const vector_t rp = visualizer_->computeRightEndEffectorPose(obs.state);
+                arms_controller_common::TrajSample rs;
+                rs.stamp_sec = t;
+                rs.position = {rp(0), rp(1), rp(2)};
+                rs.quat_xyzw = {rp(3), rp(4), rp(5), rp(6)};
+                rec.appendReal("right", rs);
+            }
+
+            if (has_pred && pred_state.size() > 0)
+            {
+                arms_controller_common::TrajSample lps;
+                lps.stamp_sec = pred_time;
+                const vector_t lpe = visualizer_->computeEndEffectorPose(pred_state);
+                lps.position = {lpe(0), lpe(1), lpe(2)};
+                lps.quat_xyzw = {lpe(3), lpe(4), lpe(5), lpe(6)};
+                rec.appendPred("left", lps);
+                if (dual_arm_mode_)
+                {
+                    arms_controller_common::TrajSample rps;
+                    rps.stamp_sec = pred_time;
+                    const vector_t rpe = visualizer_->computeRightEndEffectorPose(pred_state);
+                    rps.position = {rpe(0), rpe(1), rpe(2)};
+                    rps.quat_xyzw = {rpe(3), rpe(4), rpe(5), rpe(6)};
+                    rec.appendPred("right", rps);
+                }
+            }
+        }
     }
 
     void CtrlComponent::clearTrajectoryVisualization()

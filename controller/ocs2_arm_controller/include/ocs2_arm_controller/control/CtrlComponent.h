@@ -6,9 +6,12 @@
 
 #include <cstdlib>
 
+#include <atomic>
 #include <functional>
 #include <memory>
+#include <mutex>
 #include <string>
+#include <thread>
 #include <vector>
 
 #include <ament_index_cpp/get_package_share_directory.hpp>
@@ -168,8 +171,28 @@ namespace ocs2::mobile_manipulator
 
         void updateObservation(const rclcpp::Time& time);
         void evaluatePolicy(const rclcpp::Time& time);
+        /** Reset observation/targets and MPC node. Does NOT block for the first policy (RT-safe). */
         void resetMpc();
+        /** True once the first MPC policy after resetMpc() is available. */
+        [[nodiscard]] bool initialPolicyReceived() const;
         void advanceMpc();
+        /** Hold joints at last commanded positions (used while waiting for initial policy). */
+        void holdLastSentPositions() const;
+        /** Publish left/right(/body) current_target from cache (call on OCS2 enter for marker sync). */
+        void publishCachedCurrentTargets() const;
+
+        /**
+         * Observation FK / self-collision / EE pose viz at MPC cadence on a dedicated thread.
+         * Call start/stop from StateOCS2 enter/exit; requestVisualizationUpdate() when requesting MPC.
+         */
+        void startVisualizationThread(int thread_sleep_ms);
+        /** Signal stop only (RT-safe). Pair with joinVisualizationThread after finished. */
+        void requestStopVisualizationThread();
+        [[nodiscard]] bool isVisualizationThreadFinished() const;
+        void joinVisualizationThread();
+        /** Blocking stop: request + join (destructor / sync paths). */
+        void stopVisualizationThread();
+        void requestVisualizationUpdate();
 
         // Visualization management
         void clearTrajectoryVisualization();
@@ -221,6 +244,24 @@ namespace ocs2::mobile_manipulator
 
         // Visualization component
         std::unique_ptr<ocs2::controller_common::Ocs2PinocchioVisualizer> visualizer_;
+
+        // Visualization worker (MPC-rate, off RT update path)
+        void visualizationThreadLoop();
+        void runVisualizationOnce(const SystemObservation& obs, const rclcpp::Time& stamp,
+                                  bool has_pred, double pred_time, const vector_t& pred_state);
+
+        std::thread visualization_thread_;
+        std::atomic_bool visualization_running_{false};
+        std::atomic_bool visualization_thread_should_stop_{false};
+        std::atomic_bool visualization_thread_finished_{true};
+        std::atomic_bool visualization_update_requested_{false};
+        int visualization_thread_sleep_ms_{2};
+        std::mutex visualization_mutex_;
+        SystemObservation visualization_observation_;
+        rclcpp::Time visualization_stamp_{0, 0, RCL_ROS_TIME};
+        bool visualization_has_pred_{false};
+        double visualization_pred_time_{0.0};
+        vector_t visualization_pred_state_;
 
         // Configuration
         std::string robot_name_;

@@ -622,6 +622,24 @@ namespace ocs2::controller_common
         return !buffer.path.empty() && buffer.duration > 0.0 && time < buffer.startTime + buffer.duration;
     }
 
+    bool PoseBasedReferenceManager::anyReferenceBufferActive(double time) const
+    {
+        if (isArmReferenceBufferActive(left_arm_reference_buffer_, time))
+        {
+            return true;
+        }
+        if (dual_arm_mode_ && isArmReferenceBufferActive(right_arm_reference_buffer_, time))
+        {
+            return true;
+        }
+        if (effectiveTargetStateDim() == Ocs2ReferenceTargetContext::kWheelHumanoidTargetStateDim &&
+            isArmReferenceBufferActive(body_reference_buffer_, time))
+        {
+            return true;
+        }
+        return false;
+    }
+
     void PoseBasedReferenceManager::rebuildTargetTrajectoriesFromActiveArmReferenceBuffers(
         double start_time, double minimum_duration)
     {
@@ -638,6 +656,10 @@ namespace ocs2::controller_common
         if (dual_arm_mode_)
         {
             extend_end_time(right_arm_reference_buffer_);
+        }
+        if (effectiveTargetStateDim() == Ocs2ReferenceTargetContext::kWheelHumanoidTargetStateDim)
+        {
+            extend_end_time(body_reference_buffer_);
         }
         rebuildTargetTrajectoriesFromArmReferenceBuffers(start_time, end_time);
     }
@@ -657,6 +679,9 @@ namespace ocs2::controller_common
         time_trajectory.reserve(num_samples);
         state_trajectory.reserve(num_samples);
 
+        const bool wheel_humanoid =
+            effectiveTargetStateDim() == Ocs2ReferenceTargetContext::kWheelHumanoidTargetStateDim;
+
         for (size_t i = 0; i < num_samples; ++i)
         {
             const double t = start_time + static_cast<double>(i) * dt;
@@ -666,7 +691,13 @@ namespace ocs2::controller_common
                 : vector_t::Zero(7);
 
             vector_t state;
-            if (dual_arm_mode_)
+            if (wheel_humanoid && dual_arm_mode_)
+            {
+                const vector_t body_pose =
+                    sampleArmReferenceBuffer(body_reference_buffer_, bodySegmentForAssembly(), t);
+                state = assembleWheelHumanoidTargetState(left_pose, right_pose, body_pose);
+            }
+            else if (dual_arm_mode_)
             {
                 state = assembleDualArmReferenceState(left_pose, right_pose);
             }
@@ -733,14 +764,14 @@ namespace ocs2::controller_common
         }
         const auto [relPos, relQuatRaw] = sw->getCouplingParameters(t);
         Eigen::Quaternion<scalar_t> relQuat = relQuatRaw;
-        if (relQuat.norm() < static_cast<scalar_t>(1e-9)) {
+        if (relQuat.norm() < 1e-9) {
             return;
         }
         relQuat.normalize();
 
-        Eigen::Quaternion<scalar_t> leftQuat(left_pose7_xyzw(6), left_pose7_xyzw(3), left_pose7_xyzw(4),
+        Eigen::Quaternion leftQuat(left_pose7_xyzw(6), left_pose7_xyzw(3), left_pose7_xyzw(4),
                                              left_pose7_xyzw(5));
-        if (leftQuat.norm() < static_cast<scalar_t>(1e-9)) {
+        if (leftQuat.norm() < 1e-9) {
             return;
         }
         leftQuat.normalize();
@@ -810,125 +841,24 @@ namespace ocs2::controller_common
         const vector_t& previous_left_target_state,
         const vector_t& previous_right_target_state)
     {
-        // 使用 moveL_duration_ 作为插值时间
-        double actual_duration = moveL_duration_;
-
-        if (moveL_auto_extend_duration_)
-        {
-            actual_duration = std::max(actual_duration,
-                minimumPoseDuration(previous_left_target_state, left_target_state_));
-            if (dual_arm_mode_)
-                actual_duration = std::max(actual_duration,
-                    minimumPoseDuration(previous_right_target_state, right_target_state_));
-        }
-
-        // 根据时间长度动态计算采样点数量
-        const size_t kNumSamples = std::max(
-            static_cast<size_t>(std::ceil(actual_duration / moveL_sample_interval_)) + 1,
-            static_cast<size_t>(2) // 至少2个采样点
-        );
-
-        // 起始/终止时间
-        const double t0 = current_observation_.time;
-        const double t1 = t0 + actual_duration;
-        const double dt = (t1 - t0) / static_cast<double>(kNumSamples - 1);
-
-        // 组装 start / goal 的合并 state
-        // 在双臂模式下，总是同时更新两个臂的轨迹
-        vector_t start_state;
-        vector_t goal_state;
+        // dual_target/stamped 等双臂 moveL 必须写入 per-arm buffer。
+        // 否则后续单臂 continuous（裸 left/right_target）会因 buffer 空闲走
+        // updateTargetTrajectory()，把另一臂尚未结束的插值轨迹压成终点而加速。
+        const double start_time = current_observation_.time;
+        setArmReferenceBufferFromWaypoints(
+            left_arm_reference_buffer_, previous_left_target_state, {left_target_state_},
+            start_time, moveL_duration_);
         if (dual_arm_mode_)
         {
-            start_state = assembleDualArmReferenceState(previous_left_target_state, previous_right_target_state);
-            goal_state = assembleDualArmReferenceState(left_target_state_, right_target_state_);
+            setArmReferenceBufferFromWaypoints(
+                right_arm_reference_buffer_, previous_right_target_state, {right_target_state_},
+                start_time, moveL_duration_);
         }
         else
         {
-            start_state = previous_left_target_state;
-            goal_state = left_target_state_;
+            resetArmReferenceBuffer(right_arm_reference_buffer_, right_target_state_, start_time);
         }
-
-        auto interpolatePose7 = [](const vector_t& s0, const vector_t& s1,
-                                   double alpha) -> vector_t
-        {
-            vector_t out = vector_t::Zero(7);
-            // position
-            out.segment<3>(0) =
-                (1.0 - alpha) * s0.segment<3>(0) + alpha * s1.segment<3>(0);
-
-            // quaternion stored as [qx, qy, qz, qw]
-            Eigen::Quaterniond q0(s0(6), s0(3), s0(4), s0(5));
-            Eigen::Quaterniond q1(s1(6), s1(3), s1(4), s1(5));
-            if (q0.norm() < 1e-9)
-            {
-                q0 = Eigen::Quaterniond::Identity();
-            }
-            else
-            {
-                q0.normalize();
-            }
-            if (q1.norm() < 1e-9)
-            {
-                q1 = q0;
-            }
-            else
-            {
-                q1.normalize();
-            }
-
-            // 保证走最短弧（避免四元数符号翻转导致绕远）
-            if (q0.dot(q1) < 0.0)
-            {
-                q1.coeffs() *= -1.0;
-            }
-            Eigen::Quaterniond q = q0.slerp(alpha, q1);
-            q.normalize();
-
-            out(3) = q.x();
-            out(4) = q.y();
-            out(5) = q.z();
-            out(6) = q.w();
-            return out;
-        };
-
-
-        scalar_array_t time_trajectory;
-        time_trajectory.reserve(kNumSamples);
-        vector_array_t state_trajectory;
-        state_trajectory.reserve(kNumSamples);
-
-        for (size_t i = 0; i < kNumSamples; ++i)
-        {
-            const double t = t0 + static_cast<double>(i) * dt;
-            vector_t xt;
-            if (dual_arm_mode_)
-            {
-                const double left_progress = samplePoseProgress(
-                    start_state.segment(0, 7), goal_state.segment(0, 7), t - t0, actual_duration);
-                const double right_progress = samplePoseProgress(
-                    start_state.segment(7, 7), goal_state.segment(7, 7), t - t0, actual_duration);
-                const vector_t left_i = interpolatePose7(start_state.segment(0, 7),
-                                                         goal_state.segment(0, 7), left_progress);
-                const vector_t right_i = interpolatePose7(start_state.segment(7, 7),
-                                                          goal_state.segment(7, 7), right_progress);
-                xt = assembleDualArmReferenceState(left_i, right_i);
-            }
-            else
-            {
-                const double progress = samplePoseProgress(start_state, goal_state, t - t0, actual_duration);
-                xt = interpolatePose7(start_state, goal_state, progress);
-            }
-
-            time_trajectory.push_back(t);
-            state_trajectory.push_back(std::move(xt));
-        }
-
-        vector_array_t input_trajectory(
-            kNumSamples,
-            vector_t::Zero(target_context_.input_dim));
-        TargetTrajectories target_trajectories(time_trajectory, state_trajectory,
-                                               input_trajectory);
-        referenceManagerPtr_->setTargetTrajectories(std::move(target_trajectories));
+        rebuildTargetTrajectoriesFromActiveArmReferenceBuffers(start_time, moveL_duration_);
     }
 
     void PoseBasedReferenceManager::updateTrajectoryWithBody(
@@ -950,69 +880,18 @@ namespace ocs2::controller_common
             actual_duration = std::max(actual_duration, minimumPoseDuration(previous_right_target_state, right_target_state_));
             actual_duration = std::max(actual_duration, minimumPoseDuration(previous_body_target_state, body_pose_7_xyzw_));
         }
-        const size_t kNumSamples = std::max(
-            static_cast<size_t>(std::ceil(actual_duration / moveL_sample_interval_)) + 1,
-            static_cast<size_t>(2));
 
-        const double t0 = current_observation_.time;
-        const double t1 = t0 + actual_duration;
-        const double dt = (t1 - t0) / static_cast<double>(kNumSamples - 1);
-
-        auto interpolatePose7 = [](const vector_t& s0, const vector_t& s1, double alpha) -> vector_t
-        {
-            vector_t out = vector_t::Zero(7);
-            out.segment<3>(0) =
-                (1.0 - alpha) * s0.segment<3>(0) + alpha * s1.segment<3>(0);
-
-            Eigen::Quaterniond q0(s0(6), s0(3), s0(4), s0(5));
-            Eigen::Quaterniond q1(s1(6), s1(3), s1(4), s1(5));
-            if (q0.norm() < 1e-9) q0 = Eigen::Quaterniond::Identity();
-            else q0.normalize();
-            if (q1.norm() < 1e-9) q1 = q0;
-            else q1.normalize();
-            if (q0.dot(q1) < 0.0) q1.coeffs() *= -1.0;
-
-            Eigen::Quaterniond q = q0.slerp(alpha, q1);
-            q.normalize();
-            out(3) = q.x();
-            out(4) = q.y();
-            out(5) = q.z();
-            out(6) = q.w();
-            return out;
-        };
-
-
-        vector_t start_left = previous_left_target_state.size() >= 7 ? previous_left_target_state : left_target_state_;
-        vector_t start_right = previous_right_target_state.size() >= 7 ? previous_right_target_state : right_target_state_;
-        vector_t start_body = previous_body_target_state.size() >= 7 ? previous_body_target_state : body_pose_7_xyzw_;
-        const vector_t goal_left = left_target_state_;
-        const vector_t goal_right = right_target_state_;
-        const vector_t goal_body = body_pose_7_xyzw_;
-
-        scalar_array_t time_trajectory;
-        time_trajectory.reserve(kNumSamples);
-        vector_array_t state_trajectory;
-        state_trajectory.reserve(kNumSamples);
-
-        for (size_t i = 0; i < kNumSamples; ++i)
-        {
-            const double t = t0 + static_cast<double>(i) * dt;
-            const vector_t left_i = interpolatePose7(start_left, goal_left,
-                samplePoseProgress(start_left, goal_left, t - t0, actual_duration));
-            const vector_t right_i = interpolatePose7(start_right, goal_right,
-                samplePoseProgress(start_right, goal_right, t - t0, actual_duration));
-            const vector_t body_i = interpolatePose7(start_body, goal_body,
-                samplePoseProgress(start_body, goal_body, t - t0, actual_duration));
-            const vector_t xt = assembleWheelHumanoidTargetState(left_i, right_i, body_i);
-
-            time_trajectory.push_back(t);
-            state_trajectory.push_back(xt);
-        }
-
-        vector_array_t input_trajectory(
-            kNumSamples, vector_t::Zero(target_context_.input_dim));
-        TargetTrajectories target_trajectories(time_trajectory, state_trajectory, input_trajectory);
-        referenceManagerPtr_->setTargetTrajectories(std::move(target_trajectories));
+        const double start_time = current_observation_.time;
+        setArmReferenceBufferFromWaypoints(
+            left_arm_reference_buffer_, previous_left_target_state, {left_target_state_},
+            start_time, actual_duration);
+        setArmReferenceBufferFromWaypoints(
+            right_arm_reference_buffer_, previous_right_target_state, {right_target_state_},
+            start_time, actual_duration);
+        setArmReferenceBufferFromWaypoints(
+            body_reference_buffer_, previous_body_target_state, {body_pose_7_xyzw_},
+            start_time, actual_duration);
+        rebuildTargetTrajectoriesFromActiveArmReferenceBuffers(start_time, actual_duration);
     }
 
     void PoseBasedReferenceManager::updateBodyTrajectory(const vector_t& previous_body_target_state)
@@ -1024,70 +903,12 @@ namespace ocs2::controller_common
             return;
         }
 
-        double actual_duration = moveL_duration_;
-        if (moveL_auto_extend_duration_)
-            actual_duration = std::max(actual_duration, minimumPoseDuration(previous_body_target_state, body_pose_7_xyzw_));
-        const size_t kNumSamples = std::max(
-            static_cast<size_t>(std::ceil(actual_duration / moveL_sample_interval_)) + 1,
-            static_cast<size_t>(2));
-
-        const double t0 = current_observation_.time;
-        const double t1 = t0 + actual_duration;
-        const double dt = (t1 - t0) / static_cast<double>(kNumSamples - 1);
-
-        auto interpolatePose7 = [](const vector_t& s0, const vector_t& s1, double alpha) -> vector_t
-        {
-            vector_t out = vector_t::Zero(7);
-            out.segment<3>(0) =
-                (1.0 - alpha) * s0.segment<3>(0) + alpha * s1.segment<3>(0);
-
-            // quaternion stored as [qx, qy, qz, qw]
-            Eigen::Quaterniond q0(s0(6), s0(3), s0(4), s0(5));
-            Eigen::Quaterniond q1(s1(6), s1(3), s1(4), s1(5));
-            if (q0.norm() < 1e-9) q0 = Eigen::Quaterniond::Identity();
-            else q0.normalize();
-            if (q1.norm() < 1e-9) q1 = q0;
-            else q1.normalize();
-            if (q0.dot(q1) < 0.0) q1.coeffs() *= -1.0;
-
-            Eigen::Quaterniond q = q0.slerp(alpha, q1);
-            q.normalize();
-            out(3) = q.x();
-            out(4) = q.y();
-            out(5) = q.z();
-            out(6) = q.w();
-            return out;
-        };
-
-        vector_t start_body = previous_body_target_state;
-        if (start_body.size() < 7)
-        {
-            start_body = body_pose_7_xyzw_;
-        }
-        const vector_t goal_body = body_pose_7_xyzw_;
-        const vector_t fixed_left = left_target_state_;
-        const vector_t fixed_right = dual_arm_mode_ ? right_target_state_ : vector_t::Zero(7);
-
-        scalar_array_t time_trajectory;
-        time_trajectory.reserve(kNumSamples);
-        vector_array_t state_trajectory;
-        state_trajectory.reserve(kNumSamples);
-
-        for (size_t i = 0; i < kNumSamples; ++i)
-        {
-            const double t = t0 + static_cast<double>(i) * dt;
-            const double progress = samplePoseProgress(start_body, goal_body, t - t0, actual_duration);
-            const vector_t body_i = interpolatePose7(start_body, goal_body, progress);
-            const vector_t xt = assembleWheelHumanoidTargetState(fixed_left, fixed_right, body_i);
-
-            time_trajectory.push_back(t);
-            state_trajectory.push_back(xt);
-        }
-
-        vector_array_t input_trajectory(
-            kNumSamples, vector_t::Zero(target_context_.input_dim));
-        TargetTrajectories target_trajectories(time_trajectory, state_trajectory, input_trajectory);
-        referenceManagerPtr_->setTargetTrajectories(std::move(target_trajectories));
+        const double start_time = current_observation_.time;
+        setArmReferenceBufferFromWaypoints(
+            body_reference_buffer_, previous_body_target_state, {body_pose_7_xyzw_},
+            start_time, moveL_duration_);
+        // Preserve any active left/right moveL by rebuilding from all buffers.
+        rebuildTargetTrajectoriesFromActiveArmReferenceBuffers(start_time, moveL_duration_);
     }
 
     void PoseBasedReferenceManager::updateParam()
@@ -1195,7 +1016,7 @@ namespace ocs2::controller_common
     void PoseBasedReferenceManager::bodyPoseCallback(
         const geometry_msgs::msg::Pose::SharedPtr msg)
     {
-        // body_target: 直接更新，不插值
+        // body_target: immediate update (preempt body moveL only; preserve arm buffers).
         body_pose_7_xyzw_(0) = msg->position.x;
         body_pose_7_xyzw_(1) = msg->position.y;
         body_pose_7_xyzw_(2) = msg->position.z;
@@ -1204,7 +1025,16 @@ namespace ocs2::controller_common
         body_pose_7_xyzw_(5) = msg->orientation.z;
         body_pose_7_xyzw_(6) = msg->orientation.w;
 
-        updateTargetTrajectory();
+        const double t = current_observation_.time;
+        resetArmReferenceBuffer(body_reference_buffer_, body_pose_7_xyzw_, t);
+        if (anyReferenceBufferActive(t))
+        {
+            rebuildTargetTrajectoriesFromActiveArmReferenceBuffers(t, 0.0);
+        }
+        else
+        {
+            updateTargetTrajectory();
+        }
         publishCurrentTargets("body");
     }
 
@@ -1212,12 +1042,20 @@ namespace ocs2::controller_common
     {
         if (!interpolate)
         {
-            // 立即目标（裸 left_target / VR / marker 连续）：抢占并取消进行中的 moveL，
-            // 否则在 stamped/relative 轨迹未结束前会静默丢弃，表现为不跟手。
+            // Continuous / marker Pose preempts this arm's moveL only.
+            // If the opposite arm still has an active buffer, rebuild so its trajectory is not collapsed.
             resetArmReferenceBuffer(left_arm_reference_buffer_, goal7, current_observation_.time);
             left_target_state_ = goal7;
             (void)syncWheelHumanoidCoupledOppositeArmIfNeeded(true);
-            updateTargetTrajectory();
+            const double t = current_observation_.time;
+            if (anyReferenceBufferActive(t))
+            {
+                rebuildTargetTrajectoriesFromActiveArmReferenceBuffers(t, 0.0);
+            }
+            else
+            {
+                updateTargetTrajectory();
+            }
             publishCurrentTargets();
             return;
         }
@@ -1253,7 +1091,15 @@ namespace ocs2::controller_common
             resetArmReferenceBuffer(right_arm_reference_buffer_, goal7, current_observation_.time);
             right_target_state_ = goal7;
             (void)syncWheelHumanoidCoupledOppositeArmIfNeeded(false);
-            updateTargetTrajectory();
+            const double t = current_observation_.time;
+            if (anyReferenceBufferActive(t))
+            {
+                rebuildTargetTrajectoriesFromActiveArmReferenceBuffers(t, 0.0);
+            }
+            else
+            {
+                updateTargetTrajectory();
+            }
             publishCurrentTargets();
             return;
         }
@@ -1350,33 +1196,33 @@ namespace ocs2::controller_common
 
     void PoseBasedReferenceManager::integrateLatchedTwists(double dt)
     {
+        const double t = current_observation_.time;
         bool updated = false;
         if (left_twist_active_)
         {
-            // 速度流与裸 left_target 同属立即语义：抢占 moveL buffer
-            if (isArmReferenceBufferActive(left_arm_reference_buffer_, current_observation_.time))
-            {
-                resetArmReferenceBuffer(left_arm_reference_buffer_, left_target_state_,
-                                        current_observation_.time);
-            }
+            // Preempt this arm's moveL; opposite arm preserved via rebuild below.
+            resetArmReferenceBuffer(left_arm_reference_buffer_, left_target_state_, t);
             left_target_state_ = integrateTwistVelocity(left_target_state_, left_latched_twist_, dt);
             (void)syncWheelHumanoidCoupledOppositeArmIfNeeded(true);
             updated = true;
         }
         if (dual_arm_mode_ && right_twist_active_)
         {
-            if (isArmReferenceBufferActive(right_arm_reference_buffer_, current_observation_.time))
-            {
-                resetArmReferenceBuffer(right_arm_reference_buffer_, right_target_state_,
-                                        current_observation_.time);
-            }
+            resetArmReferenceBuffer(right_arm_reference_buffer_, right_target_state_, t);
             right_target_state_ = integrateTwistVelocity(right_target_state_, right_latched_twist_, dt);
             (void)syncWheelHumanoidCoupledOppositeArmIfNeeded(false);
             updated = true;
         }
         if (updated)
         {
-            updateTargetTrajectory();
+            if (anyReferenceBufferActive(t))
+            {
+                rebuildTargetTrajectoriesFromActiveArmReferenceBuffers(t, 0.0);
+            }
+            else
+            {
+                updateTargetTrajectory();
+            }
             publishCurrentTargets();
         }
     }
@@ -1958,6 +1804,10 @@ namespace ocs2::controller_common
         {
             extendEndTimeFromActiveBuffer(right_arm_reference_buffer_);
         }
+        if (effectiveTargetStateDim() == Ocs2ReferenceTargetContext::kWheelHumanoidTargetStateDim)
+        {
+            extendEndTimeFromActiveBuffer(body_reference_buffer_);
+        }
 
         if (!dual_arm_mode_ && left_arm_waypoints.empty())
         {
@@ -1983,6 +1833,7 @@ namespace ocs2::controller_common
         body_pose_7_xyzw_(6) = 1.0;
         left_arm_reference_buffer_ = ArmReferenceBuffer{};
         right_arm_reference_buffer_ = ArmReferenceBuffer{};
+        body_reference_buffer_ = ArmReferenceBuffer{};
 
         RCLCPP_INFO(logger_,
                     "Target state cache reset - cleared all cached target states");
@@ -2011,7 +1862,7 @@ namespace ocs2::controller_common
             // 仅轮式人形 21 维布局需要在此处把缓存推入 ReferenceManager；固定臂控仍保持 7/14 维原行为
             if (update_target_trajectory &&
                 effectiveTargetStateDim() == Ocs2ReferenceTargetContext::kWheelHumanoidTargetStateDim &&
-                !left_buffer_active && !right_buffer_active)
+                !anyReferenceBufferActive(t))
             {
                 updateTargetTrajectory();
             }

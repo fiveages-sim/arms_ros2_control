@@ -35,10 +35,14 @@ namespace ocs2::controller_common {
  * Uses Ocs2ReferenceTargetContext for dual-arm flag, base frame, and zero-input dimension.
  *
  * Inbound (left; right symmetric when dual):
- * - left_target            Pose          immediate absolute (preempts active moveL)
+ * - left_target            Pose          immediate absolute (preempts this arm's moveL;
+ *                                        other active left/right/body moveL preserved via rebuild)
  * - left_target/stamped    PoseStamped   absolute moveL; frame_id non-base → TF→base
- * - left_target/twist      Twist         velocity stream (m/s, rad/s), latch + dt integrate (preempts moveL)
+ * - left_target/twist      Twist         velocity stream (m/s, rad/s), latch + dt integrate
+ *                                        (same preempt / other-preserve semantics as Pose)
  * - left_target/relative   TwistStamped  one-shot SE(3) delta (m, rad) + moveL; frame_id selects base/EE/TF
+ * Body (wheel-humanoid): body_target / body_target/stamped — same immediate vs moveL split;
+ * dual_target/stamped with 3 poses plans left+right+body together.
  */
 class PoseBasedReferenceManager : public ReferenceManagerDecorator {
 public:
@@ -191,6 +195,11 @@ private:
 
     ArmReferenceBuffer left_arm_reference_buffer_;
     ArmReferenceBuffer right_arm_reference_buffer_;
+    /** Body/waist moveL buffer (wheel-humanoid 21-dim); same layout as arm buffers. */
+    ArmReferenceBuffer body_reference_buffer_;
+
+    /** True if any left/right/body reference buffer is still active at time. */
+    [[nodiscard]] bool anyReferenceBufferActive(double time) const;
 
     /** 在两点 7 维位姿 [x,y,z,qx,qy,qz,qw] 之间插值；alpha∈[0,1] 时位置线性插值，姿态四元数 slerp（最短路径）。 */
     static vector_t interpolatePose7(const vector_t& start, const vector_t& goal, double alpha);
