@@ -7,6 +7,7 @@ import copy
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional, Tuple
 
+import yaml
 from ament_index_python.packages import get_package_share_directory
 from launch.actions import IncludeLaunchDescription
 from launch.launch_description_sources import PythonLaunchDescriptionSource
@@ -274,6 +275,54 @@ def setup_body_controllers(
         control_patch=ctx.control_patch,
         ros2_control_config=ctx.config,
     )
+    return controllers, create_controller_spawners(controllers, ctx.use_sim_time)
+
+
+def _resolve_ft_sides(ctx: Ocs2ControlContext) -> Tuple[bool, bool]:
+    configs = ctx.launch_configurations
+    ft: Dict[str, str] = {}
+    for side in ("left", "right"):
+        key = f"{side}_ft"
+        val = str(configs.get(f"hardware_{key}", "") or "").strip()
+        if val:
+            ft[key] = val
+
+    profile_path = ctx.profile_path or ""
+    if profile_path and os.path.isfile(profile_path):
+        with open(profile_path, encoding="utf-8") as handle:
+            raw = yaml.safe_load(handle) or {}
+        hw = raw.get("hardware")
+        if isinstance(hw, dict):
+            for side in ("left", "right"):
+                key = f"{side}_ft"
+                if key not in ft and hw.get(key) is not None:
+                    ft[key] = str(hw[key]).strip()
+
+    def enabled(key: str) -> bool:
+        val = str(ft.get(key, "") or "").strip().lower()
+        return bool(val) and val != "none"
+
+    return enabled("left_ft"), enabled("right_ft")
+
+
+def setup_ft_broadcasters(
+    ctx: Ocs2ControlContext,
+) -> Tuple[List[dict], List[Node]]:
+    controllers = detect_controllers(
+        ctx.robot_name,
+        ctx.robot_type,
+        ["ft_broadcaster"],
+        ros2_control_config=ctx.config,
+    )
+    left_on, right_on = _resolve_ft_sides(ctx)
+    controllers = [
+        c
+        for c in controllers
+        if (c["name"].startswith("left_") and left_on)
+        or (c["name"].startswith("right_") and right_on)
+    ]
+    for c in controllers:
+        print(f"[INFO] FT broadcaster enabled: {c['name']}")
     return controllers, create_controller_spawners(controllers, ctx.use_sim_time)
 
 

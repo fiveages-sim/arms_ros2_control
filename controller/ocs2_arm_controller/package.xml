@@ -24,6 +24,7 @@
 
 	<exec_depend>controller_manager</exec_depend>
 	<exec_depend>joint_state_broadcaster</exec_depend>
+	<exec_depend>force_torque_sensor_broadcaster</exec_depend>
 
 	<test_depend>ament_lint_auto</test_depend>
 	<test_depend>ament_lint_common</test_depend>
