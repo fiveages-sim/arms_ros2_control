@@ -166,6 +166,9 @@ namespace arms_ros2_control::command
         pub_waist_turning_ = node_->create_publisher<std_msgs::msg::Float64>(
             "/body_joint_controller/waist_turning_command", 10);
 
+        // WBC 模式切换命令发布器（case 23 请求 BODY_TRACKING）
+        pub_mode_command_ = node_->create_publisher<std_msgs::msg::String>("/mode_command", 10);
+
         // 注意：FSM命令订阅已移除，改为在 arms_target_manager_node 中统一处理
         // 这样可以避免与 ArmsTargetManager 的订阅冲突
         // FSM状态更新现在通过 fsmCommandCallback() 方法由外部调用
@@ -942,7 +945,9 @@ namespace arms_ros2_control::command
         // 存储左摇杆轴值（从 linear.x/y 读取）
         left_thumbstick_axes_.x() = msg->linear.x;
         left_thumbstick_axes_.y() = msg->linear.y;
-        
+        // 方向抑制只清零 left_thumbstick_axes_，这里先留一份物理真值给 pending 判回中
+        left_thumbstick_axes_raw_ = left_thumbstick_axes_;
+
         // 存储右摇杆轴值（从 angular.x/y 读取）
         right_thumbstick_axes_.x() = msg->angular.x;
         right_thumbstick_axes_.y() = msg->angular.y;
@@ -990,7 +995,25 @@ namespace arms_ros2_control::command
             processChassisAxes();
             return;
         }
-        
+
+        // case 23 的异步窗口：BODY_TRACKING 未确认或摇杆未回中时，左摇杆既不给腰部也不给左臂
+        if (updateBodyTrackingRequestState())
+        {
+            processRightThumbstickAxes();
+            return;
+        }
+
+        // 跟随模式已确认：左摇杆改为控制腰部 marker，右摇杆保持右臂
+        if (isBodyTrackingActive())
+        {
+            processBodyThumbstickAxes();
+            processRightThumbstickAxes();
+            return;
+        }
+
+        // 离开跟随后腰部控制平面回到默认 XY
+        body_thumbstick_z_yaw_mode_.store(false);
+
         // 处理左摇杆轴值（末端控制）
         processLeftThumbstickAxes();
         
@@ -1189,6 +1212,96 @@ namespace arms_ros2_control::command
         }
     }
 
+    void VRInputHandler::publishHumanoidModeCommand(const std::string& command)
+    {
+        if (!pub_mode_command_)
+        {
+            return;
+        }
+
+        std_msgs::msg::String msg;
+        msg.data = command;
+        pub_mode_command_->publish(msg);
+    }
+
+    bool VRInputHandler::isBodyTrackingActive() const
+    {
+        return target_manager_ && target_manager_->shouldShowBodyMarker();
+    }
+
+    bool VRInputHandler::updateBodyTrackingRequestState()
+    {
+        if (!body_tracking_request_pending_.load())
+        {
+            return false;
+        }
+
+        // 必须读 raw：被方向抑制清零后的 left_thumbstick_axes_ 会让 centered 恒为真。
+        const bool centered =
+            std::abs(left_thumbstick_axes_raw_.x()) <= 0.3 &&
+            std::abs(left_thumbstick_axes_raw_.y()) <= 0.3;
+        const bool trackingActive = isBodyTrackingActive();
+
+        if (trackingActive && centered)
+        {
+            body_tracking_request_pending_.store(false);
+            RCLCPP_INFO(node_->get_logger(),
+                        "🔘 [case 23] BODY_TRACKING 已由 WBC 确认，左摇杆已回中，开放腰部控制");
+            return false;
+        }
+
+        const auto now = std::chrono::steady_clock::now();
+        const bool timedOut = now - body_tracking_request_time_ >= body_tracking_request_timeout_;
+
+        if (!trackingActive && timedOut && centered)
+        {
+            body_tracking_request_pending_.store(false);
+            RCLCPP_WARN(node_->get_logger(),
+                        "🔘 [case 23] BODY_TRACKING 请求超时，左摇杆已回中，恢复左臂控制");
+            return false;
+        }
+
+        return true;
+    }
+
+    void VRInputHandler::processBodyThumbstickAxes()
+    {
+        // 腰部增量直接改 BodyMarker 绝对目标，不依赖双臂 UPDATE/STORAGE 的 VR base pose，
+        // 因此这里不检查 is_update_mode_。
+        if (!enabled_.load() || !target_manager_ || !isBodyTrackingActive())
+        {
+            return;
+        }
+
+        std::array<double, 3> positionDelta{0.0, 0.0, 0.0};
+        std::array<double, 3> rpyDelta{0.0, 0.0, 0.0};
+
+        if (body_thumbstick_z_yaw_mode_.load())
+        {
+            positionDelta[2] = -left_thumbstick_axes_.y() * vr_thumbstick_linear_scale_;
+            rpyDelta[2] = -left_thumbstick_axes_.x() * vr_thumbstick_angular_scale_;
+        }
+        else
+        {
+            positionDelta[0] = -left_thumbstick_axes_.y() * vr_thumbstick_linear_scale_;
+            positionDelta[1] = -left_thumbstick_axes_.x() * vr_thumbstick_linear_scale_;
+        }
+
+        // 回中时跳过，避免 20Hz 空发布刷新 last_marker_command_time_，
+        // 永久压制 body_current_target 回显。
+        if (std::abs(positionDelta[0]) < 1e-9 &&
+            std::abs(positionDelta[1]) < 1e-9 &&
+            std::abs(positionDelta[2]) < 1e-9 &&
+            std::abs(rpyDelta[0]) < 1e-9 &&
+            std::abs(rpyDelta[1]) < 1e-9 &&
+            std::abs(rpyDelta[2]) < 1e-9)
+        {
+            return;
+        }
+
+        target_manager_->updateBodyMarkerPoseIncremental(positionDelta, rpyDelta);
+    }
+
     void VRInputHandler::processChassisAxes()
     {
         // VR 手柄轴值约定（Pico）：Y 轴往前推是负数，与机器人"正数=向前/向右"相反，
@@ -1297,6 +1410,17 @@ namespace arms_ros2_control::command
             }
             case 2:  // 左握把按钮
             {
+                // 跟随模式下左握把改为切换腰部摇杆控制平面，不动左右臂的 *_grip_mode_
+                if (isBodyTrackingActive())
+                {
+                    const bool newMode = !body_thumbstick_z_yaw_mode_.load();
+                    body_thumbstick_z_yaw_mode_.store(newMode);
+                    RCLCPP_INFO(node_->get_logger(),
+                                "🔘 [左握把] 腰部摇杆模式切换为 %s",
+                                newMode ? "Z+Yaw" : "XY");
+                    break;
+                }
+
                 // 根据镜像模式决定切换哪个臂的模式
                 if (mirror_mode_.load())
                 {
@@ -2064,9 +2188,44 @@ namespace arms_ros2_control::command
                 toggleChassisMode();
                 break;
             }
+            case 23: // 左握把 + 左摇杆向左：请求 WBC 进入 BODY_TRACKING
+            {
+                if (!enabled_.load())
+                {
+                    RCLCPP_WARN(node_->get_logger(),
+                                "🔘 [case 23] 忽略：VR 控制未启用");
+                    break;
+                }
+                if (!isFullBodyMode())
+                {
+                    RCLCPP_WARN(node_->get_logger(),
+                                "🔘 [case 23] 忽略：当前不是 FULL_BODY");
+                    break;
+                }
+                if (current_fsm_state_.load() != 3)
+                {
+                    RCLCPP_WARN(node_->get_logger(),
+                                "🔘 [case 23] 忽略：当前 FSM 不是 OCS2");
+                    break;
+                }
+
+                if (target_manager_ &&
+                    target_manager_->getCurrentMode() != MarkerState::CONTINUOUS)
+                {
+                    target_manager_->togglePublishMode();
+                }
+
+                // 不预置 body target：WBC 在切入 TRACKING 时已捕获当前实际腰部位姿。
+                publishHumanoidModeCommand("BODY_TRACKING");
+                body_tracking_request_time_ = std::chrono::steady_clock::now();
+                body_tracking_request_pending_.store(true);
+
+                RCLCPP_INFO(node_->get_logger(),
+                            "🔘 [case 23] 已请求 BODY_TRACKING，等待 WBC 确认和左摇杆回中");
+                break;
+            }
             case 21: // 左握把 + 左摇杆向上
             case 22: // 左握把 + 左摇杆向下
-            case 23: // 左握把 + 左摇杆向左
             case 24: // 左握把 + 左摇杆向右
             {
                 if (!isFullBodyMode())
@@ -2082,8 +2241,7 @@ namespace arms_ros2_control::command
 
                 const char* direction =
                     msg->data == 21 ? "UP" :
-                    msg->data == 22 ? "DOWN" :
-                    msg->data == 23 ? "LEFT" : "RIGHT";
+                    msg->data == 22 ? "DOWN" : "RIGHT";
 
                 RCLCPP_INFO(
                     node_->get_logger(),

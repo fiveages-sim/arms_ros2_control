@@ -18,6 +18,7 @@
 #include <Eigen/Geometry>
 #include <std_msgs/msg/float64.hpp>
 #include <std_msgs/msg/int32.hpp>
+#include <std_msgs/msg/string.hpp>
 #include <nav_msgs/msg/path.hpp>
 #include <tf2_ros/buffer.hpp>
 #include <tf2_ros/transform_listener.hpp>
@@ -181,6 +182,29 @@ namespace arms_ros2_control::command
          * 处理右摇杆轴值（内部辅助函数）
          */
         void processRightThumbstickAxes();
+
+        /**
+         * 处理 BODY_TRACKING 下的左摇杆轴值，把增量累加到腰部 marker
+         * XY 模式：Y→X, X→Y；Z+Yaw 模式：Y→Z, X→Yaw
+         */
+        void processBodyThumbstickAxes();
+
+        /**
+         * WBC 是否已确认腰部跟随（FSM=OCS2 且 body_state=BODY_TRACKING）
+         */
+        bool isBodyTrackingActive() const;
+
+        /**
+         * 更新 BODY_TRACKING 请求的 pending 状态
+         * @return true 表示请求仍在 pending，左摇杆此时不得回落到左臂
+         */
+        bool updateBodyTrackingRequestState();
+
+        /**
+         * 发布 WBC 模式切换命令
+         * @param command 模式命令字符串，例如 "BODY_TRACKING"
+         */
+        void publishHumanoidModeCommand(const std::string& command);
 
         /**
          * 处理底盘模式下的摇杆轴值
@@ -389,6 +413,9 @@ namespace arms_ros2_control::command
         rclcpp::Publisher<std_msgs::msg::Float64>::SharedPtr pub_waist_lifting_;
         rclcpp::Publisher<std_msgs::msg::Float64>::SharedPtr pub_waist_turning_;
 
+        // WBC 模式切换命令发布器（case 23 请求 BODY_TRACKING）
+        rclcpp::Publisher<std_msgs::msg::String>::SharedPtr pub_mode_command_;
+
         // VR pose参数
         Eigen::Matrix4d left_ee_pose_ = Eigen::Matrix4d::Identity();
         Eigen::Matrix4d right_ee_pose_ = Eigen::Matrix4d::Identity();
@@ -434,6 +461,13 @@ namespace arms_ros2_control::command
         std::atomic<bool> left_grip_direction_suppressed_{false};
         std::atomic<int32_t> current_fsm_state_; // 当前FSM状态：1=HOME, 2=HOLD, 3=OCS2, 100=REST
 
+        // 腰部摇杆控制平面：false=XY平移, true=Z轴+Yaw（与左右臂的 *_grip_mode_ 相互独立）
+        std::atomic<bool> body_thumbstick_z_yaw_mode_{false};
+        // case 23 发出 BODY_TRACKING 后到 WBC 确认（或超时）之间的异步窗口
+        std::atomic<bool> body_tracking_request_pending_{false};
+        std::chrono::steady_clock::time_point body_tracking_request_time_{};
+        static constexpr auto body_tracking_request_timeout_ = std::chrono::seconds(2);
+
         // VR base poses（摇杆按下时存储）
         Eigen::Vector3d vr_base_left_position_ = Eigen::Vector3d::Zero();
         Eigen::Quaterniond vr_base_left_orientation_ = Eigen::Quaterniond::Identity();
@@ -455,6 +489,10 @@ namespace arms_ros2_control::command
         // 摇杆轴值（归一化 -1.0 ~ 1.0）
         Eigen::Vector2d left_thumbstick_axes_ = Eigen::Vector2d::Zero();
         Eigen::Vector2d right_thumbstick_axes_ = Eigen::Vector2d::Zero();
+
+        // 未经 left_grip_direction_suppressed_ 清零的原始左摇杆轴值，
+        // 供 pending 独立判断物理摇杆是否真的回中。
+        Eigen::Vector2d left_thumbstick_axes_raw_ = Eigen::Vector2d::Zero();
 
         // 摇杆累积偏移量（米）
         Eigen::Vector3d left_thumbstick_offset_ = Eigen::Vector3d::Zero();

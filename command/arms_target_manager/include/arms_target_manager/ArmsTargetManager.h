@@ -65,6 +65,10 @@ namespace arms_ros2_control::command
             const std::array<double, 3>& positionDelta,
             const std::array<double, 3>& rpyDelta);
 
+        bool updateBodyMarkerPoseIncremental(
+            const std::array<double, 3>& positionDelta,
+            const std::array<double, 3>& rpyDelta);
+
         geometry_msgs::msg::Pose getMarkerPose(const std::string& armType) const;
 
         void togglePublishMode();

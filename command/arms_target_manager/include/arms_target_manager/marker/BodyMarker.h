@@ -29,6 +29,9 @@ public:
     using StateCheckCallback =
         std::function<bool()>;
 
+    using TargetStateCheckCallback =
+        std::function<bool()>;
+
     using CurrentPoseCallback =
         std::function<void(const geometry_msgs::msg::PoseStamped::ConstSharedPtr& pose_msg)>;
 
@@ -41,6 +44,7 @@ public:
         rclcpp::Publisher<geometry_msgs::msg::Pose>::SharedPtr target_publisher,
         rclcpp::Publisher<geometry_msgs::msg::PoseStamped>::SharedPtr target_stamped_publisher,
         const std::string& current_pose_topic,
+        const std::string& current_target_topic,
         double publish_rate = 20.0,
         UpdateCallback update_callback = nullptr);
 
@@ -55,8 +59,15 @@ public:
 
     void updateFromTopic(const geometry_msgs::msg::PoseStamped::ConstSharedPtr& pose_msg);
 
+    void updateTargetFromTopic(
+        const geometry_msgs::msg::PoseStamped::ConstSharedPtr& pose_msg);
+
     void setUpdateCallback(UpdateCallback callback) { update_callback_ = std::move(callback); }
     void setStateCheckCallback(StateCheckCallback callback) { state_check_callback_ = std::move(callback); }
+    void setTargetStateCheckCallback(TargetStateCheckCallback callback)
+    {
+        target_state_check_callback_ = std::move(callback);
+    }
     void setCurrentPoseCallback(CurrentPoseCallback callback) { current_pose_callback_ = std::move(callback); }
 
     void setPose(const geometry_msgs::msg::Pose& pose) { pose_ = pose; }
@@ -92,13 +103,20 @@ private:
     rclcpp::Publisher<geometry_msgs::msg::Pose>::SharedPtr target_publisher_;
     rclcpp::Publisher<geometry_msgs::msg::PoseStamped>::SharedPtr target_stamped_publisher_;
     rclcpp::Subscription<geometry_msgs::msg::PoseStamped>::SharedPtr current_pose_subscription_;
+    rclcpp::Subscription<geometry_msgs::msg::PoseStamped>::SharedPtr
+        current_target_subscription_;
+
+    geometry_msgs::msg::PoseStamped latest_current_target_pose_;
+    bool has_latest_current_target_pose_{false};
 
     double publish_rate_;
     mutable rclcpp::Time last_publish_time_;
     mutable rclcpp::Time last_subscription_update_time_;
+    mutable rclcpp::Time last_marker_command_time_;
 
     UpdateCallback update_callback_;
     StateCheckCallback state_check_callback_;
+    TargetStateCheckCallback target_state_check_callback_;
     CurrentPoseCallback current_pose_callback_;
 };
 
