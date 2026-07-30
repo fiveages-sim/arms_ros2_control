@@ -6,6 +6,7 @@ import os
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional, Tuple
 
+import yaml
 from ament_index_python.packages import get_package_share_directory
 from launch.actions import IncludeLaunchDescription
 from launch.launch_description_sources import PythonLaunchDescriptionSource
@@ -241,14 +242,53 @@ def setup_body_controllers(
     return controllers, create_controller_spawners(controllers, ctx.use_sim_time)
 
 
+def _resolve_ft_sides(ctx: Ocs2ControlContext) -> Tuple[bool, bool]:
+    configs = ctx.launch_configurations
+    ft: Dict[str, str] = {}
+    for side in ("left", "right"):
+        key = f"{side}_ft"
+        for arg in (f"xacro_{key}", key):
+            val = str(configs.get(arg, "") or "").strip()
+            if val:
+                ft[key] = val
+                break
+
+    use_profile = str(configs.get("use_profile_eef", "true")).lower() not in ("false", "0", "no")
+    profile_path = ctx.profile_path or ""
+    if use_profile and profile_path and os.path.isfile(profile_path):
+        with open(profile_path, encoding="utf-8") as handle:
+            raw = yaml.safe_load(handle) or {}
+        eef = (raw.get("defaults") or {}).get("end_effectors")
+        if isinstance(eef, dict):
+            for side in ("left", "right"):
+                key = f"{side}_ft"
+                if key not in ft and eef.get(key) is not None:
+                    ft[key] = str(eef[key]).strip()
+
+    def enabled(key: str) -> bool:
+        val = str(ft.get(key, "") or "").strip().lower()
+        return bool(val) and val != "none"
+
+    return enabled("left_ft"), enabled("right_ft")
+
+
 def setup_ft_broadcasters(
     ctx: Ocs2ControlContext,
 ) -> Tuple[List[dict], List[Node]]:
-    return detect_and_spawn_controllers(
-        ctx.config,
+    controllers = detect_controllers(
+        ctx.robot_name,
+        ctx.robot_type,
         ["ft_broadcaster"],
-        use_sim_time=ctx.use_sim_time,
+        ros2_control_config=ctx.config,
     )
+    left_on, right_on = _resolve_ft_sides(ctx)
+    controllers = [
+        c
+        for c in controllers
+        if (c["name"].startswith("left_") and left_on)
+        or (c["name"].startswith("right_") and right_on)
+    ]
+    return controllers, create_controller_spawners(controllers, ctx.use_sim_time)
 
 
 def resolve_rviz_config(
