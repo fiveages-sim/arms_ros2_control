@@ -12,6 +12,17 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+/**
+ * @file arx_lift_hardware.cpp
+ * @brief Lift2S 升降柱 SystemInterface 实现。
+ *
+ * 控制路径概要：
+ * - 后台线程 ~400 Hz 跟踪 position 指令（斜坡限速），按 soft_p / hybrid 下发
+ * - soft_p（position）：只用 position → setHeight/loop；忽略 vel/effort/kp/kd
+ * - hybrid：position 斜坡 + HI 重力前馈；忽略控制器 effort/vel/kp/kd（防 OCS2 RNEA 双重前馈）
+ * - ros2_control 的 read()/write() 不做电机闭环；write 仅调试日志与状态话题
+ */
+
 #include "arxlift2s_ros2_control/arx_lift_hardware.h"
 
 #include <chrono>
@@ -24,13 +35,20 @@ namespace arxlift2s_ros2_control
 {
 namespace
 {
+/** @brief 热调参数名：电机模式 soft_p | hybrid。 */
 constexpr const char * kMotorModeParam = "arx_lift.motor_mode";
+/** @brief 热调参数名：Soft-P 位置增益。 */
 constexpr const char * kSoftPKpParam = "arx_lift.soft_p_kp";
+/** @brief 热调参数名：Hybrid MIT kp。 */
 constexpr const char * kHybridKpParam = "arx_lift.hybrid_kp";
+/** @brief 热调参数名：Hybrid MIT kd。 */
 constexpr const char * kHybridKdParam = "arx_lift.hybrid_kd";
-// MIT Type3 pack clamps kd to this (see libarx_lift_src.so).
+/** @brief 热调参数名：HI 重力前馈（Hybrid τ_ff；Soft-P 写入 SDK config）。 */
+constexpr const char * kGravityCompParam = "arx_lift.gravity_compensation_torque";
+/** @brief Hybrid Type3 打包 kd 上限（见 libarx_lift_src.so）。 */
 constexpr double kHybridKdMax = 5.0;
 
+/** @brief 读取 URDF/xacro hardware_parameters 字符串，缺省返回 default_value。 */
 std::string get_hw_param(
   const hardware_interface::HardwareInfo & info, const std::string & key,
   const std::string & default_value = "")
@@ -42,6 +60,7 @@ std::string get_hw_param(
   return it->second;
 }
 
+/** @brief 解析布尔型 hardware 参数。 */
 bool parse_bool_param(
   const hardware_interface::HardwareInfo & info, const std::string & key,
   bool default_value, bool & out)
@@ -59,6 +78,7 @@ bool parse_bool_param(
   return true;
 }
 
+/** @brief 解析浮点型 hardware 参数；非法字符串返回 false。 */
 bool parse_double_param(
   const hardware_interface::HardwareInfo & info, const std::string & key,
   double default_value, double & out, const rclcpp::Logger & logger)
@@ -80,13 +100,14 @@ bool parse_double_param(
 
 }  // namespace
 
+/** @brief 将 "soft_p"/"hybrid"（及别名）解析为 MotorMode。 */
 bool ArxLiftHardware::parseMotorMode(const std::string & raw, MotorMode & out)
 {
   std::string s = raw;
   for (char & c : s) {
     c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
   }
-  if (s == "soft_p" || s == "softp" || s == "soft-p") {
+  if (s == "soft_p" || s == "softp" || s == "soft-p" || s == "position") {
     out = MotorMode::SoftP;
     return true;
   }
@@ -97,14 +118,19 @@ bool ArxLiftHardware::parseMotorMode(const std::string & raw, MotorMode & out)
   return false;
 }
 
+/** @brief MotorMode → 参数字符串。 */
 const char * ArxLiftHardware::motorModeName(MotorMode mode)
 {
   return mode == MotorMode::SoftP ? "soft_p" : "hybrid";
 }
 
+/**
+ * @brief 注册升降热调参数（模式 / soft_p_kp / hybrid_kp|kd / gravity / status_debug）。
+ * @note 挂在 controller_manager 节点上，可用 ros2 param set 在线修改。
+ */
 void ArxLiftHardware::setupDynamicParameters(
   const std::string & initial_mode, double soft_p_kp, double hybrid_kp,
-  double hybrid_kd, bool status_debug)
+  double hybrid_kd, double gravity_comp, bool status_debug)
 {
   auto node = get_node();
   if (!node) {
@@ -142,6 +168,7 @@ void ArxLiftHardware::setupDynamicParameters(
   declare_or_set_double(kSoftPKpParam, soft_p_kp);
   declare_or_set_double(kHybridKpParam, hybrid_kp);
   declare_or_set_double(kHybridKdParam, hybrid_kd);
+  declare_or_set_double(kGravityCompParam, gravity_comp);
   declare_or_set_bool("status_debug", status_debug);
   status_debug_.store(status_debug);
 
@@ -161,8 +188,24 @@ void ArxLiftHardware::setupDynamicParameters(
     return true;
   };
 
+  auto parse_finite = [](const rclcpp::Parameter & p, double & out,
+                         std::string & reason, const char * label) -> bool {
+    if (p.get_type() != rclcpp::ParameterType::PARAMETER_DOUBLE &&
+      p.get_type() != rclcpp::ParameterType::PARAMETER_INTEGER)
+    {
+      reason = std::string(label) + " must be a number";
+      return false;
+    }
+    out = p.as_double();
+    if (!std::isfinite(out)) {
+      reason = std::string(label) + " must be finite";
+      return false;
+    }
+    return true;
+  };
+
   param_cb_ = node->add_on_set_parameters_callback(
-    [this, parse_nonneg](const std::vector<rclcpp::Parameter> & params) {
+    [this, parse_nonneg, parse_finite](const std::vector<rclcpp::Parameter> & params) {
       rcl_interfaces::msg::SetParametersResult result;
       result.successful = true;
       for (const auto & p : params) {
@@ -176,7 +219,7 @@ void ArxLiftHardware::setupDynamicParameters(
           MotorMode mode;
           if (!parseMotorMode(p.as_string(), mode)) {
             result.successful = false;
-            result.reason = "arx_lift.motor_mode must be 'soft_p' or 'hybrid'";
+            result.reason = "arx_lift.motor_mode must be 'soft_p'|'position' or 'hybrid'";
             return result;
           }
           motor_mode_.store(static_cast<int>(mode));
@@ -212,6 +255,14 @@ void ArxLiftHardware::setupDynamicParameters(
           }
           hybrid_kd_.store(v);
           RCLCPP_INFO(get_logger(), "%s -> %.3f", kHybridKdParam, v);
+        } else if (name == kGravityCompParam) {
+          double v = 0.0;
+          if (!parse_finite(p, v, result.reason, kGravityCompParam)) {
+            result.successful = false;
+            return result;
+          }
+          gravity_compensation_torque_.store(v);
+          RCLCPP_INFO(get_logger(), "%s -> %.3f", kGravityCompParam, v);
         } else if (name == "status_debug") {
           if (p.get_type() != rclcpp::ParameterType::PARAMETER_BOOL) {
             result.successful = false;
@@ -229,12 +280,21 @@ void ArxLiftHardware::setupDynamicParameters(
 
   RCLCPP_INFO(
     get_logger(),
-    "Dynamic params: %s=%s %s=%.3f %s=%.3f %s=%.3f status_debug=%s",
+    "Dynamic params: %s=%s %s=%.3f %s=%.3f %s=%.3f %s=%.3f status_debug=%s",
     kMotorModeParam, initial_mode.c_str(), kSoftPKpParam, soft_p_kp,
     kHybridKpParam, hybrid_kp, kHybridKdParam, hybrid_kd,
+    kGravityCompParam, gravity_comp,
     status_debug ? "true" : "false");
 }
 
+/**
+ * @brief Hybrid 路径：斜坡逼近目标后 sendLiftHybrid。
+ *
+ * τ_ff = gravity_compensation_torque_（仅 HI 重力），再限幅。
+ * **故意忽略** 上层 effort（全身 OCS2 RNEA），避免与 HI 重力双重前馈过流。
+ * 位置/速度按电机坐标系取负（与 getHeight = -motor.position 一致）。
+ * 忽略控制器 velocity/effort/kp/kd 指令接口。
+ */
 void ArxLiftHardware::sendHybridHoldOrTrack(double q_target_sdk, double dt_s)
 {
   if (!lift_) {
@@ -246,6 +306,7 @@ void ArxLiftHardware::sendHybridHoldOrTrack(double q_target_sdk, double dt_s)
     ramp_initialized_ = true;
   }
 
+  // 按 cmd_ramp_vel 限速逼近目标（单位：SDK 弧度）
   const double v_ramp_sdk = cmd_ramp_vel_mps_ * height_rad_per_meter_;
   const double err = q_target_sdk - ramp_q_sdk_;
   double v_d = 0.0;
@@ -264,11 +325,10 @@ void ArxLiftHardware::sendHybridHoldOrTrack(double q_target_sdk, double dt_s)
   const double hy_kp = hybrid_kp_.load();
   const double hy_kd = hybrid_kd_.load();
 
-  double t_ff = gravity_compensation_torque_;
-  if (std::isfinite(lift_effort_command_)) {
-    t_ff += lift_effort_command_;
-  }
-  t_ff = std::clamp(t_ff, -lift_max_torque_, lift_max_torque_);
+  // 仅 HI 重力前馈；不叠加 lift_effort_command_（OCS2 MIX 仍可写，但不下发电机）
+  const double t_ff = std::clamp(
+    gravity_compensation_torque_.load(), -lift_max_torque_, lift_max_torque_);
+  (void)lift_effort_command_;
 
   lift_->read();
   lift_->exchangeLiftMotorMsg();
@@ -281,6 +341,7 @@ void ArxLiftHardware::sendHybridHoldOrTrack(double q_target_sdk, double dt_s)
   last_written_vel_.store(v_d);
 }
 
+/** @brief 关闭指令门控并 join 后台循环线程。 */
 void ArxLiftHardware::stop_loop_thread()
 {
   command_enabled_ = false;
@@ -290,13 +351,22 @@ void ArxLiftHardware::stop_loop_thread()
   }
 }
 
+/**
+ * @brief 析构：停线程；故意不销毁 lift_，避免厂商 SocketCAN 线程纯虚崩溃。
+ */
 ArxLiftHardware::~ArxLiftHardware()
 {
   stop_loop_thread();
   param_cb_.reset();
-  lift_.reset();
+  motor_pub_.reset();
+  // 故意泄漏 lift_：厂商 SocketCAN 收包线程仍在跑时销毁 LiftHeadControlLoop
+  // 会触发 "pure virtual method called"。
 }
 
+/**
+ * @brief 从 URDF hardware 参数加载 CAN、单位换算、增益与电机模式。
+ * @return SUCCESS / ERROR
+ */
 hardware_interface::CallbackReturn ArxLiftHardware::on_init(
   const hardware_interface::HardwareComponentInterfaceParams & params)
 {
@@ -356,7 +426,7 @@ hardware_interface::CallbackReturn ArxLiftHardware::on_init(
     return hardware_interface::CallbackReturn::ERROR;
   }
 
-  // meters ↔ motor rad (prefer height_rad_per_meter; alias height_to_motor)
+  // 米 ↔ 电机弧度（优先 height_rad_per_meter；别名 height_to_motor）
   if (!get_hw_param(info_, "height_rad_per_meter", "").empty()) {
     if (!parse_double_param(
         info_, "height_rad_per_meter", 41.54, height_scale, get_logger()))
@@ -377,7 +447,7 @@ hardware_interface::CallbackReturn ArxLiftHardware::on_init(
     return hardware_interface::CallbackReturn::ERROR;
   }
 
-  // soft_p_kp (alias: lift_kp, legacy unified kp)
+  // soft_p_kp（别名：lift_kp / kp）
   if (!get_hw_param(info_, "soft_p_kp", "").empty()) {
     if (!parse_double_param(info_, "soft_p_kp", 8.0, soft_p_kp, get_logger())) {
       return hardware_interface::CallbackReturn::ERROR;
@@ -392,7 +462,7 @@ hardware_interface::CallbackReturn ArxLiftHardware::on_init(
     }
   }
 
-  // Prefer explicit hybrid_kd; alias kd.
+  // 优先 hybrid_kd；别名 kd
   if (!get_hw_param(info_, "hybrid_kd", "").empty()) {
     if (!parse_double_param(info_, "hybrid_kd", 2.0, hybrid_kd, get_logger())) {
       return hardware_interface::CallbackReturn::ERROR;
@@ -419,7 +489,7 @@ hardware_interface::CallbackReturn ArxLiftHardware::on_init(
     return hardware_interface::CallbackReturn::ERROR;
   }
 
-  gravity_compensation_torque_ = gravity;
+  gravity_compensation_torque_.store(gravity);
   lift_max_vel_ = max_vel;
   lift_max_torque_ = max_torque;
   height_rad_per_meter_ = height_scale;
@@ -430,12 +500,12 @@ hardware_interface::CallbackReturn ArxLiftHardware::on_init(
   hybrid_kp_.store(hybrid_kp);
   hybrid_kd_.store(hybrid_kd);
 
-  motor_mode_param_ = get_hw_param(info_, "lift_motor_mode", "soft_p");
+  motor_mode_param_ = get_hw_param(info_, "lift_motor_mode", "hybrid");
   MotorMode mode;
   if (!parseMotorMode(motor_mode_param_, mode)) {
     RCLCPP_ERROR(
       get_logger(),
-      "Invalid lift_motor_mode '%s' (use soft_p or hybrid)",
+      "Invalid lift_motor_mode '%s' (use soft_p|position or hybrid)",
       motor_mode_param_.c_str());
     return hardware_interface::CallbackReturn::ERROR;
   }
@@ -469,11 +539,12 @@ hardware_interface::CallbackReturn ArxLiftHardware::on_init(
     "gravity=%.3f ramp=%.3f m/s",
     lift_joint_name_.c_str(), can_name_.c_str(), robot_type_,
     motor_mode_param_.c_str(), soft_p_kp_.load(), hybrid_kp_.load(),
-    hybrid_kd_.load(), gravity_compensation_torque_, cmd_ramp_vel_mps_);
+    hybrid_kd_.load(), gravity_compensation_torque_.load(), cmd_ramp_vel_mps_);
 
   return hardware_interface::CallbackReturn::SUCCESS;
 }
 
+/** @brief 导出 position / velocity / effort 状态接口。 */
 std::vector<hardware_interface::StateInterface::ConstSharedPtr>
 ArxLiftHardware::on_export_state_interfaces()
 {
@@ -490,12 +561,15 @@ ArxLiftHardware::on_export_state_interfaces()
   return state_interfaces;
 }
 
+/**
+ * @brief 导出 MIX 指令接口，供 ocs2_wbc claim。
+ * @note soft_p（WBC 默认）：只用 position；velocity/effort/kp/kd 可写但不下发电机。
+ *       hybrid：position + 可选 effort 前馈；kp/kd 仍由 arx_lift.* 参数决定。
+ */
 std::vector<hardware_interface::CommandInterface::SharedPtr>
 ArxLiftHardware::on_export_command_interfaces()
 {
   std::vector<hardware_interface::CommandInterface::SharedPtr> command_interfaces;
-  // MIX so ocs2_wbc full_control can claim; Soft-P/Hybrid drive uses position
-  // (+ optional effort FF in Hybrid).
   command_interfaces.push_back(
     std::make_shared<hardware_interface::CommandInterface>(
       lift_joint_name_, hardware_interface::HW_IF_POSITION,
@@ -517,6 +591,12 @@ ArxLiftHardware::on_export_command_interfaces()
   return command_interfaces;
 }
 
+/**
+ * @brief 创建 SDK、启后台循环、等待校准后打开指令门控。
+ *
+ * 流程：构造 LiftHeadControlLoop → 底盘停车 → 注册热调参数 →
+ * 循环线程（校准期 Soft-P）→ 等待约 2.5s → 指令对齐当前高度 → command_enabled。
+ */
 hardware_interface::CallbackReturn ArxLiftHardware::on_activate(
   const rclcpp_lifecycle::State & /*previous_state*/)
 {
@@ -529,15 +609,18 @@ hardware_interface::CallbackReturn ArxLiftHardware::on_activate(
     lift_ = std::make_shared<arx::LiftHeadControlLoop>(can_name_.c_str(), type);
 
     lift_->config_.lift_kp = soft_p_kp_.load();
-    lift_->config_.gravity_compensation_torque = gravity_compensation_torque_;
+    lift_->config_.gravity_compensation_torque =
+      gravity_compensation_torque_.load();
     lift_->config_.lift_max_vel = lift_max_vel_;
     lift_->config_.lift_max_torque = lift_max_torque_;
 
+    // 底盘停车模式（mode=2）
     lift_->setChassisCmd(0.0, 0.0, 0.0, 2);
 
     setupDynamicParameters(
       motor_mode_param_, soft_p_kp_.load(), hybrid_kp_.load(),
-      hybrid_kd_.load(), status_debug_.load());
+      hybrid_kd_.load(), gravity_compensation_torque_.load(),
+      status_debug_.load());
 
     if (auto node = get_node()) {
       motor_pub_ = node->create_publisher<std_msgs::msg::Float64MultiArray>(
@@ -548,10 +631,11 @@ hardware_interface::CallbackReturn ArxLiftHardware::on_activate(
     }
 
     loop_running_ = true;
-    command_enabled_ = false;
+    command_enabled_ = false;  // 校准完成前不跟踪外部指令
     last_applied_mode_ = -1;
     ramp_initialized_ = false;
     using namespace std::chrono_literals;
+    // 后台控制循环：斜坡跟踪 + soft_p/hybrid 下发 + 刷新状态缓冲
     loop_thread_ = std::thread([this]() {
       auto last = std::chrono::steady_clock::now();
       while (loop_running_.load()) {
@@ -564,6 +648,7 @@ hardware_interface::CallbackReturn ArxLiftHardware::on_activate(
           const auto now = std::chrono::steady_clock::now();
           double dt_s = std::chrono::duration<double>(now - last).count();
           last = now;
+          // 限制 dt，避免长时间阻塞后一步跳过大
           if (dt_s < 1e-4) {
             dt_s = 1e-4;
           } else if (dt_s > 0.05) {
@@ -571,7 +656,7 @@ hardware_interface::CallbackReturn ArxLiftHardware::on_activate(
           }
 
           if (!command_enabled_.load()) {
-            // Calibration / park: always Soft-P loop().
+            // 校准 / 停车：始终 Soft-P loop()
             lift_->config_.lift_kp = soft_p_kp_.load();
             lift_->loop();
             ramp_initialized_ = false;
@@ -588,7 +673,7 @@ hardware_interface::CallbackReturn ArxLiftHardware::on_activate(
             const double hy_kp = hybrid_kp_.load();
             const double hy_kd = hybrid_kd_.load();
             if (mode_i != last_applied_mode_) {
-              // Avoid jump when switching soft_p <-> hybrid.
+              // soft_p ↔ hybrid 切换时对齐斜坡，避免位置跳变
               ramp_q_sdk_ = sdk_get_height_.load();
               last_applied_mode_ = mode_i;
               RCLCPP_INFO(
@@ -599,6 +684,7 @@ hardware_interface::CallbackReturn ArxLiftHardware::on_activate(
             }
 
             if (mode_i == static_cast<int>(MotorMode::SoftP)) {
+              // Soft-P / position：只用上层 position，忽略 vel/effort/kp/kd
               const double v_ramp_sdk =
                 cmd_ramp_vel_mps_ * height_rad_per_meter_;
               const double err = q_target - ramp_q_sdk_;
@@ -616,16 +702,21 @@ hardware_interface::CallbackReturn ArxLiftHardware::on_activate(
               }
               ramp_q_sdk_ = std::clamp(ramp_q_sdk_, 0.0, sdk_max_rad_);
 
+              // 故意不读 lift_velocity/effort/kp/kd_command_
               lift_->config_.lift_kp = soft_kp;
+              lift_->config_.gravity_compensation_torque =
+                gravity_compensation_torque_.load();
               lift_->setHeight(ramp_q_sdk_);
               lift_->loop();
               last_written_height_.store(ramp_q_sdk_);
               last_written_vel_.store(v_d);
             } else {
+              // Hybrid：HI 重力前馈；忽略上层 effort（见 sendHybridHoldOrTrack）
               sendHybridHoldOrTrack(q_target, dt_s);
             }
           }
 
+          // 刷新状态供 read()/话题使用
           const double sdk_h = lift_->getHeight();
           const auto motor = lift_->getLiftMotorStatus();
           sdk_get_height_.store(sdk_h);
@@ -644,13 +735,15 @@ hardware_interface::CallbackReturn ArxLiftHardware::on_activate(
             get_logger(), *get_clock(), 1000,
             "ArxLiftHardware loop thread failed: %s", e.what());
         }
-        std::this_thread::sleep_for(2500us);  // ~400 Hz
+        std::this_thread::sleep_for(2500us);  // 约 400 Hz
       }
     });
 
+    // 等待 SDK 内部升降校准
     constexpr auto kCalibWait = std::chrono::milliseconds(2500);
     std::this_thread::sleep_for(kCalibWait);
 
+    // 指令对齐当前反馈，再打开外部跟踪
     lift_position_command_ = lift_position_;
     ramp_q_sdk_ = rosToSdk(lift_position_command_);
     ramp_initialized_ = true;
@@ -665,7 +758,7 @@ hardware_interface::CallbackReturn ArxLiftHardware::on_activate(
       can_name_.c_str(), lift_position_, sdk_get_height_.load(),
       motorModeName(static_cast<MotorMode>(motor_mode_.load())),
       soft_p_kp_.load(), hybrid_kp_.load(), hybrid_kd_.load(),
-      gravity_compensation_torque_);
+      gravity_compensation_torque_.load());
     return hardware_interface::CallbackReturn::SUCCESS;
   } catch (const std::exception & e) {
     RCLCPP_ERROR(get_logger(), "Failed to activate ArxLiftHardware: %s", e.what());
@@ -676,6 +769,9 @@ hardware_interface::CallbackReturn ArxLiftHardware::on_activate(
   }
 }
 
+/**
+ * @brief 停循环、底盘停车；不销毁 lift_（避免 CAN 线程崩溃影响臂 HI 收尾）。
+ */
 hardware_interface::CallbackReturn ArxLiftHardware::on_deactivate(
   const rclcpp_lifecycle::State & /*previous_state*/)
 {
@@ -691,12 +787,31 @@ hardware_interface::CallbackReturn ArxLiftHardware::on_deactivate(
     }
   }
 
-  lift_.reset();
+  // 重要：此处不要 reset/销毁 lift_。
+  // 关闭时销毁 LiftHeadControlLoop 可能在厂商 SocketCAN 收包路径触发
+  // "pure virtual method called"，导致进程 abort，臂 HI 无法完成回 home。
+  // 对象随进程退出（或 ~ArxLiftHardware）释放即可。
   motor_pub_.reset();
   RCLCPP_INFO(get_logger(), "ArxLiftHardware deactivated");
   return hardware_interface::CallbackReturn::SUCCESS;
 }
 
+/**
+ * @brief 停循环；同样保留 lift_ 存活，避免 CAN 线程崩溃。
+ */
+hardware_interface::CallbackReturn ArxLiftHardware::on_shutdown(
+  const rclcpp_lifecycle::State & /*previous_state*/)
+{
+  stop_loop_thread();
+  param_cb_.reset();
+  motor_pub_.reset();
+  RCLCPP_INFO(get_logger(), "ArxLiftHardware shutdown (lift SDK left alive to avoid CAN thread crash)");
+  return hardware_interface::CallbackReturn::SUCCESS;
+}
+
+/**
+ * @brief 状态已由后台线程写入缓冲；此处仅做存活检查。
+ */
 hardware_interface::return_type ArxLiftHardware::read(
   const rclcpp::Time & /*time*/, const rclcpp::Duration & /*period*/)
 {
@@ -706,6 +821,9 @@ hardware_interface::return_type ArxLiftHardware::read(
   return hardware_interface::return_type::OK;
 }
 
+/**
+ * @brief 不向电机发指令；可选 status_debug 日志，并发布 /arx_lift/motor_status。
+ */
 hardware_interface::return_type ArxLiftHardware::write(
   const rclcpp::Time & /*time*/, const rclcpp::Duration & /*period*/)
 {
@@ -734,6 +852,7 @@ hardware_interface::return_type ArxLiftHardware::write(
       hybrid_kp_.load(), hybrid_kd_.load());
   }
 
+  // data: pos,vel,torq,curr,sdk_h,online,err, -pos, mode, soft_p_kp, hybrid_kp, hybrid_kd
   if (motor_pub_) {
     std_msgs::msg::Float64MultiArray msg;
     msg.data = {

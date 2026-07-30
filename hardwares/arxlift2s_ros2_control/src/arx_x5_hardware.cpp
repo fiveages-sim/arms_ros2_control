@@ -676,8 +676,11 @@ hardware_interface::return_type ArxX5Hardware::write(
               has_gripper_ ? gripper_position_states_[0] : 0.0);
         }
 
-        // Near-current timestamp → init_fixed (no interpolator lag) for high-rate OCS2.
-        cmd.timestamp = controller_->get_timestamp();
+        // timestamp=0 → SDK 使用 current_time + default_preview_time。
+        // 勿写 get_timestamp()：set_joint_cmd 内部会再取一次时间，若已超过
+        // 传入 timestamp 会抛 "End time must be no less than current time"，
+        // write 返回 ERROR → CM 停用左臂 → WBC 无法 claim left_joint*/position。
+        cmd.timestamp = 0.0;
         controller_->set_joint_cmd(cmd);
         return hardware_interface::return_type::OK;
 

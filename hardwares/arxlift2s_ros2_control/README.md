@@ -73,30 +73,29 @@ ros2 param set /arx_lift2s_right_system status_debug true
 | `full_control` | `[20, 20, 20, 20, 10, 10]` | `[3.5, 3.5, 3.5, 3.5, 1.0, 1.0]` |
 | `position` | `[80, 70, 70, 30, 30, 20]` | `[2.0, 2.0, 2.0, 1.0, 1.0, 0.7]` (= arx-ros2-control) |
 
-### ArxLiftHardware (soft_p | hybrid)
+### ArxLiftHardware (soft_p/position | hybrid)
 
 Background thread (~400 Hz). Calibrate / park always uses Soft-P `loop()`.
 After activate, mode selects the drive path:
 
 | Mode | Drive | Gains |
 |------|-------|-------|
-| `soft_p` | `setHeight` + `loop()` | `arx_lift.soft_p_kp` |
-| `hybrid` | `sendLiftHybrid(kp, kd, p, v, τ)` | `arx_lift.hybrid_kp` / `hybrid_kd` (kd pack clamp ≤5) |
+| `soft_p` / `position` | `setHeight` + `loop()`；**只用 position**（忽略 vel/effort） | `arx_lift.soft_p_kp` |
+| `hybrid` | `sendLiftHybrid`；position 斜坡 + **仅 HI 重力**（**忽略上层 effort**） | `arx_lift.hybrid_kp` / `hybrid_kd` (kd pack ≤5) |
 
-Used for both **split_body** and **full_body**. Exports MIX command IFs so
-`ocs2_wbc` can claim; Soft-P/Hybrid gains come from HI / live ROS params
-(not controller `pd_gains`). Hybrid adds OCS2 effort IF onto τ_ff.
+分体/全身 quick_start 均可选；xacro 默认 **`hybrid`**。导出 MIX IF 供 `ocs2_wbc` claim；
+soft_p/hybrid 下上层写的 vel/effort 均不下发电机。
 
 | Param | Default | Notes |
 |-------|---------|-------|
 | `can_name` | `can5` | |
 | `robot_type` | `2` | **`2=LIFTS` for LIFT2S** |
-| `lift_motor_mode` | `soft_p` | `soft_p` \| `hybrid`; live: `arx_lift.motor_mode` |
+| `lift_motor_mode` | `hybrid` | `soft_p`/`position` \| `hybrid`; live: `arx_lift.motor_mode` |
 | `soft_p_kp` | `8.0` | Aliases: `lift_kp`, `kp`; live: `arx_lift.soft_p_kp` |
 | `lift_max_vel` | `0.20` | Soft-P SDK ramp limit |
 | `hybrid_kp` | `5.0` | Live: `arx_lift.hybrid_kp` |
 | `hybrid_kd` | `2.0` | Live: `arx_lift.hybrid_kd` (pack clamp ≤5) |
-| `gravity_compensation_torque` | `-1.8` | Base τ_ff; OCS2 effort IF added in Hybrid |
+| `gravity_compensation_torque` | `-1.8` | Hybrid τ_ff **only**; live: `arx_lift.gravity_compensation_torque` |
 | `lift_max_torque` | `15.0` | τ clamp |
 | `cmd_ramp_vel` | `0.12` (Lift2S xacro; code default `0.04`) | Command ramp [m/s] |
 | `max_height_m` / `height_span_m` | `0.48` | Command clamp |
@@ -111,6 +110,7 @@ ros2 param set /controller_manager arx_lift.soft_p_kp 10.0
 ros2 param set /controller_manager arx_lift.motor_mode hybrid
 ros2 param set /controller_manager arx_lift.hybrid_kp 50.0
 ros2 param set /controller_manager arx_lift.hybrid_kd 1.0
+ros2 param set /controller_manager arx_lift.gravity_compensation_torque -1.8
 
 # Periodic status log (default off; 2 s throttle when on)
 ros2 param set /arx_lift2s_lift_system status_debug true
