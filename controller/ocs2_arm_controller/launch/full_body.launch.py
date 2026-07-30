@@ -25,7 +25,7 @@ def launch_setup(context, *args, **kwargs):
     ctx = ocs2_common.build_ocs2_control_context(context)
 
     planning_robot_name = ocs2_common.resolve_planning_robot_name_from_config(
-        ctx.config, "ocs2_wbc_controller", ctx.robot_name
+        ctx.config, "ocs2_wbc_controller", ctx.robot_name, ctx.robot_variant
     )
 
     wbc_available = False

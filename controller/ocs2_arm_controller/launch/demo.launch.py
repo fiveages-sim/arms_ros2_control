@@ -23,7 +23,7 @@ def launch_setup(context, *args, **kwargs):
     ctx = ocs2_common.build_ocs2_control_context(context)
 
     planning_robot_name = ocs2_common.resolve_planning_robot_name_from_config(
-        ctx.config, "ocs2_arm_controller", ctx.robot_name
+        ctx.config, "ocs2_arm_controller", ctx.robot_name, ctx.robot_variant
     )
 
     planning_urdf_params = ocs2_common.validate_planning_urdf(

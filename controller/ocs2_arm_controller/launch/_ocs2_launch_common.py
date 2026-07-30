@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+import copy
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional, Tuple
 
@@ -44,6 +45,7 @@ class Ocs2ControlContext:
     control_left: str
     control_right: str
     control_patch: dict
+    robot_variant: str
     config: dict
     meta: RobotConfigMeta
     launch_mode: str
@@ -69,6 +71,21 @@ def build_ocs2_control_context(context) -> Ocs2ControlContext:
     control_patch = resolve_control_patch(profile)
     robot_variant = resolve_robot_variant(configs, profile)
 
+    # Keep the arm controller's task/config package aligned with the unified
+    # mechanical variant.  Full-body common.yaml historically names ar5_ccs;
+    # without this override an SRS planning URDF would still load CCS task.info.
+    variant_arm_robot = {
+        "base_ar5_ccs": "ar5_ccs",
+        "base_ar5_ccs_v2": "ar5_ccs",
+        "base_ar5_srs": "ar5_srs",
+    }.get(robot_variant)
+    if variant_arm_robot:
+        control_patch = copy.deepcopy(control_patch)
+        arm_params = control_patch.setdefault(
+            "ocs2_arm_controller", {}
+        ).setdefault("ros__parameters", {})
+        arm_params["robot_name"] = variant_arm_robot
+
     config, _path, meta = load_robot_config(
         robot_name,
         "ros2_control",
@@ -89,6 +106,7 @@ def build_ocs2_control_context(context) -> Ocs2ControlContext:
         control_left=control_left,
         control_right=control_right,
         control_patch=control_patch,
+        robot_variant=robot_variant,
         config=config or {},
         meta=meta,
         launch_mode=launch_mode,
@@ -102,6 +120,7 @@ def resolve_planning_robot_name_from_config(
     config: dict,
     controller_key: str,
     robot_name: str,
+    robot_variant: str = "",
 ) -> str:
     planning_robot_name = robot_name
     if not config:
@@ -118,6 +137,23 @@ def resolve_planning_robot_name_from_config(
                 )
     except KeyError:
         pass
+
+    # Arms-only planning uses a standalone arm description package.  The
+    # unified variant is authoritative when selecting the CCS or SRS family;
+    # a static robot_name in common.yaml must not override it.
+    if planning_robot_name in ("ar5_ccs", "ar5_srs"):
+        variant_key = str(robot_variant or "").strip()
+        variant_robot_name = {
+            "base_ar5_ccs": "ar5_ccs",
+            "base_ar5_ccs_v2": "ar5_ccs",
+            "base_ar5_srs": "ar5_srs",
+        }.get(variant_key)
+        if variant_robot_name and variant_robot_name != planning_robot_name:
+            print(
+                f"[INFO] Unified variant '{variant_key}' selects planning robot "
+                f"'{variant_robot_name}' (config requested: {planning_robot_name})"
+            )
+            planning_robot_name = variant_robot_name
     return planning_robot_name
 
 
