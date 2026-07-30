@@ -4,6 +4,7 @@
 
 #include "ocs2_controller_common/visualization/Ocs2PinocchioVisualizer.h"
 #include <fstream>
+#include <limits>
 #include <string>
 #include <ocs2_ros_interfaces/common/RosMsgHelpers.h>
 #include <pinocchio/algorithm/frames.hpp>
@@ -103,42 +104,42 @@ namespace ocs2::controller_common
 
     void Ocs2PinocchioVisualizer::updateEndEffectorTrajectory(const PrimalSolution& policy)
     {
-        // Update end effector trajectory history - get from MPC calculation results
-        if (!policy.stateTrajectory_.empty())
+        updateEndEffectorTrajectoryFromStates(policy.stateTrajectory_);
+    }
+
+    void Ocs2PinocchioVisualizer::updateEndEffectorTrajectoryFromStates(const vector_array_t& stateTrajectory)
+    {
+        if (stateTrajectory.empty())
         {
-            const auto& mpc_state_trajectory = policy.stateTrajectory_;
+            return;
+        }
 
-            if (dual_arm_mode_)
+        if (dual_arm_mode_)
+        {
+            std::vector<vector_t> left_trajectory, right_trajectory;
+            left_trajectory.reserve(stateTrajectory.size());
+            right_trajectory.reserve(stateTrajectory.size());
+
+            for (const auto& state : stateTrajectory)
             {
-                // Dual arm mode: calculate left and right arm end effector poses from MPC trajectory
-                std::vector<vector_t> left_trajectory, right_trajectory;
-
-                for (const auto& state : mpc_state_trajectory)
-                {
-                    vector_t left_ee_pose = computeEndEffectorPose(state);
-                    vector_t right_ee_pose = computeRightEndEffectorPose(state);
-                    left_trajectory.push_back(left_ee_pose);
-                    right_trajectory.push_back(right_ee_pose);
-                }
-
-                // Update trajectory history
-                left_arm_trajectory_history_ = std::move(left_trajectory);
-                right_arm_trajectory_history_ = std::move(right_trajectory);
+                left_trajectory.push_back(computeEndEffectorPose(state));
+                right_trajectory.push_back(computeRightEndEffectorPose(state));
             }
-            else
+
+            left_arm_trajectory_history_ = std::move(left_trajectory);
+            right_arm_trajectory_history_ = std::move(right_trajectory);
+        }
+        else
+        {
+            std::vector<vector_t> trajectory;
+            trajectory.reserve(stateTrajectory.size());
+
+            for (const auto& state : stateTrajectory)
             {
-                // Single arm mode: calculate end effector pose from MPC trajectory
-                std::vector<vector_t> trajectory;
-
-                for (const auto& state : mpc_state_trajectory)
-                {
-                    vector_t ee_pose = computeEndEffectorPose(state);
-                    trajectory.push_back(ee_pose);
-                }
-
-                // Update trajectory history
-                left_arm_trajectory_history_ = std::move(trajectory);
+                trajectory.push_back(computeEndEffectorPose(state));
             }
+
+            left_arm_trajectory_history_ = std::move(trajectory);
         }
     }
 
@@ -226,11 +227,11 @@ namespace ocs2::controller_common
         trajectory_marker_publisher_->publish(marker_array);
     }
 
-    void Ocs2PinocchioVisualizer::publishSelfCollisionVisualization(const vector_t& state) const
+    bool Ocs2PinocchioVisualizer::publishSelfCollisionVisualization(const vector_t& state) const
     {
         if (!geometry_visualization_)
         {
-            return;
+            return false;
         }
         const auto& model = pinocchio_interface_.getModel();
         if (static_cast<size_t>(state.size()) != static_cast<size_t>(model.nq))
@@ -238,31 +239,31 @@ namespace ocs2::controller_common
             RCLCPP_WARN_THROTTLE(node_->get_logger(), *node_->get_clock(), 5000,
                                  "Self-collision viz skipped: state size %ld != model.nq %u (check controller joints vs OCS2)",
                                  static_cast<long>(state.size()), model.nq);
-            return;
+            return false;
         }
         try
         {
             std::lock_guard<std::mutex> lock(self_collision_mutex_);
             geometry_visualization_->publishDistances(state);
+            return true;
         }
         catch (const std::exception& e)
         {
             RCLCPP_WARN_THROTTLE(node_->get_logger(), *node_->get_clock(), 5000,
                                  "Self-collision visualization failed (disable selfCollision in task or fix URDF/collision pairs): %s",
                                  e.what());
+            return false;
         }
     }
 
-    bool Ocs2PinocchioVisualizer::checkSelfCollision(const vector_t& state, scalar_t threshold) const
+    scalar_t Ocs2PinocchioVisualizer::getLastMinDistance() const
     {
-        // publishDistances updates the distance cache and may publish markers.
-        publishSelfCollisionVisualization(state);
-        if (geometry_visualization_)
+        if (!geometry_visualization_)
         {
-            std::lock_guard<std::mutex> lock(self_collision_mutex_);
-            return geometry_visualization_->isCollisionDetected(threshold);
+            return std::numeric_limits<scalar_t>::max();
         }
-        return false;
+        std::lock_guard<std::mutex> lock(self_collision_mutex_);
+        return geometry_visualization_->getLastMinDistance();
     }
 
     void Ocs2PinocchioVisualizer::publishEndEffectorPose(

@@ -303,9 +303,9 @@ namespace ocs2::mobile_manipulator
                 if (ctrl_comp_->interface_->isSelfCollisionEnabled())
                 {
                     state_list_.movej->setCollisionCheckCallback(
-                        [ctrl_comp = ctrl_comp_](double threshold)
+                        [ctrl_comp = ctrl_comp_](double /*threshold*/)
                         {
-                            return ctrl_comp && ctrl_comp->checkSelfCollisionOnCommand(threshold);
+                            return ctrl_comp && ctrl_comp->isSelfCollisionActive();
                         });
                     state_list_.movej->setCollisionEnabled(true);
                     state_list_.movej->setCollisionThreshold(

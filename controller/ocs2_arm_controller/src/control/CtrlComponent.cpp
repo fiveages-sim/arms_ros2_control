@@ -114,8 +114,7 @@ namespace ocs2::mobile_manipulator
             pose_reference_manager_->setCurrentObservation(observation_);
         }
 
-        // RT: lightweight EE pose only. Self-collision markers + traj: viz thread.
-        // FSM safety: sync checkSelfCollision* (not the old async isCollisionDetected cache).
+        // RT: lightweight EE pose only. Self-collision FCL + markers + traj: viz thread.
         if (visualizer_)
         {
             visualizer_->publishEndEffectorPose(time, observation_.state);
@@ -129,7 +128,11 @@ namespace ocs2::mobile_manipulator
             RCLCPP_WARN(node_->get_logger(), "MPC MRT interface not available");
             return;
         }
-        mpc_mrt_interface_->updatePolicy();
+        // updatePolicy true = swapped new buffer into active; false may still leave a prior active valid.
+        if (mpc_mrt_interface_->updatePolicy())
+        {
+            policy_active_ = true;
+        }
         // use cached action as current state if the hardware has some latency to predict next action
         bool trigger_cached_state = (time - last_execute_time_).seconds() < hardware_latency_;
         if (trigger_cached_state && cached_ob_state_)
@@ -142,78 +145,72 @@ namespace ocs2::mobile_manipulator
         const auto observation_msg = ros_msg_conversions::createObservationMsg(observation_);
         mpc_observation_publisher_->publish(observation_msg);
 
-        size_t planned_mode = 0;
-        try
-        {
-            // initialPolicyReceived() can be true while active policy is still null
-            // (policy only in buffer until updatePolicy() swaps). Guard the whole path.
-            mpc_mrt_interface_->evaluatePolicy(time.seconds(), observation_.state, optimized_state_, optimized_input_,
-                                               planned_mode);
-            const auto& policy = mpc_mrt_interface_->getPolicy();
-
-            double future_time = observation_.time + future_time_offset_ / ctrl_interfaces_.frequency_;
-            vector_t future_state = LinearInterpolation::interpolate(
-                future_time,
-                policy.timeTrajectory_,
-                policy.stateTrajectory_
-            );
-            vector_t future_input = LinearInterpolation::interpolate(
-                future_time,
-                policy.timeTrajectory_,
-                policy.inputTrajectory_
-            );
-
-            // RT-only staging; folded into atomic snapshot in requestVisualizationUpdate().
-            pending_viz_has_pred_ = true;
-            pending_viz_pred_time_ = future_time;
-            pending_viz_pred_state_ = future_state;
-
-            // Trajectory markers: same RT thread as updatePolicy/getPolicy (MRT-safe).
-            if (visualizer_)
-            {
-                visualizer_->updateEndEffectorTrajectory(policy);
-                visualizer_->publishEndEffectorTrajectory(node_->now());
-            }
-
-            if (ctrl_interfaces_.control_mode_ == ControlMode::POSITION)
-            {
-                for (size_t i = 0; i < joint_names_.size() && i < static_cast<size_t>(future_state.size()); ++i)
-                {
-                    ctrl_interfaces_.setJointPositionCommand(i, future_state(i));
-                }
-                cached_last_action_ = future_state;
-                last_execute_time_ = time;
-            }
-            else if (ctrl_interfaces_.control_mode_ == ControlMode::MIX)
-            {
-                vector_t static_torques = calculateStaticTorques();
-
-                for (size_t i = 0; i < joint_names_.size() && i < static_cast<size_t>(static_torques.size()); ++i)
-                {
-                    std::ignore = ctrl_interfaces_.joint_force_command_interface_[i].get().set_value(static_torques(i));
-                }
-
-                for (size_t i = 0; i < joint_names_.size() && i < static_cast<size_t>(future_state.size()); ++i)
-                {
-                    ctrl_interfaces_.setJointPositionCommand(i, future_state(i));
-                }
-
-                for (size_t i = 0; i < joint_names_.size() && i < static_cast<size_t>(future_input.size()); ++i)
-                {
-                    std::ignore = ctrl_interfaces_.joint_velocity_command_interface_[i].get().
-                        set_value(future_input(i));
-                }
-            }
-            else
-            {
-                RCLCPP_ERROR(node_->get_logger(), "Unknown control output mode");
-            }
-        }
-        catch (const std::exception& e)
+        if (!policy_active_)
         {
             RCLCPP_WARN_THROTTLE(node_->get_logger(), *node_->get_clock(), 1000,
-                                 "Policy not ready / trajectory eval failed, holding: %s", e.what());
+                                 "Policy not ready (no active MRT policy yet), holding");
             holdLastSentPositions();
+            return;
+        }
+
+        size_t planned_mode = 0;
+        mpc_mrt_interface_->evaluatePolicy(time.seconds(), observation_.state, optimized_state_, optimized_input_,
+                                           planned_mode);
+        const auto& policy = mpc_mrt_interface_->getPolicy();
+
+        double future_time = observation_.time + future_time_offset_ / ctrl_interfaces_.frequency_;
+        vector_t future_state = LinearInterpolation::interpolate(
+            future_time,
+            policy.timeTrajectory_,
+            policy.stateTrajectory_
+        );
+        vector_t future_input = LinearInterpolation::interpolate(
+            future_time,
+            policy.timeTrajectory_,
+            policy.inputTrajectory_
+        );
+
+        // RT-only staging; folded into atomic snapshot in requestVisualizationUpdate().
+        pending_viz_has_pred_ = true;
+        pending_viz_pred_time_ = future_time;
+        pending_viz_pred_state_ = future_state;
+
+        // EE traj markers: copy stateTrajectory for viz thread (no RT FK/publish).
+        pending_viz_has_policy_traj_ = !policy.stateTrajectory_.empty();
+        pending_viz_state_trajectory_ = policy.stateTrajectory_;
+
+        if (ctrl_interfaces_.control_mode_ == ControlMode::POSITION)
+        {
+            for (size_t i = 0; i < joint_names_.size() && i < static_cast<size_t>(future_state.size()); ++i)
+            {
+                ctrl_interfaces_.setJointPositionCommand(i, future_state(i));
+            }
+            cached_last_action_ = future_state;
+            last_execute_time_ = time;
+        }
+        else if (ctrl_interfaces_.control_mode_ == ControlMode::MIX)
+        {
+            vector_t static_torques = calculateStaticTorques();
+
+            for (size_t i = 0; i < joint_names_.size() && i < static_cast<size_t>(static_torques.size()); ++i)
+            {
+                std::ignore = ctrl_interfaces_.joint_force_command_interface_[i].get().set_value(static_torques(i));
+            }
+
+            for (size_t i = 0; i < joint_names_.size() && i < static_cast<size_t>(future_state.size()); ++i)
+            {
+                ctrl_interfaces_.setJointPositionCommand(i, future_state(i));
+            }
+
+            for (size_t i = 0; i < joint_names_.size() && i < static_cast<size_t>(future_input.size()); ++i)
+            {
+                std::ignore = ctrl_interfaces_.joint_velocity_command_interface_[i].get().
+                    set_value(future_input(i));
+            }
+        }
+        else
+        {
+            RCLCPP_ERROR(node_->get_logger(), "Unknown control output mode");
         }
     }
 
@@ -304,6 +301,8 @@ namespace ocs2::mobile_manipulator
         // Waiting for initialPolicyReceived() must happen on the MPC worker thread —
         // blocking here runs inside controller_manager::update and causes overruns.
         mpc_mrt_interface_->reset();
+        policy_active_ = false;
+        collision_active_.store(false, std::memory_order_release);
         mpc_mrt_interface_->setCurrentObservation(observation_);
         mpc_mrt_interface_->resetMpcNode(target_trajectories);
         RCLCPP_INFO(node_->get_logger(),
@@ -361,17 +360,22 @@ namespace ocs2::mobile_manipulator
         {
             visualization_thread_.join();
         }
+        collision_active_.store(false, std::memory_order_release);
     }
 
     void CtrlComponent::requestVisualizationUpdate()
     {
         auto snap = std::make_shared<VisualizationSnapshot>();
         snap->observation = observation_;
+        snap->collision_state = buildCollisionState();
         snap->has_pred = pending_viz_has_pred_;
         snap->pred_time = pending_viz_pred_time_;
         snap->pred_state = std::move(pending_viz_pred_state_);
         pending_viz_has_pred_ = false;
         pending_viz_pred_time_ = 0.0;
+        snap->has_policy_traj = pending_viz_has_policy_traj_;
+        snap->stateTrajectory = std::move(pending_viz_state_trajectory_);
+        pending_viz_has_policy_traj_ = false;
         std::atomic_store_explicit(&visualization_snapshot_, std::move(snap), std::memory_order_release);
         visualization_update_requested_ = true;
     }
@@ -401,17 +405,9 @@ namespace ocs2::mobile_manipulator
             if (visualization_update_requested_.load())
             {
                 auto snap = std::atomic_load_explicit(&visualization_snapshot_, std::memory_order_acquire);
-                try
+                if (snap)
                 {
-                    if (snap)
-                    {
-                        runVisualizationOnce(*snap);
-                    }
-                }
-                catch (const std::exception& e)
-                {
-                    RCLCPP_WARN_THROTTLE(node_->get_logger(), *node_->get_clock(), 2000,
-                                         "Visualization update failed: %s", e.what());
+                    runVisualizationOnce(*snap);
                 }
                 visualization_update_requested_ = false;
             }
@@ -428,8 +424,22 @@ namespace ocs2::mobile_manipulator
             return;
         }
 
-        // Self-collision markers only; FSM safety uses sync checkSelfCollision*.
-        visualizer_->publishSelfCollisionVisualization(obs.state);
+        // One FCL per viz tick on command-overlay q: updates markers + collision_active_ for RT.
+        const vector_t& collision_q =
+            snap.collision_state.size() > 0 ? snap.collision_state : obs.state;
+        bool active = false;
+        if (visualizer_->publishSelfCollisionVisualization(collision_q))
+        {
+            const scalar_t thr = interface_->getSelfCollisionMinimumDistance();
+            active = visualizer_->getLastMinDistance() <= thr;
+        }
+        collision_active_.store(active, std::memory_order_release);
+
+        if (snap.has_policy_traj && !snap.stateTrajectory.empty())
+        {
+            visualizer_->updateEndEffectorTrajectoryFromStates(snap.stateTrajectory);
+            visualizer_->publishEndEffectorTrajectory(node_->now());
+        }
 
         auto& rec = arms_controller_common::TrajectoryRecorder::instance();
         if (rec.enabled())
@@ -510,16 +520,7 @@ namespace ocs2::mobile_manipulator
                                Eigen::VectorXd::Zero(pinocchio_model.nv));
     }
 
-    bool CtrlComponent::checkSelfCollision(const vector_t& state, scalar_t threshold) const
-    {
-        if (!visualizer_)
-        {
-            return false;
-        }
-        return visualizer_->checkSelfCollision(state, threshold);
-    }
-
-    bool CtrlComponent::checkSelfCollisionOnCommand(scalar_t threshold) const
+    vector_t CtrlComponent::buildCollisionState() const
     {
         vector_t q = observation_.state;
         const auto& cmd = ctrl_interfaces_.last_sent_joint_positions_;
@@ -527,12 +528,7 @@ namespace ocs2::mobile_manipulator
         {
             q[static_cast<Eigen::Index>(i)] = cmd[i];
         }
-        return checkSelfCollision(q, threshold);
-    }
-
-    bool CtrlComponent::checkSelfCollisionOnObservation(scalar_t threshold) const
-    {
-        return checkSelfCollision(observation_.state, threshold);
+        return q;
     }
 
     void CtrlComponent::publishFsmCommand(int32_t command) const

@@ -183,7 +183,7 @@ namespace ocs2::mobile_manipulator
 
         /**
          * Self-collision markers + traj recording at MPC cadence on a dedicated thread
-         * (not RT update). Detection stays sync on RT for FSM safety.
+         * (not RT update). FCL judgment runs on viz thread; RT only reads collision_active_.
          * Start on controller activate, stop on deactivate. Request updates via
          * maybeRequestVisualizationUpdate() from the common control path (all FSM states).
          */
@@ -200,15 +200,14 @@ namespace ocs2::mobile_manipulator
         // Torque calculation for force control
         vector_t calculateStaticTorques() const;
 
-        /** Sync check on full OCS2 state via publishDistances (may also publish markers). */
-        bool checkSelfCollision(const vector_t& state, scalar_t threshold = 0.0) const;
         /**
-         * Sync check using last commanded joints (and current observation base pose if any).
-         * Intended for MOVEJ safety so collision follows command, not lagged measurement.
+         * RT-safe: viz thread already compared FCL min distance to configured threshold.
+         * Update/FSM only consume this flag (no threshold re-judgment).
          */
-        bool checkSelfCollisionOnCommand(scalar_t threshold = 0.0) const;
-        /** Sync check using current observation_.state (measured). For OCS2 FSM. */
-        bool checkSelfCollisionOnObservation(scalar_t threshold = 0.0) const;
+        bool isSelfCollisionActive() const
+        {
+            return collision_active_.load(std::memory_order_acquire);
+        }
 
         // Publish FSM command to stop all controllers
         // @param command: FSM command value (typically 2 for HOLD)
@@ -223,6 +222,8 @@ namespace ocs2::mobile_manipulator
         // MPC components
         std::unique_ptr<MPC_BASE> mpc_;
         std::unique_ptr<MPC_MRT_Interface> mpc_mrt_interface_;
+        /** True after first successful updatePolicy() swap; cleared in resetMpc(). */
+        bool policy_active_{false};
         std::shared_ptr<controller_common::PoseBasedReferenceManager> pose_reference_manager_;
 
         // Observation state
@@ -255,13 +256,19 @@ namespace ocs2::mobile_manipulator
         struct VisualizationSnapshot
         {
             SystemObservation observation;
+            /** Command-overlay q for FCL + collision markers (obs base + last_sent joints). */
+            vector_t collision_state;
             bool has_pred{false};
             double pred_time{0.0};
             vector_t pred_state;
+            bool has_policy_traj{false};
+            vector_array_t stateTrajectory;
         };
 
         void visualizationThreadLoop();
         void runVisualizationOnce(const VisualizationSnapshot& snap);
+        /** Observation + last_sent_joint_positions_ overlay (same as former checkSelfCollisionOnCommand). */
+        vector_t buildCollisionState() const;
 
         std::thread visualization_thread_;
         std::atomic_bool visualization_running_{false};
@@ -269,12 +276,17 @@ namespace ocs2::mobile_manipulator
         int visualization_thread_sleep_ms_{2};
         double visualization_period_sec_{0.05};
         rclcpp::Time last_visualization_request_time_{0, 0, RCL_ROS_TIME};
+        /** Viz-thread judgment (valid FCL && min_dist <= configured thr); RT only loads. */
+        std::atomic_bool collision_active_{false};
         /** Published via atomic_store/load only (RT → viz handoff, no mutex). */
         std::shared_ptr<VisualizationSnapshot> visualization_snapshot_;
         /** RT-only staging for pred samples; folded into snapshot in requestVisualizationUpdate(). */
         bool pending_viz_has_pred_{false};
         double pending_viz_pred_time_{0.0};
         vector_t pending_viz_pred_state_;
+        /** RT-only staging for EE trajectory markers (copy of policy.stateTrajectory_). */
+        bool pending_viz_has_policy_traj_{false};
+        vector_array_t pending_viz_state_trajectory_;
 
         // Configuration
         std::string robot_name_;

@@ -45,18 +45,17 @@ public:
     void initialize();
 
     void updateEndEffectorTrajectory(const PrimalSolution& policy);
+    /** Same as updateEndEffectorTrajectory but from a copied state trajectory (viz thread). */
+    void updateEndEffectorTrajectoryFromStates(const vector_array_t& stateTrajectory);
     void publishEndEffectorTrajectory(const rclcpp::Time& time);
 
     /**
      * Self-collision markers via GeometryInterfaceVisualization::publishDistances.
-     * Used by the async viz thread; also refreshes the distance cache.
+     * Used by the async viz thread only. Returns true if FCL ran (lastMinDistance updated).
      */
-    void publishSelfCollisionVisualization(const vector_t& state) const;
-    /**
-     * Sync FSM safety: publishDistances(state) then threshold check.
-     * May publish markers as a side effect (no distance-only API in ocs2_ros2).
-     */
-    bool checkSelfCollision(const vector_t& state, scalar_t threshold = 0.0) const;
+    bool publishSelfCollisionVisualization(const vector_t& state) const;
+    /** Min distance from the last successful publishDistances under the mutex. */
+    scalar_t getLastMinDistance() const;
 
     void publishEndEffectorPose(const rclcpp::Time& time, const vector_t& state) const;
 
@@ -85,7 +84,7 @@ private:
     rclcpp::Publisher<geometry_msgs::msg::PoseStamped>::SharedPtr body_frame_pose_publisher_;
 
     std::unique_ptr<GeometryInterfaceVisualization> geometry_visualization_;
-    /** Guards geometry_visualization_ across RT sync checks and viz-thread publish. */
+    /** Guards geometry_visualization_ (viz-thread publishDistances / getLastMinDistance). */
     mutable std::mutex self_collision_mutex_;
 
     std::vector<vector_t> left_arm_trajectory_history_;

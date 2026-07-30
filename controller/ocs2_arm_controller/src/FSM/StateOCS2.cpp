@@ -99,13 +99,12 @@ namespace ocs2::mobile_manipulator
 
         if (ctrl_comp_->interface_->isSelfCollisionEnabled() && !collision_detected_)
         {
-            const scalar_t minimumDistance = ctrl_comp_->interface_->getSelfCollisionMinimumDistance();
-            if (ctrl_comp_->checkSelfCollisionOnObservation(minimumDistance))
+            if (ctrl_comp_->isSelfCollisionActive())
             {
                 collision_detected_ = true;
                 RCLCPP_WARN(node_->get_logger(),
                     "Collision detected! Distance <= minimumDistance: %.4f m. Will switch to HOLD state.",
-                    minimumDistance);
+                    ctrl_comp_->interface_->getSelfCollisionMinimumDistance());
             }
         }
 
