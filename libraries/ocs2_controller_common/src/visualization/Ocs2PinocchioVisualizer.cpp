@@ -20,7 +20,6 @@ namespace ocs2::controller_common
           dual_arm_mode_(config_.dual_arm),
           base_frame_(config_.base_frame),
           urdf_file_(config_.urdf_file),
-          trajectory_line_width_(0.005),
           left_arm_color_({0.0, 0.4470, 0.7410}),
           right_arm_color_({0.6350, 0.0780, 0.1840})
     {
@@ -52,30 +51,23 @@ namespace ocs2::controller_common
             robot_description_publisher_ = node_->create_publisher<std_msgs::msg::String>(
                 "/ocs2_robot_description", rclcpp::QoS(1).transient_local());
             
-            // Read and publish URDF file
-            try
+            // Read and publish URDF file (ifstream does not throw on open failure by default).
+            std::ifstream urdf_stream(urdf_file_);
+            if (urdf_stream.is_open())
             {
-                std::ifstream urdf_stream(urdf_file_);
-                if (urdf_stream.is_open())
-                {
-                    std::string urdf_content((std::istreambuf_iterator<char>(urdf_stream)),
-                                            std::istreambuf_iterator<char>());
-                    urdf_stream.close();
-                    
-                    std_msgs::msg::String urdf_msg;
-                    urdf_msg.data = urdf_content;
-                    robot_description_publisher_->publish(urdf_msg);
-                    
-                    RCLCPP_INFO(node_->get_logger(), "Published OCS2 robot description from: %s", urdf_file_.c_str());
-                }
-                else
-                {
-                    RCLCPP_WARN(node_->get_logger(), "Failed to open URDF file: %s", urdf_file_.c_str());
-                }
+                std::string urdf_content((std::istreambuf_iterator(urdf_stream)),
+                                        std::istreambuf_iterator<char>());
+                urdf_stream.close();
+
+                std_msgs::msg::String urdf_msg;
+                urdf_msg.data = urdf_content;
+                robot_description_publisher_->publish(urdf_msg);
+
+                RCLCPP_INFO(node_->get_logger(), "Published OCS2 robot description from: %s", urdf_file_.c_str());
             }
-            catch (const std::exception& e)
+            else
             {
-                RCLCPP_ERROR(node_->get_logger(), "Failed to read and publish URDF: %s", e.what());
+                RCLCPP_WARN(node_->get_logger(), "Failed to open URDF file: %s", urdf_file_.c_str());
             }
         }
 
@@ -307,62 +299,55 @@ namespace ocs2::controller_common
     vector_t Ocs2PinocchioVisualizer::computeEndEffectorPose(const vector_t& state) const
     {
         vector_t ee_state = vector_t::Zero(7);
-
-        try
+        const auto& model = pinocchio_interface_.getModel();
+        // getFrameId does not throw; missing name returns model.nframes.
+        const auto ee_frame_id = model.getFrameId(config_.left_ee_frame);
+        if (ee_frame_id >= static_cast<pinocchio::FrameIndex>(model.nframes))
         {
-            const auto& model = pinocchio_interface_.getModel();
-            auto data = pinocchio_interface_.getData();
-
-            pinocchio::forwardKinematics(model, data, state);
-            pinocchio::updateFramePlacements(model, data);
-
-            const auto& ee_frame_name = config_.left_ee_frame;
-            const auto ee_frame_id = model.getFrameId(ee_frame_name);
-            const auto& frame_placement = data.oMf[ee_frame_id];
-
-            ee_state.head<3>() = frame_placement.translation();
-            Eigen::Quaterniond quat(frame_placement.rotation());
-            ee_state(3) = quat.x();
-            ee_state(4) = quat.y();
-            ee_state(5) = quat.z();
-            ee_state(6) = quat.w();
-        }
-        catch (const std::exception& e)
-        {
-            RCLCPP_WARN(node_->get_logger(), "Failed to compute end-effector pose: %s", e.what());
+            RCLCPP_WARN_THROTTLE(node_->get_logger(), *node_->get_clock(), 5000,
+                                 "Left EE frame '%s' not in model (nframes=%d)",
+                                 config_.left_ee_frame.c_str(), model.nframes);
+            return ee_state;
         }
 
+        auto data = pinocchio_interface_.getData();
+        pinocchio::forwardKinematics(model, data, state);
+        pinocchio::updateFramePlacements(model, data);
+
+        const auto& frame_placement = data.oMf[ee_frame_id];
+        ee_state.head<3>() = frame_placement.translation();
+        Eigen::Quaterniond quat(frame_placement.rotation());
+        ee_state(3) = quat.x();
+        ee_state(4) = quat.y();
+        ee_state(5) = quat.z();
+        ee_state(6) = quat.w();
         return ee_state;
     }
 
     vector_t Ocs2PinocchioVisualizer::computeRightEndEffectorPose(const vector_t& state) const
     {
         vector_t ee_state = vector_t::Zero(7);
-
-        try
+        const auto& model = pinocchio_interface_.getModel();
+        const auto ee_frame_id = model.getFrameId(config_.right_ee_frame);
+        if (ee_frame_id >= static_cast<pinocchio::FrameIndex>(model.nframes))
         {
-            const auto& model = pinocchio_interface_.getModel();
-            auto data = pinocchio_interface_.getData();
-
-            pinocchio::forwardKinematics(model, data, state);
-            pinocchio::updateFramePlacements(model, data);
-
-            const auto& ee_frame_name = config_.right_ee_frame;
-            const auto ee_frame_id = model.getFrameId(ee_frame_name);
-            const auto& frame_placement = data.oMf[ee_frame_id];
-
-            ee_state.head<3>() = frame_placement.translation();
-            Eigen::Quaterniond quat(frame_placement.rotation());
-            ee_state(3) = quat.x();
-            ee_state(4) = quat.y();
-            ee_state(5) = quat.z();
-            ee_state(6) = quat.w();
-        }
-        catch (const std::exception& e)
-        {
-            RCLCPP_WARN(node_->get_logger(), "Failed to compute right end-effector pose: %s", e.what());
+            RCLCPP_WARN_THROTTLE(node_->get_logger(), *node_->get_clock(), 5000,
+                                 "Right EE frame '%s' not in model (nframes=%d)",
+                                 config_.right_ee_frame.c_str(), model.nframes);
+            return ee_state;
         }
 
+        auto data = pinocchio_interface_.getData();
+        pinocchio::forwardKinematics(model, data, state);
+        pinocchio::updateFramePlacements(model, data);
+
+        const auto& frame_placement = data.oMf[ee_frame_id];
+        ee_state.head<3>() = frame_placement.translation();
+        Eigen::Quaterniond quat(frame_placement.rotation());
+        ee_state(3) = quat.x();
+        ee_state(4) = quat.y();
+        ee_state(5) = quat.z();
+        ee_state(6) = quat.w();
         return ee_state;
     }
 
@@ -375,30 +360,27 @@ namespace ocs2::controller_common
             return pose;
         }
 
-        try
+        const auto& model = pinocchio_interface_.getModel();
+        const auto frame_id = model.getFrameId(config_.body_frame);
+        if (frame_id >= static_cast<pinocchio::FrameIndex>(model.nframes))
         {
-            const auto& model = pinocchio_interface_.getModel();
-            auto data = pinocchio_interface_.getData();
-
-            pinocchio::forwardKinematics(model, data, state);
-            pinocchio::updateFramePlacements(model, data);
-
-            const auto& frame_name = config_.body_frame;
-            const auto frame_id = model.getFrameId(frame_name);
-            const auto& frame_placement = data.oMf[frame_id];
-
-            pose.head<3>() = frame_placement.translation();
-            Eigen::Quaterniond quat(frame_placement.rotation());
-            pose(3) = quat.x();
-            pose(4) = quat.y();
-            pose(5) = quat.z();
-            pose(6) = quat.w();
-        }
-        catch (const std::exception& e)
-        {
-            RCLCPP_WARN(node_->get_logger(), "Failed to compute body frame pose: %s", e.what());
+            RCLCPP_WARN_THROTTLE(node_->get_logger(), *node_->get_clock(), 5000,
+                                 "Body frame '%s' not in model (nframes=%d)",
+                                 config_.body_frame.c_str(), model.nframes);
+            return pose;
         }
 
+        auto data = pinocchio_interface_.getData();
+        pinocchio::forwardKinematics(model, data, state);
+        pinocchio::updateFramePlacements(model, data);
+
+        const auto& frame_placement = data.oMf[frame_id];
+        pose.head<3>() = frame_placement.translation();
+        Eigen::Quaterniond quat(frame_placement.rotation());
+        pose(3) = quat.x();
+        pose(4) = quat.y();
+        pose(5) = quat.z();
+        pose(6) = quat.w();
         return pose;
     }
 

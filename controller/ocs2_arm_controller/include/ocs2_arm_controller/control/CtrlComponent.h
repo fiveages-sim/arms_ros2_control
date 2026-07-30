@@ -188,7 +188,7 @@ namespace ocs2::mobile_manipulator
          * maybeRequestVisualizationUpdate() from the common control path (all FSM states).
          */
         void startVisualizationThread(int thread_sleep_ms, double visualization_period_sec);
-        /** Blocking stop: request + join (destructor / deactivate). */
+        /** Blocking stop: clear running + join (destructor / deactivate). */
         void stopVisualizationThread();
         void requestVisualizationUpdate();
         /** Throttle requestVisualizationUpdate to visualization_period_sec (MPC rate). */
@@ -262,14 +262,9 @@ namespace ocs2::mobile_manipulator
 
         void visualizationThreadLoop();
         void runVisualizationOnce(const VisualizationSnapshot& snap);
-        void requestStopVisualizationThread();
-        [[nodiscard]] bool isVisualizationThreadFinished() const;
-        void joinVisualizationThread();
 
         std::thread visualization_thread_;
         std::atomic_bool visualization_running_{false};
-        std::atomic_bool visualization_thread_should_stop_{false};
-        std::atomic_bool visualization_thread_finished_{true};
         std::atomic_bool visualization_update_requested_{false};
         int visualization_thread_sleep_ms_{2};
         double visualization_period_sec_{0.05};

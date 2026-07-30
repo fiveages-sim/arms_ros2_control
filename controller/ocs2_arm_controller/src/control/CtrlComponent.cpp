@@ -338,14 +338,12 @@ namespace ocs2::mobile_manipulator
 
     void CtrlComponent::startVisualizationThread(int thread_sleep_ms, double visualization_period_sec)
     {
-        if (visualization_running_)
+        if (visualization_running_.load())
         {
             return;
         }
         visualization_thread_sleep_ms_ = std::max(1, thread_sleep_ms);
         visualization_period_sec_ = std::max(0.001, visualization_period_sec);
-        visualization_thread_should_stop_ = false;
-        visualization_thread_finished_ = false;
         visualization_running_ = true;
         // Do not set visualization_update_requested_ here — caller must call
         // requestVisualizationUpdate() after observation_ is ready (e.g. post-resetMpc),
@@ -353,35 +351,16 @@ namespace ocs2::mobile_manipulator
         visualization_thread_ = std::thread(&CtrlComponent::visualizationThreadLoop, this);
     }
 
-    void CtrlComponent::requestStopVisualizationThread()
+    void CtrlComponent::stopVisualizationThread()
     {
-        if (!visualization_running_)
+        if (!visualization_running_.exchange(false) && !visualization_thread_.joinable())
         {
-            visualization_thread_finished_ = true;
             return;
         }
-        visualization_thread_should_stop_ = true;
-    }
-
-    bool CtrlComponent::isVisualizationThreadFinished() const
-    {
-        return visualization_thread_finished_.load();
-    }
-
-    void CtrlComponent::joinVisualizationThread()
-    {
         if (visualization_thread_.joinable())
         {
             visualization_thread_.join();
         }
-        visualization_running_ = false;
-        visualization_thread_finished_ = true;
-    }
-
-    void CtrlComponent::stopVisualizationThread()
-    {
-        requestStopVisualizationThread();
-        joinVisualizationThread();
     }
 
     void CtrlComponent::requestVisualizationUpdate()
@@ -417,7 +396,7 @@ namespace ocs2::mobile_manipulator
         RCLCPP_DEBUG(node_->get_logger(),
                      "Visualization thread started (sleep=%d ms, MPC-rate)",
                      visualization_thread_sleep_ms_);
-        while (!visualization_thread_should_stop_.load())
+        while (visualization_running_.load())
         {
             if (visualization_update_requested_.load())
             {
@@ -438,7 +417,6 @@ namespace ocs2::mobile_manipulator
             }
             std::this_thread::sleep_for(std::chrono::milliseconds(visualization_thread_sleep_ms_));
         }
-        visualization_thread_finished_ = true;
         RCLCPP_DEBUG(node_->get_logger(), "Visualization thread stopped");
     }
 

@@ -62,7 +62,7 @@ public:
 
     vector_t computeEndEffectorPose(const vector_t& state) const;
     vector_t computeRightEndEffectorPose(const vector_t& state) const;
-    /** 7-dim pose (x,y,z, qx,qy,qz,qw) of body_frame in base; identity at origin if body_frame empty or on error. */
+    /** 7-dim pose (x,y,z, qx,qy,qz,qw) of body_frame in base; identity at origin if body_frame empty or missing. */
     vector_t computeBodyFramePose(const vector_t& state) const;
 
     void clearTrajectoryHistory();

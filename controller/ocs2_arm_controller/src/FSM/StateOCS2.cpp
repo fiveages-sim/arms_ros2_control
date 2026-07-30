@@ -6,7 +6,6 @@
 
 #include <ocs2_controller_common/mpc/MpcExecutionParams.hpp>
 #include <ocs2_core/misc/LoadData.h>
-#include <ocs2_ddp/GaussNewtonDDP_MPC.h>
 #include <pinocchio/algorithm/kinematics.hpp>
 
 namespace ocs2::mobile_manipulator
@@ -19,7 +18,7 @@ namespace ocs2::mobile_manipulator
         joint_names_ = node_->get_parameter("joints").as_string_array();
 
         const double controller_frequency = ctrl_interfaces_.frequency_;
-        const auto mpc_params = ocs2::controller_common::computeMpcExecutionParams(
+        const auto mpc_params = controller_common::computeMpcExecutionParams(
             controller_frequency, node_->get_parameter("mpc_frequency").as_int(), node_->get_logger());
         mpc_period_ = mpc_params.mpc_period_sec;
         thread_sleep_duration_ms_ = mpc_params.thread_sleep_ms;
@@ -72,7 +71,7 @@ namespace ocs2::mobile_manipulator
         }
 
         // Ensure previous MPC worker is fully stopped before starting a new one.
-        if (mpc_running_ || !mpc_thread_finished_.load())
+        if (!mpc_thread_finished_.load() || mpc_thread_.joinable())
         {
             stopMpcThread();
         }
@@ -83,7 +82,6 @@ namespace ocs2::mobile_manipulator
 
         // Kick viz snapshot after reset (viz thread owned by controller activate lifetime).
         ctrl_comp_->requestVisualizationUpdate();
-        mpc_thread_should_stop_ = false;
         mpc_thread_finished_ = false;
         mpc_running_ = true;
         mpc_update_requested_ = true;
@@ -125,12 +123,13 @@ namespace ocs2::mobile_manipulator
         // RT-safe: only signal MPC worker to stop. Join happens in tryFinishExit().
         // Visualization thread is owned by the controller activate lifetime — do not stop here.
         mpc_update_requested_ = false;
-        mpc_thread_should_stop_ = true;
+        mpc_running_ = false;
     }
 
     bool StateOCS2::tryFinishExit()
     {
-        if (mpc_running_ && !mpc_thread_finished_.load())
+        // After beginExit, mpc_running_ is already false — wait only on finished_.
+        if (!mpc_thread_finished_.load())
         {
             return false;
         }
@@ -139,7 +138,6 @@ namespace ocs2::mobile_manipulator
         {
             mpc_thread_.join();
         }
-        mpc_running_ = false;
         mpc_thread_finished_ = true;
 
         if (ctrl_comp_)
@@ -164,7 +162,7 @@ namespace ocs2::mobile_manipulator
     {
         RCLCPP_DEBUG(node_->get_logger(), "MPC update thread started");
 
-        while (!mpc_thread_should_stop_.load())
+        while (mpc_running_.load())
         {
             if (mpc_update_requested_.load())
             {
@@ -191,13 +189,12 @@ namespace ocs2::mobile_manipulator
 
     void StateOCS2::stopMpcThread()
     {
-        mpc_thread_should_stop_ = true;
+        mpc_running_ = false;
         mpc_update_requested_ = false;
         if (mpc_thread_.joinable())
         {
             mpc_thread_.join();
         }
-        mpc_running_ = false;
         mpc_thread_finished_ = true;
     }
 
