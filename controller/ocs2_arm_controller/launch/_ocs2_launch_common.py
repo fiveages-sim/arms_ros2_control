@@ -247,23 +247,20 @@ def _resolve_ft_sides(ctx: Ocs2ControlContext) -> Tuple[bool, bool]:
     ft: Dict[str, str] = {}
     for side in ("left", "right"):
         key = f"{side}_ft"
-        for arg in (f"xacro_{key}", key):
-            val = str(configs.get(arg, "") or "").strip()
-            if val:
-                ft[key] = val
-                break
+        val = str(configs.get(f"hardware_{key}", "") or "").strip()
+        if val:
+            ft[key] = val
 
-    use_profile = str(configs.get("use_profile_eef", "true")).lower() not in ("false", "0", "no")
     profile_path = ctx.profile_path or ""
-    if use_profile and profile_path and os.path.isfile(profile_path):
+    if profile_path and os.path.isfile(profile_path):
         with open(profile_path, encoding="utf-8") as handle:
             raw = yaml.safe_load(handle) or {}
-        eef = (raw.get("defaults") or {}).get("end_effectors")
-        if isinstance(eef, dict):
+        hw = raw.get("hardware")
+        if isinstance(hw, dict):
             for side in ("left", "right"):
                 key = f"{side}_ft"
-                if key not in ft and eef.get(key) is not None:
-                    ft[key] = str(eef[key]).strip()
+                if key not in ft and hw.get(key) is not None:
+                    ft[key] = str(hw[key]).strip()
 
     def enabled(key: str) -> bool:
         val = str(ft.get(key, "") or "").strip().lower()
@@ -288,6 +285,8 @@ def setup_ft_broadcasters(
         if (c["name"].startswith("left_") and left_on)
         or (c["name"].startswith("right_") and right_on)
     ]
+    for c in controllers:
+        print(f"[INFO] FT broadcaster enabled: {c['name']}")
     return controllers, create_controller_spawners(controllers, ctx.use_sim_time)
 
 
