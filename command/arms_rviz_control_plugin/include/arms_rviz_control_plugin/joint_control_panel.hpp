@@ -98,19 +98,25 @@ namespace arms_rviz_control_plugin
         bool hasControllerForCategory(const std::string& category);
         bool shouldShowSendButton() const;
         void updateSpinboxRanges();
-        void tryParseLimitsFromCache();
+        bool refreshJointMetadataFromCache();
         void initializeJoints(const std::vector<std::string>& joint_names_source);
         void publishWaistLifting(double value);
         void publishWaistTurning(double value);
 
         // UI 单位成对：米+弧度 / 厘米+角度；内部与 ROS 始终为 m、rad
+        // 末端位姿 XYZ/RPY 继续使用下列换算；普通关节使用类型感知接口
         double toDisplayAngle(double radians) const;
         double fromDisplayAngle(double display_value) const;
         double toDisplayLength(double meters) const;
         double fromDisplayLength(double display_value) const;
-        void setJointSpinboxFromRadians(size_t index, double radians);
-        double getJointSpinboxRadians(size_t index) const;
+        bool isPrismaticJoint(size_t index) const;
+        double toDisplayJointValue(size_t index, double value_si) const;
+        double fromDisplayJointValue(size_t index, double display_value) const;
+        QString jointUnitSuffix(size_t index) const;
+        void setJointSpinboxFromSiValue(size_t index, double value_si);
+        double getJointSpinboxSiValue(size_t index) const;
         void applyDisplayUnitToJointSpinboxes();
+        bool isPoseTargetCommand() const;
         void applyDisplayUnitToPoseSpinboxes(
             std::vector<std::unique_ptr<QDoubleSpinBox>>& spinboxes);
 
@@ -194,6 +200,9 @@ namespace arms_rviz_control_plugin
         std::shared_ptr<arms_controller_common::JointLimitsManager> joint_limits_manager_;
         std::string robot_description_cache_;
         bool robot_description_received_ = false;
+        bool joint_types_ready_ = false;
+        // Non-empty when refresh failed for a specific joint; shown instead of generic wait text
+        QString joint_metadata_status_;
 
         // UI Elements
         std::unique_ptr<QGroupBox> joint_control_group_;

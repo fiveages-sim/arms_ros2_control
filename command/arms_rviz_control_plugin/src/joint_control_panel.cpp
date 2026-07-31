@@ -366,15 +366,11 @@ namespace arms_rviz_control_plugin
                 // Always cache robot_description
                 robot_description_cache_ = msg->data;
                 robot_description_received_ = true;
+                joint_types_ready_ = false;
 
-                // If joints are already initialized, parse limits immediately
-                if (joint_limits_manager_ && joints_initialized_ && !joint_names_.empty())
+                if (joints_initialized_)
                 {
-                    joint_limits_manager_->parseFromURDF(msg->data, joint_names_, false);
-                    // Update spinbox ranges after parsing limits
-                    updateSpinboxRanges();
-                    RCLCPP_INFO(node_->get_logger(),
-                                "关节限位已从 /robot_description topic 加载");
+                    refreshJointMetadataFromCache();
                 }
                 else
                 {
@@ -524,9 +520,10 @@ namespace arms_rviz_control_plugin
                 joint_positions_[joint_idx] = target_value;
             }
 
-            if (joint_idx < joint_spinboxes_.size() && joint_spinboxes_[joint_idx])
+            if (joint_types_ready_ && joint_idx < joint_spinboxes_.size() &&
+                joint_spinboxes_[joint_idx])
             {
-                setJointSpinboxFromRadians(joint_idx, target_value);
+                setJointSpinboxFromSiValue(joint_idx, target_value);
             }
         }
     }
@@ -736,9 +733,9 @@ namespace arms_rviz_control_plugin
                         double position = msg->position[msg_index];
                         joint_positions_[i] = position;
 
-                        if (joint_spinboxes_[i])
+                        if (joint_types_ready_ && joint_spinboxes_[i])
                         {
-                            setJointSpinboxFromRadians(i, position);
+                            setJointSpinboxFromSiValue(i, position);
                         }
                     }
                 }
@@ -792,6 +789,12 @@ namespace arms_rviz_control_plugin
     {
         // Button only visible when controls are enabled
         if (!is_joint_control_enabled_ || !joints_initialized_)
+        {
+            return false;
+        }
+
+        // Ordinary joint commands require URDF joint types; OCS2 pose targets do not
+        if (!isPoseTargetCommand() && !joint_types_ready_)
         {
             return false;
         }
@@ -903,10 +906,23 @@ namespace arms_rviz_control_plugin
 
         updatePoseModeControlsVisibility();
 
-        // Hide status label when joint control is enabled
+        // Hide status label when joint control is enabled, unless waiting for joint types
         if (status_label_)
         {
-            status_label_->setVisible(!should_show_controls);
+            const bool waiting_joint_types =
+                should_show_controls && !isPoseTargetCommand() && !joint_types_ready_;
+            if (waiting_joint_types)
+            {
+                status_label_->setText(
+                    joint_metadata_status_.isEmpty()
+                        ? QStringLiteral("等待 robot_description 关节类型")
+                        : joint_metadata_status_);
+                status_label_->setVisible(true);
+            }
+            else
+            {
+                status_label_->setVisible(!should_show_controls);
+            }
         }
 
         if (should_show_controls)
@@ -1284,10 +1300,18 @@ namespace arms_rviz_control_plugin
 
     void JointControlPanel::onSendButtonClicked()
     {
-        if (is_joint_control_enabled_ && joints_initialized_)
+        if (!is_joint_control_enabled_ || !joints_initialized_)
         {
-            publishJointPositions();
+            return;
         }
+        if (!isPoseTargetCommand() && !joint_types_ready_)
+        {
+            RCLCPP_ERROR(node_->get_logger(),
+                         "Joint command rejected: joint types are not ready");
+            status_label_->setText("关节类型尚未加载，禁止发送");
+            return;
+        }
+        publishJointPositions();
     }
 
     void JointControlPanel::publishJointPositions()
@@ -1324,7 +1348,7 @@ namespace arms_rviz_control_plugin
             target_joint_names = joint_names_;
             for (size_t i = 0; i < joint_spinboxes_.size(); ++i)
             {
-                target_positions[i] = getJointSpinboxRadians(i);
+                target_positions[i] = getJointSpinboxSiValue(i);
             }
         }
         else
@@ -1341,7 +1365,7 @@ namespace arms_rviz_control_plugin
                     size_t joint_idx = joint_indices[i];
                     if (joint_idx < joint_spinboxes_.size() && joint_idx < joint_names_.size())
                     {
-                        target_positions[i] = getJointSpinboxRadians(joint_idx);
+                        target_positions[i] = getJointSpinboxSiValue(joint_idx);
                         target_joint_names[i] = joint_names_[joint_idx];
                     }
                 }
@@ -1741,24 +1765,52 @@ namespace arms_rviz_control_plugin
 
     void JointControlPanel::updateSpinboxRanges()
     {
-        if (!joint_limits_manager_ || !joints_initialized_ || joint_spinboxes_.empty())
+        if (!joint_limits_manager_ || !joints_initialized_ || joint_spinboxes_.empty() ||
+            !joint_types_ready_)
         {
             return;
         }
 
         for (size_t i = 0; i < joint_names_.size() && i < joint_spinboxes_.size(); ++i)
         {
+            if (!joint_spinboxes_[i])
+            {
+                continue;
+            }
+
             const std::string& joint_name = joint_names_[i];
             auto limits = joint_limits_manager_->getJointLimits(joint_name);
 
-            const double lower_rad = limits.initialized ? limits.lower : (-M_PI * 2);
-            const double upper_rad = limits.initialized ? limits.upper : (M_PI * 2);
-            joint_spinboxes_[i]->setRange(toDisplayAngle(lower_rad), toDisplayAngle(upper_rad));
+            double lower_si = 0.0;
+            double upper_si = 0.0;
+            if (limits.initialized)
+            {
+                lower_si = limits.lower;
+                upper_si = limits.upper;
+            }
+            else if (isPrismaticJoint(i))
+            {
+                RCLCPP_ERROR(node_->get_logger(),
+                             "Prismatic joint %s has no position limits; skipping range update",
+                             joint_name.c_str());
+                continue;
+            }
+            else
+            {
+                // Revolute/continuous without explicit limits: keep [-2π, 2π]
+                lower_si = -M_PI * 2;
+                upper_si = M_PI * 2;
+            }
+
+            joint_spinboxes_[i]->setRange(
+                toDisplayJointValue(i, lower_si),
+                toDisplayJointValue(i, upper_si));
             RCLCPP_DEBUG(node_->get_logger(),
                          "Set range for joint %s: [%.6f, %.6f] (%s)",
                          joint_name.c_str(),
-                         toDisplayAngle(lower_rad), toDisplayAngle(upper_rad),
-                         use_cm_deg_ ? "deg" : "rad");
+                         toDisplayJointValue(i, lower_si),
+                         toDisplayJointValue(i, upper_si),
+                         jointUnitSuffix(i).trimmed().toStdString().c_str());
         }
     }
 
@@ -1782,41 +1834,99 @@ namespace arms_rviz_control_plugin
         return use_cm_deg_ ? (display_value / 100.0) : display_value;
     }
 
-    void JointControlPanel::setJointSpinboxFromRadians(size_t index, double radians)
+    bool JointControlPanel::isPrismaticJoint(size_t index) const
+    {
+        return index < joint_names_.size() &&
+               joint_limits_manager_ &&
+               joint_limits_manager_->isPrismaticJoint(joint_names_[index]);
+    }
+
+    double JointControlPanel::toDisplayJointValue(
+        size_t index, double value_si) const
+    {
+        if (!joint_types_ready_ || index >= joint_names_.size())
+        {
+            RCLCPP_ERROR(node_->get_logger(),
+                         "Cannot display joint value: joint type is not ready");
+            return 0.0;
+        }
+        return isPrismaticJoint(index)
+                   ? toDisplayLength(value_si)
+                   : toDisplayAngle(value_si);
+    }
+
+    double JointControlPanel::fromDisplayJointValue(
+        size_t index, double display_value) const
+    {
+        if (!joint_types_ready_ || index >= joint_names_.size())
+        {
+            RCLCPP_ERROR(node_->get_logger(),
+                         "Cannot convert joint command: joint type is not ready");
+            return 0.0;
+        }
+        return isPrismaticJoint(index)
+                   ? fromDisplayLength(display_value)
+                   : fromDisplayAngle(display_value);
+    }
+
+    QString JointControlPanel::jointUnitSuffix(size_t index) const
+    {
+        if (isPrismaticJoint(index))
+        {
+            return use_cm_deg_ ? " cm" : " m";
+        }
+        return use_cm_deg_ ? " deg" : " rad";
+    }
+
+    void JointControlPanel::setJointSpinboxFromSiValue(
+        size_t index, double value_si)
     {
         if (index >= joint_spinboxes_.size() || !joint_spinboxes_[index])
         {
             return;
         }
-        bool was_blocked = joint_spinboxes_[index]->blockSignals(true);
-        joint_spinboxes_[index]->setValue(toDisplayAngle(radians));
+        const bool was_blocked = joint_spinboxes_[index]->blockSignals(true);
+        joint_spinboxes_[index]->setValue(
+            toDisplayJointValue(index, value_si));
         joint_spinboxes_[index]->blockSignals(was_blocked);
     }
 
-    double JointControlPanel::getJointSpinboxRadians(size_t index) const
+    double JointControlPanel::getJointSpinboxSiValue(size_t index) const
     {
         if (index >= joint_spinboxes_.size() || !joint_spinboxes_[index])
         {
             return 0.0;
         }
-        return fromDisplayAngle(joint_spinboxes_[index]->value());
+        return fromDisplayJointValue(
+            index, joint_spinboxes_[index]->value());
     }
 
     void JointControlPanel::applyDisplayUnitToJointSpinboxes()
     {
+        if (!joint_types_ready_)
+        {
+            return;
+        }
         for (size_t i = 0; i < joint_spinboxes_.size(); ++i)
         {
             if (!joint_spinboxes_[i])
             {
                 continue;
             }
-            bool was_blocked = joint_spinboxes_[i]->blockSignals(true);
-            joint_spinboxes_[i]->setSuffix(use_cm_deg_ ? " deg" : " rad");
+            const bool was_blocked = joint_spinboxes_[i]->blockSignals(true);
+            joint_spinboxes_[i]->setSuffix(jointUnitSuffix(i));
             joint_spinboxes_[i]->setDecimals(use_cm_deg_ ? 2 : 4);
             joint_spinboxes_[i]->setSingleStep(use_cm_deg_ ? 1.0 : 0.01);
             joint_spinboxes_[i]->blockSignals(was_blocked);
         }
         updateSpinboxRanges();
+    }
+
+    bool JointControlPanel::isPoseTargetCommand() const
+    {
+        return current_command_ == 3 &&
+               (current_category_ == "left" ||
+                current_category_ == "right");
     }
 
     void JointControlPanel::onDisplayUnitChanged()
@@ -1833,10 +1943,13 @@ namespace arms_rviz_control_plugin
             return;
         }
 
-        std::vector<double> values_rad(joint_spinboxes_.size(), 0.0);
-        for (size_t i = 0; i < joint_spinboxes_.size(); ++i)
+        std::vector<double> values_si(joint_spinboxes_.size(), 0.0);
+        if (joint_types_ready_)
         {
-            values_rad[i] = getJointSpinboxRadians(i);
+            for (size_t i = 0; i < joint_spinboxes_.size(); ++i)
+            {
+                values_si[i] = getJointSpinboxSiValue(i);
+            }
         }
 
         const geometry_msgs::msg::Pose left_abs = getArmPoseFromSpinboxes(left_arm_spinboxes_);
@@ -1846,9 +1959,13 @@ namespace arms_rviz_control_plugin
 
         use_cm_deg_ = new_use_cm_deg;
         applyDisplayUnitToJointSpinboxes();
-        for (size_t i = 0; i < joint_spinboxes_.size(); ++i)
+
+        if (joint_types_ready_)
         {
-            setJointSpinboxFromRadians(i, values_rad[i]);
+            for (size_t i = 0; i < joint_spinboxes_.size(); ++i)
+            {
+                setJointSpinboxFromSiValue(i, values_si[i]);
+            }
         }
 
         applyDisplayUnitToPoseSpinboxes(left_arm_spinboxes_);
@@ -2278,28 +2395,59 @@ namespace arms_rviz_control_plugin
         return true;
     }
 
-    void JointControlPanel::tryParseLimitsFromCache()
+    bool JointControlPanel::refreshJointMetadataFromCache()
     {
-        // Try to parse limits from cached robot_description if available
-        if (robot_description_received_ && !robot_description_cache_.empty() &&
-            joint_limits_manager_ && joints_initialized_ && !joint_names_.empty())
+        joint_types_ready_ = false;
+        joint_metadata_status_.clear();
+        if (!robot_description_received_ || robot_description_cache_.empty() ||
+            !joint_limits_manager_ || !joints_initialized_ || joint_names_.empty())
         {
-            size_t parsed_count = joint_limits_manager_->parseFromURDF(
-                robot_description_cache_, joint_names_, false);
-            if (parsed_count > 0)
+            updatePanelVisibility();
+            return false;
+        }
+
+        joint_limits_manager_->parseFromURDF(
+            robot_description_cache_, joint_names_, false);
+
+        for (const auto& joint_name : joint_names_)
+        {
+            if (!joint_limits_manager_->hasJointMotionType(joint_name))
             {
-                // Update spinbox ranges after parsing limits
-                updateSpinboxRanges();
-                RCLCPP_INFO(node_->get_logger(),
-                            "关节限位已从缓存的 robot_description 加载 (%zu 个关节)",
-                            parsed_count);
+                RCLCPP_ERROR(node_->get_logger(),
+                             "Cannot initialize unit for joint %s",
+                             joint_name.c_str());
+                joint_metadata_status_ =
+                    QString("无法识别关节单位: %1")
+                        .arg(QString::fromStdString(joint_name));
+                updatePanelVisibility();
+                return false;
             }
-            else
+            if (joint_limits_manager_->isPrismaticJoint(joint_name) &&
+                !joint_limits_manager_->hasLimits(joint_name))
             {
-                RCLCPP_WARN(node_->get_logger(),
-                            "未能从缓存的 robot_description 中解析关节限位");
+                RCLCPP_ERROR(node_->get_logger(),
+                             "Prismatic joint %s has no position limits",
+                             joint_name.c_str());
+                joint_metadata_status_ =
+                    QString("平移关节缺少限位: %1")
+                        .arg(QString::fromStdString(joint_name));
+                updatePanelVisibility();
+                return false;
             }
         }
+
+        joint_types_ready_ = true;
+        applyDisplayUnitToJointSpinboxes();
+        for (size_t i = 0;
+             i < joint_positions_.size() && i < joint_spinboxes_.size(); ++i)
+        {
+            setJointSpinboxFromSiValue(i, joint_positions_[i]);
+        }
+        updatePanelVisibility();
+        RCLCPP_INFO(node_->get_logger(),
+                    "Joint types and limits loaded for %zu joints",
+                    joint_names_.size());
+        return true;
     }
 
     void JointControlPanel::initializeJoints(const std::vector<std::string>& joint_names_source)
@@ -2541,12 +2689,12 @@ namespace arms_rviz_control_plugin
             row_layout->addWidget(label.get());
             joint_labels_.push_back(std::move(label));
 
-            // Create spinbox（显示单位由 use_cm_deg_ 决定，发到 ROS 始终为弧度）
+            // Create spinbox with dimension-neutral format until joint types are ready
             auto spinbox = std::make_unique<QDoubleSpinBox>(joint_control_group_.get());
-            spinbox->setRange(toDisplayAngle(-M_PI * 2), toDisplayAngle(M_PI * 2));
-            spinbox->setSingleStep(use_cm_deg_ ? 1.0 : 0.01);
-            spinbox->setDecimals(use_cm_deg_ ? 2 : 4);
-            spinbox->setSuffix(use_cm_deg_ ? " deg" : " rad");
+            spinbox->setRange(-1000.0, 1000.0);
+            spinbox->setSingleStep(0.01);
+            spinbox->setDecimals(4);
+            spinbox->setSuffix("");
             spinbox->setValue(0.0);
             row_layout->addWidget(spinbox.get());
             joint_spinboxes_.push_back(std::move(spinbox));
@@ -2556,6 +2704,7 @@ namespace arms_rviz_control_plugin
         }
 
         joints_initialized_ = true;
+        joint_types_ready_ = false;
         if (status_label_)
         {
             status_label_->setText("请切换到支持关节控制的状态");
@@ -2567,8 +2716,8 @@ namespace arms_rviz_control_plugin
             joint_limits_manager_->setJointNames(joint_names_);
         }
 
-        // Try to parse limits from cached robot_description if available
-        tryParseLimitsFromCache();
+        // Parse joint types/limits from cached robot_description if available
+        refreshJointMetadataFromCache();
 
         // left/right 分类延迟到关节名分类后添加
         std::string wbc_controller;
@@ -2663,12 +2812,12 @@ namespace arms_rviz_control_plugin
                 display_unit_combo_->setCurrentIndex(index);
                 display_unit_combo_->blockSignals(blocked);
                 use_cm_deg_ = (unit == "cm_deg");
-                if (joints_initialized_)
+                if (joints_initialized_ && joint_types_ready_)
                 {
                     applyDisplayUnitToJointSpinboxes();
                     for (size_t i = 0; i < joint_positions_.size(); ++i)
                     {
-                        setJointSpinboxFromRadians(i, joint_positions_[i]);
+                        setJointSpinboxFromSiValue(i, joint_positions_[i]);
                     }
                 }
                 applyDisplayUnitToPoseSpinboxes(left_arm_spinboxes_);
@@ -2685,12 +2834,12 @@ namespace arms_rviz_control_plugin
                 display_unit_combo_->setCurrentIndex(index);
                 display_unit_combo_->blockSignals(blocked);
                 use_cm_deg_ = (mapped == "cm_deg");
-                if (joints_initialized_)
+                if (joints_initialized_ && joint_types_ready_)
                 {
                     applyDisplayUnitToJointSpinboxes();
                     for (size_t i = 0; i < joint_positions_.size(); ++i)
                     {
-                        setJointSpinboxFromRadians(i, joint_positions_[i]);
+                        setJointSpinboxFromSiValue(i, joint_positions_[i]);
                     }
                 }
                 applyDisplayUnitToPoseSpinboxes(left_arm_spinboxes_);

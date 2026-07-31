@@ -14,6 +14,17 @@
 namespace arms_controller_common
 {
     /**
+     * @brief URDF joint motion type for controllable joints
+     */
+    enum class JointMotionType
+    {
+        UNKNOWN,
+        REVOLUTE,
+        CONTINUOUS,
+        PRISMATIC
+    };
+
+    /**
      * @brief Joint limits structure
      */
     struct JointLimits
@@ -21,6 +32,7 @@ namespace arms_controller_common
         double lower = -std::numeric_limits<double>::max();
         double upper = std::numeric_limits<double>::max();
         bool initialized = false;
+        JointMotionType motion_type = JointMotionType::UNKNOWN;
     };
 
     /**
@@ -47,16 +59,17 @@ namespace arms_controller_common
         explicit JointLimitsManager(rclcpp::Logger logger = rclcpp::get_logger("joint_limits_manager"));
 
         /**
-         * @brief Parse joint limits from URDF robot description
+         * @brief Parse joint limits and motion types from URDF robot description
          * 
-         * This method searches for joint definitions in the URDF and extracts
-         * position limits from <limit> tags or <command_interface> tags.
+         * Uses urdf::Model to extract motion type and position limits for the
+         * requested joints. Return value is the number of joints with successfully
+         * parsed finite position limits (continuous joints contribute type only).
          * 
          * @param robot_description URDF XML string
          * @param joint_names List of joint names to parse limits for
-         *                     If empty, will try to parse all joints found in URDF
+         *                     If empty, no joints are parsed
          * @param log_summary If true, emit one INFO summary after parsing (disable for RViz etc.)
-         * @return Number of joints with successfully parsed limits
+         * @return Number of joints with successfully parsed position limits
          */
         size_t parseFromURDF(const std::string& robot_description, 
                             const std::vector<std::string>& joint_names = {},
@@ -67,6 +80,9 @@ namespace arms_controller_common
          * @param joint_name Name of the joint
          * @param lower Lower limit (minimum position)
          * @param upper Upper limit (maximum position)
+         *
+         * Does not invent a motion type; leaves motion_type as UNKNOWN unless
+         * previously set by parseFromURDF().
          */
         void setJointLimits(const std::string& joint_name, double lower, double upper);
 
@@ -83,6 +99,22 @@ namespace arms_controller_common
          * @return True if limits are initialized for this joint
          */
         bool hasLimits(const std::string& joint_name) const;
+
+        /**
+         * @brief Get URDF motion type for a joint
+         * @return UNKNOWN if joint is missing or type was not parsed
+         */
+        JointMotionType getJointMotionType(const std::string& joint_name) const;
+
+        /**
+         * @brief Check if a supported motion type has been parsed for a joint
+         */
+        bool hasJointMotionType(const std::string& joint_name) const;
+
+        /**
+         * @brief True only when the joint motion type is explicitly PRISMATIC
+         */
+        bool isPrismaticJoint(const std::string& joint_name) const;
 
         /**
          * @brief Apply joint limits to target positions (clamp values)
@@ -158,15 +190,5 @@ namespace arms_controller_common
         rclcpp::Logger logger_;
         std::unordered_map<std::string, JointLimits> joint_limits_;
         std::vector<std::string> joint_names_;  // Order of joints for applyLimits()
-
-        /**
-         * @brief Parse limits for a single joint from URDF
-         * @param robot_description URDF XML string
-         * @param joint_name Name of the joint to parse
-         * @return True if limits were successfully parsed
-         */
-        bool parseJointLimitsFromURDF(const std::string& robot_description, 
-                                      const std::string& joint_name);
     };
 } // namespace arms_controller_common
-
