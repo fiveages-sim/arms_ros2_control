@@ -51,6 +51,8 @@ def launch_setup(context, *args, **kwargs):
     )
     hand_controllers, hand_spawners = ocs2_common.setup_hand_controllers(ctx, enable_gripper)
 
+    ft_controllers, ft_spawners = ocs2_common.setup_ft_broadcasters(ctx)
+
     enable_body = context.launch_configurations.get("enable_body", "true").lower() == "true"
     body_spawners = []
     joint_controller_names = ["ocs2_arm_controller"]
@@ -112,7 +114,7 @@ def launch_setup(context, *args, **kwargs):
         rviz_node=rviz_node,
         controller_stack_nodes=controller_stack_nodes,
         main_spawner=main_spawner,
-        extra_spawners=hand_spawners + body_spawners,
+        extra_spawners=hand_spawners + body_spawners + ft_spawners,
         optional_nodes=[arms_target_manager] if arms_target_manager else [],
     )
 
