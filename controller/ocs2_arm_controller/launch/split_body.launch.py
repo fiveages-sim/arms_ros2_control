@@ -58,8 +58,6 @@ def launch_setup(context, *args, **kwargs):
     hand_controllers, hand_spawners = ocs2_common.setup_hand_controllers(ctx, enable_gripper)
     _ft_controllers, ft_spawners = ocs2_common.setup_ft_broadcasters(ctx)
 
-    ft_controllers, ft_spawners = ocs2_common.setup_ft_broadcasters(ctx)
-
     enable_body = context.launch_configurations.get("enable_body", "true").lower() == "true"
     body_controllers = []
     body_spawners = []
