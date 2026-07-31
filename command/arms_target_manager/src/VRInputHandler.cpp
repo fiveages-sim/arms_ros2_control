@@ -9,6 +9,7 @@
 #include <geometry_msgs/msg/pose.hpp>
 #include <geometry_msgs/msg/point.hpp>
 #include <geometry_msgs/msg/twist.hpp>
+#include <arms_ros2_control_msgs/msg/wbc_current_state.hpp>
 #include <std_msgs/msg/float64.hpp>
 #include <std_msgs/msg/int32.hpp>
 #include <nav_msgs/msg/path.hpp>
@@ -166,7 +167,7 @@ namespace arms_ros2_control::command
         pub_waist_turning_ = node_->create_publisher<std_msgs::msg::Float64>(
             "/body_joint_controller/waist_turning_command", 10);
 
-        // WBC 模式切换命令发布器（case 23 请求 BODY_TRACKING）
+        // WBC 模式切换命令发布器（case 21–24 请求身体模式）
         pub_mode_command_ = node_->create_publisher<std_msgs::msg::String>("/mode_command", 10);
 
         // 注意：FSM命令订阅已移除，改为在 arms_target_manager_node 中统一处理
@@ -178,8 +179,9 @@ namespace arms_ros2_control::command
                     "🕹️🕶️🕹️ Chassis mode (case 20 = L+R thumbstick): L.stick→chassis XY, R.stick→waist lift/turn");
         RCLCPP_INFO(
             node_->get_logger(),
-            "🕹️🕶️🕹️ FULL_BODY reserved direction events: "
-            "left grip + left stick UP/DOWN/LEFT/RIGHT = case 21/22/23/24");
+            "🕹️ FULL_BODY directions: "
+            "left grip + left stick cases 21-24; "
+            "right grip + right stick cases 25-28");
         RCLCPP_INFO(node_->get_logger(), "🕹️🕶️🕹️ Subscribed to button event topic: /xr/controller_state (Int32)");
         RCLCPP_INFO(node_->get_logger(), "🕹️🕶️🕹️ Subscribed to thumbstick axes topic: /xr/thumbstick_axes (ThumbstickAxes)");
         RCLCPP_INFO(node_->get_logger(), "🕹️🕶️🕹️ Subscribed to trigger values topic: /xr/trigger_values (linear.x=left, angular.x=right)");
@@ -428,6 +430,12 @@ namespace arms_ros2_control::command
     void VRInputHandler::disable()
     {
         enabled_.store(false);
+        left_grip_direction_suppressed_.store(false);
+        body_mode_request_pending_.store(false);
+        requested_body_state_.store(-1);
+        right_grip_direction_suppressed_.store(false);
+        right_wbc_toggle_request_pending_.store(false);
+        requested_wbc_toggle_target_.store(WbcToggleTarget::NONE);
         RCLCPP_INFO(node_->get_logger(), "🕹️🕶️🕹️ VR control DISABLED!");
 
         // 禁用 VR 控制时，若处于底盘模式则退出并清零底盘/腰部命令，防止残留运动
@@ -552,11 +560,11 @@ namespace arms_ros2_control::command
                                      calculatedPos.x(), calculatedPos.y(), calculatedPos.z());
 
                         // 发布到右臂
-                        publishTargetPoseDirect("right", calculatedPos, calculatedOri);
-
-                        // 更新之前计算的右臂pose
-                        prev_calculated_right_position_ = calculatedPos;
-                        prev_calculated_right_orientation_ = calculatedOri;
+                        if (publishTargetPoseDirect("right", calculatedPos, calculatedOri))
+                        {
+                            prev_calculated_right_position_ = calculatedPos;
+                            prev_calculated_right_orientation_ = calculatedOri;
+                        }
                     }
                 }
                 else
@@ -604,11 +612,11 @@ namespace arms_ros2_control::command
                                      calculatedPos.x(), calculatedPos.y(), calculatedPos.z());
 
                         // 发布到左臂
-                        publishTargetPoseDirect("left", calculatedPos, calculatedOri);
-
-                        // 更新之前计算的左臂pose
-                        prev_calculated_left_position_ = calculatedPos;
-                        prev_calculated_left_orientation_ = calculatedOri;
+                        if (publishTargetPoseDirect("left", calculatedPos, calculatedOri))
+                        {
+                            prev_calculated_left_position_ = calculatedPos;
+                            prev_calculated_left_orientation_ = calculatedOri;
+                        }
                     }
                 }
             }
@@ -679,11 +687,11 @@ namespace arms_ros2_control::command
                                      calculatedPos.x(), calculatedPos.y(), calculatedPos.z());
 
                         // 发布到左臂
-                        publishTargetPoseDirect("left", calculatedPos, calculatedOri);
-
-                        // 更新之前计算的左臂pose
-                        prev_calculated_left_position_ = calculatedPos;
-                        prev_calculated_left_orientation_ = calculatedOri;
+                        if (publishTargetPoseDirect("left", calculatedPos, calculatedOri))
+                        {
+                            prev_calculated_left_position_ = calculatedPos;
+                            prev_calculated_left_orientation_ = calculatedOri;
+                        }
                     }
                 }
                 else
@@ -732,11 +740,11 @@ namespace arms_ros2_control::command
                                      calculatedPos.x(), calculatedPos.y(), calculatedPos.z());
 
                         // 发布到右臂
-                        publishTargetPoseDirect("right", calculatedPos, calculatedOri);
-
-                        // 更新之前计算的右臂pose
-                        prev_calculated_right_position_ = calculatedPos;
-                        prev_calculated_right_orientation_ = calculatedOri;
+                        if (publishTargetPoseDirect("right", calculatedPos, calculatedOri))
+                        {
+                            prev_calculated_right_position_ = calculatedPos;
+                            prev_calculated_right_orientation_ = calculatedOri;
+                        }
                     }
                 }
             }
@@ -811,11 +819,84 @@ namespace arms_ros2_control::command
         }
     }
 
-    void VRInputHandler::publishTargetPoseDirect(const std::string& armType,
-                                                const Eigen::Vector3d& position,
-                                                const Eigen::Quaterniond& orientation)
+    bool VRInputHandler::isBimanualCoupled() const
     {
-        // 转换为geometry_msgs格式
+        using WbcState =
+            arms_ros2_control_msgs::msg::WbcCurrentState;
+
+        return target_manager_ &&
+               target_manager_->getCurrentBimanualState() ==
+                   WbcState::BIMANUAL_COUPLED;
+    }
+
+    void VRInputHandler::rebaseRightArmVrControl()
+    {
+        const bool paused = right_arm_paused_.load();
+
+        if (mirror_mode_.load())
+        {
+            vr_base_left_position_ =
+                paused ? paused_left_position_ : left_position_;
+            vr_base_left_orientation_ =
+                paused ? paused_left_orientation_ : left_orientation_;
+        }
+        else
+        {
+            vr_base_right_position_ =
+                paused ? paused_right_position_ : right_position_;
+            vr_base_right_orientation_ =
+                paused ? paused_right_orientation_ : right_orientation_;
+        }
+
+        robot_base_right_position_ = robot_current_right_position_;
+        robot_base_right_orientation_ =
+            robot_current_right_orientation_.normalized();
+
+        right_thumbstick_offset_ = Eigen::Vector3d::Zero();
+        right_thumbstick_yaw_offset_ = 0.0;
+
+        prev_calculated_right_position_ =
+            robot_current_right_position_;
+        prev_calculated_right_orientation_ =
+            robot_current_right_orientation_.normalized();
+
+        has_last_published_right_target_ = false;
+    }
+
+    bool VRInputHandler::publishTargetPoseDirect(
+        const std::string& armType,
+        const Eigen::Vector3d& position,
+        const Eigen::Quaterniond& orientation)
+    {
+        const bool bimanual_coupled = isBimanualCoupled();
+        if (bimanual_coupled)
+        {
+            right_vr_target_suppressed_by_bimanual_ = true;
+
+            if (armType == "right")
+            {
+                RCLCPP_DEBUG_THROTTLE(
+                    node_->get_logger(),
+                    *node_->get_clock(),
+                    2000,
+                    "🕹️ 双臂耦合中，忽略 VR right_target");
+                return false;
+            }
+        }
+
+        if (armType == "right")
+        {
+            if (right_vr_target_suppressed_by_bimanual_)
+            {
+                rebaseRightArmVrControl();
+                right_vr_target_suppressed_by_bimanual_ = false;
+                RCLCPP_INFO(
+                    node_->get_logger(),
+                    "🕹️ 双臂已解耦，右臂 VR 控制基准已重建");
+                return false;
+            }
+        }
+
         geometry_msgs::msg::Pose pose;
         pose.position.x = position.x();
         pose.position.y = position.y();
@@ -825,25 +906,27 @@ namespace arms_ros2_control::command
         pose.orientation.y = orientation.y();
         pose.orientation.z = orientation.z();
 
-        // 直接发布到对应的话题（无坐标转换）
         if (armType == "left" && pub_left_target_)
         {
             pub_left_target_->publish(pose);
-            recordLastPublishedTarget(armType, position, orientation);
-            RCLCPP_DEBUG(node_->get_logger(), "🕹️🕶️🕹️ Published left_target: [%.3f, %.3f, %.3f]",
-                        pose.position.x, pose.position.y, pose.position.z);
+            recordLastPublishedTarget(
+                armType, position, orientation);
+            return true;
         }
-        else if (armType == "right" && pub_right_target_)
+
+        if (armType == "right" && pub_right_target_)
         {
             pub_right_target_->publish(pose);
-            recordLastPublishedTarget(armType, position, orientation);
-            RCLCPP_DEBUG(node_->get_logger(), "🕹️🕶️🕹️ Published right_target: [%.3f, %.3f, %.3f]",
-                        pose.position.x, pose.position.y, pose.position.z);
+            recordLastPublishedTarget(
+                armType, position, orientation);
+            return true;
         }
-        else
-        {
-            RCLCPP_WARN(node_->get_logger(), "🕹️🕶️🕹️ Invalid armType or publisher not initialized: %s", armType.c_str());
-        }
+
+        RCLCPP_WARN(
+            node_->get_logger(),
+            "🕹️ Invalid armType or publisher not initialized: %s",
+            armType.c_str());
+        return false;
     }
 
     Eigen::Matrix4d VRInputHandler::poseMsgToMatrix(const geometry_msgs::msg::Pose::SharedPtr msg)
@@ -951,6 +1034,7 @@ namespace arms_ros2_control::command
         // 存储右摇杆轴值（从 angular.x/y 读取）
         right_thumbstick_axes_.x() = msg->angular.x;
         right_thumbstick_axes_.y() = msg->angular.y;
+        right_thumbstick_axes_raw_ = right_thumbstick_axes_;
 
         // 读取左右握把实时状态（xr_target_node 复用 linear.z / angular.z 携带，1.0=按下）
         // 末端控制路径不消费握把状态（末端用下降沿事件 case 2/5），仅 chassis 模式用作修饰符
@@ -963,6 +1047,9 @@ namespace arms_ros2_control::command
         {
             // 拓扑离开 FULL_BODY 时不保留组合抑制状态。
             left_grip_direction_suppressed_.store(false);
+            right_grip_direction_suppressed_.store(false);
+            right_wbc_toggle_request_pending_.store(false);
+            requested_wbc_toggle_target_.store(WbcToggleTarget::NONE);
         }
         else
         {
@@ -987,6 +1074,34 @@ namespace arms_ros2_control::command
                 // 防止组合输入以及“先松握把、后松摇杆”误驱动末端或底盘。
                 left_thumbstick_axes_.setZero();
             }
+
+            if (right_grip_active_.load())
+            {
+                right_grip_direction_suppressed_.store(true);
+            }
+
+            const bool rightThumbstickCentered =
+                std::abs(right_thumbstick_axes_raw_.x()) <=
+                    direction_reset_threshold &&
+                std::abs(right_thumbstick_axes_raw_.y()) <=
+                    direction_reset_threshold;
+
+            if (right_grip_direction_suppressed_.load() &&
+                !right_grip_active_.load() &&
+                rightThumbstickCentered)
+            {
+                right_grip_direction_suppressed_.store(false);
+            }
+
+            if (right_grip_direction_suppressed_.load())
+            {
+                right_thumbstick_axes_.setZero();
+            }
+        }
+
+        if (updateRightWbcToggleRequestState())
+        {
+            right_thumbstick_axes_.setZero();
         }
 
         // 底盘控制模式分流：进入该模式后摇杆不再驱动末端，改为驱动底盘/腰部
@@ -996,8 +1111,8 @@ namespace arms_ros2_control::command
             return;
         }
 
-        // case 23 的异步窗口：BODY_TRACKING 未确认或摇杆未回中时，左摇杆既不给腰部也不给左臂
-        if (updateBodyTrackingRequestState())
+        // 身体模式请求未确认或摇杆未回中时，左摇杆既不给腰部也不给左臂
+        if (updateBodyModeRequestState())
         {
             processRightThumbstickAxes();
             return;
@@ -1212,6 +1327,251 @@ namespace arms_ros2_control::command
         }
     }
 
+    void VRInputHandler::requestBodyMode(
+        int32_t eventCase,
+        const char* direction,
+        const char* modeName,
+        const char* command,
+        int expectedBodyState)
+    {
+        if (!enabled_.load())
+        {
+            RCLCPP_WARN(node_->get_logger(),
+                        "🔘 [case %d] 忽略%s模式：VR 控制未启用",
+                        eventCase, modeName);
+            return;
+        }
+
+        if (!isFullBodyMode())
+        {
+            RCLCPP_WARN(node_->get_logger(),
+                        "🔘 [case %d] 忽略%s模式：当前不是 FULL_BODY",
+                        eventCase, modeName);
+            return;
+        }
+
+        if (current_fsm_state_.load() != 3)
+        {
+            RCLCPP_WARN(node_->get_logger(),
+                        "🔘 [case %d] 忽略%s模式：当前 FSM 不是 OCS2",
+                        eventCase, modeName);
+            return;
+        }
+
+        if (expectedBodyState ==
+                arms_ros2_control_msgs::msg::WbcCurrentState::BODY_TRACKING &&
+            target_manager_ &&
+            target_manager_->getCurrentMode() != MarkerState::CONTINUOUS)
+        {
+            target_manager_->togglePublishMode();
+        }
+
+        requested_body_state_.store(expectedBodyState);
+        body_mode_request_time_ = std::chrono::steady_clock::now();
+        body_mode_request_pending_.store(true);
+        publishHumanoidModeCommand(command);
+
+        RCLCPP_INFO(
+            node_->get_logger(),
+            "🔘 [case %d] 左握把+左摇杆%s：已请求%s（%s），等待 WBC 确认和左摇杆回中",
+            eventCase, direction, modeName, command);
+    }
+
+    bool VRInputHandler::readWbcToggleState(
+        WbcToggleTarget target,
+        bool& enabled) const
+    {
+        if (!target_manager_)
+        {
+            return false;
+        }
+
+        using WbcState =
+            arms_ros2_control_msgs::msg::WbcCurrentState;
+
+        switch (target)
+        {
+            case WbcToggleTarget::BASE:
+                enabled =
+                    target_manager_->getCurrentBaseState() ==
+                    WbcState::BASE_UNLOCKED;
+                return true;
+            case WbcToggleTarget::BIMANUAL:
+                enabled =
+                    target_manager_->getCurrentBimanualState() ==
+                    WbcState::BIMANUAL_COUPLED;
+                return true;
+            case WbcToggleTarget::LEFT_ARM:
+                enabled =
+                    target_manager_->getCurrentLeftArmState() ==
+                    WbcState::ARM_ENABLED;
+                return true;
+            case WbcToggleTarget::RIGHT_ARM:
+                enabled =
+                    target_manager_->getCurrentRightArmState() ==
+                    WbcState::ARM_ENABLED;
+                return true;
+            case WbcToggleTarget::NONE:
+                return false;
+        }
+
+        return false;
+    }
+
+    void VRInputHandler::requestRightWbcToggle(
+        int32_t eventCase,
+        const char* direction,
+        WbcToggleTarget target)
+    {
+        if (!enabled_.load() ||
+            !isFullBodyMode() ||
+            current_fsm_state_.load() != 3)
+        {
+            RCLCPP_WARN(
+                node_->get_logger(),
+                "🔘 [case %d] 忽略右握把+右摇杆%s：要求 VR enabled、FULL_BODY、OCS2",
+                eventCase, direction);
+            return;
+        }
+
+        if (right_wbc_toggle_request_pending_.load())
+        {
+            RCLCPP_WARN(
+                node_->get_logger(),
+                "🔘 [case %d] 忽略：上一条右侧 WBC 开关请求仍在 pending",
+                eventCase);
+            return;
+        }
+
+        using WbcState =
+            arms_ros2_control_msgs::msg::WbcCurrentState;
+
+        const bool bimanualCoupled =
+            target_manager_ &&
+            target_manager_->getCurrentBimanualState() ==
+                WbcState::BIMANUAL_COUPLED;
+        const bool leftEnabled =
+            target_manager_ &&
+            target_manager_->getCurrentLeftArmState() ==
+                WbcState::ARM_ENABLED;
+        const bool rightEnabled =
+            target_manager_ &&
+            target_manager_->getCurrentRightArmState() ==
+                WbcState::ARM_ENABLED;
+
+        if ((target == WbcToggleTarget::LEFT_ARM ||
+             target == WbcToggleTarget::RIGHT_ARM) &&
+            bimanualCoupled)
+        {
+            RCLCPP_WARN(
+                node_->get_logger(),
+                "🔘 双臂耦合开启时禁止切换单臂启用状态");
+            return;
+        }
+
+        if (target == WbcToggleTarget::BIMANUAL &&
+            !bimanualCoupled &&
+            (!leftEnabled || !rightEnabled))
+        {
+            RCLCPP_WARN(
+                node_->get_logger(),
+                "🔘 任意一臂禁用时禁止开启双臂耦合");
+            return;
+        }
+
+        bool currentEnabled = false;
+        if (!readWbcToggleState(target, currentEnabled))
+        {
+            RCLCPP_WARN(node_->get_logger(),
+                        "🔘 无法读取 WBC 开关状态");
+            return;
+        }
+
+        const bool expectedEnabled = !currentEnabled;
+        const char* command = nullptr;
+
+        switch (target)
+        {
+            case WbcToggleTarget::BASE:
+                command = expectedEnabled ? "BASE_UNLOCK" : "BASE_LOCK";
+                break;
+            case WbcToggleTarget::BIMANUAL:
+                command = expectedEnabled ? "ARMS_COUPLED" : "ARMS_INDEPENDENT";
+                break;
+            case WbcToggleTarget::LEFT_ARM:
+                command = expectedEnabled ? "LEFT_ARM_ENABLE" : "LEFT_ARM_DISABLE";
+                break;
+            case WbcToggleTarget::RIGHT_ARM:
+                command = expectedEnabled ? "RIGHT_ARM_ENABLE" : "RIGHT_ARM_DISABLE";
+                break;
+            case WbcToggleTarget::NONE:
+                return;
+        }
+
+        requested_wbc_toggle_target_.store(target);
+        requested_wbc_toggle_enabled_.store(expectedEnabled);
+        right_wbc_toggle_request_time_ =
+            std::chrono::steady_clock::now();
+        right_wbc_toggle_request_pending_.store(true);
+        publishHumanoidModeCommand(command);
+
+        RCLCPP_INFO(
+            node_->get_logger(),
+            "🔘 [case %d] 右握把+右摇杆%s：发布 %s，等待 WBC 确认和右摇杆回中",
+            eventCase, direction, command);
+    }
+
+    bool VRInputHandler::updateRightWbcToggleRequestState()
+    {
+        if (!right_wbc_toggle_request_pending_.load())
+        {
+            return false;
+        }
+
+        const bool centered =
+            std::abs(right_thumbstick_axes_raw_.x()) <= 0.3 &&
+            std::abs(right_thumbstick_axes_raw_.y()) <= 0.3;
+
+        bool actualEnabled = false;
+        const bool stateAvailable = readWbcToggleState(
+            requested_wbc_toggle_target_.load(),
+            actualEnabled);
+        const bool confirmed =
+            current_fsm_state_.load() == 3 &&
+            stateAvailable &&
+            actualEnabled ==
+                requested_wbc_toggle_enabled_.load();
+
+        if (confirmed && centered)
+        {
+            right_wbc_toggle_request_pending_.store(false);
+            requested_wbc_toggle_target_.store(
+                WbcToggleTarget::NONE);
+            RCLCPP_INFO(
+                node_->get_logger(),
+                "🔘 右侧 WBC 开关已确认，右摇杆已回中");
+            return false;
+        }
+
+        const bool timedOut =
+            std::chrono::steady_clock::now() -
+                right_wbc_toggle_request_time_ >=
+            right_wbc_toggle_request_timeout_;
+
+        if (timedOut && centered)
+        {
+            right_wbc_toggle_request_pending_.store(false);
+            requested_wbc_toggle_target_.store(
+                WbcToggleTarget::NONE);
+            RCLCPP_WARN(
+                node_->get_logger(),
+                "🔘 右侧 WBC 开关请求未在 2 秒内确认，右摇杆已回中");
+            return false;
+        }
+
+        return true;
+    }
+
     void VRInputHandler::publishHumanoidModeCommand(const std::string& command)
     {
         if (!pub_mode_command_)
@@ -1229,35 +1589,42 @@ namespace arms_ros2_control::command
         return target_manager_ && target_manager_->shouldShowBodyMarker();
     }
 
-    bool VRInputHandler::updateBodyTrackingRequestState()
+    bool VRInputHandler::updateBodyModeRequestState()
     {
-        if (!body_tracking_request_pending_.load())
+        if (!body_mode_request_pending_.load())
         {
             return false;
         }
 
-        // 必须读 raw：被方向抑制清零后的 left_thumbstick_axes_ 会让 centered 恒为真。
         const bool centered =
             std::abs(left_thumbstick_axes_raw_.x()) <= 0.3 &&
             std::abs(left_thumbstick_axes_raw_.y()) <= 0.3;
-        const bool trackingActive = isBodyTrackingActive();
+        const int expectedState = requested_body_state_.load();
+        const bool confirmed =
+            current_fsm_state_.load() == 3 &&
+            target_manager_ &&
+            target_manager_->getCurrentBodyState() == expectedState;
 
-        if (trackingActive && centered)
+        if (confirmed && centered)
         {
-            body_tracking_request_pending_.store(false);
+            body_mode_request_pending_.store(false);
+            requested_body_state_.store(-1);
             RCLCPP_INFO(node_->get_logger(),
-                        "🔘 [case 23] BODY_TRACKING 已由 WBC 确认，左摇杆已回中，开放腰部控制");
+                        "🔘 身体模式已由 WBC 确认，左摇杆已回中");
             return false;
         }
 
-        const auto now = std::chrono::steady_clock::now();
-        const bool timedOut = now - body_tracking_request_time_ >= body_tracking_request_timeout_;
+        const bool timedOut =
+            std::chrono::steady_clock::now() - body_mode_request_time_ >=
+            body_mode_request_timeout_;
 
-        if (!trackingActive && timedOut && centered)
+        if (timedOut && centered)
         {
-            body_tracking_request_pending_.store(false);
-            RCLCPP_WARN(node_->get_logger(),
-                        "🔘 [case 23] BODY_TRACKING 请求超时，左摇杆已回中，恢复左臂控制");
+            body_mode_request_pending_.store(false);
+            requested_body_state_.store(-1);
+            RCLCPP_WARN(
+                node_->get_logger(),
+                "🔘 身体模式请求未在 2 秒内确认，左摇杆已回中，按 WBC 实际状态恢复路由");
             return false;
         }
 
@@ -1306,6 +1673,8 @@ namespace arms_ros2_control::command
     {
         // VR 手柄轴值约定（Pico）：Y 轴往前推是负数，与机器人"正数=向前/向右"相反，
         // 因此 chassis 模式下对四个轴值统一取负，使方向语义与 joystick_teleop.cpp 对齐。
+        // 非 FULL_BODY 下按住右握把可作为腰部控制修饰符；
+        // FULL_BODY 下右握把方向由 WBC 四开关组合消费，右轴会在进入这里前清零。
         const double left_x = -left_thumbstick_axes_.x();
         const double left_y = -left_thumbstick_axes_.y();
         const double right_x = -right_thumbstick_axes_.x();
@@ -2188,67 +2557,42 @@ namespace arms_ros2_control::command
                 toggleChassisMode();
                 break;
             }
-            case 23: // 左握把 + 左摇杆向左：请求 WBC 进入 BODY_TRACKING
-            {
-                if (!enabled_.load())
-                {
-                    RCLCPP_WARN(node_->get_logger(),
-                                "🔘 [case 23] 忽略：VR 控制未启用");
-                    break;
-                }
-                if (!isFullBodyMode())
-                {
-                    RCLCPP_WARN(node_->get_logger(),
-                                "🔘 [case 23] 忽略：当前不是 FULL_BODY");
-                    break;
-                }
-                if (current_fsm_state_.load() != 3)
-                {
-                    RCLCPP_WARN(node_->get_logger(),
-                                "🔘 [case 23] 忽略：当前 FSM 不是 OCS2");
-                    break;
-                }
-
-                if (target_manager_ &&
-                    target_manager_->getCurrentMode() != MarkerState::CONTINUOUS)
-                {
-                    target_manager_->togglePublishMode();
-                }
-
-                // 不预置 body target：WBC 在切入 TRACKING 时已捕获当前实际腰部位姿。
-                publishHumanoidModeCommand("BODY_TRACKING");
-                body_tracking_request_time_ = std::chrono::steady_clock::now();
-                body_tracking_request_pending_.store(true);
-
-                RCLCPP_INFO(node_->get_logger(),
-                            "🔘 [case 23] 已请求 BODY_TRACKING，等待 WBC 确认和左摇杆回中");
+            case 21: // 左握把 + 左摇杆向上：竖直
+                requestBodyMode(
+                    21, "向上", "竖直", "BODY_RELATIVE",
+                    arms_ros2_control_msgs::msg::WbcCurrentState::BODY_VERTICAL);
                 break;
-            }
-            case 21: // 左握把 + 左摇杆向上
-            case 22: // 左握把 + 左摇杆向下
-            case 24: // 左握把 + 左摇杆向右
-            {
-                if (!isFullBodyMode())
-                {
-                    const char* topology =
-                        isSplitBodyMode() ? "SPLIT_BODY" : "UNKNOWN";
-                    RCLCPP_WARN_THROTTLE(
-                        node_->get_logger(), *node_->get_clock(), 2000,
-                        "🔘 [case %d] 忽略身体模式方向事件：当前拓扑为 %s",
-                        msg->data, topology);
-                    break;
-                }
-
-                const char* direction =
-                    msg->data == 21 ? "UP" :
-                    msg->data == 22 ? "DOWN" : "RIGHT";
-
-                RCLCPP_INFO(
-                    node_->get_logger(),
-                    "🔘 [case %d] FULL_BODY 身体模式方向预留事件：%s",
-                    msg->data, direction);
+            case 22: // 左握把 + 左摇杆向下：锁定
+                requestBodyMode(
+                    22, "向下", "锁定", "BODY_LOCK",
+                    arms_ros2_control_msgs::msg::WbcCurrentState::BODY_LOCKED);
                 break;
-            }
+            case 23: // 左握把 + 左摇杆向左：跟随
+                requestBodyMode(
+                    23, "向左", "跟随", "BODY_TRACKING",
+                    arms_ros2_control_msgs::msg::WbcCurrentState::BODY_TRACKING);
+                break;
+            case 24: // 左握把 + 左摇杆向右：自定义
+                requestBodyMode(
+                    24, "向右", "自定义", "BODY_CUSTOM_LOCK",
+                    arms_ros2_control_msgs::msg::WbcCurrentState::BODY_CUSTOM_LOCKED);
+                break;
+            case 25: // 右握把 + 右摇杆向上：双臂耦合
+                requestRightWbcToggle(
+                    25, "向上", WbcToggleTarget::BIMANUAL);
+                break;
+            case 26: // 右握把 + 右摇杆向下：启用底盘
+                requestRightWbcToggle(
+                    26, "向下", WbcToggleTarget::BASE);
+                break;
+            case 27: // 右握把 + 右摇杆向左：启用左臂
+                requestRightWbcToggle(
+                    27, "向左", WbcToggleTarget::LEFT_ARM);
+                break;
+            case 28: // 右握把 + 右摇杆向右：启用右臂
+                requestRightWbcToggle(
+                    28, "向右", WbcToggleTarget::RIGHT_ARM);
+                break;
             case 0:  // 无事件
             default:
                 // 无按钮事件

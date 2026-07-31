@@ -143,6 +143,15 @@ namespace arms_ros2_control::command
         void robotRightPoseCallback(geometry_msgs::msg::PoseStamped::SharedPtr msg);
 
     private:
+        enum class WbcToggleTarget : uint8_t
+        {
+            NONE = 0,
+            BASE,
+            BIMANUAL,
+            LEFT_ARM,
+            RIGHT_ARM
+        };
+
         /**
          * VR左臂pose回调函数
          * @param msg VR pose消息
@@ -195,10 +204,31 @@ namespace arms_ros2_control::command
         bool isBodyTrackingActive() const;
 
         /**
-         * 更新 BODY_TRACKING 请求的 pending 状态
-         * @return true 表示请求仍在 pending，左摇杆此时不得回落到左臂
+         * 更新身体模式请求的 pending 状态
+         * @return true 表示请求仍在 pending，左摇杆此时不得驱动腰部或左臂
          */
-        bool updateBodyTrackingRequestState();
+        bool updateBodyModeRequestState();
+
+        /**
+         * 统一处理 case 21–24 身体模式请求
+         */
+        void requestBodyMode(
+            int32_t eventCase,
+            const char* direction,
+            const char* modeName,
+            const char* command,
+            int expectedBodyState);
+
+        bool readWbcToggleState(
+            WbcToggleTarget target,
+            bool& enabled) const;
+
+        void requestRightWbcToggle(
+            int32_t eventCase,
+            const char* direction,
+            WbcToggleTarget target);
+
+        bool updateRightWbcToggleRequestState();
 
         /**
          * 发布 WBC 模式切换命令
@@ -209,7 +239,8 @@ namespace arms_ros2_control::command
         /**
          * 处理底盘模式下的摇杆轴值
          * 默认：左摇杆→底盘平移, 右摇杆X→底盘转向(angular.z), 右摇杆Y忽略
-         * 按住右握把（修饰符）：左摇杆仍控底盘平移, 右摇杆X→腰部旋转, 右摇杆Y→腰部升降
+         * 非 FULL_BODY 下按住右握把可作为腰部控制修饰符；
+         * FULL_BODY 下右握把方向由 WBC 四开关组合消费，右轴会在进入这里前清零。
          */
         void processChassisAxes();
 
@@ -294,10 +325,17 @@ namespace arms_ros2_control::command
          * @param armType 手臂类型 ("left" 或 "right")
          * @param position 位置（已在目标坐标系下）
          * @param orientation 方向
+         * @return true 表示本次请求真正发布；false 表示被耦合拦截、首次解耦重建丢弃或发布器不可用
          */
-        void publishTargetPoseDirect(const std::string& armType,
+        bool publishTargetPoseDirect(const std::string& armType,
                                      const Eigen::Vector3d& position,
                                      const Eigen::Quaterniond& orientation);
+
+        /** 读取 ArmsTargetManager 中 WBC 已确认的双臂耦合状态。 */
+        bool isBimanualCoupled() const;
+
+        /** 解耦后首次恢复前重建右臂 VR 控制基准，不发布 ROS 目标。 */
+        void rebaseRightArmVrControl();
 
         /**
          * 记录最后一次实际发布出去的目标位姿，用作暂停恢复/进入 UPDATE 的 command 连续性基准。
@@ -413,7 +451,7 @@ namespace arms_ros2_control::command
         rclcpp::Publisher<std_msgs::msg::Float64>::SharedPtr pub_waist_lifting_;
         rclcpp::Publisher<std_msgs::msg::Float64>::SharedPtr pub_waist_turning_;
 
-        // WBC 模式切换命令发布器（case 23 请求 BODY_TRACKING）
+        // WBC 模式切换命令发布器（case 21–24 请求身体模式）
         rclcpp::Publisher<std_msgs::msg::String>::SharedPtr pub_mode_command_;
 
         // VR pose参数
@@ -459,14 +497,29 @@ namespace arms_ros2_control::command
         // FULL_BODY 下左握把方向组合的安全锁存：
         // 松开握把后仍保持抑制，直到左摇杆 X/Y 都回到 0.3 内。
         std::atomic<bool> left_grip_direction_suppressed_{false};
+        // FULL_BODY 下右握把方向组合的安全锁存，语义与左侧对称。
+        std::atomic<bool> right_grip_direction_suppressed_{false};
+
+        std::atomic<bool> right_wbc_toggle_request_pending_{false};
+        std::atomic<WbcToggleTarget> requested_wbc_toggle_target_{
+            WbcToggleTarget::NONE};
+        std::atomic<bool> requested_wbc_toggle_enabled_{false};
+        std::chrono::steady_clock::time_point right_wbc_toggle_request_time_{};
+        static constexpr auto right_wbc_toggle_request_timeout_ =
+            std::chrono::seconds(2);
+
+        // 双臂耦合期间右臂 VR 目标被抑制后，解耦后的下一次右臂发布前需重建控制基准。
+        bool right_vr_target_suppressed_by_bimanual_{false};
+
         std::atomic<int32_t> current_fsm_state_; // 当前FSM状态：1=HOME, 2=HOLD, 3=OCS2, 100=REST
 
         // 腰部摇杆控制平面：false=XY平移, true=Z轴+Yaw（与左右臂的 *_grip_mode_ 相互独立）
         std::atomic<bool> body_thumbstick_z_yaw_mode_{false};
-        // case 23 发出 BODY_TRACKING 后到 WBC 确认（或超时）之间的异步窗口
-        std::atomic<bool> body_tracking_request_pending_{false};
-        std::chrono::steady_clock::time_point body_tracking_request_time_{};
-        static constexpr auto body_tracking_request_timeout_ = std::chrono::seconds(2);
+        // 身体模式命令发出后到 WBC 确认且左摇杆回中之间的异步窗口。
+        std::atomic<bool> body_mode_request_pending_{false};
+        std::atomic<int> requested_body_state_{-1};
+        std::chrono::steady_clock::time_point body_mode_request_time_{};
+        static constexpr auto body_mode_request_timeout_ = std::chrono::seconds(2);
 
         // VR base poses（摇杆按下时存储）
         Eigen::Vector3d vr_base_left_position_ = Eigen::Vector3d::Zero();
@@ -493,6 +546,8 @@ namespace arms_ros2_control::command
         // 未经 left_grip_direction_suppressed_ 清零的原始左摇杆轴值，
         // 供 pending 独立判断物理摇杆是否真的回中。
         Eigen::Vector2d left_thumbstick_axes_raw_ = Eigen::Vector2d::Zero();
+        Eigen::Vector2d right_thumbstick_axes_raw_ =
+            Eigen::Vector2d::Zero();
 
         // 摇杆累积偏移量（米）
         Eigen::Vector3d left_thumbstick_offset_ = Eigen::Vector3d::Zero();

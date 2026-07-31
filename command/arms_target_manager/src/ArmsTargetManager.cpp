@@ -98,6 +98,31 @@ namespace arms_ros2_control::command
         return (current_controller_state_ == 3) && (body_state_ == 2);
     }
 
+    int ArmsTargetManager::getCurrentBodyState() const
+    {
+        return body_state_;
+    }
+
+    int ArmsTargetManager::getCurrentBaseState() const
+    {
+        return base_state_;
+    }
+
+    int ArmsTargetManager::getCurrentBimanualState() const
+    {
+        return bimanual_state_;
+    }
+
+    int ArmsTargetManager::getCurrentLeftArmState() const
+    {
+        return left_arm_state_;
+    }
+
+    int ArmsTargetManager::getCurrentRightArmState() const
+    {
+        return right_arm_state_;
+    }
+
     void ArmsTargetManager::updateBodyMarkerVisibility()
     {
         if (!server_ || !body_marker_)
@@ -148,6 +173,7 @@ namespace arms_ros2_control::command
         right_arm_state_ = msg->right_arm_state;
         bimanual_state_ = msg->bimanual_state;
         body_state_ = msg->body_state;
+        base_state_ = msg->base_state;
 
         const bool bimanual_state_changed = (prev_bimanual_state != bimanual_state_);
 

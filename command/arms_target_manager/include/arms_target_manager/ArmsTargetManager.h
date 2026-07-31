@@ -88,6 +88,11 @@ namespace arms_ros2_control::command
         bool shouldShowLeftArmMarker() const;
         bool shouldShowRightArmMarker() const;
         bool shouldShowBodyMarker() const;
+        int getCurrentBodyState() const;
+        int getCurrentBaseState() const;
+        int getCurrentBimanualState() const;
+        int getCurrentLeftArmState() const;
+        int getCurrentRightArmState() const;
 
         void markPendingChanges();
 
@@ -197,6 +202,8 @@ namespace arms_ros2_control::command
         int right_arm_state_{1};
         int bimanual_state_{0};
         int body_state_{0};
+        int base_state_{
+            arms_ros2_control_msgs::msg::WbcCurrentState::BASE_LOCKED};
 
         rclcpp::Time last_marker_update_time_;
         double marker_update_interval_;
