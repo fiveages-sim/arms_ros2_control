@@ -74,8 +74,6 @@ def launch_setup(context, *args, **kwargs):
     hand_names = [c["name"] for c in hand_controllers] if enable_gripper else []
     _ft_controllers, ft_spawners = ocs2_common.setup_ft_broadcasters(ctx)
 
-    ft_controllers, ft_spawners = ocs2_common.setup_ft_broadcasters(ctx)
-
     body_spawners = []
     joint_controller_names = ["ocs2_wbc_controller"]
     is_arm_controller_type = wbc_controller_type == "ocs2_arm_controller/Ocs2ArmController"
