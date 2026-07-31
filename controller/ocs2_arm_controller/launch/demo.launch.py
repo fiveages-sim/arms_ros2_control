@@ -52,8 +52,6 @@ def launch_setup(context, *args, **kwargs):
     hand_names = [c["name"] for c in hand_controllers] if enable_gripper else []
     _ft_controllers, ft_spawners = ocs2_common.setup_ft_broadcasters(ctx)
 
-    ft_controllers, ft_spawners = ocs2_common.setup_ft_broadcasters(ctx)
-
     info_file_name = extract_info_file_name_from_config(ctx.config, launch_mode="demo")
     robot_pkg_path = get_robot_package_path(ctx.robot_name)
     if robot_pkg_path is None:
