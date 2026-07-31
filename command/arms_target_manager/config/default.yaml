@@ -14,6 +14,9 @@
 
     # VR手柄位姿缩放因子（左右共用，可由组合键动态校准，范围建议 [0.75, 1.5]）
     vr_pose_scale: 1.0
+
+    # FULL_BODY 下 VR 末端目标保持所在的机器人跟随坐标系
+    vr_follow_frame: base_footprint
     
     # 是否启用VR输入处理
     enable_vr: false

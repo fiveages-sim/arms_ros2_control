@@ -36,7 +36,8 @@ namespace arms_ros2_control::command
         double vr_thumbstick_linear_scale,
         double vr_thumbstick_angular_scale,
         double vr_pose_scale,
-        const std::string& reference_link)
+        const std::string& reference_link,
+        const std::string& vr_follow_frame)
         : node_(std::move(node))
           , target_manager_(targetManager)
           , pub_left_target_(std::move(pub_left_target))
@@ -58,6 +59,7 @@ namespace arms_ros2_control::command
           , vr_thumbstick_angular_scale_(vr_thumbstick_angular_scale)
           , vr_pose_scale_(vr_pose_scale)
           , reference_link_(reference_link)
+          , vr_follow_frame_(vr_follow_frame)
     {
         // 创建 controller topology 检测 client 和启动期重试 timer
         list_controllers_client_ =
@@ -175,6 +177,11 @@ namespace arms_ros2_control::command
         // FSM状态更新现在通过 fsmCommandCallback() 方法由外部调用
 
         RCLCPP_INFO(node_->get_logger(), "🕹️🕶️🕹️ VRInputHandler created");
+        RCLCPP_INFO(
+            node_->get_logger(),
+            "🕹️ VR frames: reference_link=%s, full_body_follow_frame=%s",
+            reference_link_.c_str(),
+            vr_follow_frame_.c_str());
         RCLCPP_INFO(node_->get_logger(),
                     "🕹️🕶️🕹️ Chassis mode (case 20 = L+R thumbstick): L.stick→chassis XY, R.stick→waist lift/turn");
         RCLCPP_INFO(
@@ -545,26 +552,18 @@ namespace arms_ros2_control::command
                         orientation_with_yaw.normalize();
                     }
 
-                    calculatePoseFromDifference(position_with_offset, orientation_with_yaw,
-                                                vr_base_left_position_, vr_base_left_orientation_,
-                                                robot_base_right_position_, robot_base_right_orientation_,
-                                                calculatedPos, calculatedOri);
-
-                    // 检查计算的pose是否发生显著变化
-                    if (hasPoseChanged(calculatedPos, calculatedOri, prev_calculated_right_position_,
-                                       prev_calculated_right_orientation_))
+                    if (calculateAndPublishTarget(
+                            "right",
+                            position_with_offset,
+                            orientation_with_yaw,
+                            vr_base_left_position_,
+                            vr_base_left_orientation_,
+                            calculatedPos,
+                            calculatedOri))
                     {
-                        // 调试输出
-                        RCLCPP_DEBUG(node_->get_logger(), "🕹️🕶️🕹️ [Mirror] Left VR → Right Arm");
-                        RCLCPP_DEBUG(node_->get_logger(), "🕹️🕶️🕹️ Right Calculated: [%.3f, %.3f, %.3f]",
-                                     calculatedPos.x(), calculatedPos.y(), calculatedPos.z());
-
-                        // 发布到右臂
-                        if (publishTargetPoseDirect("right", calculatedPos, calculatedOri))
-                        {
-                            prev_calculated_right_position_ = calculatedPos;
-                            prev_calculated_right_orientation_ = calculatedOri;
-                        }
+                        RCLCPP_DEBUG(
+                            node_->get_logger(),
+                            "🕹️ [Mirror] Left VR -> Right Arm target published");
                     }
                 }
                 else
@@ -589,34 +588,18 @@ namespace arms_ros2_control::command
                         orientation_with_yaw.normalize();
                     }
 
-                    calculatePoseFromDifference(position_with_offset, orientation_with_yaw,
-                                                vr_base_left_position_, vr_base_left_orientation_,
-                                                robot_base_left_position_, robot_base_left_orientation_,
-                                                calculatedPos, calculatedOri);
-
-                    // 检查计算的pose是否发生显著变化
-                    if (hasPoseChanged(calculatedPos, calculatedOri, prev_calculated_left_position_,
-                                       prev_calculated_left_orientation_))
+                    if (calculateAndPublishTarget(
+                            "left",
+                            position_with_offset,
+                            orientation_with_yaw,
+                            vr_base_left_position_,
+                            vr_base_left_orientation_,
+                            calculatedPos,
+                            calculatedOri))
                     {
-                        // 调试输出
-                        RCLCPP_DEBUG(node_->get_logger(), "🕹️🕶️🕹️ Left VR Base: [%.3f, %.3f, %.3f]",
-                                     vr_base_left_position_.x(), vr_base_left_position_.y(), vr_base_left_position_.z());
-                        RCLCPP_DEBUG(node_->get_logger(), "🕹️🕶️🕹️ Left VR Current: [%.3f, %.3f, %.3f]",
-                                     left_position_.x(), left_position_.y(), left_position_.z());
-                        RCLCPP_DEBUG(node_->get_logger(), "🕹️🕶️🕹️ Left Thumbstick Offset: [%.3f, %.3f, %.3f]",
-                                     left_thumbstick_offset_.x(), left_thumbstick_offset_.y(), left_thumbstick_offset_.z());
-                        RCLCPP_DEBUG(node_->get_logger(), "🕹️🕶️🕹️ Left Robot Base: [%.3f, %.3f, %.3f]",
-                                     robot_base_left_position_.x(), robot_base_left_position_.y(),
-                                     robot_base_left_position_.z());
-                        RCLCPP_DEBUG(node_->get_logger(), "🕹️🕶️🕹️ Left Calculated: [%.3f, %.3f, %.3f]",
-                                     calculatedPos.x(), calculatedPos.y(), calculatedPos.z());
-
-                        // 发布到左臂
-                        if (publishTargetPoseDirect("left", calculatedPos, calculatedOri))
-                        {
-                            prev_calculated_left_position_ = calculatedPos;
-                            prev_calculated_left_orientation_ = calculatedOri;
-                        }
+                        RCLCPP_DEBUG(
+                            node_->get_logger(),
+                            "🕹️ Left VR -> Left Arm target published");
                     }
                 }
             }
@@ -672,26 +655,18 @@ namespace arms_ros2_control::command
                         orientation_with_yaw.normalize();
                     }
 
-                    calculatePoseFromDifference(position_with_offset, orientation_with_yaw,
-                                                vr_base_right_position_, vr_base_right_orientation_,
-                                                robot_base_left_position_, robot_base_left_orientation_,
-                                                calculatedPos, calculatedOri);
-
-                    // 检查计算的pose是否发生显著变化
-                    if (hasPoseChanged(calculatedPos, calculatedOri, prev_calculated_left_position_,
-                                       prev_calculated_left_orientation_))
+                    if (calculateAndPublishTarget(
+                            "left",
+                            position_with_offset,
+                            orientation_with_yaw,
+                            vr_base_right_position_,
+                            vr_base_right_orientation_,
+                            calculatedPos,
+                            calculatedOri))
                     {
-                        // 调试输出
-                        RCLCPP_DEBUG(node_->get_logger(), "🕹️🕶️🕹️ [Mirror] Right VR → Left Arm");
-                        RCLCPP_DEBUG(node_->get_logger(), "🕹️🕶️🕹️ Left Calculated: [%.3f, %.3f, %.3f]",
-                                     calculatedPos.x(), calculatedPos.y(), calculatedPos.z());
-
-                        // 发布到左臂
-                        if (publishTargetPoseDirect("left", calculatedPos, calculatedOri))
-                        {
-                            prev_calculated_left_position_ = calculatedPos;
-                            prev_calculated_left_orientation_ = calculatedOri;
-                        }
+                        RCLCPP_DEBUG(
+                            node_->get_logger(),
+                            "🕹️ [Mirror] Right VR -> Left Arm target published");
                     }
                 }
                 else
@@ -716,35 +691,18 @@ namespace arms_ros2_control::command
                         orientation_with_yaw.normalize();
                     }
 
-                    calculatePoseFromDifference(position_with_offset, orientation_with_yaw,
-                                                vr_base_right_position_, vr_base_right_orientation_,
-                                                robot_base_right_position_, robot_base_right_orientation_,
-                                                calculatedPos, calculatedOri);
-
-                    // 检查计算的pose是否发生显著变化
-                    if (hasPoseChanged(calculatedPos, calculatedOri, prev_calculated_right_position_,
-                                       prev_calculated_right_orientation_))
+                    if (calculateAndPublishTarget(
+                            "right",
+                            position_with_offset,
+                            orientation_with_yaw,
+                            vr_base_right_position_,
+                            vr_base_right_orientation_,
+                            calculatedPos,
+                            calculatedOri))
                     {
-                        // 调试输出
-                        RCLCPP_DEBUG(node_->get_logger(), "🕹️🕶️🕹️ Right VR Base: [%.3f, %.3f, %.3f]",
-                                     vr_base_right_position_.x(), vr_base_right_position_.y(), vr_base_right_position_.z());
-                        RCLCPP_DEBUG(node_->get_logger(), "🕹️🕶️🕹️ Right VR Current: [%.3f, %.3f, %.3f]",
-                                     right_position_.x(), right_position_.y(), right_position_.z());
-                        RCLCPP_DEBUG(node_->get_logger(), "🕹️🕶️🕹️ Right Thumbstick Offset: [%.3f, %.3f, %.3f]",
-                                     right_thumbstick_offset_.x(), right_thumbstick_offset_.y(),
-                                     right_thumbstick_offset_.z());
-                        RCLCPP_DEBUG(node_->get_logger(), "🕹️🕶️🕹️ Right Robot Base: [%.3f, %.3f, %.3f]",
-                                     robot_base_right_position_.x(), robot_base_right_position_.y(),
-                                     robot_base_right_position_.z());
-                        RCLCPP_DEBUG(node_->get_logger(), "🕹️🕶️🕹️ Right Calculated: [%.3f, %.3f, %.3f]",
-                                     calculatedPos.x(), calculatedPos.y(), calculatedPos.z());
-
-                        // 发布到右臂
-                        if (publishTargetPoseDirect("right", calculatedPos, calculatedOri))
-                        {
-                            prev_calculated_right_position_ = calculatedPos;
-                            prev_calculated_right_orientation_ = calculatedOri;
-                        }
+                        RCLCPP_DEBUG(
+                            node_->get_logger(),
+                            "🕹️ Right VR -> Right Arm target published");
                     }
                 }
             }
@@ -785,38 +743,215 @@ namespace arms_ros2_control::command
         has_last_published_right_target_ = false;
         last_published_right_position_ = Eigen::Vector3d::Zero();
         last_published_right_orientation_ = Eigen::Quaterniond::Identity();
+
+        left_robot_base_valid_ = false;
+        right_robot_base_valid_ = false;
     }
 
-    void VRInputHandler::setRobotBaseFromLastCommandOrCurrent(const std::string& armType)
+    bool VRInputHandler::transformPoseBetweenFrames(
+        const std::string& armType,
+        const Eigen::Vector3d& inputPosition,
+        const Eigen::Quaterniond& inputOrientation,
+        const std::string& sourceFrame,
+        const std::string& targetFrame,
+        Eigen::Vector3d& outputPosition,
+        Eigen::Quaterniond& outputOrientation)
     {
-        if (armType == "left")
+        if (sourceFrame.empty() || targetFrame.empty())
         {
-            if (has_last_published_left_target_)
-            {
-                robot_base_left_position_ = last_published_left_position_;
-                robot_base_left_orientation_ = last_published_left_orientation_;
-            }
-            else
-            {
-                robot_base_left_position_ = robot_current_left_position_;
-                robot_base_left_orientation_ = robot_current_left_orientation_;
-            }
-            robot_base_left_orientation_.normalize();
+            RCLCPP_WARN_THROTTLE(
+                node_->get_logger(), *node_->get_clock(), 2000,
+                "🕹️ %s VR pose transform skipped: source='%s', target='%s'",
+                armType.c_str(), sourceFrame.c_str(), targetFrame.c_str());
+            return false;
         }
-        else if (armType == "right")
+
+        if (!inputPosition.allFinite() ||
+            !inputOrientation.coeffs().allFinite() ||
+            inputOrientation.norm() < 1e-9)
         {
-            if (has_last_published_right_target_)
-            {
-                robot_base_right_position_ = last_published_right_position_;
-                robot_base_right_orientation_ = last_published_right_orientation_;
-            }
-            else
-            {
-                robot_base_right_position_ = robot_current_right_position_;
-                robot_base_right_orientation_ = robot_current_right_orientation_;
-            }
-            robot_base_right_orientation_.normalize();
+            RCLCPP_WARN_THROTTLE(
+                node_->get_logger(), *node_->get_clock(), 2000,
+                "🕹️ %s VR pose transform skipped: invalid pose in frame '%s'",
+                armType.c_str(), sourceFrame.c_str());
+            return false;
         }
+
+        const Eigen::Quaterniond normalizedInput = inputOrientation.normalized();
+        if (sourceFrame == targetFrame)
+        {
+            outputPosition = inputPosition;
+            outputOrientation = normalizedInput;
+            return true;
+        }
+
+        try
+        {
+            geometry_msgs::msg::PoseStamped input;
+            input.header.frame_id = sourceFrame;
+            input.header.stamp = node_->now();
+            input.pose.position.x = inputPosition.x();
+            input.pose.position.y = inputPosition.y();
+            input.pose.position.z = inputPosition.z();
+            input.pose.orientation.x = normalizedInput.x();
+            input.pose.orientation.y = normalizedInput.y();
+            input.pose.orientation.z = normalizedInput.z();
+            input.pose.orientation.w = normalizedInput.w();
+
+            const auto transform = tf_buffer_->lookupTransform(
+                targetFrame, sourceFrame, tf2::TimePointZero);
+            geometry_msgs::msg::PoseStamped transformed;
+            tf2::doTransform(input, transformed, transform);
+
+            Eigen::Vector3d nextPosition(
+                transformed.pose.position.x,
+                transformed.pose.position.y,
+                transformed.pose.position.z);
+            Eigen::Quaterniond nextOrientation(
+                transformed.pose.orientation.w,
+                transformed.pose.orientation.x,
+                transformed.pose.orientation.y,
+                transformed.pose.orientation.z);
+            if (!nextPosition.allFinite() ||
+                !nextOrientation.coeffs().allFinite() ||
+                nextOrientation.norm() < 1e-9)
+            {
+                RCLCPP_WARN_THROTTLE(
+                    node_->get_logger(), *node_->get_clock(), 2000,
+                    "🕹️ %s VR pose transform produced invalid result: %s -> %s",
+                    armType.c_str(), sourceFrame.c_str(), targetFrame.c_str());
+                return false;
+            }
+
+            outputPosition = nextPosition;
+            outputOrientation = nextOrientation.normalized();
+            return true;
+        }
+        catch (const tf2::TransformException& ex)
+        {
+            RCLCPP_WARN_THROTTLE(
+                node_->get_logger(), *node_->get_clock(), 2000,
+                "🕹️ %s VR pose transform unavailable: %s -> %s: %s",
+                armType.c_str(), sourceFrame.c_str(), targetFrame.c_str(), ex.what());
+            return false;
+        }
+    }
+
+    bool VRInputHandler::setRobotBaseFromLastCommandOrCurrent(
+        const std::string& armType)
+    {
+        const bool isLeft = armType == "left";
+        const bool isRight = armType == "right";
+        if (!isLeft && !isRight)
+        {
+            RCLCPP_WARN(
+                node_->get_logger(),
+                "🕹️ Cannot set VR robot base for unknown arm '%s'",
+                armType.c_str());
+            return false;
+        }
+
+        bool& valid = isLeft ? left_robot_base_valid_ : right_robot_base_valid_;
+        bool& hasLast = isLeft
+            ? has_last_published_left_target_
+            : has_last_published_right_target_;
+        Eigen::Vector3d& basePosition = isLeft
+            ? robot_base_left_position_
+            : robot_base_right_position_;
+        Eigen::Quaterniond& baseOrientation = isLeft
+            ? robot_base_left_orientation_
+            : robot_base_right_orientation_;
+        const Eigen::Vector3d& lastPosition = isLeft
+            ? last_published_left_position_
+            : last_published_right_position_;
+        const Eigen::Quaterniond& lastOrientation = isLeft
+            ? last_published_left_orientation_
+            : last_published_right_orientation_;
+        const Eigen::Vector3d& currentPosition = isLeft
+            ? robot_current_left_position_
+            : robot_current_right_position_;
+        const Eigen::Quaterniond& currentOrientation = isLeft
+            ? robot_current_left_orientation_
+            : robot_current_right_orientation_;
+
+        valid = false;
+        if (hasLast)
+        {
+            basePosition = lastPosition;
+            baseOrientation = lastOrientation.normalized();
+            valid = true;
+            return true;
+        }
+
+        if (!isFullBodyMode())
+        {
+            basePosition = currentPosition;
+            baseOrientation = currentOrientation.normalized();
+            valid = true;
+            return true;
+        }
+
+        Eigen::Vector3d transformedPosition;
+        Eigen::Quaterniond transformedOrientation;
+        if (!ee_frame_id_initialized_ ||
+            !transformPoseBetweenFrames(
+                armType,
+                currentPosition,
+                currentOrientation,
+                ee_frame_id_,
+                vr_follow_frame_,
+                transformedPosition,
+                transformedOrientation))
+        {
+            return false;
+        }
+
+        basePosition = transformedPosition;
+        baseOrientation = transformedOrientation;
+        valid = true;
+        return true;
+    }
+
+    bool VRInputHandler::calculateAndPublishTarget(
+        const std::string& armType,
+        const Eigen::Vector3d& vrCurrentPosition,
+        const Eigen::Quaterniond& vrCurrentOrientation,
+        const Eigen::Vector3d& vrBasePosition,
+        const Eigen::Quaterniond& vrBaseOrientation,
+        Eigen::Vector3d& calculatedPosition,
+        Eigen::Quaterniond& calculatedOrientation)
+    {
+        const bool isLeft = armType == "left";
+        const bool isRight = armType == "right";
+        if (!isLeft && !isRight)
+        {
+            return false;
+        }
+
+        bool& valid = isLeft ? left_robot_base_valid_ : right_robot_base_valid_;
+        if (!valid && !setRobotBaseFromLastCommandOrCurrent(armType))
+        {
+            return false;
+        }
+
+        const Eigen::Vector3d& robotBasePosition = isLeft
+            ? robot_base_left_position_
+            : robot_base_right_position_;
+        const Eigen::Quaterniond& robotBaseOrientation = isLeft
+            ? robot_base_left_orientation_
+            : robot_base_right_orientation_;
+
+        calculatePoseFromDifference(
+            vrCurrentPosition,
+            vrCurrentOrientation,
+            vrBasePosition,
+            vrBaseOrientation,
+            robotBasePosition,
+            robotBaseOrientation,
+            calculatedPosition,
+            calculatedOrientation);
+        return publishTargetPoseDirect(
+            armType, calculatedPosition, calculatedOrientation);
     }
 
     bool VRInputHandler::isBimanualCoupled() const
@@ -848,19 +983,22 @@ namespace arms_ros2_control::command
                 paused ? paused_right_orientation_ : right_orientation_;
         }
 
-        robot_base_right_position_ = robot_current_right_position_;
-        robot_base_right_orientation_ =
-            robot_current_right_orientation_.normalized();
-
         right_thumbstick_offset_ = Eigen::Vector3d::Zero();
         right_thumbstick_yaw_offset_ = 0.0;
 
-        prev_calculated_right_position_ =
-            robot_current_right_position_;
+        has_last_published_right_target_ = false;
+        right_robot_base_valid_ = false;
+        const bool rightBaseReady =
+            setRobotBaseFromLastCommandOrCurrent("right");
+
+        prev_calculated_right_position_ = robot_current_right_position_;
         prev_calculated_right_orientation_ =
             robot_current_right_orientation_.normalized();
 
-        has_last_published_right_target_ = false;
+        RCLCPP_INFO(
+            node_->get_logger(),
+            "🕹️ Right VR rebase after decoupling: %s",
+            rightBaseReady ? "ready" : "waiting for TF");
     }
 
     bool VRInputHandler::publishTargetPoseDirect(
@@ -868,65 +1006,98 @@ namespace arms_ros2_control::command
         const Eigen::Vector3d& position,
         const Eigen::Quaterniond& orientation)
     {
-        const bool bimanual_coupled = isBimanualCoupled();
-        if (bimanual_coupled)
+        const bool bimanualCoupled = isBimanualCoupled();
+        if (bimanualCoupled)
         {
             right_vr_target_suppressed_by_bimanual_ = true;
-
             if (armType == "right")
             {
                 RCLCPP_DEBUG_THROTTLE(
-                    node_->get_logger(),
-                    *node_->get_clock(),
-                    2000,
+                    node_->get_logger(), *node_->get_clock(), 2000,
                     "🕹️ 双臂耦合中，忽略 VR right_target");
                 return false;
             }
         }
 
-        if (armType == "right")
+        if (armType == "right" &&
+            right_vr_target_suppressed_by_bimanual_)
         {
-            if (right_vr_target_suppressed_by_bimanual_)
+            rebaseRightArmVrControl();
+            right_vr_target_suppressed_by_bimanual_ = false;
+            RCLCPP_INFO(
+                node_->get_logger(),
+                "🕹️ 双臂已解耦，右臂 VR 控制基准已重建");
+            return false;
+        }
+
+        const bool isLeft = armType == "left";
+        const bool isRight = armType == "right";
+        if ((!isLeft && !isRight) ||
+            (isLeft && !pub_left_target_) ||
+            (isRight && !pub_right_target_))
+        {
+            RCLCPP_WARN(
+                node_->get_logger(),
+                "🕹️ Invalid armType or publisher not initialized: %s",
+                armType.c_str());
+            return false;
+        }
+
+        Eigen::Vector3d publishPosition = position;
+        Eigen::Quaterniond publishOrientation = orientation;
+        if (isFullBodyMode())
+        {
+            if (!ee_frame_id_initialized_ ||
+                !transformPoseBetweenFrames(
+                    armType,
+                    position,
+                    orientation,
+                    vr_follow_frame_,
+                    ee_frame_id_,
+                    publishPosition,
+                    publishOrientation))
             {
-                rebaseRightArmVrControl();
-                right_vr_target_suppressed_by_bimanual_ = false;
-                RCLCPP_INFO(
-                    node_->get_logger(),
-                    "🕹️ 双臂已解耦，右臂 VR 控制基准已重建");
                 return false;
             }
         }
 
-        geometry_msgs::msg::Pose pose;
-        pose.position.x = position.x();
-        pose.position.y = position.y();
-        pose.position.z = position.z();
-        pose.orientation.w = orientation.w();
-        pose.orientation.x = orientation.x();
-        pose.orientation.y = orientation.y();
-        pose.orientation.z = orientation.z();
+        Eigen::Vector3d& previousPosition = isLeft
+            ? prev_calculated_left_position_
+            : prev_calculated_right_position_;
+        Eigen::Quaterniond& previousOrientation = isLeft
+            ? prev_calculated_left_orientation_
+            : prev_calculated_right_orientation_;
+        if (!hasPoseChanged(
+                publishPosition,
+                publishOrientation,
+                previousPosition,
+                previousOrientation))
+        {
+            return false;
+        }
 
-        if (armType == "left" && pub_left_target_)
+        geometry_msgs::msg::Pose pose;
+        pose.position.x = publishPosition.x();
+        pose.position.y = publishPosition.y();
+        pose.position.z = publishPosition.z();
+        pose.orientation.x = publishOrientation.x();
+        pose.orientation.y = publishOrientation.y();
+        pose.orientation.z = publishOrientation.z();
+        pose.orientation.w = publishOrientation.w();
+
+        if (isLeft)
         {
             pub_left_target_->publish(pose);
-            recordLastPublishedTarget(
-                armType, position, orientation);
-            return true;
         }
-
-        if (armType == "right" && pub_right_target_)
+        else
         {
             pub_right_target_->publish(pose);
-            recordLastPublishedTarget(
-                armType, position, orientation);
-            return true;
         }
 
-        RCLCPP_WARN(
-            node_->get_logger(),
-            "🕹️ Invalid armType or publisher not initialized: %s",
-            armType.c_str());
-        return false;
+        recordLastPublishedTarget(armType, position, orientation);
+        previousPosition = publishPosition;
+        previousOrientation = publishOrientation.normalized();
+        return true;
     }
 
     Eigen::Matrix4d VRInputHandler::poseMsgToMatrix(const geometry_msgs::msg::Pose::SharedPtr msg)
@@ -1839,7 +2010,8 @@ namespace arms_ros2_control::command
                         // 当前是暂停状态，执行恢复操作
                         vr_base_left_position_ = left_position_;
                         vr_base_left_orientation_ = left_orientation_;
-                        setRobotBaseFromLastCommandOrCurrent("right");
+                        const bool baseReady =
+                            setRobotBaseFromLastCommandOrCurrent("right");
 
                         // 重置右摇杆累积偏移
                         right_thumbstick_offset_ = Eigen::Vector3d::Zero();
@@ -1852,6 +2024,10 @@ namespace arms_ros2_control::command
                         paused_left_orientation_ = Eigen::Quaterniond::Identity();
 
                         RCLCPP_INFO(node_->get_logger(), "🔘 [左Y按钮] 按下 - 功能: 切换右臂更新状态 - 操作: 恢复右臂更新（重置基准位姿和摇杆偏移） [镜像模式]");
+                        RCLCPP_INFO(
+                            node_->get_logger(),
+                            "🕹️ right VR base %s after resume",
+                            baseReady ? "ready" : "waiting for TF");
                         RCLCPP_DEBUG(node_->get_logger(),
                                     "   Right Robot Base Source: %s",
                                     has_last_published_right_target_ ? "last_command" : "current_pose");
@@ -1874,7 +2050,8 @@ namespace arms_ros2_control::command
                         // 当前是暂停状态，执行恢复操作
                         vr_base_left_position_ = left_position_;
                         vr_base_left_orientation_ = left_orientation_;
-                        setRobotBaseFromLastCommandOrCurrent("left");
+                        const bool baseReady =
+                            setRobotBaseFromLastCommandOrCurrent("left");
 
                         // 重置左摇杆累积偏移
                         left_thumbstick_offset_ = Eigen::Vector3d::Zero();
@@ -1887,6 +2064,10 @@ namespace arms_ros2_control::command
                         paused_left_orientation_ = Eigen::Quaterniond::Identity();
 
                         RCLCPP_INFO(node_->get_logger(), "🔘 [左Y按钮] 按下 - 功能: 切换左臂更新状态 - 操作: 恢复左臂更新（重置基准位姿和摇杆偏移）");
+                        RCLCPP_INFO(
+                            node_->get_logger(),
+                            "🕹️ left VR base %s after resume",
+                            baseReady ? "ready" : "waiting for TF");
                         RCLCPP_DEBUG(node_->get_logger(),
                                     "   VR Base Position: [%.3f, %.3f, %.3f]",
                                     vr_base_left_position_.x(), vr_base_left_position_.y(), vr_base_left_position_.z());
@@ -1933,8 +2114,16 @@ namespace arms_ros2_control::command
                     vr_base_right_position_ = right_position_;
                     vr_base_right_orientation_ = right_orientation_;
 
-                    setRobotBaseFromLastCommandOrCurrent("left");
-                    setRobotBaseFromLastCommandOrCurrent("right");
+                    const bool leftBaseReady =
+                        setRobotBaseFromLastCommandOrCurrent("left");
+                    const bool rightBaseReady =
+                        setRobotBaseFromLastCommandOrCurrent("right");
+                    RCLCPP_INFO(
+                        node_->get_logger(),
+                        "🕹️ UPDATE bases: left=%s, right=%s, calculation_frame=%s",
+                        leftBaseReady ? "ready" : "pending_tf",
+                        rightBaseReady ? "ready" : "pending_tf",
+                        isFullBodyMode() ? vr_follow_frame_.c_str() : ee_frame_id_.c_str());
 
                     // 重置摇杆累积偏移
                     left_thumbstick_offset_ = Eigen::Vector3d::Zero();
@@ -2035,7 +2224,8 @@ namespace arms_ros2_control::command
                         // 当前是暂停状态，执行恢复操作
                         vr_base_right_position_ = right_position_;
                         vr_base_right_orientation_ = right_orientation_;
-                        setRobotBaseFromLastCommandOrCurrent("left");
+                        const bool baseReady =
+                            setRobotBaseFromLastCommandOrCurrent("left");
 
                         // 重置左摇杆累积偏移
                         left_thumbstick_offset_ = Eigen::Vector3d::Zero();
@@ -2048,6 +2238,10 @@ namespace arms_ros2_control::command
                         paused_right_orientation_ = Eigen::Quaterniond::Identity();
 
                         RCLCPP_INFO(node_->get_logger(), "🔘 [右B按钮] 按下 - 功能: 切换左臂更新状态 - 操作: 恢复左臂更新（重置基准位姿和摇杆偏移） [镜像模式]");
+                        RCLCPP_INFO(
+                            node_->get_logger(),
+                            "🕹️ left VR base %s after resume",
+                            baseReady ? "ready" : "waiting for TF");
                         RCLCPP_DEBUG(node_->get_logger(),
                                     "   Left Robot Base Source: %s",
                                     has_last_published_left_target_ ? "last_command" : "current_pose");
@@ -2070,7 +2264,8 @@ namespace arms_ros2_control::command
                         // 当前是暂停状态，执行恢复操作
                         vr_base_right_position_ = right_position_;
                         vr_base_right_orientation_ = right_orientation_;
-                        setRobotBaseFromLastCommandOrCurrent("right");
+                        const bool baseReady =
+                            setRobotBaseFromLastCommandOrCurrent("right");
 
                         // 重置右摇杆累积偏移
                         right_thumbstick_offset_ = Eigen::Vector3d::Zero();
@@ -2083,6 +2278,10 @@ namespace arms_ros2_control::command
                         paused_right_orientation_ = Eigen::Quaterniond::Identity();
 
                         RCLCPP_INFO(node_->get_logger(), "🔘 [右B按钮] 按下 - 功能: 切换右臂更新状态 - 操作: 恢复右臂更新（重置基准位姿和摇杆偏移）");
+                        RCLCPP_INFO(
+                            node_->get_logger(),
+                            "🕹️ right VR base %s after resume",
+                            baseReady ? "ready" : "waiting for TF");
                         RCLCPP_DEBUG(node_->get_logger(),
                                     "   VR Base Position: [%.3f, %.3f, %.3f]",
                                     vr_base_right_position_.x(), vr_base_right_position_.y(), vr_base_right_position_.z());
@@ -2645,6 +2844,7 @@ namespace arms_ros2_control::command
                     const auto previous = control_topology_.exchange(next);
                     if (previous != next)
                     {
+                        clearLastPublishedTargets();
                         const char* name =
                             next == ControlTopology::FULL_BODY ? "FULL_BODY" :
                             next == ControlTopology::SPLIT_BODY ? "SPLIT_BODY" :
@@ -2652,6 +2852,9 @@ namespace arms_ros2_control::command
                         RCLCPP_INFO(
                             node_->get_logger(),
                             "VR control topology changed to %s", name);
+                        RCLCPP_INFO(
+                            node_->get_logger(),
+                            "🕹️ Control topology changed; VR frame caches invalidated");
                     }
 
                     if (next != ControlTopology::UNKNOWN)

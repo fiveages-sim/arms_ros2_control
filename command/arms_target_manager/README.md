@@ -57,10 +57,11 @@ ArmsTargetManager 的参数处理逻辑已集成到 `robot_common_launch` 中，
 - `angular_scale`：角度控制缩放因子，默认 0.05
 - `vr_update_rate`：VR 更新频率（Hz），默认 500.0
 - `enable_vr`：是否启用 VR 输入处理，默认 true
+- `vr_follow_frame`：FULL_BODY 下 VR 末端目标计算坐标系，默认 `base_footprint`；发布前转换到 current-pose 的 `header.frame_id`
 
 ## 发布主题
 
-- `left_target`：左臂目标pose
+- `left_target`：左臂目标pose（普通 `geometry_msgs/msg/Pose`；FULL_BODY 内部在 `vr_follow_frame` 计算后转换到控制 frame）
 - `right_target`：右臂目标pose（仅双臂模式）
 
 ## 订阅主题
