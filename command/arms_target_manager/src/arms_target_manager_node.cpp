@@ -195,6 +195,16 @@ int main(int argc, char** argv)
         // ArmMarker 内部订阅了 current_pose，通过回调机制将原始消息转发给 VRInputHandler
         if (enable_vr && vr_handler)
         {
+            target_manager->setWbcStateCallback(
+                [vr_handler_ptr = vr_handler.get()](
+                    const arms_ros2_control_msgs::msg::WbcCurrentState::ConstSharedPtr& msg)
+                {
+                    if (vr_handler_ptr)
+                    {
+                        vr_handler_ptr->wbcStateCallback(msg);
+                    }
+                });
+
             // 左臂 current_pose 回调
             target_manager->setCurrentPoseCallback("left",
                 [vr_handler_ptr = vr_handler.get()](const geometry_msgs::msg::PoseStamped::ConstSharedPtr& msg)

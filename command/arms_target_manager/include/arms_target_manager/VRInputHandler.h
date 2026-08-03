@@ -144,6 +144,9 @@ namespace arms_ros2_control::command
          */
         void robotRightPoseCallback(geometry_msgs::msg::PoseStamped::SharedPtr msg);
 
+        void wbcStateCallback(
+            arms_ros2_control_msgs::msg::WbcCurrentState::ConstSharedPtr msg);
+
     private:
         enum class WbcToggleTarget : uint8_t
         {
@@ -225,12 +228,21 @@ namespace arms_ros2_control::command
             WbcToggleTarget target,
             bool& enabled) const;
 
-        void requestRightWbcToggle(
+        void requestWbcToggle(
             int32_t eventCase,
-            const char* direction,
+            const char* sourceDescription,
             WbcToggleTarget target);
 
         bool updateRightWbcToggleRequestState();
+
+        void updateArmWbcVrState(
+            WbcToggleTarget arm,
+            int armState);
+        bool isArmVrInputSuppressed(WbcToggleTarget arm) const;
+        bool prepareArmVrInput(WbcToggleTarget arm);
+        bool rebaseArmVrControlFromCurrentPose(WbcToggleTarget arm);
+        bool setRobotBaseFromCurrentPose(const std::string& armType);
+        void clearLastPublishedTarget(const std::string& armType);
 
         /**
          * 发布 WBC 模式切换命令
@@ -539,6 +551,21 @@ namespace arms_ros2_control::command
         std::chrono::steady_clock::time_point right_wbc_toggle_request_time_{};
         static constexpr auto right_wbc_toggle_request_timeout_ =
             std::chrono::seconds(2);
+
+        // FULL_BODY 单臂 WBC 禁用：按实际机械臂抑制 VR 输入，并在 ARM_ENABLED 后
+        // 等待 state-based rebase。不替代 SPLIT_BODY 的 *_arm_paused_，也不改变
+        // right_wbc_toggle_request_pending_ 的互斥/超时/回中语义。
+        std::atomic<int> observed_left_wbc_arm_state_{-1};
+        std::atomic<int> observed_right_wbc_arm_state_{-1};
+        std::atomic<bool> left_wbc_vr_suppressed_{false};
+        std::atomic<bool> right_wbc_vr_suppressed_{false};
+        std::atomic<bool> left_wbc_rebase_pending_{false};
+        std::atomic<bool> right_wbc_rebase_pending_{false};
+
+        std::atomic<bool> has_robot_current_left_pose_{false};
+        std::atomic<bool> has_robot_current_right_pose_{false};
+        std::atomic<bool> has_vr_left_pose_{false};
+        std::atomic<bool> has_vr_right_pose_{false};
 
         // 双臂耦合期间右臂 VR 目标被抑制后，解耦后的下一次右臂发布前需重建控制基准。
         bool right_vr_target_suppressed_by_bimanual_{false};

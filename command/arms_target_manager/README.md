@@ -92,6 +92,26 @@ scale_vel ≈ scale_old * f
 
 例：`scale_old = 0.005`、`f = 50` → `linear_scale = 0.25`。
 
+## VR 面键的单臂控制
+
+| 控制拓扑 | 非镜像：左 Y | 非镜像：右 B | 镜像：左 Y | 镜像：右 B |
+|---|---|---|---|---|
+| FULL_BODY | 左臂 ENABLE/DISABLE | 右臂 ENABLE/DISABLE | 右臂 ENABLE/DISABLE | 左臂 ENABLE/DISABLE |
+| SPLIT_BODY | 左臂 VR 暂停/恢复 | 右臂 VR 暂停/恢复 | 右臂 VR 暂停/恢复 | 左臂 VR 暂停/恢复 |
+| UNKNOWN | 忽略 | 忽略 | 忽略 | 忽略 |
+
+- FULL_BODY 的 Y/B 不依赖 VR UPDATE/STORAGE，但要求 VR enabled、FSM=OCS2。
+- 双臂耦合时禁止通过 Y/B 单独切换任一臂。
+- Y/B 与 case 25–28 复用现有 WBC pending、2 秒超时和右摇杆回中安全门。
+
+### FULL_BODY 单臂禁用后的 VR 恢复
+
+- WBC 确认某臂为 `ARM_DISABLED` 后，VR 停止发布映射到该臂的 pose 目标，也停止累积该臂摇杆 offset；另一臂保持可控。
+- 禁用期间可自由移动对应 VR 手柄。重新启用确认后，机器人基准取 `observation_.state` 对应的 `left/right_current_pose`，VR 基准取手柄当前位置，并清零该臂摇杆 offset。
+- rebase 成功前该臂保持抑制；current pose 或 TF 暂不可用时不会回退到禁用前 target。
+- `left_current_target` / `right_current_target` 可能因参考管理器同步发布而刷新时间戳；禁用臂 pose 数值应保持不受 VR 输入影响。
+- 镜像模式只交换物理手柄到实际机械臂的映射，WBC enabled/disabled 和 rebase 状态始终按实际机械臂保存。
+
 ## 本包发布 / 订阅摘要
 
 **发布**

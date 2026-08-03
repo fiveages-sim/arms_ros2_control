@@ -107,6 +107,11 @@ namespace arms_ros2_control::command
             const std::string& armType,
             std::function<void(const geometry_msgs::msg::PoseStamped::ConstSharedPtr&)> callback);
 
+        void setWbcStateCallback(
+            std::function<void(
+                const arms_ros2_control_msgs::msg::WbcCurrentState::ConstSharedPtr&)>
+                callback);
+
         void currentTargetJointCallback(const std_msgs::msg::Float64MultiArray::ConstSharedPtr& msg);
 
     private:
@@ -160,6 +165,9 @@ namespace arms_ros2_control::command
         rclcpp::Subscription<arms_ros2_control_msgs::msg::Inputs>::SharedPtr control_input_subscription_;
         rclcpp::Subscription<sensor_msgs::msg::JointState>::SharedPtr head_joint_state_subscription_;
         rclcpp::Subscription<arms_ros2_control_msgs::msg::WbcCurrentState>::SharedPtr wbc_state_subscriber_;
+        std::function<void(
+            const arms_ros2_control_msgs::msg::WbcCurrentState::ConstSharedPtr&)>
+            wbc_state_callback_;
         rclcpp::Subscription<std_msgs::msg::Float64MultiArray>::SharedPtr body_joint_target_subscriber_;
 
         rclcpp::Publisher<nav_msgs::msg::Path>::SharedPtr dual_target_stamped_publisher_;

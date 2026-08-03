@@ -175,6 +175,11 @@ namespace arms_ros2_control::command
         body_state_ = msg->body_state;
         base_state_ = msg->base_state;
 
+        if (wbc_state_callback_)
+        {
+            wbc_state_callback_(msg);
+        }
+
         const bool bimanual_state_changed = (prev_bimanual_state != bimanual_state_);
 
         if (bimanual_state_changed)
@@ -1155,6 +1160,14 @@ namespace arms_ros2_control::command
         {
             right_arm_marker_->setCurrentPoseCallback(callback);
         }
+    }
+
+    void ArmsTargetManager::setWbcStateCallback(
+        std::function<void(
+            const arms_ros2_control_msgs::msg::WbcCurrentState::ConstSharedPtr&)>
+            callback)
+    {
+        wbc_state_callback_ = std::move(callback);
     }
 
     void ArmsTargetManager::updateHeadMarkerFromTopic(
