@@ -36,6 +36,10 @@ namespace ocs2::mobile_manipulator
         void exit() override;
         FSMStateName checkChange() override;
 
+        [[nodiscard]] bool needsAsyncExit() const override { return true; }
+        void beginExit() override;
+        [[nodiscard]] bool tryFinishExit() override;
+
     private:
         void mpcUpdateThread();
         void stopMpcThread();
@@ -50,8 +54,8 @@ namespace ocs2::mobile_manipulator
         int thread_sleep_duration_ms_{};
 
         std::thread mpc_thread_;
-        std::atomic_bool mpc_running_{false};
-        std::atomic_bool mpc_thread_should_stop_{false};
+        std::atomic_bool mpc_running_{false};         // loop while true; beginExit sets false
+        std::atomic_bool mpc_thread_finished_{true};  // set true when thread leaves loop
         std::atomic_bool mpc_update_requested_{false};
 
         bool collision_detected_{false};

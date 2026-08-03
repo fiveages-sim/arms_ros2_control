@@ -7,7 +7,6 @@
 #include <algorithm>
 #include <cmath>
 #include "arms_target_manager/ArmsTargetManager.h"
-#include "arms_target_manager/MarkerFactory.h"
 #include <std_msgs/msg/int32.hpp>
 #include <std_msgs/msg/float64.hpp>
 
@@ -18,15 +17,24 @@ namespace arms_ros2_control::command
         ArmsTargetManager* targetManager,
         const double linearScale,
         const double angularScale,
+        const double controlInputRate,
         const std::vector<std::string>& handControllers)
         : node_(std::move(node))
           , target_manager_(targetManager)
           , linear_scale_(linearScale)
           , angular_scale_(angularScale)
+          , control_input_rate_(std::max(1.0, controlInputRate))
           , hand_controllers_(handControllers)
     {
-        RCLCPP_INFO(node_->get_logger(), "🎮 ControlInputHandler created with scales: linear=%.3f, angular=%.3f",
-                    linear_scale_, angular_scale_);
+        left_twist_publisher_ = node_->create_publisher<geometry_msgs::msg::Twist>(
+            "left_target/twist", 10);
+        right_twist_publisher_ = node_->create_publisher<geometry_msgs::msg::Twist>(
+            "right_target/twist", 10);
+
+        RCLCPP_INFO(node_->get_logger(),
+                    "🎮 ControlInputHandler: twist velocity scales linear=%.3f m/s, angular=%.3f rad/s "
+                    "(control_input_rate=%.1f Hz; align old step scale via scale_vel ≈ scale_old * rate)",
+                    linear_scale_, angular_scale_, control_input_rate_);
         if (!hand_controllers_.empty()) {
             RCLCPP_INFO(node_->get_logger(), "🎮 Hand controllers configured: %zu controller(s)", hand_controllers_.size());
             for (size_t i = 0; i < hand_controllers_.size(); ++i) {
@@ -49,6 +57,24 @@ namespace arms_ros2_control::command
         bool hasValidInput = std::abs(x_input) > 0.001 || std::abs(y_input) > 0.001 || std::abs(z_input) > 0.001 ||
             std::abs(roll_input) > 0.001 || std::abs(pitch_input) > 0.001 || std::abs(yaw_input) > 0.001;
 
+        geometry_msgs::msg::Twist twist;
+        twist.linear.x = x_input * linear_scale_;
+        twist.linear.y = y_input * linear_scale_;
+        twist.linear.z = z_input * linear_scale_;
+        twist.angular.x = roll_input * angular_scale_;
+        twist.angular.y = pitch_input * angular_scale_;
+        twist.angular.z = yaw_input * angular_scale_;
+
+        const bool is_left = msg->target != 2;
+        if (is_left)
+        {
+            left_twist_publisher_->publish(twist);
+        }
+        else
+        {
+            right_twist_publisher_->publish(twist);
+        }
+
         if (hasValidInput && target_manager_)
         {
             if (target_manager_->getCurrentMode() != MarkerState::CONTINUOUS)
@@ -57,26 +83,27 @@ namespace arms_ros2_control::command
                 RCLCPP_INFO(node_->get_logger(), "🎮 ArmsTargetManager switched to CONTINUOUS mode for control input");
             }
 
+            // Marker 仅可视化：用 v/f 近似一帧位移，不向 left_target 发绝对 Pose
+            const double inv_rate = 1.0 / control_input_rate_;
             std::array<double, 3> positionDelta = {
-                x_input * linear_scale_,
-                y_input * linear_scale_,
-                z_input * linear_scale_
+                twist.linear.x * inv_rate,
+                twist.linear.y * inv_rate,
+                twist.linear.z * inv_rate
             };
-
             std::array<double, 3> rpyDelta = {
-                roll_input * angular_scale_,
-                pitch_input * angular_scale_,
-                yaw_input * angular_scale_
+                twist.angular.x * inv_rate,
+                twist.angular.y * inv_rate,
+                twist.angular.z * inv_rate
             };
 
-            std::string armType = msg->target == 1 ? "left" : "right";
-            target_manager_->updateMarkerPoseIncremental(armType, positionDelta, rpyDelta);
+            std::string armType = is_left ? "left" : "right";
+            target_manager_->updateMarkerPoseIncremental(armType, positionDelta, rpyDelta, false);
 
             RCLCPP_DEBUG(node_->get_logger(),
-                         "🎮 Updated %s arm pose incrementally: pos[%.3f, %.3f, %.3f], rpy[%.3f, %.3f, %.3f]",
+                         "🎮 Published %s twist vel pos[%.3f, %.3f, %.3f] ang[%.3f, %.3f, %.3f]",
                          armType.c_str(),
-                         positionDelta[0], positionDelta[1], positionDelta[2],
-                         rpyDelta[0], rpyDelta[1], rpyDelta[2]);
+                         twist.linear.x, twist.linear.y, twist.linear.z,
+                         twist.angular.x, twist.angular.y, twist.angular.z);
         }
 
         processHandCommand(msg->target, msg->hand_command);
@@ -118,38 +145,33 @@ namespace arms_ros2_control::command
         const bool use_switch = (hand_command == 0.0f || hand_command == 1.0f);
         const std::string arm_label = (hand_controllers_.size() == 1)
             ? controller_name
-            : ((target == 1) ? "LEFT" : "RIGHT") + std::string(" (") + controller_name + ")";
+            : (target == 1 ? "left" : "right");
 
-        if (use_switch) {
-            if (hand_switch_publishers_.find(controller_name) == hand_switch_publishers_.end()) {
-                const std::string topic_name = "/" + controller_name + "/target_command";
-                hand_switch_publishers_[controller_name] =
-                    node_->create_publisher<std_msgs::msg::Int32>(topic_name, 10);
-                RCLCPP_INFO(node_->get_logger(), "🎮 Created hand switch publisher: %s", topic_name.c_str());
+        if (use_switch)
+        {
+            auto& pub = hand_switch_publishers_[controller_name];
+            if (!pub)
+            {
+                pub = node_->create_publisher<std_msgs::msg::Int32>(
+                    "/" + controller_name + "/target_command", 10);
             }
-
-            auto switch_msg = std_msgs::msg::Int32();
-            switch_msg.data = static_cast<int32_t>(value);
-            hand_switch_publishers_[controller_name]->publish(switch_msg);
-
-            RCLCPP_INFO(node_->get_logger(), "🎮 Hand switch sent to %s: %s",
-                        arm_label.c_str(), (switch_msg.data == 1) ? "OPEN" : "CLOSE");
-            return;
+            std_msgs::msg::Int32 cmd;
+            cmd.data = (hand_command >= 0.5f) ? 1 : 0;
+            pub->publish(cmd);
+            RCLCPP_DEBUG(node_->get_logger(), "🎮 Hand switch %s -> %d", arm_label.c_str(), cmd.data);
         }
-
-        const double ratio = std::clamp(value, 0.0, 1.0);
-        if (hand_percent_publishers_.find(controller_name) == hand_percent_publishers_.end()) {
-            const std::string topic_name = "/" + controller_name + "/target_percent";
-            hand_percent_publishers_[controller_name] =
-                node_->create_publisher<std_msgs::msg::Float64>(topic_name, 10);
-            RCLCPP_INFO(node_->get_logger(), "🎮 Created hand percent publisher: %s", topic_name.c_str());
+        else
+        {
+            auto& pub = hand_percent_publishers_[controller_name];
+            if (!pub)
+            {
+                pub = node_->create_publisher<std_msgs::msg::Float64>(
+                    "/" + controller_name + "/target_percent", 10);
+            }
+            std_msgs::msg::Float64 pct;
+            pct.data = std::clamp(value, 0.0, 1.0);
+            pub->publish(pct);
+            RCLCPP_DEBUG(node_->get_logger(), "🎮 Hand percent %s -> %.3f", arm_label.c_str(), pct.data);
         }
-
-        auto percent_msg = std_msgs::msg::Float64();
-        percent_msg.data = ratio;
-        hand_percent_publishers_[controller_name]->publish(percent_msg);
-
-        RCLCPP_DEBUG(node_->get_logger(), "🎮 Hand percent sent to %s: %.3f",
-                     arm_label.c_str(), ratio);
     }
 } // namespace arms_ros2_control::command

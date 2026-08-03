@@ -19,6 +19,7 @@ set(TARGET_MANAGER_INCLUDE_DEPENDS
         tf2_geometry_msgs
         std_msgs
         nav_msgs
+        controller_manager_msgs
         Eigen3
 )
 
@@ -56,6 +57,7 @@ target_link_libraries(${PROJECT_NAME} PUBLIC
         ${tf2_geometry_msgs_TARGETS}
         ${std_msgs_TARGETS}
         ${nav_msgs_TARGETS}
+        ${controller_manager_msgs_TARGETS}
         Eigen3::Eigen
 )
 

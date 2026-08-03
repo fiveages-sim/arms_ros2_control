@@ -6,9 +6,11 @@
 
 #include <cstdlib>
 
+#include <atomic>
 #include <functional>
 #include <memory>
 #include <string>
+#include <thread>
 #include <vector>
 
 #include <ament_index_cpp/get_package_share_directory.hpp>
@@ -46,6 +48,9 @@ namespace ocs2::mobile_manipulator
         }
         return std::string("/tmp/ocs2_ros2/") + robot_pkg;
     }
+
+    /** Read model frame defaults from task.info (eeFrame=left, eeFrame1=right). */
+    FrameOverrides loadInfoFrameDefaults(const std::string& task_file);
 
     class CtrlComponent
     {
@@ -85,7 +90,20 @@ namespace ocs2::mobile_manipulator
                 auto_declare("ocs2_library_folder", defaultOcs2LibraryFolder(robot_pkg));
             const std::string urdf_file = resolvePlanningUrdfPath();
 
-            setupInterface(task_file, lib_folder, urdf_file);
+            // Frame params: YAML overrides task.info defaults; applied in-memory into Interface.
+            const auto info_frames = loadInfoFrameDefaults(task_file);
+            const std::string base_frame =
+                auto_declare("base_frame", info_frames.baseFrame);
+            const std::string left_ee_frame =
+                auto_declare("left_ee_frame", info_frames.eeFrame);
+            const std::string right_ee_frame =
+                auto_declare("right_ee_frame", info_frames.eeFrame1);
+            FrameOverrides frame_overrides;
+            frame_overrides.baseFrame = base_frame;
+            frame_overrides.eeFrame = left_ee_frame;
+            frame_overrides.eeFrame1 = right_ee_frame;
+
+            setupInterface(task_file, lib_folder, urdf_file, frame_overrides);
 
             dual_arm_mode_ = interface_->dual_arm_;
 
@@ -93,7 +111,6 @@ namespace ocs2::mobile_manipulator
 
             {
                 ocs2::controller_common::Ocs2VisualizerConfig viz_cfg;
-                viz_cfg.robot_name = robot_name_;
                 viz_cfg.urdf_file = urdf_file;
                 viz_cfg.dual_arm = interface_->dual_arm_;
                 const auto& minfo = interface_->getManipulatorModelInfo();
@@ -122,7 +139,7 @@ namespace ocs2::mobile_manipulator
             auto_declare("movel_max_angular_jerk", 4.0);
             auto_declare("movel_auto_extend_duration", true);
 
-            ocs2::controller_common::Ocs2ReferenceTargetContext ref_ctx;
+            controller_common::Ocs2ReferenceTargetContext ref_ctx;
             ref_ctx.dual_arm = interface_->dual_arm_;
             ref_ctx.base_frame = interface_->getManipulatorModelInfo().baseFrame;
             ref_ctx.input_dim = interface_->getManipulatorModelInfo().inputDim;
@@ -150,10 +167,32 @@ namespace ocs2::mobile_manipulator
             cached_last_action_ = observation_.state;
         }
 
+        ~CtrlComponent() { stopVisualizationThread(); }
+
         void updateObservation(const rclcpp::Time& time);
         void evaluatePolicy(const rclcpp::Time& time);
+        /** Reset observation/targets and MPC node. Does NOT block for the first policy (RT-safe). */
         void resetMpc();
+        /** True once the first MPC policy after resetMpc() is available. */
+        [[nodiscard]] bool initialPolicyReceived() const;
         void advanceMpc();
+        /** Hold joints at last commanded positions (used while waiting for initial policy). */
+        void holdLastSentPositions() const;
+        /** Publish left/right(/body) current_target from cache (call on OCS2 enter for marker sync). */
+        void publishCachedCurrentTargets() const;
+
+        /**
+         * Self-collision markers + traj recording at MPC cadence on a dedicated thread
+         * (not RT update). FCL judgment runs on viz thread; RT only reads collision_active_.
+         * Start on controller activate, stop on deactivate. Request updates via
+         * maybeRequestVisualizationUpdate() from the common control path (all FSM states).
+         */
+        void startVisualizationThread(int thread_sleep_ms, double visualization_period_sec);
+        /** Blocking stop: clear running + join (destructor / deactivate). */
+        void stopVisualizationThread();
+        void requestVisualizationUpdate();
+        /** Throttle requestVisualizationUpdate to visualization_period_sec (MPC rate). */
+        void maybeRequestVisualizationUpdate(const rclcpp::Time& time);
 
         // Visualization management
         void clearTrajectoryVisualization();
@@ -161,9 +200,14 @@ namespace ocs2::mobile_manipulator
         // Torque calculation for force control
         vector_t calculateStaticTorques() const;
 
-        // Collision detection (uses cached values from visualization, no extra computation)
-        // @param threshold: Distance threshold to consider as collision (default 0.0 = actual penetration)
-        bool isCollisionDetected(scalar_t threshold = 0.0) const;
+        /**
+         * RT-safe: viz thread already compared FCL min distance to configured threshold.
+         * Update/FSM only consume this flag (no threshold re-judgment).
+         */
+        bool isSelfCollisionActive() const
+        {
+            return collision_active_.load(std::memory_order_acquire);
+        }
 
         // Publish FSM command to stop all controllers
         // @param command: FSM command value (typically 2 for HOLD)
@@ -178,7 +222,9 @@ namespace ocs2::mobile_manipulator
         // MPC components
         std::unique_ptr<MPC_BASE> mpc_;
         std::unique_ptr<MPC_MRT_Interface> mpc_mrt_interface_;
-        std::shared_ptr<ocs2::controller_common::PoseBasedReferenceManager> pose_reference_manager_;
+        /** True after first successful updatePolicy() swap; cleared in resetMpc(). */
+        bool policy_active_{false};
+        std::shared_ptr<controller_common::PoseBasedReferenceManager> pose_reference_manager_;
 
         // Observation state
         SystemObservation observation_;
@@ -190,7 +236,8 @@ namespace ocs2::mobile_manipulator
     private:
         void setupInterface(const std::string& task_file,
                             const std::string& lib_folder,
-                            const std::string& urdf_file);
+                            const std::string& urdf_file,
+                            const FrameOverrides& frame_overrides = FrameOverrides{});
         void setupPublisher();
 
         /** Requires launch-injected xacro planning URDF (planning_urdf_path). */
@@ -204,6 +251,42 @@ namespace ocs2::mobile_manipulator
 
         // Visualization component
         std::unique_ptr<ocs2::controller_common::Ocs2PinocchioVisualizer> visualizer_;
+
+        // Visualization worker (MPC-rate, off RT update path)
+        struct VisualizationSnapshot
+        {
+            SystemObservation observation;
+            /** Command-overlay q for FCL + collision markers (obs base + last_sent joints). */
+            vector_t collision_state;
+            bool has_pred{false};
+            double pred_time{0.0};
+            vector_t pred_state;
+            bool has_policy_traj{false};
+            vector_array_t stateTrajectory;
+        };
+
+        void visualizationThreadLoop();
+        void runVisualizationOnce(const VisualizationSnapshot& snap);
+        /** Observation + last_sent_joint_positions_ overlay (same as former checkSelfCollisionOnCommand). */
+        vector_t buildCollisionState() const;
+
+        std::thread visualization_thread_;
+        std::atomic_bool visualization_running_{false};
+        std::atomic_bool visualization_update_requested_{false};
+        int visualization_thread_sleep_ms_{2};
+        double visualization_period_sec_{0.05};
+        rclcpp::Time last_visualization_request_time_{0, 0, RCL_ROS_TIME};
+        /** Viz-thread judgment (valid FCL && min_dist <= configured thr); RT only loads. */
+        std::atomic_bool collision_active_{false};
+        /** Published via atomic_store/load only (RT → viz handoff, no mutex). */
+        std::shared_ptr<VisualizationSnapshot> visualization_snapshot_;
+        /** RT-only staging for pred samples; folded into snapshot in requestVisualizationUpdate(). */
+        bool pending_viz_has_pred_{false};
+        double pending_viz_pred_time_{0.0};
+        vector_t pending_viz_pred_state_;
+        /** RT-only staging for EE trajectory markers (copy of policy.stateTrajectory_). */
+        bool pending_viz_has_policy_traj_{false};
+        vector_array_t pending_viz_state_trajectory_;
 
         // Configuration
         std::string robot_name_;

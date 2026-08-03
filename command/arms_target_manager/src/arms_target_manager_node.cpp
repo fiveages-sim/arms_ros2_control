@@ -23,13 +23,24 @@ int main(int argc, char** argv)
     std::string control_base_frame = node->declare_parameter("control_base_frame", "world");
     std::string marker_fixed_frame = node->declare_parameter("marker_fixed_frame", "base_link");
     std::string body_controller_name = node->declare_parameter("body_controller_name", "body_joint_controller");
-    double linear_scale = node->declare_parameter("linear_scale", 0.005);
-    double angular_scale = node->declare_parameter("angular_scale", 0.05);
+    double linear_scale = node->declare_parameter("linear_scale", 0.25);
+    double angular_scale = node->declare_parameter("angular_scale", 2.5);
+    double control_input_rate = node->declare_parameter("control_input_rate", 50.0);
     double vr_thumbstick_linear_scale = node->declare_parameter("vr_thumbstick_linear_scale", 0.005);
     double vr_thumbstick_angular_scale = node->declare_parameter("vr_thumbstick_angular_scale", 0.05);
     double vr_pose_scale = node->declare_parameter("vr_pose_scale", 1.0);
     // VR/头显参考link（通常为机器人头部link），可在各机器人target_manager.yaml中配置
     std::string reference_link = node->declare_parameter("reference_link", "head_link2");
+    // FULL_BODY 下 VR 末端目标计算所在的跟随坐标系
+    std::string vr_follow_frame =
+        node->declare_parameter("vr_follow_frame", "base_footprint");
+    if (vr_follow_frame.empty())
+    {
+        RCLCPP_WARN(
+            node->get_logger(),
+            "vr_follow_frame is empty; falling back to base_footprint");
+        vr_follow_frame = "base_footprint";
+    }
 
     bool enable_vr = node->declare_parameter("enable_vr", true);
 
@@ -95,6 +106,10 @@ int main(int argc, char** argv)
         RCLCPP_INFO(node->get_logger(),
                     "VR reference_link: %s (from target_manager.yaml, default=head_link2)",
                     reference_link.c_str());
+        RCLCPP_INFO(
+            node->get_logger(),
+            "VR follow frame: %s (used by FULL_BODY VR target mapping)",
+            vr_follow_frame.c_str());
     }
 
     try
@@ -128,7 +143,7 @@ int main(int argc, char** argv)
 
         // 创建ControlInputHandler（传入hand_controllers参数）
         auto control_handler = std::make_unique<ControlInputHandler>(
-            node, target_manager.get(), linear_scale, angular_scale, hand_controllers);
+            node, target_manager.get(), linear_scale, angular_scale, control_input_rate, hand_controllers);
 
         // 创建VRInputHandler（如果启用，传入统一的发布器、hand_controllers 及 target_manager.yaml 的 scale 参数）
         std::unique_ptr<VRInputHandler> vr_handler = nullptr;
@@ -138,7 +153,7 @@ int main(int argc, char** argv)
             vr_handler = std::make_unique<VRInputHandler>(
                 node, target_manager.get(), pub_left_target, pub_right_target, hand_controllers,
                 vr_thumbstick_linear_scale, vr_thumbstick_angular_scale,
-                vr_pose_scale, reference_link);
+                vr_pose_scale, reference_link, vr_follow_frame);
         }
 
         // 创建 control input 订阅器（用于增量控制）
@@ -180,6 +195,16 @@ int main(int argc, char** argv)
         // ArmMarker 内部订阅了 current_pose，通过回调机制将原始消息转发给 VRInputHandler
         if (enable_vr && vr_handler)
         {
+            target_manager->setWbcStateCallback(
+                [vr_handler_ptr = vr_handler.get()](
+                    const arms_ros2_control_msgs::msg::WbcCurrentState::ConstSharedPtr& msg)
+                {
+                    if (vr_handler_ptr)
+                    {
+                        vr_handler_ptr->wbcStateCallback(msg);
+                    }
+                });
+
             // 左臂 current_pose 回调
             target_manager->setCurrentPoseCallback("left",
                 [vr_handler_ptr = vr_handler.get()](const geometry_msgs::msg::PoseStamped::ConstSharedPtr& msg)
