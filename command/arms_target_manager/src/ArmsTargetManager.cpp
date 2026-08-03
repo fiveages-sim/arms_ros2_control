@@ -98,6 +98,31 @@ namespace arms_ros2_control::command
         return (current_controller_state_ == 3) && (body_state_ == 2);
     }
 
+    int ArmsTargetManager::getCurrentBodyState() const
+    {
+        return body_state_;
+    }
+
+    int ArmsTargetManager::getCurrentBaseState() const
+    {
+        return base_state_;
+    }
+
+    int ArmsTargetManager::getCurrentBimanualState() const
+    {
+        return bimanual_state_;
+    }
+
+    int ArmsTargetManager::getCurrentLeftArmState() const
+    {
+        return left_arm_state_;
+    }
+
+    int ArmsTargetManager::getCurrentRightArmState() const
+    {
+        return right_arm_state_;
+    }
+
     void ArmsTargetManager::updateBodyMarkerVisibility()
     {
         if (!server_ || !body_marker_)
@@ -148,6 +173,7 @@ namespace arms_ros2_control::command
         right_arm_state_ = msg->right_arm_state;
         bimanual_state_ = msg->bimanual_state;
         body_state_ = msg->body_state;
+        base_state_ = msg->base_state;
 
         const bool bimanual_state_changed = (prev_bimanual_state != bimanual_state_);
 
@@ -269,20 +295,25 @@ namespace arms_ros2_control::command
             body_target_publisher_,
             body_target_stamped_publisher_,
             "body_current_pose",
+            "body_current_target",
             publish_rate_,
-            [this](const std::string& marker_name, const geometry_msgs::msg::Pose& pose)
+            [this](const std::string& marker_name,
+                   const geometry_msgs::msg::Pose& pose)
             {
-                if (shouldShowBodyMarker())
+                if (!server_ || !shouldShowBodyMarker())
                 {
                     return;
                 }
 
-                (void)marker_name;
-                (void)pose;
+                server_->setPose(marker_name, pose);
+                markPendingChanges();
             });
 
         body_marker_->setStateCheckCallback(
             [this]() { return !shouldShowBodyMarker(); });
+
+        body_marker_->setTargetStateCheckCallback(
+            [this]() { return shouldShowBodyMarker(); });
 
         server_ = std::make_shared<interactive_markers::InteractiveMarkerServer>(
             "arms_target_manager", node_);
@@ -1348,6 +1379,61 @@ namespace arms_ros2_control::command
         {
             arm_marker->publishTargetPose();
         }
+    }
+
+    bool ArmsTargetManager::updateBodyMarkerPoseIncremental(
+        const std::array<double, 3>& positionDelta,
+        const std::array<double, 3>& rpyDelta)
+    {
+        if (!body_marker_ || !shouldShowBodyMarker())
+        {
+            return false;
+        }
+
+        geometry_msgs::msg::Pose current_pose = body_marker_->getPose();
+
+        current_pose.position.x += positionDelta[0];
+        current_pose.position.y += positionDelta[1];
+        current_pose.position.z += positionDelta[2];
+
+        if (std::abs(rpyDelta[0]) > 0.001 || std::abs(rpyDelta[1]) > 0.001 || std::abs(rpyDelta[2]) > 0.001)
+        {
+            Eigen::Quaterniond current_quat(
+                current_pose.orientation.w,
+                current_pose.orientation.x,
+                current_pose.orientation.y,
+                current_pose.orientation.z
+            );
+
+            Eigen::AngleAxisd rollAngle(rpyDelta[0], Eigen::Vector3d::UnitX());
+            Eigen::AngleAxisd pitchAngle(rpyDelta[1], Eigen::Vector3d::UnitY());
+            Eigen::AngleAxisd yawAngle(rpyDelta[2], Eigen::Vector3d::UnitZ());
+
+            Eigen::Quaterniond rotationIncrement = yawAngle * pitchAngle * rollAngle;
+
+            current_quat = rotationIncrement * current_quat;
+            current_quat.normalize();
+
+            current_pose.orientation.w = current_quat.w();
+            current_pose.orientation.x = current_quat.x();
+            current_pose.orientation.y = current_quat.y();
+            current_pose.orientation.z = current_quat.z();
+        }
+
+        body_marker_->setPose(current_pose);
+
+        if (server_)
+        {
+            server_->setPose(body_marker_->getMarkerName(), current_pose);
+            markPendingChanges();
+        }
+
+        if (current_mode_ == MarkerState::CONTINUOUS)
+        {
+            body_marker_->publishTargetPose();
+        }
+
+        return true;
     }
 
     geometry_msgs::msg::Pose ArmsTargetManager::getMarkerPose(const std::string& armType) const
