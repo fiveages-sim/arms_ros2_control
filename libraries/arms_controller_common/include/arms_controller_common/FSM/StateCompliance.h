@@ -60,6 +60,9 @@ namespace arms_controller_common
             Eigen::Matrix<double, 6, 1> force_integral{Eigen::Matrix<double, 6, 1>::Zero()};
             Eigen::Matrix<double, 6, 1> force_disp{Eigen::Matrix<double, 6, 1>::Zero()};
             Eigen::Matrix<double, 6, 1> wrench_filt{Eigen::Matrix<double, 6, 1>::Zero()};
+            // Low-pass filtered force-axis velocity (adds virtual inertia / damping
+            // to the admittance law, suppresses low-frequency drag oscillation).
+            Eigen::Matrix<double, 6, 1> v_des_filt{Eigen::Matrix<double, 6, 1>::Zero()};
 
             std::array<double, 6> zero_cal_sum{};
             long zero_cal_samples{0};
@@ -85,6 +88,7 @@ namespace arms_controller_common
             {
                 ft_active = false;
                 wrench_filt.setZero();
+                v_des_filt.setZero();
                 force_integral.setZero();
                 pos_integral.setZero();
                 force_disp.setZero();
@@ -152,14 +156,18 @@ namespace arms_controller_common
         std::vector<double> hybrid_force_damping_{5000.0, 5000.0, 5000.0, 250.0, 250.0, 250.0};
         double hybrid_force_ki_{2.0};
         double hybrid_force_ki_max_{10.0};
+        double hybrid_force_ki_leak_{0.5};        // integral leakage [1/s], anti-windup during drag
         double hybrid_force_deadband_{0.5};
         std::vector<double> force_setpoint_{0.0, 0.0, 0.0, 0.0, 0.0, 0.0};
         double force_feedback_sign_{-1.0};
+        // Low-pass on admittance output v_des (virtual inertia). Larger = more damping.
+        double force_vel_lpf_alpha_{0.3};
 
         // ── Limits ──
         std::vector<double> hybrid_cart_vmax_{0.15, 0.15, 0.15, 0.6, 0.6, 0.6};
         double hybrid_force_xmax_lin_{0.2};
         double hybrid_force_xmax_ang_{0.3};
+        double hybrid_force_xmax_margin_ratio_{0.2};  // soft-limit fade margin as fraction of xmax
         double hybrid_joint_vmax_{0.8};
         double hybrid_joint_limit_margin_{0.02};
         double hybrid_dls_lambda_{0.05};

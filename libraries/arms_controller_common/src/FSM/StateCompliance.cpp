@@ -73,13 +73,18 @@ namespace arms_controller_common
         get_array("compliance_hybrid_force_damping", hybrid_force_damping_);
         hybrid_force_ki_       = get_double("compliance_hybrid_force_ki", hybrid_force_ki_);
         hybrid_force_ki_max_   = get_double("compliance_hybrid_force_ki_max", hybrid_force_ki_max_);
+        hybrid_force_ki_leak_  = std::max(0.0, get_double("compliance_hybrid_force_ki_leak", hybrid_force_ki_leak_));
         hybrid_force_deadband_ = get_double("compliance_hybrid_force_deadband", hybrid_force_deadband_);
         get_array("compliance_force_setpoint", force_setpoint_);
         force_feedback_sign_ = get_double("compliance_force_feedback_sign", force_feedback_sign_);
+        force_vel_lpf_alpha_ = std::clamp(
+            get_double("compliance_force_vel_lpf_alpha", force_vel_lpf_alpha_), 0.02, 1.0);
 
         get_array("compliance_hybrid_cart_vmax", hybrid_cart_vmax_);
         hybrid_force_xmax_lin_ = get_double("compliance_hybrid_force_xmax_lin", hybrid_force_xmax_lin_);
         hybrid_force_xmax_ang_ = get_double("compliance_hybrid_force_xmax_ang", hybrid_force_xmax_ang_);
+        hybrid_force_xmax_margin_ratio_ = std::clamp(
+            get_double("compliance_hybrid_force_xmax_margin_ratio", hybrid_force_xmax_margin_ratio_), 0.0, 0.9);
 
         hybrid_joint_vmax_         = get_double("compliance_hybrid_joint_vmax", hybrid_joint_vmax_);
         hybrid_joint_limit_margin_ = get_double("compliance_hybrid_joint_limit_margin", hybrid_joint_limit_margin_);
@@ -691,6 +696,9 @@ namespace arms_controller_common
 
                 if (std::abs(f_err) >= hybrid_force_deadband_)
                 {
+                    // Leakage: force_integral *= (1 - leak·dt). Prevents wind-up
+                    // accumulation during sustained drag (main oscillation driver).
+                    a.force_integral(i) *= std::max(0.0, 1.0 - hybrid_force_ki_leak_ * dt);
                     a.force_integral(i) += hybrid_force_ki_ * dt * f_err;
                     a.force_integral(i) = std::clamp(
                         a.force_integral(i), -hybrid_force_ki_max_, hybrid_force_ki_max_);
@@ -737,6 +745,17 @@ namespace arms_controller_common
             }
         }
 
+        // Force-axis admittance output damping: low-pass v_des to add virtual
+        // inertia. This is the primary suppressor of the ~1-3 Hz drag oscillation
+        // (pure proportional admittance + joint-tracking lag → positive feedback).
+        for (int i = 0; i < 6; ++i)
+        {
+            if (S(i) < 0.5) { a.v_des_filt(i) = 0.0; continue; }
+            a.v_des_filt(i) = force_vel_lpf_alpha_ * v_des(i) +
+                              (1.0 - force_vel_lpf_alpha_) * a.v_des_filt(i);
+            v_des(i) = a.v_des_filt(i);
+        }
+
         for (int i = 0; i < 6; ++i) {
             const double vmax = i < static_cast<int>(hybrid_cart_vmax_.size())
                                     ? hybrid_cart_vmax_[i] : (i < 3 ? 0.05 : 0.3);
@@ -747,7 +766,7 @@ namespace arms_controller_common
         for (int i = 0; i < 6; ++i) {
             if (S(i) < 0.5) { a.force_disp(i) = 0.0; continue; }
             const double xmax = i < 3 ? hybrid_force_xmax_lin_ : hybrid_force_xmax_ang_;
-            const double margin = 0.1 * xmax;
+            const double margin = hybrid_force_xmax_margin_ratio_ * xmax;
             const double proposed = a.force_disp(i) + v_des(i) * dt;
             if (std::abs(proposed) > xmax)
                 v_des(i) = (std::copysign(xmax, proposed) - a.force_disp(i)) / dt;

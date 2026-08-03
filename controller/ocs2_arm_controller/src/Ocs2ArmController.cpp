@@ -226,14 +226,17 @@ namespace ocs2::mobile_manipulator
                                               {5000.0, 5000.0, 5000.0, 250.0, 250.0, 250.0});
             auto_declare<double>("compliance_hybrid_force_ki", 2.0);
             auto_declare<double>("compliance_hybrid_force_ki_max", 10.0);
+            auto_declare<double>("compliance_hybrid_force_ki_leak", 0.5);
             auto_declare<double>("compliance_hybrid_force_deadband", 0.5);
             auto_declare<std::vector<double>>("compliance_force_setpoint",
                                               {0.0, 0.0, 0.0, 0.0, 0.0, 0.0});
             auto_declare<double>("compliance_force_feedback_sign", -1.0);
+            auto_declare<double>("compliance_force_vel_lpf_alpha", 0.3);
             auto_declare<std::vector<double>>("compliance_hybrid_cart_vmax",
                                               {0.15, 0.15, 0.15, 0.6, 0.6, 0.6});
             auto_declare<double>("compliance_hybrid_force_xmax_lin", 0.2);
             auto_declare<double>("compliance_hybrid_force_xmax_ang", 0.3);
+            auto_declare<double>("compliance_hybrid_force_xmax_margin_ratio", 0.2);
             auto_declare<double>("compliance_hybrid_joint_vmax", 0.8);
             auto_declare<double>("compliance_hybrid_joint_limit_margin", 0.02);
             auto_declare<double>("compliance_hybrid_dls_lambda", 0.05);

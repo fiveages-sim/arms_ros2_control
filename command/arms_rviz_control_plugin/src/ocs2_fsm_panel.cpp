@@ -550,20 +550,26 @@ namespace arms_rviz_control_plugin
 
         // Soft: more compliant. Medium: controller defaults. Hard: stiffer tracking.
         // Force damping D: v = F_err/D → larger D = harder against external force.
+        // vel_lpf_alpha / ki_leak: anti-oscillation; softer modes get stronger damping
+        // since their lower D raises the loop gain.
         std::vector<double> k_pos;
         std::vector<double> d_force;
         std::vector<double> cart_vmax;
         double joint_vmax = 0.8;
+        double vel_lpf_alpha = 0.3;
+        double ki_leak = 0.5;
         const char* name = "中";
 
         switch (preset)
         {
             case ComplianceStiffnessPreset::Soft:
                 name = "软";
-                k_pos = {8.0, 8.0, 8.0, 4.0, 4.0, 4.0};
-                d_force = {1500.0, 1500.0, 1500.0, 80.0, 80.0, 80.0};
+                k_pos = {5.0, 5.0, 5.0, 2.5, 2.5, 2.5};
+                d_force = {1000.0, 1000.0, 1000.0, 50.0, 50.0, 50.0};
                 cart_vmax = {0.10, 0.10, 0.10, 0.45, 0.45, 0.45};
                 joint_vmax = 0.5;
+                vel_lpf_alpha = 0.15;   // stronger virtual inertia (low D → higher gain)
+                ki_leak = 1.0;
                 break;
             case ComplianceStiffnessPreset::Hard:
                 name = "硬";
@@ -571,14 +577,18 @@ namespace arms_rviz_control_plugin
                 d_force = {12000.0, 12000.0, 12000.0, 600.0, 600.0, 600.0};
                 cart_vmax = {0.20, 0.20, 0.20, 0.80, 0.80, 0.80};
                 joint_vmax = 1.0;
+                vel_lpf_alpha = 0.5;    // high D already damps; keep responsive
+                ki_leak = 0.3;
                 break;
             case ComplianceStiffnessPreset::Medium:
             default:
                 name = "中";
-                k_pos = {20.0, 20.0, 20.0, 10.0, 10.0, 10.0};
-                d_force = {5000.0, 5000.0, 5000.0, 250.0, 250.0, 250.0};
+                k_pos = {15.0, 15.0, 15.0, 7.0, 7.0, 7.0};
+                d_force = {4000.0, 4000.0, 4000.0, 200.0, 200.0, 200.0};
                 cart_vmax = {0.15, 0.15, 0.15, 0.60, 0.60, 0.60};
                 joint_vmax = 0.8;
+                vel_lpf_alpha = 0.3;
+                ki_leak = 0.5;
                 break;
         }
 
@@ -602,13 +612,16 @@ namespace arms_rviz_control_plugin
             rclcpp::Parameter("compliance_hybrid_force_damping", d_force),
             rclcpp::Parameter("compliance_hybrid_cart_vmax", cart_vmax),
             rclcpp::Parameter("compliance_hybrid_joint_vmax", joint_vmax),
+            rclcpp::Parameter("compliance_force_vel_lpf_alpha", vel_lpf_alpha),
+            rclcpp::Parameter("compliance_hybrid_force_ki_leak", ki_leak),
         };
 
         auto future = ocs2_param_client_->set_parameters(params);
         RCLCPP_INFO(node_->get_logger(),
                     "COMPLIANCE stiffness preset → %s "
-                    "(K_lin=%.0f D_lin=%.0f vmax=%.2f j_vmax=%.2f)",
-                    name, k_pos[0], d_force[0], cart_vmax[0], joint_vmax);
+                    "(K_lin=%.0f D_lin=%.0f vmax=%.2f j_vmax=%.2f vel_lpf=%.2f ki_leak=%.2f)",
+                    name, k_pos[0], d_force[0], cart_vmax[0], joint_vmax,
+                    vel_lpf_alpha, ki_leak);
         (void)future;
     }
 

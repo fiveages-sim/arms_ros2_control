@@ -137,10 +137,13 @@ ros2 interface show arms_ros2_control_msgs/msg/ComplianceForceStatus
 | `compliance_hybrid_force_damping` | `[5000,…,250]` | 力控 D；越大越柔 |
 | `compliance_hybrid_force_ki` | `2.0` | 积分增益，消重力残余 |
 | `compliance_hybrid_force_ki_max` | `10.0` | 积分上限 |
+| `compliance_hybrid_force_ki_leak` | `0.5` | 积分泄漏 [1/s]；拖拽振荡时调大（0.5–1.5） |
 | `compliance_hybrid_force_deadband` | `0.5` | 力误差死区 |
 | `compliance_force_feedback_sign` | `-1.0` | 力方向反了改为 `1.0` |
+| `compliance_force_vel_lpf_alpha` | `0.3` | 导纳输出低通（虚拟惯性）；振荡调小（0.1–0.3），迟钝调大 |
 | `compliance_hybrid_force_xmax_lin` | `0.2` | 力控平移软限 [m] |
 | `compliance_hybrid_force_xmax_ang` | `0.3` | 力控旋转软限 [rad] |
+| `compliance_hybrid_force_xmax_margin_ratio` | `0.2` | 软限渐缓区占 xmax 比例 |
 
 ### 关节限幅与求解
 
@@ -215,6 +218,7 @@ ros2 param set /ocs2_arm_controller compliance_zero_cal_duration 5.0
 | 无 status 话题 | `ros2 topic list \| grep compliance` |
 | F_meas 全 0 | 查 `robot.local.yaml` FT 配置与 `ros2 control list_controllers \| grep ft` |
 | 力方向反 | `compliance_force_feedback_sign` 改为 `1.0` |
+| 拖拽时低频振荡（1–3 Hz） | `compliance_force_vel_lpf_alpha` 调小至 0.1–0.2；`compliance_hybrid_force_ki_leak` 调大至 0.8–1.5；必要时增大 `compliance_hybrid_force_damping` |
 
 ---
 
