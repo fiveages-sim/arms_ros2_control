@@ -23,7 +23,7 @@ def launch_setup(context, *args, **kwargs):
     ctx = ocs2_common.build_ocs2_control_context(context)
 
     planning_robot_name = ocs2_common.resolve_planning_robot_name_from_config(
-        ctx.config, "ocs2_arm_controller", ctx.robot_name
+        ctx.config, "ocs2_arm_controller", ctx.robot_name, ctx.robot_variant
     )
 
     planning_urdf_params = ocs2_common.validate_planning_urdf(
@@ -50,6 +50,8 @@ def launch_setup(context, *args, **kwargs):
         context.launch_configurations.get("enable_gripper", "true").lower() == "true"
     )
     hand_controllers, hand_spawners = ocs2_common.setup_hand_controllers(ctx, enable_gripper)
+
+    ft_controllers, ft_spawners = ocs2_common.setup_ft_broadcasters(ctx)
 
     enable_body = context.launch_configurations.get("enable_body", "true").lower() == "true"
     body_spawners = []
@@ -112,7 +114,7 @@ def launch_setup(context, *args, **kwargs):
         rviz_node=rviz_node,
         controller_stack_nodes=controller_stack_nodes,
         main_spawner=main_spawner,
-        extra_spawners=hand_spawners + body_spawners,
+        extra_spawners=hand_spawners + body_spawners + ft_spawners,
         optional_nodes=[arms_target_manager] if arms_target_manager else [],
     )
 
