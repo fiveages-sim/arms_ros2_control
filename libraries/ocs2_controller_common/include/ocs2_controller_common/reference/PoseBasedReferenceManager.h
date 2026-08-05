@@ -61,6 +61,11 @@ public:
     void setCurrentEndEffectorPoses(const vector_t& left_ee_pose, const vector_t& right_ee_pose,
                                     bool update_target_trajectory = true);
 
+    void resetLeftEndEffectorTarget(
+        const vector_t& left_ee_pose, bool update_target_trajectory = true);
+    void resetRightEndEffectorTarget(
+        const vector_t& right_ee_pose, bool update_target_trajectory = true);
+
     /** Body pose (7: x,y,z, qx,qy,qz,qw) for indices [14:21] when using wheel-humanoid 21-dim layout. */
     void setBodyPoseReference(const vector_t& body_pose_xyzw_7);
     /** Update only body target (keep arm targets unchanged), optionally pushing trajectory to MPC. */
