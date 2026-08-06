@@ -20,6 +20,7 @@ set(dependencies
         tf2
         tf2_ros
         geometry_msgs
+        std_srvs
         trajectory_msgs
         arms_ros2_control_msgs
 )
@@ -81,6 +82,7 @@ target_link_libraries(${PROJECT_NAME} PUBLIC
         ${tf2_TARGETS}
         ${tf2_ros_TARGETS}
         ${geometry_msgs_TARGETS}
+        ${std_srvs_TARGETS}
         ${trajectory_msgs_TARGETS}
         ${arms_ros2_control_msgs_TARGETS}
         Eigen3::Eigen

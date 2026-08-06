@@ -13,6 +13,7 @@
   <depend>arms_controller_common</depend>
   <depend>sensor_msgs</depend>
   <depend>std_msgs</depend>
+  <depend>std_srvs</depend>
   <depend>arms_ros2_control_msgs</depend>
   <depend>qtbase5-dev</depend>
 

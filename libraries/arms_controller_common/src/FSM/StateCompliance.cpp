@@ -121,6 +121,7 @@ namespace arms_controller_common
         {
             auto& a = arms_[s];
             a.wrench_sub.reset();
+            a.filtered_wrench_pub.reset();
             if (a.wrench_topic.empty()) continue;
             a.wrench_sub = node_->create_subscription<geometry_msgs::msg::WrenchStamped>(
                 a.wrench_topic, qos,
@@ -136,8 +137,27 @@ namespace arms_controller_common
                     arr[5] = msg->wrench.torque.z;
                     arms_[s].ft_active = true;
                     arms_[s].ft_stamp  = msg->header.stamp;
+                    arms_[s].wrench_frame_id = msg->header.frame_id;
                 });
+            a.filtered_wrench_pub = node_->create_publisher<geometry_msgs::msg::WrenchStamped>(
+                kFilteredWrenchTopic[s], rclcpp::SensorDataQoS());
         }
+    }
+
+    void StateCompliance::setupZeroWrenchService()
+    {
+        if (!node_) return;
+
+        zero_wrench_service_ = node_->create_service<std_srvs::srv::Trigger>(
+            "compliance_zero_wrench",
+            [this](const std::shared_ptr<std_srvs::srv::Trigger::Request> /* request */,
+                   std::shared_ptr<std_srvs::srv::Trigger::Response> response)
+            {
+                zero_cal_requested_.store(true, std::memory_order_release);
+                response->success = true;
+                response->message =
+                    "Wrench zero calibration requested; keep the arms still and unloaded";
+            });
     }
 
     void StateCompliance::setupTeleopSubscriptions()
@@ -226,6 +246,8 @@ namespace arms_controller_common
         zero_cal_pending_ = true;
         zero_cal_running_ = false;
         zero_cal_done_    = false;
+        zero_cal_requested_.store(false, std::memory_order_relaxed);
+        zero_cal_start_ = rclcpp::Time(0, 0, RCL_ROS_TIME);
         measured_joint_vel_max_ = 0.0;
         q_meas_prev_all_.resize(0);
 
@@ -237,6 +259,7 @@ namespace arms_controller_common
 
         setupWrenchSubscriptions();
         setupTeleopSubscriptions();
+        setupZeroWrenchService();
 
         if (node_)
         {
@@ -272,12 +295,36 @@ namespace arms_controller_common
     {
         for (auto& a : arms_) a.resetIo();
         force_status_pub_.reset();
+        zero_wrench_service_.reset();
     }
 
     void StateCompliance::run(const rclcpp::Time& time, const rclcpp::Duration& period)
     {
         updateParam();
         const double dt = period.seconds();
+
+        if (zero_cal_requested_.exchange(false, std::memory_order_acq_rel))
+        {
+            for (auto& a : arms_)
+            {
+                a.zero_cal_sum.fill(0.0);
+                a.zero_cal_samples = 0;
+                a.force_integral.setZero();
+                a.wrench_filt.setZero();
+                a.v_des_filt.setZero();
+            }
+            zero_cal_pending_ = true;
+            zero_cal_running_ = false;
+            zero_cal_done_ = false;
+            zero_cal_start_ = rclcpp::Time(0, 0, RCL_ROS_TIME);
+            measured_joint_vel_max_ = 0.0;
+            q_meas_prev_all_.resize(0);
+            if (node_)
+            {
+                RCLCPP_INFO(node_->get_logger(),
+                            "COMPLIANCE wrench zero requested; keep arms still and unloaded");
+            }
+        }
 
         // ── FT freshness ──
         if (node_)
@@ -300,12 +347,17 @@ namespace arms_controller_common
 
         std::array<std::array<double, 6>, 2> raw{};
         std::array<bool, 2> ft_active{false, false};  // consistent snapshot of arms_[s].ft_active
+        std::array<rclcpp::Time, 2> ft_stamp{
+            rclcpp::Time(0, 0, RCL_ROS_TIME), rclcpp::Time(0, 0, RCL_ROS_TIME)};
+        std::array<std::string, 2> wrench_frame_id;
         {
             std::lock_guard<std::mutex> lk(wrench_mutex_);
             for (int s = 0; s < 2; ++s)
             {
                 raw[s] = arms_[s].wrench;
                 ft_active[s] = arms_[s].ft_active;
+                ft_stamp[s] = arms_[s].ft_stamp;
+                wrench_frame_id[s] = arms_[s].wrench_frame_id;
             }
         }
 
@@ -343,7 +395,9 @@ namespace arms_controller_common
         for (int s = 0; s < 2; ++s)
         {
             if (!ft_active[s]) continue;
-            if (computeToolGravityWrenchInSensorFrame(s, w_grav[s]))
+            const std::string sensor_frame = wrench_frame_id[s].empty()
+                                                 ? kFtFrame[s] : wrench_frame_id[s];
+            if (computeToolGravityWrenchInSensorFrame(s, sensor_frame, w_grav[s]))
                 for (int i = 0; i < 6; ++i) net[s][i] -= w_grav[s](i);
         }
 
@@ -388,6 +442,7 @@ namespace arms_controller_common
             {
                 for (int s = 0; s < 2; ++s)
                 {
+                    if (!ft_active[s]) continue;
                     for (int i = 0; i < 6; ++i)
                         arms_[s].zero_cal_sum[i] += net[s][i];
                     ++arms_[s].zero_cal_samples;
@@ -395,15 +450,19 @@ namespace arms_controller_common
             }
             if (elapsed >= zero_cal_duration_)
             {
-                if (arms_[0].zero_cal_samples < 10 && elapsed < 3.0 * zero_cal_duration_)
+                bool active_side_needs_samples = false;
+                for (int s = 0; s < 2; ++s)
+                    active_side_needs_samples |= ft_active[s] && arms_[s].zero_cal_samples < 10;
+                if (active_side_needs_samples && elapsed < 3.0 * zero_cal_duration_)
                 {
                     RCLCPP_WARN_THROTTLE(node_->get_logger(), *node_->get_clock(), 1000,
-                                         "COMPLIANCE zero_cal: too few still samples (%ld) — extending...",
-                                         arms_[0].zero_cal_samples);
+                                         "COMPLIANCE zero_cal: too few still samples (L=%ld R=%ld) — extending...",
+                                         arms_[0].zero_cal_samples, arms_[1].zero_cal_samples);
                 }
                 else
                 {
                     bool any_failed = false;
+                    bool any_calibrated = false;
                     for (int s = 0; s < 2; ++s)
                     {
                         if (arms_[s].zero_cal_samples <= 0)
@@ -423,9 +482,10 @@ namespace arms_controller_common
                         for (int i = 0; i < 6; ++i)
                             arms_[s].wrench_bias[i] = arms_[s].zero_cal_sum[i] /
                                 static_cast<double>(arms_[s].zero_cal_samples);
+                        any_calibrated = true;
                     }
                     zero_cal_running_ = false;
-                    zero_cal_done_    = !any_failed;
+                    zero_cal_done_    = any_calibrated && !any_failed;
                     if (any_failed)
                     {
                         RCLCPP_WARN(node_->get_logger(),
@@ -450,8 +510,26 @@ namespace arms_controller_common
         {
             std::array<double, 6> tared = net[s];
             for (int i = 0; i < 6; ++i) tared[i] -= arms_[s].wrench_bias[i];
+
+            if (ft_active[s] && arms_[s].filtered_wrench_pub)
+            {
+                geometry_msgs::msg::WrenchStamped msg;
+                msg.header.stamp = ft_stamp[s].nanoseconds() == 0 ? time : ft_stamp[s];
+                msg.header.frame_id = wrench_frame_id[s].empty()
+                                          ? kFtFrame[s] : wrench_frame_id[s];
+                msg.wrench.force.x = tared[0];
+                msg.wrench.force.y = tared[1];
+                msg.wrench.force.z = tared[2];
+                msg.wrench.torque.x = tared[3];
+                msg.wrench.torque.y = tared[4];
+                msg.wrench.torque.z = tared[5];
+                arms_[s].filtered_wrench_pub->publish(msg);
+            }
+
             contact_wrench[s] = ft_active[s]
-                ? wrenchToBase(s, tared)
+                ? wrenchToBase(s,
+                               wrench_frame_id[s].empty() ? kFtFrame[s] : wrench_frame_id[s],
+                               tared)
                 : Eigen::Matrix<double, 6, 1>::Zero();
         }
 
@@ -804,10 +882,12 @@ namespace arms_controller_common
     }
 
     bool StateCompliance::computeToolGravityWrenchInSensorFrame(
-        int side_index, Eigen::Matrix<double, 6, 1>& wrench_sensor) const
+        int side_index, const std::string& sensor_frame,
+        Eigen::Matrix<double, 6, 1>& wrench_sensor) const
     {
         wrench_sensor.setZero();
-        if (!tf_buffer_ || side_index < 0 || side_index > 1) return false;
+        if (!tf_buffer_ || sensor_frame.empty() || side_index < 0 || side_index > 1)
+            return false;
 
         const auto& dyn = arms_[side_index].dyn_param;
         if (dyn.size() < 4 || dyn[0] < 1e-6) return false;
@@ -819,19 +899,34 @@ namespace arms_controller_common
         geometry_msgs::msg::TransformStamped tf_world_from_sensor;
         try
         {
-            tf_sensor_from_tcp =
-                tf_buffer_->lookupTransform(kFtFrame[side_index], kTcpFrame[side_index],
-                                            tf2::TimePointZero);
+            // Tool CoM is normally expressed in the TCP frame.  Some models
+            // expose only *_eef; use it as a compatible fallback.
+            const std::array<const char*, 2> tool_frames = {
+                kTcpFrame[side_index], side_index == 0 ? "left_eef" : "right_eef"};
+            bool have_tool_tf = false;
+            for (const char* tool_frame : tool_frames)
+            {
+                try
+                {
+                    tf_sensor_from_tcp = tf_buffer_->lookupTransform(
+                        sensor_frame, tool_frame, tf2::TimePointZero);
+                    have_tool_tf = true;
+                    break;
+                }
+                catch (const tf2::TransformException&) {}
+            }
+            if (!have_tool_tf) return false;
+
             try
             {
                 tf_world_from_sensor =
-                    tf_buffer_->lookupTransform(gravity_frame_, kFtFrame[side_index],
+                    tf_buffer_->lookupTransform(gravity_frame_, sensor_frame,
                                                 tf2::TimePointZero);
             }
             catch (const tf2::TransformException&)
             {
                 tf_world_from_sensor =
-                    tf_buffer_->lookupTransform("base_link", kFtFrame[side_index],
+                    tf_buffer_->lookupTransform("base_link", sensor_frame,
                                                 tf2::TimePointZero);
             }
         }
@@ -861,6 +956,7 @@ namespace arms_controller_common
 
     Eigen::Matrix<double, 6, 1>
     StateCompliance::wrenchToBase(int side_index,
+                                   const std::string& sensor_frame,
                                    const std::array<double, 6>& wrench_ee) const
     {
         Eigen::Matrix<double, 6, 1> w_base;
@@ -875,12 +971,12 @@ namespace arms_controller_common
                 try
                 {
                     tf = tf_buffer_->lookupTransform(
-                        gravity_frame_, kFtFrame[side_index], tf2::TimePointZero);
+                        gravity_frame_, sensor_frame, tf2::TimePointZero);
                 }
                 catch (const tf2::TransformException&)
                 {
                     tf = tf_buffer_->lookupTransform(
-                        "base_link", kFtFrame[side_index], tf2::TimePointZero);
+                        "base_link", sensor_frame, tf2::TimePointZero);
                 }
                 const auto& q = tf.transform.rotation;
                 Eigen::Matrix3d R =
@@ -897,9 +993,9 @@ namespace arms_controller_common
 
         // Prefer the FT sensor frame (matches the TF path above); fall back to
         // the legacy eef frame name if the sensor frame is absent from the model.
-        const std::array<const char*, 2> fallback_frames = {
-            kFtFrame[side_index], side_index == 0 ? "left_eef" : "right_eef"};
-        for (const char* frame_name : fallback_frames)
+        const std::array<std::string, 3> fallback_frames = {
+            sensor_frame, kFtFrame[side_index], side_index == 0 ? "left_eef" : "right_eef"};
+        for (const auto& frame_name : fallback_frames)
         {
             try
             {

@@ -16,6 +16,7 @@
 #include <rclcpp/rclcpp.hpp>
 
 #include <arms_ros2_control_msgs/msg/compliance_force_status.hpp>
+#include <std_srvs/srv/trigger.hpp>
 
 namespace arms_rviz_control_plugin
 {
@@ -39,6 +40,7 @@ public:
 private Q_SLOTS:
     void onApplyClicked();
     void onSyncClicked();
+    void onZeroWrenchClicked();
     void onUserEdited();
 
 private:
@@ -52,6 +54,7 @@ private:
     rclcpp::Node::SharedPtr node_;
     rclcpp::Subscription<StatusMsg>::SharedPtr status_sub_;
     rclcpp::AsyncParametersClient::SharedPtr param_client_;
+    rclcpp::Client<std_srvs::srv::Trigger>::SharedPtr zero_wrench_client_;
 
     QLabel* status_label_{nullptr};
     QLabel* frame_label_{nullptr};
@@ -62,6 +65,7 @@ private:
     std::array<QLabel*, 6> err_left_label_{};
     QPushButton* apply_btn_{nullptr};
     QPushButton* sync_btn_{nullptr};
+    QPushButton* zero_wrench_btn_{nullptr};
 
     bool ui_dirty_{false};
     bool have_status_{false};

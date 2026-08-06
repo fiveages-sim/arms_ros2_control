@@ -109,10 +109,30 @@ ros2 interface show arms_ros2_control_msgs/msg/ComplianceForceStatus
 
 ### FT 原始输入
 
-| 侧 | 话题 |
-|----|------|
-| 左 | `/left_ft_broadcaster/wrench` |
-| 右 | `/right_ft_broadcaster/wrench` |
+| 侧 | 原始输入 | 重力补偿 + 零偏清除输出 |
+|----|----------|--------------------------|
+| 左 | `/left_ft_broadcaster/wrench` | `/left_ft_broadcaster/wrench_filtered` |
+| 右 | `/right_ft_broadcaster/wrench` | `/right_ft_broadcaster/wrench_filtered` |
+
+`wrench_filtered` 保持传感器原始 `frame_id`，数值为：
+
+```text
+原始传感器读数 - 工具重力力/力矩 - 静止清零残余偏置
+```
+
+仅在 COMPLIANCE 状态中发布。若 broadcaster 自身配置了 filter chain，不要再让它发布同名
+`wrench_filtered`，避免同一话题出现两个数据源。
+
+### 手动清零
+
+进入 COMPLIANCE 后，可在 RViz Compliance Force Panel 点击「传感器清零」，或调用：
+
+```bash
+ros2 service call /compliance_zero_wrench std_srvs/srv/Trigger '{}'
+```
+
+清零使用 `compliance_zero_cal_duration` 配置的静止采样时间。采样期间保持机械臂静止、末端无接触；
+力控轴在新零偏标定完成前保持禁用。
 
 `config/robot.local.yaml` 中 `hardware.left_ft` / `right_ft` 为 `none` 时，该侧 broadcaster 不启动。
 
@@ -208,8 +228,6 @@ ros2 param set /ocs2_arm_controller compliance_zero_cal_duration 5.0
 | `zero_cal=done FT(L=on)` | 校准完成，力控可用 |
 | `zero_cal=running` | 校准中，保持静止 |
 | `zero_cal=waiting_FT` | 等待 FT（超时后跳过） |
-| `force_ctl_L: … v=0.0055` | 力控正常 |
-| `disp_lin=[20 0 0]mm` | 力控位移触软限 |
 | `ft_ok=0` | FT 掉线或未完成校准 |
 
 | 现象 | 处理 |

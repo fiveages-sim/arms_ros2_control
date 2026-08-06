@@ -86,8 +86,12 @@ namespace arms_rviz_control_plugin
             "将力控轴选择与 F_des 写入 /ocs2_arm_controller 参数");
         sync_btn_ = new QPushButton("从控制器同步", this);
         sync_btn_->setToolTip("用最新 compliance_force_status 覆盖本面板编辑框");
+        zero_wrench_btn_ = new QPushButton("传感器清零", this);
+        zero_wrench_btn_->setToolTip(
+            "重新标定重力补偿后的残余零偏；标定期间请保持双臂静止且末端无接触");
         btn_row->addWidget(apply_btn_);
         btn_row->addWidget(sync_btn_);
+        btn_row->addWidget(zero_wrench_btn_);
         main->addLayout(btn_row);
 
         auto* hint = new QLabel(
@@ -99,6 +103,8 @@ namespace arms_rviz_control_plugin
 
         connect(apply_btn_, &QPushButton::clicked, this, &ComplianceForcePanel::onApplyClicked);
         connect(sync_btn_, &QPushButton::clicked, this, &ComplianceForcePanel::onSyncClicked);
+        connect(zero_wrench_btn_, &QPushButton::clicked,
+                this, &ComplianceForcePanel::onZeroWrenchClicked);
     }
 
     ComplianceForcePanel::~ComplianceForcePanel() = default;
@@ -109,6 +115,8 @@ namespace arms_rviz_control_plugin
 
         param_client_ = std::make_shared<rclcpp::AsyncParametersClient>(
             node_, "/ocs2_arm_controller");
+        zero_wrench_client_ = node_->create_client<std_srvs::srv::Trigger>(
+            "/compliance_zero_wrench");
 
         status_sub_ = node_->create_subscription<StatusMsg>(
             "compliance_force_status", 10,
@@ -150,6 +158,19 @@ namespace arms_rviz_control_plugin
         }
         syncUiFromStatus(last_status_);
         ui_dirty_ = false;
+    }
+
+    void ComplianceForcePanel::onZeroWrenchClicked()
+    {
+        if (!zero_wrench_client_ || !zero_wrench_client_->service_is_ready())
+        {
+            status_label_->setText("清零失败: 请先进入 COMPLIANCE 模式");
+            return;
+        }
+
+        (void)zero_wrench_client_->async_send_request(
+            std::make_shared<std_srvs::srv::Trigger::Request>());
+        status_label_->setText("传感器清零中…请保持机械臂静止且末端无接触");
     }
 
     void ComplianceForcePanel::onStatus(const StatusMsg::SharedPtr msg)

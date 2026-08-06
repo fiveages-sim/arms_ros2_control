@@ -16,6 +16,7 @@
 #include "arms_controller_common/utils/GravityCompensation.h"
 #include "arms_controller_common/utils/Kinematics.h"
 
+#include <atomic>
 #include <array>
 #include <memory>
 #include <mutex>
@@ -27,6 +28,7 @@
 #include <geometry_msgs/msg/pose_stamped.hpp>
 #include <geometry_msgs/msg/wrench_stamped.hpp>
 #include <rclcpp_lifecycle/lifecycle_node.hpp>
+#include <std_srvs/srv/trigger.hpp>
 #include <tf2_ros/buffer.h>
 #include <tf2_ros/transform_listener.h>
 
@@ -71,6 +73,7 @@ namespace arms_controller_common
             std::array<double, 6> wrench{};
             bool ft_active{false};
             rclcpp::Time ft_stamp{0, 0, RCL_ROS_TIME};
+            std::string wrench_frame_id;
 
             Eigen::VectorXd joint_lower;
             Eigen::VectorXd joint_upper;
@@ -83,6 +86,7 @@ namespace arms_controller_common
             rclcpp::Subscription<geometry_msgs::msg::PoseStamped>::SharedPtr target_stamped_sub;
             rclcpp::Publisher<geometry_msgs::msg::PoseStamped>::SharedPtr pose_pub;
             rclcpp::Publisher<geometry_msgs::msg::PoseStamped>::SharedPtr target_pub;
+            rclcpp::Publisher<geometry_msgs::msg::WrenchStamped>::SharedPtr filtered_wrench_pub;
 
             void resetControlState()
             {
@@ -106,6 +110,7 @@ namespace arms_controller_common
                 target_stamped_sub.reset();
                 pose_pub.reset();
                 target_pub.reset();
+                filtered_wrench_pub.reset();
             }
         };
 
@@ -114,13 +119,16 @@ namespace arms_controller_common
         void updateParam();
         void setupWrenchSubscriptions();
         void setupTeleopSubscriptions();
+        void setupZeroWrenchService();
         bool kinematicsAvailable() const;
         /** measured=true: joint state interfaces; else hold_positions_. */
         RobotState makeRobotState(bool measured) const;
 
         bool computeToolGravityWrenchInSensorFrame(
-            int side_index, Eigen::Matrix<double, 6, 1>& wrench_sensor) const;
+            int side_index, const std::string& sensor_frame,
+            Eigen::Matrix<double, 6, 1>& wrench_sensor) const;
         Eigen::Matrix<double, 6, 1> wrenchToBase(int side_index,
+                                                  const std::string& sensor_frame,
                                                   const std::array<double, 6>& wrench_ee) const;
 
         bool stampedPoseToBase(const geometry_msgs::msg::PoseStamped& msg,
@@ -204,10 +212,15 @@ namespace arms_controller_common
             "left_current_target", "right_current_target"};
         static constexpr const char* kDefaultWrenchTopic[2] = {
             "/left_ft_broadcaster/wrench", "/right_ft_broadcaster/wrench"};
+        static constexpr const char* kFilteredWrenchTopic[2] = {
+            "/left_ft_broadcaster/wrench_filtered",
+            "/right_ft_broadcaster/wrench_filtered"};
         static constexpr const char* kArmName[2] = {"left", "right"};
 
         rclcpp::Publisher<arms_ros2_control_msgs::msg::ComplianceForceStatus>::SharedPtr
             force_status_pub_;
+        rclcpp::Service<std_srvs::srv::Trigger>::SharedPtr zero_wrench_service_;
+        std::atomic_bool zero_cal_requested_{false};
         rclcpp::Time last_force_status_pub_{0, 0, RCL_ROS_TIME};
 
         std::mutex wrench_mutex_;
