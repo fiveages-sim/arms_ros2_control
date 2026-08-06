@@ -5,6 +5,7 @@
 
 #include <array>
 #include <memory>
+#include <mutex>
 #include <optional>
 #include <string>
 #include <vector>
@@ -25,7 +26,6 @@ namespace ocs2::controller_common {
 
 /** Frame names and optional geometry — no MobileManipulatorInterface dependency. */
 struct Ocs2VisualizerConfig {
-    std::string robot_name;
     std::string urdf_file;
     bool dual_arm{false};
     std::string base_frame;
@@ -45,16 +45,23 @@ public:
     void initialize();
 
     void updateEndEffectorTrajectory(const PrimalSolution& policy);
+    /** Same as updateEndEffectorTrajectory but from a copied state trajectory (viz thread). */
+    void updateEndEffectorTrajectoryFromStates(const vector_array_t& stateTrajectory);
     void publishEndEffectorTrajectory(const rclcpp::Time& time);
 
-    void publishSelfCollisionVisualization(const vector_t& state) const;
-    bool isCollisionDetected(scalar_t threshold = 0.0) const;
+    /**
+     * Self-collision markers via GeometryInterfaceVisualization::publishDistances.
+     * Used by the async viz thread only. Returns true if FCL ran (lastMinDistance updated).
+     */
+    bool publishSelfCollisionVisualization(const vector_t& state) const;
+    /** Min distance from the last successful publishDistances under the mutex. */
+    scalar_t getLastMinDistance() const;
 
     void publishEndEffectorPose(const rclcpp::Time& time, const vector_t& state) const;
 
     vector_t computeEndEffectorPose(const vector_t& state) const;
     vector_t computeRightEndEffectorPose(const vector_t& state) const;
-    /** 7-dim pose (x,y,z, qx,qy,qz,qw) of body_frame in base; identity at origin if body_frame empty or on error. */
+    /** 7-dim pose (x,y,z, qx,qy,qz,qw) of body_frame in base; identity at origin if body_frame empty or missing. */
     vector_t computeBodyFramePose(const vector_t& state) const;
 
     void clearTrajectoryHistory();
@@ -77,13 +84,13 @@ private:
     rclcpp::Publisher<geometry_msgs::msg::PoseStamped>::SharedPtr body_frame_pose_publisher_;
 
     std::unique_ptr<GeometryInterfaceVisualization> geometry_visualization_;
+    /** Guards geometry_visualization_ (viz-thread publishDistances / getLastMinDistance). */
+    mutable std::mutex self_collision_mutex_;
 
     std::vector<vector_t> left_arm_trajectory_history_;
     std::vector<vector_t> right_arm_trajectory_history_;
 
-    bool enable_self_collision_{true};
     bool dual_arm_mode_{false};
-    std::string robot_name_;
     std::string base_frame_;
     std::string urdf_file_;
 

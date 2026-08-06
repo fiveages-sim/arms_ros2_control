@@ -128,12 +128,15 @@ Waist lift/turn topics are published as zero from the keyboard node. Keyboard te
 
 ### Published topics
 
-- `control_input` (`arms_ros2_control_msgs/msg/Inputs`)
+- `control_input` (`arms_ros2_control_msgs/msg/Inputs`) — high-rate axes; `target` is the active arm (1=left, 2=right)
+- `teleop_mode` (`arms_ros2_control_msgs/msg/TeleopMode`) — latched mode snapshot (`Reliable` + `TransientLocal`): `active`, `control_mode`, `mirror_movement`, `speed_level`, `speed_scale`, with `stamp`. Published once at startup and again when those fields change (not on target-arm switch; use `Inputs.target` for that). Joystick starts with `active=false` until right-stick enable; keyboard always `active=true`.
 - `/cmd_vel` (`geometry_msgs/msg/Twist`)
 - `/body_joint_controller/waist_lifting_command` (`std_msgs/msg/Float64`)
 - `/body_joint_controller/waist_turning_command` (`std_msgs/msg/Float64`)
 
 The joystick stack also publishes `/fsm_command` (`std_msgs/msg/Int32`). The keyboard node does not.
+
+`TeleopMode.speed_level` / `speed_scale`: keyboard uses levels 1–10 with `speed_scale = level * 0.1`; joystick uses `0`=LOW / `1`=HIGH with the configured low/high scales.
 
 ### Subscribed topics (joystick only)
 

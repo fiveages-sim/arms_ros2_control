@@ -63,6 +63,11 @@ namespace arms_ros2_control::command
         void updateMarkerPoseIncremental(
             const std::string& armType,
             const std::array<double, 3>& positionDelta,
+            const std::array<double, 3>& rpyDelta,
+            bool publish = true);
+
+        bool updateBodyMarkerPoseIncremental(
+            const std::array<double, 3>& positionDelta,
             const std::array<double, 3>& rpyDelta);
 
         geometry_msgs::msg::Pose getMarkerPose(const std::string& armType) const;
@@ -84,6 +89,11 @@ namespace arms_ros2_control::command
         bool shouldShowLeftArmMarker() const;
         bool shouldShowRightArmMarker() const;
         bool shouldShowBodyMarker() const;
+        int getCurrentBodyState() const;
+        int getCurrentBaseState() const;
+        int getCurrentBimanualState() const;
+        int getCurrentLeftArmState() const;
+        int getCurrentRightArmState() const;
 
         void markPendingChanges();
 
@@ -96,6 +106,11 @@ namespace arms_ros2_control::command
         void setCurrentPoseCallback(
             const std::string& armType,
             std::function<void(const geometry_msgs::msg::PoseStamped::ConstSharedPtr&)> callback);
+
+        void setWbcStateCallback(
+            std::function<void(
+                const arms_ros2_control_msgs::msg::WbcCurrentState::ConstSharedPtr&)>
+                callback);
 
         void currentTargetJointCallback(const std_msgs::msg::Float64MultiArray::ConstSharedPtr& msg);
 
@@ -150,6 +165,9 @@ namespace arms_ros2_control::command
         rclcpp::Subscription<arms_ros2_control_msgs::msg::Inputs>::SharedPtr control_input_subscription_;
         rclcpp::Subscription<sensor_msgs::msg::JointState>::SharedPtr head_joint_state_subscription_;
         rclcpp::Subscription<arms_ros2_control_msgs::msg::WbcCurrentState>::SharedPtr wbc_state_subscriber_;
+        std::function<void(
+            const arms_ros2_control_msgs::msg::WbcCurrentState::ConstSharedPtr&)>
+            wbc_state_callback_;
         rclcpp::Subscription<std_msgs::msg::Float64MultiArray>::SharedPtr body_joint_target_subscriber_;
 
         rclcpp::Publisher<nav_msgs::msg::Path>::SharedPtr dual_target_stamped_publisher_;
@@ -193,6 +211,8 @@ namespace arms_ros2_control::command
         int right_arm_state_{1};
         int bimanual_state_{0};
         int body_state_{0};
+        int base_state_{
+            arms_ros2_control_msgs::msg::WbcCurrentState::BASE_LOCKED};
 
         rclcpp::Time last_marker_update_time_;
         double marker_update_interval_;

@@ -2,6 +2,7 @@
 // Joint Limits Manager Implementation
 //
 #include "arms_controller_common/utils/JointLimitsManager.h"
+#include <urdf/model.h>
 #include <algorithm>
 #include <cmath>
 
@@ -12,209 +13,75 @@ namespace arms_controller_common
     {
     }
 
-    size_t JointLimitsManager::parseFromURDF(const std::string& robot_description, 
-                                             const std::vector<std::string>& joint_names,
-                                             bool log_summary)
+    size_t JointLimitsManager::parseFromURDF(
+        const std::string& robot_description,
+        const std::vector<std::string>& joint_names,
+        bool log_summary)
     {
-        size_t initialized_count = 0;
-
-        // If joint_names is provided, parse only those joints
-        if (!joint_names.empty())
+        urdf::Model model;
+        if (!model.initString(robot_description))
         {
-            // Initialize joint limits map for all specified joints
-            for (const auto& joint_name : joint_names)
-            {
-                if (joint_limits_.find(joint_name) == joint_limits_.end())
-                {
-                    joint_limits_[joint_name] = JointLimits();
-                }
-            }
-
-            // Parse limits for each joint
-            for (const auto& joint_name : joint_names)
-            {
-                if (parseJointLimitsFromURDF(robot_description, joint_name))
-                {
-                    initialized_count++;
-                }
-            }
-        }
-        else
-        {
-            // If no joint names provided, try to find all joints in URDF
-            // This is a simplified approach - in practice, it's better to provide joint names
-            RCLCPP_WARN(logger_, 
-                       "parseFromURDF called without joint names. "
-                       "Please provide joint names for accurate parsing.");
+            RCLCPP_ERROR(logger_, "Failed to parse robot description as URDF");
+            return 0;
         }
 
-        if (log_summary && !joint_names.empty())
+        if (joint_names.empty())
         {
-            RCLCPP_INFO(logger_, 
-                       "Loaded joint limits for %zu/%zu joints from URDF", 
-                       initialized_count, joint_names.size());
+            RCLCPP_WARN(logger_,
+                        "parseFromURDF called without joint names; no joints were parsed");
+            return 0;
         }
 
-        return initialized_count;
-    }
+        size_t limits_count = 0;
+        size_t type_count = 0;
 
-    bool JointLimitsManager::parseJointLimitsFromURDF(const std::string& robot_description, 
-                                                      const std::string& joint_name)
-    {
-        try
+        for (const auto& joint_name : joint_names)
         {
-            // Find the joint definition in URDF
-            std::string joint_search = "<joint name=\"" + joint_name + "\"";
-            size_t joint_pos = robot_description.find(joint_search);
-            
-            if (joint_pos == std::string::npos)
+            JointLimits& metadata = joint_limits_[joint_name];
+            metadata = JointLimits{};
+
+            const urdf::JointConstSharedPtr joint = model.getJoint(joint_name);
+            if (!joint)
             {
-                // Try to find in ros2_control section
-                size_t search_start = 0;
-                while (true)
-                {
-                    size_t ros2_control_start = robot_description.find("<ros2_control", search_start);
-                    if (ros2_control_start == std::string::npos)
-                    {
-                        break;
-                    }
-                    
-                    size_t ros2_control_end = robot_description.find("</ros2_control>", ros2_control_start);
-                    if (ros2_control_end == std::string::npos)
-                    {
-                        ros2_control_end = robot_description.size();
-                    }
-                    
-                    joint_pos = robot_description.find(joint_search, ros2_control_start);
-                    if (joint_pos != std::string::npos && joint_pos < ros2_control_end)
-                    {
-                        break;
-                    }
-                    
-                    search_start = ros2_control_end;
-                }
+                RCLCPP_ERROR(logger_, "Joint %s not found in robot description",
+                             joint_name.c_str());
+                continue;
             }
 
-            if (joint_pos == std::string::npos)
+            switch (joint->type)
             {
-                RCLCPP_DEBUG(logger_, 
-                            "Joint %s not found in robot description", joint_name.c_str());
-                return false;
+            case urdf::Joint::REVOLUTE:
+                metadata.motion_type = JointMotionType::REVOLUTE;
+                break;
+            case urdf::Joint::CONTINUOUS:
+                metadata.motion_type = JointMotionType::CONTINUOUS;
+                break;
+            case urdf::Joint::PRISMATIC:
+                metadata.motion_type = JointMotionType::PRISMATIC;
+                break;
+            default:
+                RCLCPP_ERROR(logger_, "Joint %s has unsupported URDF type %d",
+                             joint_name.c_str(), joint->type);
+                continue;
             }
+            ++type_count;
 
-            // Find limit tag within this joint
-            size_t limit_pos = robot_description.find("<limit", joint_pos);
-            if (limit_pos == std::string::npos)
+            if (joint->type != urdf::Joint::CONTINUOUS && joint->limits)
             {
-                // Try to find limit in command_interface
-                size_t command_interface_pos = robot_description.find("<command_interface", joint_pos);
-                if (command_interface_pos != std::string::npos)
-                {
-                    // Look for min/max attributes in command_interface
-                    size_t min_pos = robot_description.find("min=\"", command_interface_pos);
-                    size_t max_pos = robot_description.find("max=\"", command_interface_pos);
-                    
-                    if (min_pos != std::string::npos && min_pos < robot_description.find("</joint>", joint_pos))
-                    {
-                        min_pos += 5; // Skip "min=\""
-                        size_t min_end = robot_description.find('"', min_pos);
-                        if (min_end != std::string::npos)
-                        {
-                            std::string lower_str = robot_description.substr(min_pos, min_end - min_pos);
-                            try
-                            {
-                                joint_limits_[joint_name].lower = std::stod(lower_str);
-                            }
-                            catch (...)
-                            {
-                                RCLCPP_WARN(logger_, 
-                                            "Failed to parse lower limit for joint %s", joint_name.c_str());
-                            }
-                        }
-                    }
-                    
-                    if (max_pos != std::string::npos && max_pos < robot_description.find("</joint>", joint_pos))
-                    {
-                        max_pos += 5; // Skip "max=\""
-                        size_t max_end = robot_description.find('"', max_pos);
-                        if (max_end != std::string::npos)
-                        {
-                            std::string upper_str = robot_description.substr(max_pos, max_end - max_pos);
-                            try
-                            {
-                                joint_limits_[joint_name].upper = std::stod(upper_str);
-                            }
-                            catch (...)
-                            {
-                                RCLCPP_WARN(logger_, 
-                                            "Failed to parse upper limit for joint %s", joint_name.c_str());
-                            }
-                        }
-                    }
-                    
-                    if (joint_limits_[joint_name].lower != -std::numeric_limits<double>::max() &&
-                        joint_limits_[joint_name].upper != std::numeric_limits<double>::max())
-                    {
-                        joint_limits_[joint_name].initialized = true;
-                        RCLCPP_DEBUG(logger_,
-                                     "Loaded joint limits for %s: lower=%.6f, upper=%.6f",
-                                     joint_name.c_str(), joint_limits_[joint_name].lower,
-                                     joint_limits_[joint_name].upper);
-                        return true;
-                    }
-                }
-                return false;
-            }
-
-            // Parse upper and lower limits from <limit> tag
-            size_t upper_pos = robot_description.find("upper=\"", limit_pos);
-            size_t lower_pos = robot_description.find("lower=\"", limit_pos);
-
-            if (upper_pos != std::string::npos && lower_pos != std::string::npos)
-            {
-                upper_pos += 7; // Skip "upper=\""
-                lower_pos += 7; // Skip "lower=\""
-
-                size_t upper_end = robot_description.find('"', upper_pos);
-                size_t lower_end = robot_description.find('"', lower_pos);
-
-                if (upper_end != std::string::npos && lower_end != std::string::npos)
-                {
-                    std::string upper_str = robot_description.substr(upper_pos, upper_end - upper_pos);
-                    std::string lower_str = robot_description.substr(lower_pos, lower_end - lower_pos);
-
-                    try
-                    {
-                        joint_limits_[joint_name].upper = std::stod(upper_str);
-                        joint_limits_[joint_name].lower = std::stod(lower_str);
-                        joint_limits_[joint_name].initialized = true;
-
-                        RCLCPP_DEBUG(logger_,
-                                     "Loaded joint limits for %s: lower=%.6f, upper=%.6f",
-                                     joint_name.c_str(), joint_limits_[joint_name].lower,
-                                     joint_limits_[joint_name].upper);
-                        return true;
-                    }
-                    catch (const std::exception& e)
-                    {
-                        RCLCPP_WARN(logger_, 
-                                    "Failed to parse limits for joint %s: %s", 
-                                    joint_name.c_str(), e.what());
-                    }
-                }
-            }
-            else
-            {
-                RCLCPP_DEBUG(logger_, 
-                            "Missing upper or lower limit attributes for joint %s", joint_name.c_str());
+                metadata.lower = joint->limits->lower;
+                metadata.upper = joint->limits->upper;
+                metadata.initialized = true;
+                ++limits_count;
             }
         }
-        catch (const std::exception& e)
-        {
-            RCLCPP_ERROR(logger_, "Error parsing joint limits for %s: %s", joint_name.c_str(), e.what());
-        }
 
-        return false;
+        if (log_summary)
+        {
+            RCLCPP_INFO(logger_,
+                        "Loaded joint metadata for %zu/%zu joints; %zu have position limits",
+                        type_count, joint_names.size(), limits_count);
+        }
+        return limits_count;
     }
 
     void JointLimitsManager::setJointLimits(const std::string& joint_name, double lower, double upper)
@@ -222,7 +89,8 @@ namespace arms_controller_common
         joint_limits_[joint_name].lower = lower;
         joint_limits_[joint_name].upper = upper;
         joint_limits_[joint_name].initialized = true;
-        
+        // Intentionally leave motion_type unchanged (UNKNOWN for new entries)
+
         RCLCPP_DEBUG(logger_,
                     "Set joint limits for %s: lower=%.6f, upper=%.6f",
                     joint_name.c_str(), lower, upper);
@@ -242,6 +110,25 @@ namespace arms_controller_common
     {
         auto it = joint_limits_.find(joint_name);
         return it != joint_limits_.end() && it->second.initialized;
+    }
+
+    JointMotionType JointLimitsManager::getJointMotionType(
+        const std::string& joint_name) const
+    {
+        const auto it = joint_limits_.find(joint_name);
+        return it == joint_limits_.end()
+                   ? JointMotionType::UNKNOWN
+                   : it->second.motion_type;
+    }
+
+    bool JointLimitsManager::hasJointMotionType(const std::string& joint_name) const
+    {
+        return getJointMotionType(joint_name) != JointMotionType::UNKNOWN;
+    }
+
+    bool JointLimitsManager::isPrismaticJoint(const std::string& joint_name) const
+    {
+        return getJointMotionType(joint_name) == JointMotionType::PRISMATIC;
     }
 
     std::vector<double> JointLimitsManager::applyLimits(
@@ -386,4 +273,3 @@ namespace arms_controller_common
         return getInitializedCount() > 0;
     }
 } // namespace arms_controller_common
-
