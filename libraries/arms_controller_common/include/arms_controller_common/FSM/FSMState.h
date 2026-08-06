@@ -46,6 +46,12 @@ namespace arms_controller_common
         virtual void exit() = 0;
         virtual FSMStateName checkChange() { return FSMStateName::INVALID; }
 
+        // Async exit support: states that need to join worker threads on exit
+        // (e.g. OCS2 MPC/viz threads) override these; the default is a synchronous exit.
+        virtual bool needsAsyncExit() const { return false; }
+        virtual void beginExit() {}
+        virtual bool tryFinishExit() { return true; }
+
         FSMStateName state_name;
         std::string state_name_string;
 

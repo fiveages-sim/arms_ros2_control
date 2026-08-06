@@ -238,6 +238,18 @@ namespace arms_controller_common
                         zero_cal_duration_,
                         kinematicsAvailable() ? "ok" : "MISSING",
                         arms_[0].joint_count, arms_[1].joint_count);
+
+            for (int s = 0; s < 2; ++s)
+            {
+                if (arms_[s].dyn_param.size() < 4 || arms_[s].dyn_param[0] < 1e-6)
+                {
+                    RCLCPP_WARN(node_->get_logger(),
+                                "COMPLIANCE: %s tool gravity compensation NOT configured "
+                                "(left_dyn_param/right_dyn_param). Zero-cal absorbs gravity at the "
+                                "current pose only — expect force errors when the arm moves.",
+                                kArmName[s]);
+                }
+            }
         }
     }
 
@@ -272,9 +284,14 @@ namespace arms_controller_common
         }
 
         std::array<std::array<double, 6>, 2> raw{};
+        std::array<bool, 2> ft_active{false, false};  // consistent snapshot of arms_[s].ft_active
         {
             std::lock_guard<std::mutex> lk(wrench_mutex_);
-            for (int s = 0; s < 2; ++s) raw[s] = arms_[s].wrench;
+            for (int s = 0; s < 2; ++s)
+            {
+                raw[s] = arms_[s].wrench;
+                ft_active[s] = arms_[s].ft_active;
+            }
         }
 
         // ── Measured joint velocity (for zero-cal stillness) ──
@@ -310,13 +327,23 @@ namespace arms_controller_common
         std::array<std::array<double, 6>, 2> net = raw;
         for (int s = 0; s < 2; ++s)
         {
-            if (!arms_[s].ft_active) continue;
+            if (!ft_active[s]) continue;
             if (computeToolGravityWrenchInSensorFrame(s, w_grav[s]))
                 for (int i = 0; i < 6; ++i) net[s][i] -= w_grav[s](i);
         }
 
         // ── Zero-cal (FT tare; does NOT block position teleop) ──
-        if (zero_cal_pending_ && (arms_[0].ft_active || arms_[1].ft_active))
+        // FT late arrival / previous zero-cal failure: re-arm automatically once
+        // a sensor is available and no calibration was ever completed.
+        if (!zero_cal_pending_ && !zero_cal_running_ && !zero_cal_done_ &&
+            (ft_active[0] || ft_active[1]))
+        {
+            zero_cal_pending_ = true;
+            RCLCPP_WARN_THROTTLE(node_->get_logger(), *node_->get_clock(), 2000,
+                                 "COMPLIANCE: FT available but zero-cal not completed — "
+                                 "restarting zero-cal, keep arm still");
+        }
+        if (zero_cal_pending_ && (ft_active[0] || ft_active[1]))
         {
             zero_cal_pending_ = false;
             zero_cal_running_ = true;
@@ -324,17 +351,18 @@ namespace arms_controller_common
             RCLCPP_INFO(node_->get_logger(),
                         "COMPLIANCE zero_cal started (%.2f s). Keep arm still.", zero_cal_duration_);
         }
-        if (zero_cal_pending_ && !arms_[0].ft_active && !arms_[1].ft_active)
+        if (zero_cal_pending_ && !ft_active[0] && !ft_active[1])
         {
             if (zero_cal_start_.nanoseconds() == 0)
                 zero_cal_start_ = time;
             else if ((time - zero_cal_start_).seconds() > 2.0)
             {
                 zero_cal_pending_ = false;
-                zero_cal_done_ = true;
+                // NOT zero_cal_done_: no calibration was performed; it will be
+                // re-armed automatically above once FT becomes available.
                 RCLCPP_WARN(node_->get_logger(),
-                            "COMPLIANCE: no FT within 2 s — continuing with "
-                            "position teleop only (force axes inactive until FT).");
+                            "COMPLIANCE: no FT within 2 s — position teleop only; "
+                            "zero-cal starts automatically once FT is available.");
             }
         }
         if (zero_cal_running_)
@@ -360,21 +388,43 @@ namespace arms_controller_common
                 }
                 else
                 {
+                    bool any_failed = false;
                     for (int s = 0; s < 2; ++s)
                     {
-                        if (arms_[s].zero_cal_samples <= 0) continue;
+                        if (arms_[s].zero_cal_samples <= 0)
+                        {
+                            // Sensor present but no still samples: calibration
+                            // failed — keep force axes OFF (no untared data in control).
+                            if (ft_active[s])
+                            {
+                                any_failed = true;
+                                RCLCPP_ERROR(node_->get_logger(),
+                                             "COMPLIANCE zero_cal FAILED on %s: no still samples "
+                                             "(arm moving or too noisy) — force axes stay inactive; retrying",
+                                             kArmName[s]);
+                            }
+                            continue;
+                        }
                         for (int i = 0; i < 6; ++i)
                             arms_[s].wrench_bias[i] = arms_[s].zero_cal_sum[i] /
                                 static_cast<double>(arms_[s].zero_cal_samples);
                     }
                     zero_cal_running_ = false;
-                    zero_cal_done_    = true;
-                    RCLCPP_INFO(node_->get_logger(),
-                                "COMPLIANCE zero_cal done (%ld samples). "
-                                "Bias L=[%.3f %.3f %.3f] R=[%.3f %.3f %.3f] N.",
-                                arms_[0].zero_cal_samples,
-                                arms_[0].wrench_bias[0], arms_[0].wrench_bias[1], arms_[0].wrench_bias[2],
-                                arms_[1].wrench_bias[0], arms_[1].wrench_bias[1], arms_[1].wrench_bias[2]);
+                    zero_cal_done_    = !any_failed;
+                    if (any_failed)
+                    {
+                        RCLCPP_WARN(node_->get_logger(),
+                                    "COMPLIANCE zero_cal incomplete — will retry automatically");
+                    }
+                    else
+                    {
+                        RCLCPP_INFO(node_->get_logger(),
+                                    "COMPLIANCE zero_cal done (%ld samples). "
+                                    "Bias L=[%.3f %.3f %.3f] R=[%.3f %.3f %.3f] N.",
+                                    arms_[0].zero_cal_samples,
+                                    arms_[0].wrench_bias[0], arms_[0].wrench_bias[1], arms_[0].wrench_bias[2],
+                                    arms_[1].wrench_bias[0], arms_[1].wrench_bias[1], arms_[1].wrench_bias[2]);
+                    }
                 }
             }
         }
@@ -385,7 +435,7 @@ namespace arms_controller_common
         {
             std::array<double, 6> tared = net[s];
             for (int i = 0; i < 6; ++i) tared[i] -= arms_[s].wrench_bias[i];
-            contact_wrench[s] = arms_[s].ft_active
+            contact_wrench[s] = ft_active[s]
                 ? wrenchToBase(s, tared)
                 : Eigen::Matrix<double, 6, 1>::Zero();
         }
@@ -419,8 +469,8 @@ namespace arms_controller_common
         // ── Hybrid control ──
         if (kinematicsAvailable())
         {
-            stepHybridControl(true,  dt, contact_wrench[0]);
-            stepHybridControl(false, dt, contact_wrench[1]);
+            stepHybridControl(true,  dt, contact_wrench[0], ft_active[0]);
+            stepHybridControl(false, dt, contact_wrench[1], ft_active[1]);
         }
         else
         {
@@ -497,8 +547,8 @@ namespace arms_controller_common
                 "force_setpoint=%.1f N I_L=%.1f F_filt_L=%.2f N",
                 zero_cal_done_ ? "DONE" :
                     (zero_cal_running_ ? "running" : "waiting_FT"),
-                arms_[0].ft_active ? "on" : "OFF",
-                arms_[1].ft_active ? "on" : "OFF",
+                ft_active[0] ? "on" : "OFF",
+                ft_active[1] ? "on" : "OFF",
                 force_setpoint_.empty() ? 0.0 : force_setpoint_[0],
                 arms_[0].force_integral(0),
                 arms_[0].wrench_filt(0));
@@ -598,8 +648,8 @@ namespace arms_controller_common
                     msg.force_measured_right[i] =
                         force_feedback_sign_ * arms_[1].wrench_filt(i);
                 }
-                msg.left_ft_active = arms_[0].ft_active;
-                msg.right_ft_active = arms_[1].ft_active;
+                msg.left_ft_active = ft_active[0];
+                msg.right_ft_active = ft_active[1];
                 msg.zero_cal_done = zero_cal_done_;
                 msg.force_feedback_sign = force_feedback_sign_;
                 force_status_pub_->publish(msg);
@@ -610,7 +660,8 @@ namespace arms_controller_common
 
     void StateCompliance::stepHybridControl(
         bool is_left, double dt,
-        const Eigen::Matrix<double, 6, 1>& contact_wrench)
+        const Eigen::Matrix<double, 6, 1>& contact_wrench,
+        bool ft_active)
     {
         if (dt <= 1e-6 || !kinematicsAvailable()) return;
 
@@ -683,7 +734,7 @@ namespace arms_controller_common
 
         // Force axes: v = (F_err + I) / D
         {
-            const bool ft_ok = zero_cal_done_ && a.ft_active;
+            const bool ft_ok = zero_cal_done_ && ft_active;
             for (int i = 0; i < 6; ++i) {
                 if (S(i) < 0.5) continue;
                 if (!ft_ok) { v_des(i) = 0.0; continue; }
@@ -694,15 +745,17 @@ namespace arms_controller_common
                 const double D = i < static_cast<int>(hybrid_force_damping_.size())
                                      ? hybrid_force_damping_[i] : (i < 3 ? 2000.0 : 100.0);
 
+                // Leakage: force_integral *= (1 - leak·dt). Prevents wind-up
+                // accumulation during sustained drag (main oscillation driver).
+                // Applied also inside the deadband so a stale integral cannot
+                // cause a velocity jump when the error re-enters the deadband.
+                a.force_integral(i) *= std::max(0.0, 1.0 - hybrid_force_ki_leak_ * dt);
                 if (std::abs(f_err) >= hybrid_force_deadband_)
                 {
-                    // Leakage: force_integral *= (1 - leak·dt). Prevents wind-up
-                    // accumulation during sustained drag (main oscillation driver).
-                    a.force_integral(i) *= std::max(0.0, 1.0 - hybrid_force_ki_leak_ * dt);
                     a.force_integral(i) += hybrid_force_ki_ * dt * f_err;
-                    a.force_integral(i) = std::clamp(
-                        a.force_integral(i), -hybrid_force_ki_max_, hybrid_force_ki_max_);
                 }
+                a.force_integral(i) = std::clamp(
+                    a.force_integral(i), -hybrid_force_ki_max_, hybrid_force_ki_max_);
                 v_des(i) = (f_err + a.force_integral(i)) / std::max(D, 1e-3);
 
                 // Idle force axis: blend teleop position tracking
@@ -925,16 +978,23 @@ namespace arms_controller_common
 
         if (!kinematics_) return w_base;
 
-        try
+        // Prefer the FT sensor frame (matches the TF path above); fall back to
+        // the legacy eef frame name if the sensor frame is absent from the model.
+        const std::array<const char*, 2> fallback_frames = {
+            kFtFrame[side_index], side_index == 0 ? "left_eef" : "right_eef"};
+        for (const char* frame_name : fallback_frames)
         {
-            auto pose = kinematics_->computeFramePose(
-                makeRobotState(/*measured=*/true),
-                side_index == 0 ? "left_eef" : "right_eef");
-            Eigen::Vector3d f_ee(wrench_ee[0], wrench_ee[1], wrench_ee[2]);
-            Eigen::Vector3d t_ee(wrench_ee[3], wrench_ee[4], wrench_ee[5]);
-            w_base << (pose.rotationMatrix * f_ee), (pose.rotationMatrix * t_ee);
+            try
+            {
+                auto pose = kinematics_->computeFramePose(
+                    makeRobotState(/*measured=*/true), frame_name);
+                Eigen::Vector3d f_ee(wrench_ee[0], wrench_ee[1], wrench_ee[2]);
+                Eigen::Vector3d t_ee(wrench_ee[3], wrench_ee[4], wrench_ee[5]);
+                w_base << (pose.rotationMatrix * f_ee), (pose.rotationMatrix * t_ee);
+                break;
+            }
+            catch (...) {}
         }
-        catch (...) {}
 
         return w_base;
     }

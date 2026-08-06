@@ -128,7 +128,8 @@ namespace arms_controller_common
         bool updateTargetFromPose(bool is_left, const geometry_msgs::msg::Pose& pose_base);
 
         void stepHybridControl(bool is_left, double dt,
-                               const Eigen::Matrix<double, 6, 1>& contact_wrench);
+                               const Eigen::Matrix<double, 6, 1>& contact_wrench,
+                               bool ft_active);
 
         std::shared_ptr<rclcpp_lifecycle::LifecycleNode> node_;
         std::shared_ptr<GravityCompensation> gravity_compensation_;
@@ -160,7 +161,7 @@ namespace arms_controller_common
         double hybrid_force_deadband_{0.5};
         std::vector<double> force_setpoint_{0.0, 0.0, 0.0, 0.0, 0.0, 0.0};
         double force_feedback_sign_{-1.0};
-        // Low-pass on admittance output v_des (virtual inertia). Larger = more damping.
+        // Low-pass on admittance output v_des (virtual inertia). Smaller = more damping.
         double force_vel_lpf_alpha_{0.3};
 
         // ── Limits ──
