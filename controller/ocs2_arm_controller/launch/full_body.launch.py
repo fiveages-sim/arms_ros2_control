@@ -25,7 +25,7 @@ def launch_setup(context, *args, **kwargs):
     ctx = ocs2_common.build_ocs2_control_context(context)
 
     planning_robot_name = ocs2_common.resolve_planning_robot_name_from_config(
-        ctx.config, "ocs2_wbc_controller", ctx.robot_name
+        ctx.config, "ocs2_wbc_controller", ctx.robot_name, ctx.robot_variant
     )
 
     wbc_available = False
@@ -68,6 +68,8 @@ def launch_setup(context, *args, **kwargs):
     hand_controllers, hand_spawners = ocs2_common.setup_hand_controllers(ctx, enable_gripper)
     hand_names = [c["name"] for c in hand_controllers] if enable_gripper else []
     _ft_controllers, ft_spawners = ocs2_common.setup_ft_broadcasters(ctx)
+
+    ft_controllers, ft_spawners = ocs2_common.setup_ft_broadcasters(ctx)
 
     body_spawners = []
     joint_controller_names = ["ocs2_wbc_controller"]
