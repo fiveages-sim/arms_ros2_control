@@ -6,7 +6,7 @@
 
 - **3D 交互式 marker**：在 RViz 中拖拽设置绝对目标 pose
 - **单臂/双臂支持**
-- **手柄适配**：订阅 `control_input`（`Inputs`），发布 `*/twist` 速度流；marker 仅可视化
+- **手柄适配**：订阅 `control_input`（`Inputs`），按 `linear_scale`/`angular_scale` 放大为 `*/twist` 速度（m/s、rad/s）；marker 仅可视化
 - **VR**：仍发绝对 `left_target` / `right_target`（本阶段不迁相对话题）
 
 ## 使用方法
@@ -77,20 +77,26 @@ RViz Joint Panel：绝对 / 相对基座 / 相对末端；相对基座填 `curre
 
 | 参数 | 含义 | 默认 |
 |------|------|------|
-| `linear_scale` | 手柄满杆最大线速度 **m/s** | `0.25` |
-| `angular_scale` | 手柄满杆最大角速度 **rad/s** | `2.5` |
-| `control_input_rate` | 上游 `control_input` 典型频率 Hz（手感对齐估算） | `50.0` |
+| `linear_scale` | 映射到 `*/twist` 的线速度上限 **m/s**（满杆） | `0.1` |
+| `angular_scale` | 映射到 `*/twist` 的角速度上限 **rad/s**（满杆） | `0.25` |
+| `control_input_rate` | 上游 `control_input` 典型频率 Hz（仅手感估算，不参与实时换算） | `50.0` |
 | `vr_thumbstick_linear_scale` | VR 摇杆线位移步进 m/step | `0.005` |
 | `vr_thumbstick_angular_scale` | VR 摇杆角位移步进 rad/step | `0.05` |
 | `enable_vr` | 是否启用 VR | `false` |
 
-### 手柄 scale 与现网手感对齐
+### 手柄 / 键盘 scale（速度，不是每帧位移）
+
+`ControlInputHandler` 将 `control_input`（`Inputs`）适配为 `left_target/twist` / `right_target/twist`：
 
 ```text
-scale_vel ≈ scale_old * f
+twist.linear.{x,y,z}  = Inputs.{x,y,z}     * linear_scale     # 单位：m/s
+twist.angular.{x,y,z} = Inputs.{roll,pitch,yaw} * angular_scale  # 单位：rad/s
 ```
 
-例：`scale_old = 0.005`、`f = 50` → `linear_scale = 0.25`。
+- **`linear_scale` / `angular_scale` 的单位就是 Twist 速度单位**（m/s、rad/s），不是旧版「每条消息位移步进」的 m/step、rad/step。
+- `Inputs` 轴量大致在 `[-1, 1]`（再乘 teleop 侧 `speed_scale`）；满杆时末端指令速度约为上述 scale。
+- 各机器人可在自身 `target_manager.yaml` 覆盖默认值。
+- OCS2 对 `*/twist` 做 latch + `dt` 积分；需要更快/更慢时直接调大/调小这两个 scale。
 
 ## VR 面键的单臂控制
 

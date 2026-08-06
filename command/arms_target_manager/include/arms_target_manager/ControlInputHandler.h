@@ -26,7 +26,6 @@ namespace arms_ros2_control::command
      * hand_command 仍转发到夹爪控制器。Marker 仅做可视化，不再发绝对 Pose。
      *
      * linear_scale / angular_scale 单位为最大速度：m/s、rad/s（满杆）。
-     * 与旧「每消息位移步进」对齐：scale_vel ≈ scale_old * control_input_rate。
      */
     class ControlInputHandler
     {
@@ -34,8 +33,8 @@ namespace arms_ros2_control::command
         ControlInputHandler(
             rclcpp::Node::SharedPtr node,
             ArmsTargetManager* targetManager,
-            double linearScale = 0.25,
-            double angularScale = 2.5,
+            double linearScale = 0.1,
+            double angularScale = 0.25,
             double controlInputRate = 50.0,
             const std::vector<std::string>& handControllers = {});
 

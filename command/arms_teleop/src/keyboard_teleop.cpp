@@ -54,6 +54,12 @@ void signalHandler(int signum)
 KeyboardTeleop::KeyboardTeleop() : Node("keyboard_teleop_node")
 {
     inputs_pub_ = create_publisher<arms_ros2_control_msgs::msg::Inputs>("control_input", 10);
+    {
+        rclcpp::QoS qos(1);
+        qos.reliable().transient_local();
+        teleop_mode_pub_ =
+            create_publisher<arms_ros2_control_msgs::msg::TeleopMode>("teleop_mode", qos);
+    }
     chassis_pub_ = create_publisher<geometry_msgs::msg::Twist>("/cmd_vel", 10);
     waist_lift_pub_ =
         create_publisher<std_msgs::msg::Float64>("/body_joint_controller/waist_lifting_command", 10);
@@ -111,6 +117,8 @@ KeyboardTeleop::KeyboardTeleop() : Node("keyboard_teleop_node")
                  "keyboard_teleop — WASD / I K / J L / arrows | N mode | M mirror | +/- speed | Space arm | "
                  "Enter grip | Ctrl+C quit\n");
     std::fflush(stdout);
+
+    publishTeleopMode();
 }
 
 KeyboardTeleop::~KeyboardTeleop()
@@ -142,6 +150,20 @@ void KeyboardTeleop::publishWaistZero()
     z.data = 0.0;
     waist_lift_pub_->publish(z);
     waist_turn_pub_->publish(z);
+}
+
+void KeyboardTeleop::publishTeleopMode()
+{
+    arms_ros2_control_msgs::msg::TeleopMode msg;
+    msg.stamp = now();
+    msg.active = true;
+    msg.control_mode = (mode_ == ControlMode::Arm)
+                           ? arms_ros2_control_msgs::msg::TeleopMode::CONTROL_ARM
+                           : arms_ros2_control_msgs::msg::TeleopMode::CONTROL_CHASSIS;
+    msg.mirror_movement = mirror_movement_;
+    msg.speed_level = speed_level_;
+    msg.speed_scale = static_cast<float>(speedMultiplier());
+    teleop_mode_pub_->publish(msg);
 }
 
 double KeyboardTeleop::speedMultiplier() const
@@ -361,21 +383,25 @@ void KeyboardTeleop::timerCallback()
         inputs_.x = inputs_.y = inputs_.z = inputs_.roll = inputs_.pitch = inputs_.yaw = 0.0;
         chassis_cmd_.linear.x = chassis_cmd_.linear.y = chassis_cmd_.linear.z = 0.0;
         chassis_cmd_.angular.x = chassis_cmd_.angular.y = chassis_cmd_.angular.z = 0.0;
+        publishTeleopMode();
     }
     prev_active_n_ = an;
 
     if (prev_active_m_ && !am) {
         mirror_movement_ = !mirror_movement_;
+        publishTeleopMode();
     }
     prev_active_m_ = am;
 
     if (prev_active_minus_ && !aminus) {
         speed_level_ = std::max(1, speed_level_ - 1);
+        publishTeleopMode();
     }
     prev_active_minus_ = aminus;
 
     if (prev_active_plus_ && !aplus) {
         speed_level_ = std::min(10, speed_level_ + 1);
+        publishTeleopMode();
     }
     prev_active_plus_ = aplus;
 
