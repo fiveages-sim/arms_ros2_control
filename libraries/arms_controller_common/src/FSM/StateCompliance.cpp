@@ -5,7 +5,6 @@
 
 #include <algorithm>
 #include <cmath>
-#include <cstdio>
 #include <utility>
 
 #include <tf2/exceptions.h>
@@ -189,25 +188,41 @@ namespace arms_controller_common
     {
         updateParam();
 
+        // Clear the previous COMPLIANCE session before capturing the new
+        // initial target.  In particular, resetControlState() invalidates the
+        // target, so it must run before the FK result is stored below.
+        for (auto& a : arms_) a.resetControlState();
+
         const size_t nj = ctrl_interfaces_.joint_position_state_interface_.size();
         hold_positions_.resize(nj);
         for (size_t i = 0; i < nj; ++i)
         {
+            const double measured = ctrl_interfaces_.joint_position_state_interface_[i]
+                                        .get().get_optional().value_or(0.0);
             hold_positions_[i] = ctrl_interfaces_.last_sent_joint_positions_.size() > i
-                ? ctrl_interfaces_.last_sent_joint_positions_[i] : 0.0;
+                ? ctrl_interfaces_.last_sent_joint_positions_[i] : measured;
         }
 
+        // Match StateOCS2::resetMpc(): the target on state entry is the FK of
+        // the last commanded joint state.  Store it as a real target (instead
+        // of relying on the target_valid=false publishing fallback), so
+        // left/right_current_target start at the pose where control takes over.
         if (kinematicsAvailable())
         {
             const RobotState state = makeRobotState(/*measured=*/false);
             for (int s = 0; s < 2; ++s)
             {
                 if (arms_[s].joint_count > 0)
-                    arms_[s].cmd_pose = kinematics_->computeSingleEndEffectorPose(state, kArmName[s]);
+                {
+                    const EndEffectorPose initial_pose =
+                        kinematics_->computeSingleEndEffectorPose(state, kArmName[s]);
+                    arms_[s].cmd_pose = initial_pose;
+                    arms_[s].target = initial_pose;
+                    arms_[s].target_valid = true;
+                }
             }
         }
 
-        for (auto& a : arms_) a.resetControlState();
         zero_cal_pending_ = true;
         zero_cal_running_ = false;
         zero_cal_done_    = false;
@@ -538,67 +553,6 @@ namespace arms_controller_common
             }
         }
 
-        // ── Diagnostics ──
-        if (node_)
-        {
-            RCLCPP_INFO_THROTTLE(
-                node_->get_logger(), *node_->get_clock(), 3000,
-                "COMPLIANCE status: zero_cal=%s FT(L=%s R=%s) "
-                "force_setpoint=%.1f N I_L=%.1f F_filt_L=%.2f N",
-                zero_cal_done_ ? "DONE" :
-                    (zero_cal_running_ ? "running" : "waiting_FT"),
-                ft_active[0] ? "on" : "OFF",
-                ft_active[1] ? "on" : "OFF",
-                force_setpoint_.empty() ? 0.0 : force_setpoint_[0],
-                arms_[0].force_integral(0),
-                arms_[0].wrench_filt(0));
-        }
-        if (node_ && kinematicsAvailable())
-        {
-            auto log_arm = [&](const char* tag, const Eigen::Matrix<double, 6, 1>& wrench,
-                               const ArmSide& a)
-            {
-                Eigen::Vector3d de = Eigen::Vector3d::Zero();
-                if (a.target_valid) de = a.target.position - a.cmd_pose.position;
-                double pos_err = 0, force_err = 0;
-                for (int i = 0; i < 3; ++i)
-                    (task_selection_[i] > 0.5 ? force_err : pos_err) += de(i) * de(i);
-
-                double ang_err = 0, ang_pos = 0, ang_force = 0;
-                if (a.target_valid)
-                {
-                    const auto Rr = a.target.rotationMatrix * a.cmd_pose.rotationMatrix.transpose();
-                    const double ca = std::clamp((Rr.trace() - 1.0) * 0.5, -1.0, 1.0);
-                    const double ang = std::acos(ca);
-                    Eigen::Vector3d rv = Eigen::Vector3d::Zero();
-                    if (ang > 1e-9) {
-                        rv << Rr(2,1)-Rr(1,2), Rr(0,2)-Rr(2,0), Rr(1,0)-Rr(0,1);
-                        const double s2 = 2.0 * std::sin(ang);
-                        if (std::abs(s2) > 1e-9) rv /= s2;
-                        rv *= ang;
-                    }
-                    ang_err = rv.norm();
-                    for (int i = 0; i < 3; ++i)
-                        (task_selection_[i+3] > 0.5 ? ang_force : ang_pos) += rv(i) * rv(i);
-                }
-                const double kR = 180.0 / M_PI;
-                RCLCPP_INFO_THROTTLE(
-                    node_->get_logger(), *node_->get_clock(), 200,
-                    "COMPLIANCE %s: F=[%.2f %.2f %.2f]N M=[%.2f %.2f %.2f]Nm "
-                    "pos=%.1fmm force=%.1fmm ang=%.1fdeg ang_p=%.1fdeg ang_f=%.1fdeg "
-                    "disp_lin=[%.3f %.3f %.3f]mm disp_ang=[%.2f %.2f %.2f]deg",
-                    tag, wrench(0),wrench(1),wrench(2), wrench(3),wrench(4),wrench(5),
-                    std::sqrt(pos_err)*1e3, std::sqrt(force_err)*1e3,
-                    ang_err*kR, std::sqrt(ang_pos)*kR, std::sqrt(ang_force)*kR,
-                    std::abs(a.force_disp(0))*1e3, std::abs(a.force_disp(1))*1e3,
-                    std::abs(a.force_disp(2))*1e3,
-                    std::abs(a.force_disp(3))*kR, std::abs(a.force_disp(4))*kR,
-                    std::abs(a.force_disp(5))*kR);
-            };
-            log_arm("L", contact_wrench[0], arms_[0]);
-            log_arm("R", contact_wrench[1], arms_[1]);
-        }
-
         // ── Publish TCP / teleop target for RViz ──
         if (node_)
         {
@@ -771,31 +725,6 @@ namespace arms_controller_common
                 }
             }
 
-            if (node_)
-            {
-                std::string axes;
-                for (int i = 0; i < 6; ++i)
-                {
-                    if (S(i) < 0.5) continue;
-                    const double F_des = i < static_cast<int>(force_setpoint_.size())
-                                             ? force_setpoint_[i] : 0.0;
-                    const double F_meas = force_feedback_sign_ * a.wrench_filt(i);
-                    char buf[128];
-                    std::snprintf(buf, sizeof(buf),
-                                  "  F%d: set=%.2f meas=%.2f err=%.2f int=%.2f v=%.4f",
-                                  i, F_des, F_meas, F_des - F_meas,
-                                  a.force_integral(i), v_des(i));
-                    axes += buf;
-                }
-                if (!axes.empty())
-                {
-                    RCLCPP_INFO_THROTTLE(
-                        node_->get_logger(), *node_->get_clock(), 2000,
-                        "COMPLIANCE force_ctl_%s: zero_cal=%d ft_ok=%d dt=%.4f%s",
-                        is_left ? "L" : "R",
-                        (int)zero_cal_done_, (int)ft_ok, dt, axes.c_str());
-                }
-            }
         }
 
         // Force-axis admittance output damping: low-pass v_des to add virtual

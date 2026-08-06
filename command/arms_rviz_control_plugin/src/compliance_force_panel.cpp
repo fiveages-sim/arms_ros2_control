@@ -172,9 +172,9 @@ namespace arms_rviz_control_plugin
         }
         status_label_->setText(text);
         frame_label_->setText(
-            QString("frame: %1   sign=%.0f")
+            QString("frame: %1   sign=%2")
                 .arg(QString::fromStdString(msg->header.frame_id))
-                .arg(msg->force_feedback_sign));
+                .arg(msg->force_feedback_sign, 0, 'f', 0));
 
         updateMeasuredLabels(*msg);
 

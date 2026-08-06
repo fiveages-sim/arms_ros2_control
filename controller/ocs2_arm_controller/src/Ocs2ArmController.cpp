@@ -133,6 +133,7 @@ namespace ocs2::mobile_manipulator
             // 从 CtrlComponent 的 OCS2 接口读取末端执行器名称
             std::string left_ee_name_ = "left_tcp";  // 默认值
             std::string right_ee_name_ = "right_tcp"; // 默认值
+            std::string control_base_frame = "base_link";
 
             if (ctrl_comp_->interface_)
             {
@@ -140,6 +141,10 @@ namespace ocs2::mobile_manipulator
                 const auto& model_info = ctrl_comp_->interface_->getManipulatorModelInfo();
                 left_ee_name_ = model_info.eeFrame;    // 从 .info 文件读取（如 "left_eef"）
                 right_ee_name_ = model_info.eeFrame1;  // 从 .info 文件读取（如 "right_eef"）
+                if (!model_info.baseFrame.empty())
+                {
+                    control_base_frame = model_info.baseFrame;
+                }
 
                 RCLCPP_INFO(get_node()->get_logger(),
                             "Using end effector names from OCS2 config: left='%s', right='%s'",
@@ -247,7 +252,9 @@ namespace ocs2::mobile_manipulator
             auto_declare<double>("compliance_gravity_accel", 9.81);
             auto_declare<double>("compliance_ft_timeout_sec", 0.2);
             auto_declare<bool>("compliance_teleop_enable", true);
-            auto_declare<std::string>("compliance_teleop_base_frame", "base_link");
+            // Keep COMPLIANCE targets in the same frame used by StateOCS2.
+            // A YAML override is still honored by auto_declare().
+            auto_declare<std::string>("compliance_teleop_base_frame", control_base_frame);
             auto_declare<std::string>("compliance_gravity_frame", "world");
             auto_declare<std::vector<double>>("left_dyn_param", {});
             auto_declare<std::vector<double>>("right_dyn_param", {});
