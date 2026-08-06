@@ -33,7 +33,7 @@ namespace arms_ros2_control::command
 
         RCLCPP_INFO(node_->get_logger(),
                     "🎮 ControlInputHandler: twist velocity scales linear=%.3f m/s, angular=%.3f rad/s "
-                    "(control_input_rate=%.1f Hz; align old step scale via scale_vel ≈ scale_old * rate)",
+                    "(control_input_rate=%.1f Hz)",
                     linear_scale_, angular_scale_, control_input_rate_);
         if (!hand_controllers_.empty()) {
             RCLCPP_INFO(node_->get_logger(), "🎮 Hand controllers configured: %zu controller(s)", hand_controllers_.size());

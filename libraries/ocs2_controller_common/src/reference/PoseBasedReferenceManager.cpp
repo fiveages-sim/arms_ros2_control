@@ -1872,6 +1872,42 @@ namespace ocs2::controller_common
         publishCurrentTargets();
     }
 
+    void PoseBasedReferenceManager::resetLeftEndEffectorTarget(
+        const vector_t& pose, bool update_target_trajectory)
+    {
+        if (pose.size() != 7)
+        {
+            RCLCPP_ERROR(logger_, "left EE target must have 7 elements");
+            return;
+        }
+        left_target_state_ = pose;
+        resetArmReferenceBuffer(left_arm_reference_buffer_, pose, current_observation_.time);
+        if (update_target_trajectory &&
+            effectiveTargetStateDim() == Ocs2ReferenceTargetContext::kWheelHumanoidTargetStateDim)
+        {
+            updateTargetTrajectory();
+        }
+        publishCurrentTargets("left");
+    }
+
+    void PoseBasedReferenceManager::resetRightEndEffectorTarget(
+        const vector_t& pose, bool update_target_trajectory)
+    {
+        if (pose.size() != 7)
+        {
+            RCLCPP_ERROR(logger_, "right EE target must have 7 elements");
+            return;
+        }
+        right_target_state_ = pose;
+        resetArmReferenceBuffer(right_arm_reference_buffer_, pose, current_observation_.time);
+        if (update_target_trajectory &&
+            effectiveTargetStateDim() == Ocs2ReferenceTargetContext::kWheelHumanoidTargetStateDim)
+        {
+            updateTargetTrajectory();
+        }
+        publishCurrentTargets("right");
+    }
+
     void PoseBasedReferenceManager::publishCurrentTargets(
         const std::string& target_type)
     {

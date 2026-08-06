@@ -1,13 +1,16 @@
 /**:
   ros__parameters:
-    # 手柄/键盘：满杆最大线速度 (m/s)。与旧步进 scale 对齐：scale_vel ≈ scale_old * control_input_rate
-    # 例：旧 linear_scale=0.005、发布约 50 Hz → 0.005 * 50 = 0.25
-    linear_scale: 0.25
+    # 手柄/键盘 → left/right_target/twist：
+    #   twist.linear  = Inputs.{x,y,z} * linear_scale          # 单位 m/s
+    #   twist.angular = Inputs.{roll,pitch,yaw} * angular_scale # 单位 rad/s
+    # 满杆时即为最大指令速度。
+    linear_scale: 0.1
 
-    # 手柄/键盘：满杆最大角速度 (rad/s)。例：旧 0.05 * 50 = 2.5
-    angular_scale: 2.5
+    # 同上，单位 rad/s
+    angular_scale: 0.25
 
-    # control_input 典型发布频率 (Hz)，仅用于文档/手感对齐估算；控制器按自身 dt 积分 twist
+    # control_input 典型发布频率 (Hz)，仅用于文档/手感估算；不参与实时换算
+    # （OCS2 按自身 dt 对 twist 积分）
     control_input_rate: 50.0
 
     # VR摇杆：线性缩放因子（单位 m/step）

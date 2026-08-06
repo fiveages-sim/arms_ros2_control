@@ -18,6 +18,7 @@
 #include <rclcpp/rclcpp.hpp>
 #include <std_msgs/msg/float64.hpp>
 #include <arms_ros2_control_msgs/msg/inputs.hpp>
+#include <arms_ros2_control_msgs/msg/teleop_mode.hpp>
 
 class KeyboardTeleop final : public rclcpp::Node {
 public:
@@ -36,6 +37,7 @@ private:
     bool isTtyOk() const;
     void restoreTerminal();
     void publishWaistZero();
+    void publishTeleopMode();
 
     double speedMultiplier() const;
 
@@ -45,6 +47,7 @@ private:
                   std::chrono::milliseconds stale) const;
 
     rclcpp::Publisher<arms_ros2_control_msgs::msg::Inputs>::SharedPtr inputs_pub_;
+    rclcpp::Publisher<arms_ros2_control_msgs::msg::TeleopMode>::SharedPtr teleop_mode_pub_;
     rclcpp::Publisher<geometry_msgs::msg::Twist>::SharedPtr chassis_pub_;
     rclcpp::Publisher<std_msgs::msg::Float64>::SharedPtr waist_lift_pub_;
     rclcpp::Publisher<std_msgs::msg::Float64>::SharedPtr waist_turn_pub_;
