@@ -711,18 +711,6 @@ namespace arms_controller_common
                 a.force_integral(i) = std::clamp(
                     a.force_integral(i), -hybrid_force_ki_max_, hybrid_force_ki_max_);
                 v_des(i) = (f_err + a.force_integral(i)) / std::max(D, 1e-3);
-
-                // Idle force axis: blend teleop position tracking
-                if (std::abs(f_err) < hybrid_force_deadband_ && a.target_valid && i < 3)
-                {
-                    const double e_pos = tgt.position(i) - cur.position(i);
-                    if (std::abs(e_pos) > 1e-6)
-                    {
-                        const double K = i < static_cast<int>(hybrid_pos_stiffness_.size())
-                                             ? hybrid_pos_stiffness_[i] : 20.0;
-                        v_des(i) += K * e_pos;
-                    }
-                }
             }
 
         }
