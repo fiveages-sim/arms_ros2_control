@@ -1,10 +1,13 @@
 #pragma once
+#include "arms_controller_common/utils/BimanualProjectedPlanner.h"
 #include "arms_controller_common/utils/Kinematics.h"
 #include <Eigen/Dense>
 #include <arms_ros2_control_msgs/msg/circle_message.hpp>
+#include <arms_ros2_control_msgs/msg/cooperative_motion.hpp>
 #include <arms_ros2_control_msgs/msg/linear_message.hpp>
 #include <geometry_msgs/msg/pose.hpp>
 #include <memory>
+#include <optional>
 #include <rclcpp/rclcpp.hpp>
 #include <string>
 #include <vector>
@@ -26,6 +29,11 @@ namespace arms_controller_common
         void setKinematicsSolver(
             const std::shared_ptr<ArmKinematics>& kinematics = nullptr);
 
+        void setCooperativeCollisionGeometry(
+            pinocchio::GeometryModel geometry_model,
+            double minimum_allowed_distance);
+        void clearCooperativeCollisionGeometry();
+
         bool planSingleArmMoveL(
             const std::vector<double>& start_joint_pos,
             const arms_ros2_control_msgs::msg::LinearMessage& target_point_msg,
@@ -42,6 +50,10 @@ namespace arms_controller_common
             const std::vector<double>& start_joint_pos,
             const arms_ros2_control_msgs::msg::CircleMessage& target_circle_msg,
             const double period = 0.01);
+        bool planCooperativeMotion(
+            const std::vector<double>& start_joint_pos,
+            const arms_ros2_control_msgs::msg::CooperativeMotion& motion,
+            const double period = 0.01);
 
         bool getNextJointPos(std::vector<double>& res);
         void setSampleStamp(double t) { last_sample_stamp_ = t; }
@@ -50,6 +62,8 @@ namespace arms_controller_common
         double getPlanningTime() const { return planningTime_; }
         bool isCompleted() const { return completed_; }
         std::string getLastError() const { return last_error_; }
+        double getRelativePositionError() const { return relative_position_error_; }
+        double getRelativeOrientationError() const { return relative_orientation_error_; }
         std::vector<std::string> getMovelJointNames(std::string arm_name);
         void clearPlanner();
 
@@ -75,6 +89,13 @@ namespace arms_controller_common
         std::string last_error_;
         double planningTime_ = 0.0;
         double last_sample_stamp_{0.0};
+        std::vector<Eigen::VectorXd> precomputed_joint_trajectory_;
+        size_t precomputed_index_{0};
+        bool cooperative_mode_{false};
+        double relative_position_error_{0.0};
+        double relative_orientation_error_{0.0};
+        std::optional<pinocchio::GeometryModel> cooperative_collision_geometry_;
+        double cooperative_minimum_collision_distance_{0.0};
 
         //辅助函数
         bool validateCircleMsg(
@@ -112,6 +133,13 @@ namespace arms_controller_common
             arm_kinematics_ = kinematics;
         }
 
+        void setCooperativeCollisionGeometry(
+            pinocchio::GeometryModel /*geometry_model*/,
+            double /*minimum_allowed_distance*/)
+        {
+        }
+        void clearCooperativeCollisionGeometry() {}
+
         bool planSingleArmMoveL(
             const std::vector<double>& /*start_joint_pos*/,
             const arms_ros2_control_msgs::msg::LinearMessage& /*target_point_msg*/,
@@ -144,6 +172,14 @@ namespace arms_controller_common
             last_error_ = "lina_planning not found; dual-arm MoveC is disabled";
             return false;
         }
+        bool planCooperativeMotion(
+            const std::vector<double>& /*start_joint_pos*/,
+            const arms_ros2_control_msgs::msg::CooperativeMotion& /*motion*/,
+            const double /*period*/ = 0.01)
+        {
+            last_error_ = "lina_planning not found; cooperative motion is disabled";
+            return false;
+        }
 
         bool getNextJointPos(std::vector<double>& /*res*/)
         {
@@ -156,6 +192,8 @@ namespace arms_controller_common
         double getPlanningTime() const { return planningTime_; }
         bool isCompleted() const { return completed_; }
         std::string getLastError() const { return last_error_; }
+        double getRelativePositionError() const { return 0.0; }
+        double getRelativeOrientationError() const { return 0.0; }
         std::vector<std::string> getMovelJointNames(std::string /*arm_name*/) { return {}; }
         void clearPlanner()
         {

@@ -572,7 +572,9 @@ namespace arms_controller_common
         if (motion_mode_ == MotionMode::MOVECARTESIAN && move_cartesian_active_)
         {
             if ((active_linear_goal_ && active_linear_goal_->is_canceling()) ||
-                (active_circle_goal_ && active_circle_goal_->is_canceling()))
+                (active_circle_goal_ && active_circle_goal_->is_canceling()) ||
+                (active_cooperative_motion_goal_ &&
+                 active_cooperative_motion_goal_->is_canceling()))
             {
                 refreshHoldPositions();
                 move_cartesian_active_ = false;
@@ -580,6 +582,7 @@ namespace arms_controller_common
                 cartesian_manager_.clearPlanner();
                 finishLinearAction(false, true, "MoveL trajectory canceled");
                 finishCircleAction(false, true, "MoveC trajectory canceled");
+                finishCooperativeMotionAction(false, true, "Cooperative trajectory canceled");
                 return;
             }
 
@@ -611,6 +614,7 @@ namespace arms_controller_common
                     publishCurrentTargetJoint(full_joint_pos);
                     publishLinearFeedback();
                     publishCircleFeedback();
+                    publishCooperativeMotionFeedback();
 
                     // 检查 MoveL或者Movec 是否完成
                     if (cartesian_manager_.isCompleted())
@@ -624,6 +628,8 @@ namespace arms_controller_common
                         cartesian_manager_.clearPlanner();
                         finishLinearAction(true, false, "MoveL trajectory completed successfully");
                         finishCircleAction(true, false, "MoveC trajectory completed successfully");
+                        finishCooperativeMotionAction(
+                            true, false, "Cooperative trajectory completed successfully");
                     }
                 }
                 else
@@ -635,6 +641,8 @@ namespace arms_controller_common
                     motion_mode_ = MotionMode::MOVEJ;
                     finishLinearAction(false, false, "MoveL joint position size mismatch");
                     finishCircleAction(false, false, "MoveC joint position size mismatch");
+                    finishCooperativeMotionAction(
+                        false, false, "Cooperative joint position size mismatch");
                 }
             }
             else
@@ -650,6 +658,7 @@ namespace arms_controller_common
                 RCLCPP_WARN(node_->get_logger(), "%s", error_msg.c_str());
                 finishLinearAction(false, false, error_msg);
                 finishCircleAction(false, false, error_msg);
+                finishCooperativeMotionAction(false, false, error_msg);
             }
 
             return; // MoveL 优先级高于 MOVEJ
@@ -944,6 +953,8 @@ namespace arms_controller_common
         cartesian_manager_.clearPlanner();
         finishLinearAction(false, false, "StateMoveJ exited before MoveL trajectory completed");
         finishCircleAction(false, false, "StateMoveJ exited before MoveC trajectory completed");
+        finishCooperativeMotionAction(
+            false, false, "StateMoveJ exited before cooperative trajectory completed");
         finishJointTrajectoryAction(false, false, "StateMoveJ exited before joint trajectory completed");
         finishWaistLiftingPoseAction(
             false,
@@ -969,7 +980,7 @@ namespace arms_controller_common
             return false;
         }
         if (move_cartesian_active_ || joint_trajectory_action_active_ ||
-            linear_action_active_ || circle_action_active_)
+            linear_action_active_ || circle_action_active_ || cooperative_action_active_)
         {
             return true;
         }
@@ -1064,6 +1075,7 @@ namespace arms_controller_common
         cartesian_manager_.clearPlanner();
         finishLinearAction(false, false, "MoveL preempted for stop-to-zero");
         finishCircleAction(false, false, "MoveC preempted for stop-to-zero");
+        finishCooperativeMotionAction(false, false, "Cooperative motion preempted for stop-to-zero");
         finishJointTrajectoryAction(false, false, "Joint trajectory preempted for stop-to-zero");
         finishWaistLiftingPoseAction(
             false,
@@ -3509,6 +3521,14 @@ namespace arms_controller_common
         cartesian_manager_.setKinematicsSolver(kinematics);
     }
 
+    void StateMoveJ::setCooperativeCollisionGeometry(
+        pinocchio::GeometryModel geometry_model,
+        double minimum_allowed_distance)
+    {
+        cartesian_manager_.setCooperativeCollisionGeometry(
+            std::move(geometry_model), minimum_allowed_distance);
+    }
+
     void StateMoveJ::setupLinearTrajectoryService(const std::string& service_name)
     {
         std::string full_service_name = node_->get_name() + std::string("/") + service_name;
@@ -3534,6 +3554,22 @@ namespace arms_controller_common
             std::bind(&StateMoveJ::handleLinearAccepted, this, std::placeholders::_1));
 
         RCLCPP_DEBUG(node_->get_logger(), "Created linear trajectory action at %s",
+                     full_action_name.c_str());
+    }
+
+    void StateMoveJ::setupCooperativeMotionAction(const std::string& action_name)
+    {
+        const std::string full_action_name = node_->get_name() + std::string("/") + action_name;
+        cooperative_motion_action_server_ =
+            rclcpp_action::create_server<ExecuteCooperativeMotionAction>(
+                node_, full_action_name,
+                std::bind(&StateMoveJ::handleCooperativeMotionGoal, this,
+                          std::placeholders::_1, std::placeholders::_2),
+                std::bind(&StateMoveJ::handleCooperativeMotionCancel, this,
+                          std::placeholders::_1),
+                std::bind(&StateMoveJ::handleCooperativeMotionAccepted, this,
+                          std::placeholders::_1));
+        RCLCPP_DEBUG(node_->get_logger(), "Created cooperative motion action at %s",
                      full_action_name.c_str());
     }
 
@@ -3765,6 +3801,173 @@ namespace arms_controller_common
         active_linear_goal_.reset();
         linear_action_active_ = false;
         linear_action_estimated_duration_ = 0.0;
+    }
+
+    rclcpp_action::GoalResponse StateMoveJ::handleCooperativeMotionGoal(
+        const rclcpp_action::GoalUUID& uuid,
+        std::shared_ptr<const ExecuteCooperativeMotionAction::Goal> goal)
+    {
+        (void)uuid;
+        (void)goal;
+        std::lock_guard lock(target_mutex_);
+        if (!state_active_)
+        {
+            RCLCPP_WARN(node_->get_logger(),
+                        "Rejecting cooperative action goal: StateMoveJ is not active");
+            return rclcpp_action::GoalResponse::REJECT;
+        }
+        return rclcpp_action::GoalResponse::ACCEPT_AND_EXECUTE;
+    }
+
+    rclcpp_action::CancelResponse StateMoveJ::handleCooperativeMotionCancel(
+        const std::shared_ptr<ExecuteCooperativeMotionGoalHandle> goal_handle)
+    {
+        (void)goal_handle;
+        return rclcpp_action::CancelResponse::ACCEPT;
+    }
+
+    void StateMoveJ::handleCooperativeMotionAccepted(
+        const std::shared_ptr<ExecuteCooperativeMotionGoalHandle> goal_handle)
+    {
+        std::lock_guard lock(target_mutex_);
+        const auto motion = goal_handle->get_goal()->motion;
+        requestMotionOrDefer([this, goal_handle, motion]()
+        {
+            std::string message;
+            double estimated_duration = 0.0;
+            if (!startCooperativeMotionImpl(motion, message, estimated_duration))
+            {
+                auto result = std::make_shared<ExecuteCooperativeMotionAction::Result>();
+                result->success = false;
+                result->message = message;
+                result->estimated_duration = 0.0;
+                result->actual_duration = 0.0;
+                result->relative_position_error = cartesian_manager_.getRelativePositionError();
+                result->relative_orientation_error = cartesian_manager_.getRelativeOrientationError();
+                goal_handle->abort(result);
+                return;
+            }
+
+            active_cooperative_motion_goal_ = goal_handle;
+            cooperative_action_start_time_ = node_->now();
+            cooperative_action_estimated_duration_ = estimated_duration;
+            cooperative_relative_position_error_ = cartesian_manager_.getRelativePositionError();
+            cooperative_relative_orientation_error_ = cartesian_manager_.getRelativeOrientationError();
+            cooperative_action_active_ = true;
+            publishCooperativeMotionFeedback();
+            RCLCPP_INFO(node_->get_logger(),
+                        "Cooperative motion action started: duration=%.3f", estimated_duration);
+        });
+    }
+
+    bool StateMoveJ::startCooperativeMotionImpl(
+        const arms_ros2_control_msgs::msg::CooperativeMotion& motion,
+        std::string& message,
+        double& estimated_duration)
+    {
+        if (!state_active_)
+        {
+            message = "StateMoveJ is not active";
+            estimated_duration = 0.0;
+            return false;
+        }
+        if (!cartesian_manager_.hasKinematics())
+        {
+            message = "Kinematics solver not set for cooperative planning";
+            estimated_duration = 0.0;
+            return false;
+        }
+
+        move_cartesian_joint_names_ = cartesian_manager_.getMovelJointNames("both");
+        if (move_cartesian_joint_names_.empty())
+        {
+            message = "Cooperative joint names not initialized";
+            estimated_duration = 0.0;
+            return false;
+        }
+        const std::vector<double> current_joint_positions =
+            getCurrentJointPositions(move_cartesian_joint_names_);
+        if (current_joint_positions.empty())
+        {
+            message = "Failed to get current dual-arm joint positions";
+            estimated_duration = 0.0;
+            return false;
+        }
+
+        const double period = 1.0 / ctrl_interfaces_.frequency_;
+        if (!cartesian_manager_.planCooperativeMotion(
+                current_joint_positions, motion, period))
+        {
+            message = cartesian_manager_.getLastError();
+            if (message.empty())
+            {
+                message = "Failed to plan cooperative trajectory";
+            }
+            estimated_duration = 0.0;
+            return false;
+        }
+
+        trajectory_manager_.reset();
+        interpolation_active_ = false;
+        has_target_ = false;
+        motion_mode_ = MotionMode::MOVECARTESIAN;
+        move_cartesian_active_ = true;
+        estimated_duration = cartesian_manager_.getPlanningTime();
+        message = "Cooperative trajectory accepted";
+        return true;
+    }
+
+    void StateMoveJ::publishCooperativeMotionFeedback()
+    {
+        if (!active_cooperative_motion_goal_ || !cooperative_action_active_)
+        {
+            return;
+        }
+        const double elapsed = std::max(
+            0.0, (node_->now() - cooperative_action_start_time_).seconds());
+        const double remaining = std::max(
+            0.0, cooperative_action_estimated_duration_ - elapsed);
+        const double progress = cooperative_action_estimated_duration_ > 1.0e-9
+                                    ? std::clamp(
+                                        elapsed / cooperative_action_estimated_duration_, 0.0, 1.0)
+                                    : 0.0;
+        auto feedback = std::make_shared<ExecuteCooperativeMotionAction::Feedback>();
+        feedback->progress = progress;
+        feedback->elapsed_time = elapsed;
+        feedback->remaining_time = remaining;
+        active_cooperative_motion_goal_->publish_feedback(feedback);
+    }
+
+    void StateMoveJ::finishCooperativeMotionAction(
+        bool success, bool canceled, const std::string& message)
+    {
+        if (!active_cooperative_motion_goal_ || !cooperative_action_active_)
+        {
+            return;
+        }
+        auto result = std::make_shared<ExecuteCooperativeMotionAction::Result>();
+        result->success = success;
+        result->message = message;
+        result->estimated_duration = cooperative_action_estimated_duration_;
+        result->actual_duration = std::max(
+            0.0, (node_->now() - cooperative_action_start_time_).seconds());
+        result->relative_position_error = cooperative_relative_position_error_;
+        result->relative_orientation_error = cooperative_relative_orientation_error_;
+        if (canceled)
+        {
+            active_cooperative_motion_goal_->canceled(result);
+        }
+        else if (success)
+        {
+            active_cooperative_motion_goal_->succeed(result);
+        }
+        else
+        {
+            active_cooperative_motion_goal_->abort(result);
+        }
+        active_cooperative_motion_goal_.reset();
+        cooperative_action_active_ = false;
+        cooperative_action_estimated_duration_ = 0.0;
     }
 
     bool StateMoveJ::validateLinearRequest(
@@ -4372,6 +4575,8 @@ namespace arms_controller_common
             motion_mode_ = MotionMode::MOVEJ;
             ctrl_interfaces_.fsm_command_ = 2;
             publishFsmCommand(2);
+            finishCooperativeMotionAction(
+                false, false, "Collision detected during cooperative motion");
 
             return true;
         }

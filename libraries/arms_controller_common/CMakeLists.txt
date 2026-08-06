@@ -13,6 +13,7 @@ set(dependencies
         hardware_interface
         rclcpp
         rclcpp_action
+        ompl
         pinocchio
         urdf
         ament_index_cpp
@@ -43,6 +44,9 @@ set(ARMS_CONTROLLER_COMMON_SOURCES
         src/utils/WaistLiftingPlaner.cpp
         src/utils/TrajectoryRecorder.cpp
         src/utils/Kinematics.cpp
+        src/utils/BimanualClosedChainConstraint.cpp
+        src/utils/BimanualSelfCollisionChecker.cpp
+        src/utils/BimanualProjectedPlanner.cpp
 )
 
 if(lina_planning_FOUND)
@@ -72,6 +76,7 @@ target_include_directories(${PROJECT_NAME}
 target_link_libraries(${PROJECT_NAME} PUBLIC
         ${hardware_interface_TARGETS}
         ${rclcpp_TARGETS}
+        ompl::ompl
         pinocchio::pinocchio
         ${urdf_TARGETS}
         ament_index_cpp::ament_index_cpp
@@ -97,6 +102,22 @@ target_link_libraries(${PROJECT_NAME} PRIVATE
         pthread
         rt
 )
+
+if(BUILD_TESTING)
+    find_package(ament_cmake_gtest REQUIRED)
+
+    ament_add_gtest(test_bimanual_closed_chain_constraint
+            test/test_bimanual_closed_chain_constraint.cpp
+    )
+    if(TARGET test_bimanual_closed_chain_constraint)
+        target_link_libraries(test_bimanual_closed_chain_constraint
+                ${PROJECT_NAME}
+                ompl::ompl
+                pinocchio::pinocchio
+                Eigen3::Eigen
+        )
+    endif()
+endif()
 
 
 install(

@@ -30,6 +30,7 @@
 #include "arms_controller_common/utils/Kinematics.h"
 #include "arms_controller_common/utils/CartesianTrajectoryManager.h"
 #include "arms_ros2_control_msgs/action/execute_linear.hpp"
+#include "arms_ros2_control_msgs/action/execute_cooperative_motion.hpp"
 #include "arms_ros2_control_msgs/action/movec_use_ik.hpp"
 #include "arms_ros2_control_msgs/action/waist_lifting_pose.hpp"
 #include "arms_ros2_control_msgs/srv/execute_linear.hpp"
@@ -202,6 +203,9 @@ namespace arms_controller_common
         void setupWaistLiftingPoseAction(const std::string& action_name = "waist_lifting_pose");
 
         void setKinematicsSolver(const std::shared_ptr<ArmKinematics>& kinematics = nullptr);
+        void setCooperativeCollisionGeometry(
+            pinocchio::GeometryModel geometry_model,
+            double minimum_allowed_distance);
         // 在 StateMoveJ.h 的 public 部分添加
         /**
         * @brief Setup linear trajectory service for MoveL planning
@@ -214,6 +218,12 @@ namespace arms_controller_common
         * @param action_name Action name (default: "execute_linear")
         */
         void setupLinearTrajectoryAction(const std::string& action_name = "execute_linear");
+
+        /**
+         * @brief Setup rigid-relative-pose dual-arm cooperative motion action.
+         */
+        void setupCooperativeMotionAction(
+            const std::string& action_name = "execute_cooperative_motion");
 
         /**
         * @brief Setup linear trajectory service for MoveL planning
@@ -544,6 +554,10 @@ namespace arms_controller_common
 
         using ExecuteLinearAction = arms_ros2_control_msgs::action::ExecuteLinear;
         using ExecuteLinearGoalHandle = rclcpp_action::ServerGoalHandle<ExecuteLinearAction>;
+        using ExecuteCooperativeMotionAction =
+            arms_ros2_control_msgs::action::ExecuteCooperativeMotion;
+        using ExecuteCooperativeMotionGoalHandle =
+            rclcpp_action::ServerGoalHandle<ExecuteCooperativeMotionAction>;
         using MovecUseIKAction = arms_ros2_control_msgs::action::MovecUseIK;
         using MovecUseIKGoalHandle = rclcpp_action::ServerGoalHandle<MovecUseIKAction>;
 
@@ -556,6 +570,30 @@ namespace arms_controller_common
         rclcpp::Time linear_action_start_time_;
         double linear_action_estimated_duration_{0.0};
         bool linear_action_active_{false};
+
+        rclcpp_action::Server<ExecuteCooperativeMotionAction>::SharedPtr
+            cooperative_motion_action_server_;
+        std::shared_ptr<ExecuteCooperativeMotionGoalHandle> active_cooperative_motion_goal_;
+        rclcpp::Time cooperative_action_start_time_;
+        double cooperative_action_estimated_duration_{0.0};
+        double cooperative_relative_position_error_{0.0};
+        double cooperative_relative_orientation_error_{0.0};
+        bool cooperative_action_active_{false};
+
+        rclcpp_action::GoalResponse handleCooperativeMotionGoal(
+            const rclcpp_action::GoalUUID& uuid,
+            std::shared_ptr<const ExecuteCooperativeMotionAction::Goal> goal);
+        rclcpp_action::CancelResponse handleCooperativeMotionCancel(
+            const std::shared_ptr<ExecuteCooperativeMotionGoalHandle> goal_handle);
+        void handleCooperativeMotionAccepted(
+            const std::shared_ptr<ExecuteCooperativeMotionGoalHandle> goal_handle);
+        bool startCooperativeMotionImpl(
+            const arms_ros2_control_msgs::msg::CooperativeMotion& motion,
+            std::string& message,
+            double& estimated_duration);
+        void publishCooperativeMotionFeedback();
+        void finishCooperativeMotionAction(
+            bool success, bool canceled, const std::string& message);
 
         // Service handler for MoveL
         void handleLinearTrajectory(

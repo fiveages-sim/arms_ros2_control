@@ -25,7 +25,9 @@ namespace arms_controller_common
         weight_ = Eigen::VectorXd::Ones(6);
     }
 
-    ArmKinematics::ArmKinematics(const pinocchio::Model& model) : model_(model)
+    ArmKinematics::ArmKinematics(const pinocchio::Model& model,
+                                 const std::string& baseFrameName)
+        : model_(model), baseFrameName_(baseFrameName)
     {
         data_ = pinocchio::Data(model_);
         buildMappings();
@@ -140,7 +142,8 @@ namespace arms_controller_common
                                                  SolutionInfo& info,
                                                  std::string arm_type,
                                                  int maxIterations,
-                                                 double tolerance)
+                                                 double tolerance,
+                                                 bool log_failure)
     {
         int jointCount = (arm_type == "left") ? leftArmJointCount_ : rightArmJointCount_;
         if (initialGuess.size() != static_cast<Eigen::Index>(jointCount))
@@ -179,7 +182,10 @@ namespace arms_controller_common
             // 如果 DLS 失败，尝试 BFGS
             if (result.second.status != "success")
             {
-                std::cout << "DLS failed, trying BFGS..." << std::endl;
+                if (log_failure)
+                {
+                    std::cout << "DLS failed, trying BFGS..." << std::endl;
+                }
                 result = solveBFGS(initialGuess, lower, upper, arm_type, targetPose);
                 result.second.usedSolver = SolverType::BFGS;
             }
@@ -198,8 +204,11 @@ namespace arms_controller_common
             return true;
         }
 
-        std::cerr << "IK failed (" << solverTypeName(info.usedSolver)
-            << "): " << info.status << ", final error: " << info.poseErrorNorm << std::endl;
+        if (log_failure)
+        {
+            std::cerr << "IK failed (" << solverTypeName(info.usedSolver)
+                << "): " << info.status << ", final error: " << info.poseErrorNorm << std::endl;
+        }
         return false;
     }
 
@@ -329,6 +338,22 @@ namespace arms_controller_common
                                         Eigen::VectorXd& solution,
                                         int maxIterations, double tolerance)
     {
+        SolutionInfo leftInfo;
+        SolutionInfo rightInfo;
+        return solveBothArmsIKWithInfo(
+            leftTargetPose, rightTargetPose, initialGuess, solution,
+            leftInfo, rightInfo, maxIterations, tolerance);
+    }
+
+    bool ArmKinematics::solveBothArmsIKWithInfo(
+        const EndEffectorPose& leftTargetPose,
+        const EndEffectorPose& rightTargetPose,
+        const Eigen::VectorXd& initialGuess,
+        Eigen::VectorXd& solution,
+        SolutionInfo& leftInfo,
+        SolutionInfo& rightInfo,
+        int maxIterations, double tolerance)
+    {
         if (initialGuess.size() !=
             static_cast<Eigen::Index>(leftArmJointCount_ + rightArmJointCount_))
         {
@@ -337,12 +362,12 @@ namespace arms_controller_common
 
         // 分别求解左臂和右臂
         Eigen::VectorXd leftSolution, rightSolution;
-        bool leftSuccess = solveSingleArmIK(leftTargetPose,
-                                            initialGuess.head(leftArmJointCount_),
-                                            leftSolution, "left", maxIterations, tolerance);
-        bool rightSuccess = solveSingleArmIK(rightTargetPose,
-                                             initialGuess.tail(rightArmJointCount_),
-                                             rightSolution, "right", maxIterations, tolerance);
+        bool leftSuccess = solveSingleArmIKWithInfo(
+            leftTargetPose, initialGuess.head(leftArmJointCount_),
+            leftSolution, leftInfo, "left", maxIterations, tolerance);
+        bool rightSuccess = solveSingleArmIKWithInfo(
+            rightTargetPose, initialGuess.tail(rightArmJointCount_),
+            rightSolution, rightInfo, "right", maxIterations, tolerance);
 
         if (leftSuccess && rightSuccess)
         {
@@ -447,6 +472,47 @@ namespace arms_controller_common
         Eigen::VectorXd lower, upper;
         getJointLimits(armType, lower, upper);
         joints = clampToLimits(joints, lower, upper);
+    }
+
+    Eigen::VectorXd ArmKinematics::getJointVelocityLimits(const std::string& armType) const
+    {
+        const auto extract = [this](const std::vector<std::string>& names)
+        {
+            Eigen::VectorXd limits(static_cast<Eigen::Index>(names.size()));
+            for (size_t i = 0; i < names.size(); ++i)
+            {
+                const pinocchio::JointIndex joint_id = model_.getJointId(names[i]);
+                double limit = 0.0;
+                if (joint_id < model_.joints.size() && model_.joints[joint_id].nv() == 1)
+                {
+                    const int index = model_.joints[joint_id].idx_v();
+                    if (index >= 0 && index < model_.velocityLimit.size())
+                    {
+                        limit = std::abs(model_.velocityLimit[index]);
+                    }
+                }
+                limits[static_cast<Eigen::Index>(i)] = limit;
+            }
+            return limits;
+        };
+
+        if (armType == "left")
+        {
+            return extract(leftArmJointNames_);
+        }
+        if (armType == "right")
+        {
+            return extract(rightArmJointNames_);
+        }
+        if (armType == "both")
+        {
+            const Eigen::VectorXd left = extract(leftArmJointNames_);
+            const Eigen::VectorXd right = extract(rightArmJointNames_);
+            Eigen::VectorXd both(left.size() + right.size());
+            both << left, right;
+            return both;
+        }
+        return {};
     }
 
     void ArmKinematics::buildMappings()
@@ -1470,6 +1536,15 @@ namespace arms_controller_common
         const std::shared_ptr<arms_ros2_control_msgs::srv::KinematicsService::Response> response)
     {
         auto start_time = std::chrono::high_resolution_clock::now();
+
+        // Service-specific solver settings must not leak into later controller
+        // actions that share this ArmKinematics instance.
+        struct SolverParamsRestore
+        {
+            SolverParams& target;
+            SolverParams saved;
+            ~SolverParamsRestore() { target = saved; }
+        } restore{params_, params_};
 
         // 设置默认参数
         int max_iterations = request->max_iterations > 0 ? request->max_iterations : 100;

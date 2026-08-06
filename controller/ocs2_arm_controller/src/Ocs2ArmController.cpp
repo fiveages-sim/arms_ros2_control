@@ -152,13 +152,17 @@ namespace ocs2::mobile_manipulator
             }
             if (ctrl_comp_->interface_)
             {
+                const auto& model_info = ctrl_comp_->interface_->getManipulatorModelInfo();
                 const auto& pinocchio_model = ctrl_comp_->interface_->getPinocchioInterface().getModel();
                 gravity_compensation = std::make_shared<arms_controller_common::GravityCompensation>(pinocchio_model);
-                kinematics_ = std::make_shared<arms_controller_common::ArmKinematics>(pinocchio_model);
+                kinematics_ = std::make_shared<arms_controller_common::ArmKinematics>(
+                    pinocchio_model, model_info.baseFrame);
                 kinematics_->initializeFromParameters(joint_names_, left_ee_name_, right_ee_name_);
                 const std::string robot_name = get_node()->get_parameter("robot_name").as_string();
                 RCLCPP_INFO(get_node()->get_logger(),
-                            "Gravity compensation initialized from OCS2 Pinocchio model");
+                            "Gravity compensation and kinematics initialized from OCS2 model "
+                            "with base frame '%s'",
+                            model_info.baseFrame.c_str());
             }
 
             // Home state
@@ -264,6 +268,17 @@ namespace ocs2::mobile_manipulator
 
                 if (ctrl_comp_->interface_->isSelfCollisionEnabled())
                 {
+                    if (auto geometry =
+                            ctrl_comp_->interface_->getPinocchioGeometryInterface())
+                    {
+                        state_list_.movej->setCooperativeCollisionGeometry(
+                            geometry->getGeometryModel(),
+                            ctrl_comp_->interface_->getSelfCollisionMinimumDistance());
+                        RCLCPP_INFO(
+                            get_node()->get_logger(),
+                            "Cooperative OMPL collision checker configured with %zu pairs",
+                            geometry->getGeometryModel().collisionPairs.size());
+                    }
                     state_list_.movej->setCollisionCheckCallback(
                         [ctrl_comp = ctrl_comp_](double threshold)
                         {
@@ -307,6 +322,7 @@ namespace ocs2::mobile_manipulator
             });
         state_list_.movej->setupJointTrajectoryAction("joint_trajectory_with_para");
         state_list_.movej->setupLinearTrajectoryAction("execute_linear");
+        state_list_.movej->setupCooperativeMotionAction("execute_cooperative_motion");
         state_list_.movej->setupCircleTrajectoryAction("execute_circle_use_ik");
 
         kinematics_service_ = get_node()->create_service<arms_ros2_control_msgs::srv::KinematicsService>(

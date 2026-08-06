@@ -90,7 +90,8 @@ namespace arms_controller_common
 
         ArmKinematics(const std::string& urdf_path,
                       const std::string& baseFrameName = "base_link");
-        ArmKinematics(const pinocchio::Model& model);
+        ArmKinematics(const pinocchio::Model& model,
+                      const std::string& baseFrameName = "");
         ~ArmKinematics();
 
         // ==================== 正运动学 ====================
@@ -176,7 +177,8 @@ namespace arms_controller_common
                                       SolutionInfo& info,
                                       std::string arm_type,
                                       int maxIterations = 1500,
-                                      double tolerance = 1e-4);
+                                      double tolerance = 1e-4,
+                                      bool log_failure = true);
 
 
         void setWeight(const Eigen::VectorXd& weight) { weight_ = weight; }
@@ -191,6 +193,15 @@ namespace arms_controller_common
                              Eigen::VectorXd& solution,
                              int maxIterations = 1500,
                              double tolerance = 1e-4);
+
+        bool solveBothArmsIKWithInfo(const EndEffectorPose& leftTargetPose,
+                                     const EndEffectorPose& rightTargetPose,
+                                     const Eigen::VectorXd& initialGuess,
+                                     Eigen::VectorXd& solution,
+                                     SolutionInfo& leftInfo,
+                                     SolutionInfo& rightInfo,
+                                     int maxIterations = 1500,
+                                     double tolerance = 1e-4);
 
         // ==================== 雅可比矩阵计算 ====================
         /**
@@ -213,6 +224,9 @@ namespace arms_controller_common
         void getJointLimits(const std::string& armType, Eigen::VectorXd& lower,
                             Eigen::VectorXd& upper) const;
 
+        /** Get URDF/Pinocchio velocity limits in controller joint order. */
+        Eigen::VectorXd getJointVelocityLimits(const std::string& armType) const;
+
         /**
          * @brief 应用关节限位
          * @param joints 关节角度
@@ -227,6 +241,15 @@ namespace arms_controller_common
 
         size_t getLeftArmJointCount() const { return leftArmJointCount_; }
         size_t getRightArmJointCount() const { return rightArmJointCount_; }
+        const std::string& getBaseFrameName() const { return baseFrameName_; }
+        const std::string& getLeftEndEffectorName() const
+        {
+            return leftEndEffectorName_;
+        }
+        const std::string& getRightEndEffectorName() const
+        {
+            return rightEndEffectorName_;
+        }
 
         std::vector<std::string> getLeftArmJointNames() const
         {

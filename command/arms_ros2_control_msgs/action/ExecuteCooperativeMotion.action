@@ -1,0 +1,15 @@
+# Goal
+arms_ros2_control_msgs/CooperativeMotion motion
+---
+# Result
+bool success
+string message
+float64 estimated_duration
+float64 actual_duration
+float64 relative_position_error
+float64 relative_orientation_error
+---
+# Feedback
+float64 progress
+float64 elapsed_time
+float64 remaining_time
