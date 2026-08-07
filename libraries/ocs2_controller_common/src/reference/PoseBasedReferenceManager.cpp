@@ -360,6 +360,11 @@ namespace ocs2::controller_common
             body_target_publisher_ =
                 node->create_publisher<geometry_msgs::msg::PoseStamped>(
                     "body_current_target", 1);
+            body_relative_subscriber_ = node->create_subscription<geometry_msgs::msg::TwistStamped>(
+                "body_target/relative", 1,
+                [this](const geometry_msgs::msg::TwistStamped::SharedPtr msg) {
+                    bodyRelativeCallback(msg);
+                });
         }
     }
 
@@ -1016,26 +1021,15 @@ namespace ocs2::controller_common
     void PoseBasedReferenceManager::bodyPoseCallback(
         const geometry_msgs::msg::Pose::SharedPtr msg)
     {
-        // body_target: immediate update (preempt body moveL only; preserve arm buffers).
-        body_pose_7_xyzw_(0) = msg->position.x;
-        body_pose_7_xyzw_(1) = msg->position.y;
-        body_pose_7_xyzw_(2) = msg->position.z;
-        body_pose_7_xyzw_(3) = msg->orientation.x;
-        body_pose_7_xyzw_(4) = msg->orientation.y;
-        body_pose_7_xyzw_(5) = msg->orientation.z;
-        body_pose_7_xyzw_(6) = msg->orientation.w;
-
-        const double t = current_observation_.time;
-        resetArmReferenceBuffer(body_reference_buffer_, body_pose_7_xyzw_, t);
-        if (anyReferenceBufferActive(t))
-        {
-            rebuildTargetTrajectoriesFromActiveArmReferenceBuffers(t, 0.0);
-        }
-        else
-        {
-            updateTargetTrajectory();
-        }
-        publishCurrentTargets("body");
+        vector_t target_state = vector_t::Zero(7);
+        target_state(0) = msg->position.x;
+        target_state(1) = msg->position.y;
+        target_state(2) = msg->position.z;
+        target_state(3) = msg->orientation.x;
+        target_state(4) = msg->orientation.y;
+        target_state(5) = msg->orientation.z;
+        target_state(6) = msg->orientation.w;
+        applyBodyAbsoluteTarget(target_state, false);
     }
 
     void PoseBasedReferenceManager::applyLeftAbsoluteTarget(const vector_t& goal7, bool interpolate)
@@ -1126,6 +1120,38 @@ namespace ocs2::controller_common
 
         rebuildTargetTrajectoriesFromActiveArmReferenceBuffers(start_time, moveL_duration_);
         publishCurrentTargets("right");
+    }
+
+    void PoseBasedReferenceManager::applyBodyAbsoluteTarget(const vector_t& goal7, bool interpolate)
+    {
+        if (goal7.size() < 7)
+        {
+            return;
+        }
+
+        if (!interpolate)
+        {
+            // Immediate body update: preempt body moveL only; preserve arm buffers.
+            body_pose_7_xyzw_ = goal7.head<7>();
+            const double t = current_observation_.time;
+            resetArmReferenceBuffer(body_reference_buffer_, body_pose_7_xyzw_, t);
+            if (anyReferenceBufferActive(t))
+            {
+                rebuildTargetTrajectoriesFromActiveArmReferenceBuffers(t, 0.0);
+            }
+            else
+            {
+                updateTargetTrajectory();
+            }
+            publishCurrentTargets("body");
+            return;
+        }
+
+        updateParam();
+        const vector_t previous_body_target_state = body_pose_7_xyzw_;
+        body_pose_7_xyzw_ = goal7.head<7>();
+        updateBodyTrajectory(previous_body_target_state);
+        publishCurrentTargets("body");
     }
 
     vector_t PoseBasedReferenceManager::composeTwistDelta(
@@ -1314,6 +1340,18 @@ namespace ocs2::controller_common
         applyRightAbsoluteTarget(goal, true);
     }
 
+    void PoseBasedReferenceManager::bodyRelativeCallback(
+        const geometry_msgs::msg::TwistStamped::SharedPtr msg)
+    {
+        geometry_msgs::msg::Twist twist_base;
+        if (!twistStampedToBaseTwist(*msg, twist_base))
+        {
+            return;
+        }
+        const vector_t goal = composeTwistDelta(body_pose_7_xyzw_, twist_base);
+        applyBodyAbsoluteTarget(goal, true);
+    }
+
     void PoseBasedReferenceManager::leftPoseStampedPoseCallback(
         const geometry_msgs::msg::Pose::SharedPtr msg)
     {
@@ -1345,20 +1383,15 @@ namespace ocs2::controller_common
     void PoseBasedReferenceManager::bodyPoseStampedPoseCallback(
         const geometry_msgs::msg::Pose::SharedPtr msg)
     {
-        // body_target/stamped: 与手臂一致，使用 moveL_duration 插值
-        updateParam();
-        const vector_t previous_body_target_state = body_pose_7_xyzw_;
-
-        body_pose_7_xyzw_(0) = msg->position.x;
-        body_pose_7_xyzw_(1) = msg->position.y;
-        body_pose_7_xyzw_(2) = msg->position.z;
-        body_pose_7_xyzw_(3) = msg->orientation.x;
-        body_pose_7_xyzw_(4) = msg->orientation.y;
-        body_pose_7_xyzw_(5) = msg->orientation.z;
-        body_pose_7_xyzw_(6) = msg->orientation.w;
-
-        updateBodyTrajectory(previous_body_target_state);
-        publishCurrentTargets("body");
+        vector_t target_state = vector_t::Zero(7);
+        target_state(0) = msg->position.x;
+        target_state(1) = msg->position.y;
+        target_state(2) = msg->position.z;
+        target_state(3) = msg->orientation.x;
+        target_state(4) = msg->orientation.y;
+        target_state(5) = msg->orientation.z;
+        target_state(6) = msg->orientation.w;
+        applyBodyAbsoluteTarget(target_state, true);
     }
 
     void PoseBasedReferenceManager::processPoseStamped(

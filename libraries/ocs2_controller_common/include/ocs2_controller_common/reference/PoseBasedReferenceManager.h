@@ -41,7 +41,9 @@ namespace ocs2::controller_common {
  * - left_target/twist      Twist         velocity stream (m/s, rad/s), latch + dt integrate
  *                                        (same preempt / other-preserve semantics as Pose)
  * - left_target/relative   TwistStamped  one-shot SE(3) delta (m, rad) + moveL; frame_id selects base/EE/TF
- * Body (wheel-humanoid): body_target / body_target/stamped — same immediate vs moveL split;
+ * Body (wheel-humanoid, when body_target_enabled):
+ * - body_target / body_target/stamped — same immediate vs moveL split as arms
+ * - body_target/relative   TwistStamped  one-shot SE(3) delta + moveL; frame_id selects base/body/TF
  * dual_target/stamped with 3 poses plans left+right+body together.
  */
 class PoseBasedReferenceManager : public ReferenceManagerDecorator {
@@ -95,6 +97,7 @@ private:
     void rightTwistCallback(geometry_msgs::msg::Twist::SharedPtr msg);
     void leftRelativeCallback(geometry_msgs::msg::TwistStamped::SharedPtr msg);
     void rightRelativeCallback(geometry_msgs::msg::TwistStamped::SharedPtr msg);
+    void bodyRelativeCallback(geometry_msgs::msg::TwistStamped::SharedPtr msg);
     void dualTargetStampedCallback(nav_msgs::msg::Path::SharedPtr msg);
     void bodyPoseStampedCallback(geometry_msgs::msg::PoseStamped::SharedPtr msg);
     void pathCallback(nav_msgs::msg::Path::SharedPtr msg);
@@ -123,6 +126,7 @@ private:
     /** Apply absolute 7D target [x,y,z,qx,qy,qz,qw]. interpolate=true uses moveL buffer path. */
     void applyLeftAbsoluteTarget(const vector_t& goal7, bool interpolate);
     void applyRightAbsoluteTarget(const vector_t& goal7, bool interpolate);
+    void applyBodyAbsoluteTarget(const vector_t& goal7, bool interpolate);
 
     /** Compose one-shot relative Twist (linear=m, angular=rad RPY) onto base7. */
     [[nodiscard]] static vector_t composeTwistDelta(const vector_t& base7,
@@ -172,6 +176,7 @@ private:
     rclcpp::Subscription<geometry_msgs::msg::Twist>::SharedPtr right_twist_subscriber_;
     rclcpp::Subscription<geometry_msgs::msg::TwistStamped>::SharedPtr left_relative_subscriber_;
     rclcpp::Subscription<geometry_msgs::msg::TwistStamped>::SharedPtr right_relative_subscriber_;
+    rclcpp::Subscription<geometry_msgs::msg::TwistStamped>::SharedPtr body_relative_subscriber_;
     rclcpp::Subscription<nav_msgs::msg::Path>::SharedPtr dual_target_stamped_subscriber_;
     rclcpp::Subscription<geometry_msgs::msg::PoseStamped>::SharedPtr body_pose_stamped_subscriber_;
     rclcpp::Subscription<nav_msgs::msg::Path>::SharedPtr path_subscriber_;

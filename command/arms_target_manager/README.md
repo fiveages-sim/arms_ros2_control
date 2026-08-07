@@ -42,6 +42,10 @@ ros2 launch ocs2_arm_controller demo.launch.py robot:=cr5
 | `left_target/twist` | `geometry_msgs/Twist` | **速度流**（m/s、rad/s），latch + `dt` 积分 | **手柄** |
 | `left_target/relative` | `geometry_msgs/TwistStamped` | **一次相对位移**（m、rad）+ moveL；`frame_id` 选坐标系 | **RViz 相对基座/末端** |
 | `left_current_target` | `PoseStamped` | 当前指令目标反馈（`frame_id`=base） | RViz / 可视化 |
+| `body_target` | `geometry_msgs/Pose` | 立即绝对（需 `body_target_enabled`） | VR / marker |
+| `body_target/stamped` | `geometry_msgs/PoseStamped` | 绝对 **moveL** | RViz 身体绝对（TRACKING） |
+| `body_target/relative` | `geometry_msgs/TwistStamped` | **一次相对位移** + moveL；`frame_id`=base/`body_frame` | **RViz 相对基座/身体** |
+| `body_current_target` | `PoseStamped` | 身体当前指令目标反馈 | RViz / marker |
 
 要点：
 
@@ -65,7 +69,7 @@ ros2 launch ocs2_arm_controller demo.launch.py robot:=cr5
 - 覆盖在 **Interface 构造时内存注入** `createManipulatorModelInfo`（不写临时 info），MPC 真正跟踪新 tip。
 - **不支持**像 `movel_duration` 那样运行时热改；改 tip 需重启控制器。
 
-RViz Joint Panel：绝对 / 相对基座 / 相对末端；相对基座填 `current_target`/`base_frame`；相对末端填 `left/right_ee_frame`。
+RViz Joint Panel：绝对 / 相对基座 / 相对末端（手臂）或相对身体（Body TRACKING）；相对基座填 `current_target`/`base_frame`；相对末端填 `left/right_ee_frame`；相对身体填 `body_frame`。
 
 ## 参数说明
 
