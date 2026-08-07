@@ -30,6 +30,7 @@
 #include <geometry_msgs/msg/pose_stamped.hpp>
 #include <geometry_msgs/msg/twist.hpp>
 #include <geometry_msgs/msg/twist_stamped.hpp>
+#include <arms_ros2_control_msgs/msg/wbc_current_state.hpp>
 #include <arms_controller_common/utils/JointLimitsManager.h>
 #include <rclcpp/parameter_client.hpp>
 
@@ -86,6 +87,8 @@ namespace arms_rviz_control_plugin
         void onJointStateReceived(const sensor_msgs::msg::JointState::SharedPtr msg);
         void onLeftCurrentTargetReceived(const geometry_msgs::msg::PoseStamped::SharedPtr msg);
         void onRightCurrentTargetReceived(const geometry_msgs::msg::PoseStamped::SharedPtr msg);
+        void onBodyPoseCurrentTargetReceived(const geometry_msgs::msg::PoseStamped::SharedPtr msg);
+        void onWbcCurrentStateReceived(const arms_ros2_control_msgs::msg::WbcCurrentState::SharedPtr msg);
         void updatePanelVisibility();
         void publishJointPositions();
         void updateJointValuesFromState();
@@ -117,10 +120,13 @@ namespace arms_rviz_control_plugin
         double getJointSpinboxSiValue(size_t index) const;
         void applyDisplayUnitToJointSpinboxes();
         bool isPoseTargetCommand() const;
+        /** OCS2 + Body + BODY_TRACKING：显示身体笛卡尔位姿 UI */
+        bool isBodyTrackingPoseMode() const;
         void applyDisplayUnitToPoseSpinboxes(
             std::vector<std::unique_ptr<QDoubleSpinBox>>& spinboxes);
 
-        // 绝对：xyz + 四元数（无 RPY 转换）；相对：xyz + RPY
+        // 绝对：米/弧度 → xyz+四元数；厘米/角度 → xyz+RPY（OrientZYX）；相对始终 xyz+RPY
+        bool useAbsoluteRpyUi() const { return !use_relative_pose_ && use_cm_deg_; }
         void setArmPoseSpinboxesFromPose(
             std::vector<std::unique_ptr<QDoubleSpinBox>>& spinboxes,
             const geometry_msgs::msg::Pose& pose);
@@ -140,6 +146,7 @@ namespace arms_rviz_control_plugin
         void zeroArmPoseSpinboxes(std::vector<std::unique_ptr<QDoubleSpinBox>>& spinboxes);
         void updatePoseModeControlsVisibility();
         bool publishOcs2ArmPose(bool is_left);
+        bool publishOcs2BodyPose();
         void refreshOcs2FrameParams();
         std::string getOcs2ControllerName() const;
 
@@ -153,6 +160,7 @@ namespace arms_rviz_control_plugin
 
         void updateWaistControlsVisibility(bool visible);
 
+        /** MOVEJ / 腰部关节目标回填（Float64MultiArray current_target_joint） */
         void onBodyCurrentTargetReceived(const std_msgs::msg::Float64MultiArray::SharedPtr msg);
 
         void refreshWaistEnabledState();
@@ -175,26 +183,35 @@ namespace arms_rviz_control_plugin
         rclcpp::Publisher<std_msgs::msg::Float64MultiArray>::SharedPtr joint_position_publisher_;
         rclcpp::Publisher<geometry_msgs::msg::PoseStamped>::SharedPtr left_target_publisher_;
         rclcpp::Publisher<geometry_msgs::msg::PoseStamped>::SharedPtr right_target_publisher_;
+        rclcpp::Publisher<geometry_msgs::msg::PoseStamped>::SharedPtr body_target_publisher_;
         rclcpp::Publisher<geometry_msgs::msg::TwistStamped>::SharedPtr left_relative_publisher_;
         rclcpp::Publisher<geometry_msgs::msg::TwistStamped>::SharedPtr right_relative_publisher_;
+        rclcpp::Publisher<geometry_msgs::msg::TwistStamped>::SharedPtr body_relative_publisher_;
         rclcpp::Subscription<geometry_msgs::msg::PoseStamped>::SharedPtr left_current_target_subscriber_;
         rclcpp::Subscription<geometry_msgs::msg::PoseStamped>::SharedPtr right_current_target_subscriber_;
+        rclcpp::Subscription<geometry_msgs::msg::PoseStamped>::SharedPtr body_pose_current_target_subscriber_;
+        rclcpp::Subscription<arms_ros2_control_msgs::msg::WbcCurrentState>::SharedPtr wbc_current_state_subscriber_;
         rclcpp::Publisher<std_msgs::msg::Float64>::SharedPtr waist_lifting_publisher_;
         rclcpp::Publisher<std_msgs::msg::Float64>::SharedPtr waist_turning_publisher_;
         rclcpp::Subscription<std_msgs::msg::Float64MultiArray>::SharedPtr body_current_target_subscriber_;
 
-        // Frame IDs: base from current_target (or controller base_frame); EE from controller params
+        // Frame IDs: base from current_target (or controller base_frame); EE / body from controller params
         std::string left_target_frame_id_;
         std::string right_target_frame_id_;
+        std::string body_target_frame_id_;
         std::string ocs2_base_frame_;
         std::string left_ee_frame_;
         std::string right_ee_frame_;
+        std::string body_frame_;
         std::mutex frame_id_mutex_;
 
         geometry_msgs::msg::Pose left_current_pose_;
         geometry_msgs::msg::Pose right_current_pose_;
+        geometry_msgs::msg::Pose body_current_pose_;
         bool left_current_pose_valid_ = false;
         bool right_current_pose_valid_ = false;
+        bool body_current_pose_valid_ = false;
+        uint8_t wbc_body_state_ = 0;  // WbcCurrentState::body_state
 
         // Joint limits manager
         std::shared_ptr<arms_controller_common::JointLimitsManager> joint_limits_manager_;
@@ -223,13 +240,17 @@ namespace arms_rviz_control_plugin
         std::vector<std::unique_ptr<QLabel>> joint_labels_;
         std::vector<std::unique_ptr<QDoubleSpinBox>> joint_spinboxes_;
 
-        // OCS2 末端：绝对 xyz+qx/qy/qz/qw（7）；相对复用前 6 为 xyz+rpy，隐藏 qw
+        // OCS2 末端：绝对米/弧度 xyz+qx/qy/qz/qw（7）；绝对厘米/角度与相对复用前 6 为 xyz+rpy，隐藏 qw
         std::vector<std::unique_ptr<QVBoxLayout>> left_arm_row_layouts_;
         std::vector<std::unique_ptr<QLabel>> left_arm_labels_;
         std::vector<std::unique_ptr<QDoubleSpinBox>> left_arm_spinboxes_;
         std::vector<std::unique_ptr<QVBoxLayout>> right_arm_row_layouts_;
         std::vector<std::unique_ptr<QLabel>> right_arm_labels_;
         std::vector<std::unique_ptr<QDoubleSpinBox>> right_arm_spinboxes_;
+        // BODY_TRACKING 下身体笛卡尔位姿（同构）
+        std::vector<std::unique_ptr<QVBoxLayout>> body_pose_row_layouts_;
+        std::vector<std::unique_ptr<QLabel>> body_pose_labels_;
+        std::vector<std::unique_ptr<QDoubleSpinBox>> body_pose_spinboxes_;
 
         // Joint information
         std::vector<std::string> joint_names_;

@@ -6,6 +6,8 @@
 #include <geometry_msgs/msg/pose.hpp>
 #include <geometry_msgs/msg/twist.hpp>
 #include <geometry_msgs/msg/twist_stamped.hpp>
+#include <tf2/LinearMath/Matrix3x3.h>
+#include <tf2/LinearMath/Quaternion.h>
 #include <algorithm>
 #include <cmath>
 #include <cctype>
@@ -15,6 +17,33 @@
 
 namespace
 {
+    // ABB OrientZYX(z, y, x) ≡ tf2 setRPY(roll=x, pitch=y, yaw=z) ≡ Rz * Ry * Rx
+    geometry_msgs::msg::Quaternion orientZyx(double roll, double pitch, double yaw)
+    {
+        tf2::Quaternion q;
+        q.setRPY(roll, pitch, yaw);
+        geometry_msgs::msg::Quaternion out;
+        out.x = q.x();
+        out.y = q.y();
+        out.z = q.z();
+        out.w = q.w();
+        return out;
+    }
+
+    // ABB EulerZYX：从四元数提取 ZYX 欧拉角（roll=X, pitch=Y, yaw=Z）
+    void eulerZyx(const geometry_msgs::msg::Quaternion& q_msg,
+                  double& roll, double& pitch, double& yaw)
+    {
+        tf2::Quaternion q(q_msg.x, q_msg.y, q_msg.z, q_msg.w);
+        if (q.length2() < 1e-18)
+        {
+            roll = pitch = yaw = 0.0;
+            return;
+        }
+        q.normalize();
+        tf2::Matrix3x3(q).getRPY(roll, pitch, yaw);
+    }
+
     // joint_states 名称常为字母序，与 linkerhand ros2_control 中关节顺序不一致；与硬件/控制器约定对齐。
     int dexterousLinkerHandSortKey(const std::string& joint_name)
     {
@@ -473,6 +502,15 @@ namespace arms_rviz_control_plugin
             "left_current_target", 10,
             std::bind(&JointControlPanel::onLeftCurrentTargetReceived, this, std::placeholders::_1));
 
+        body_pose_current_target_subscriber_ = node_->create_subscription<geometry_msgs::msg::PoseStamped>(
+            "body_current_target", 10,
+            std::bind(&JointControlPanel::onBodyPoseCurrentTargetReceived, this, std::placeholders::_1));
+
+        wbc_current_state_subscriber_ =
+            node_->create_subscription<arms_ros2_control_msgs::msg::WbcCurrentState>(
+                "/ocs2_wbc_controller/current_state", 10,
+                std::bind(&JointControlPanel::onWbcCurrentStateReceived, this, std::placeholders::_1));
+
         // Initialize publisher (will be updated when category changes)
         updatePublisher();
 
@@ -759,7 +797,7 @@ namespace arms_rviz_control_plugin
         left_current_pose_valid_ = true;
 
         // 相对模式保留用户输入的增量，不覆盖 spinbox
-        if (use_relative_pose_ || left_arm_spinboxes_.size() < 7)
+        if (use_relative_pose_ || left_arm_spinboxes_.size() < 6)
         {
             return;
         }
@@ -777,12 +815,50 @@ namespace arms_rviz_control_plugin
         right_current_pose_ = msg->pose;
         right_current_pose_valid_ = true;
 
-        if (use_relative_pose_ || right_arm_spinboxes_.size() < 7)
+        if (use_relative_pose_ || right_arm_spinboxes_.size() < 6)
         {
             return;
         }
 
         setArmPoseSpinboxesFromPose(right_arm_spinboxes_, msg->pose);
+    }
+
+    void JointControlPanel::onBodyPoseCurrentTargetReceived(
+        const geometry_msgs::msg::PoseStamped::SharedPtr msg)
+    {
+        {
+            std::lock_guard<std::mutex> lock(frame_id_mutex_);
+            body_target_frame_id_ = msg->header.frame_id;
+        }
+
+        body_current_pose_ = msg->pose;
+        body_current_pose_valid_ = true;
+
+        if (use_relative_pose_ || !isBodyTrackingPoseMode() || body_pose_spinboxes_.size() < 6)
+        {
+            return;
+        }
+
+        setArmPoseSpinboxesFromPose(body_pose_spinboxes_, msg->pose);
+    }
+
+    void JointControlPanel::onWbcCurrentStateReceived(
+        const arms_ros2_control_msgs::msg::WbcCurrentState::SharedPtr msg)
+    {
+        if (!msg)
+        {
+            return;
+        }
+        const uint8_t prev = wbc_body_state_;
+        wbc_body_state_ = msg->body_state;
+        if (prev != wbc_body_state_ && is_joint_control_enabled_)
+        {
+            if (current_category_ == "body")
+            {
+                updatePublisher();
+            }
+            updatePanelVisibility();
+        }
     }
 
     bool JointControlPanel::shouldShowSendButton() const
@@ -805,36 +881,11 @@ namespace arms_rviz_control_plugin
             return false;
         }
 
-        // When command is 3 (OCS2), hide button for body (if using ocs2_wbc_controller)
-        // But show button for left/right with different text
-        if (current_command_ == 3)
+        // OCS2 + WBC body：仅 BODY_TRACKING 时走笛卡尔位姿发送；其它身体模式不显示发送
+        if (current_command_ == 3 && current_category_ == "body")
         {
-            // Hide button for body when using ocs2_wbc_controller
-            if (current_category_ == "body")
-            {
-                auto it = category_to_controller_.find("body");
-                if (it != category_to_controller_.end())
-                {
-                    std::string controller_lower = it->second;
-                    std::transform(controller_lower.begin(), controller_lower.end(),
-                                   controller_lower.begin(), ::tolower);
-
-                    if (controller_lower.find("ocs2_wbc_controller") != std::string::npos)
-                    {
-                        return false;
-                    }
-                }
-            }
+            return isBodyTrackingPoseMode();
         }
-        // When command is 4 (MOVEJ), hide button for left/right categories
-        // NOTE: Now enabled - button will show in MOVEJ mode for left/right categories
-        // if (current_command_ == 4)
-        // {
-        //     if (current_category_ == "left" || current_category_ == "right")
-        //     {
-        //         return false;
-        //     }
-        // }
 
         return true;
     }
@@ -891,11 +942,22 @@ namespace arms_rviz_control_plugin
             // Update button text based on command and category
             if (should_show)
             {
-                if (current_command_ == 3 && (current_category_ == "left" || current_category_ == "right"))
+                if (current_command_ == 3 &&
+                    (current_category_ == "left" || current_category_ == "right" ||
+                     isBodyTrackingPoseMode()))
                 {
-                    send_button_->setText(use_relative_pose_
-                                              ? (pose_mode_ == "relative_ee" ? "发送相对末端" : "发送相对基座")
-                                              : "发送末端位姿");
+                    if (use_relative_pose_)
+                    {
+                        send_button_->setText(
+                            pose_mode_ == "relative_ee"
+                                ? (current_category_ == "body" ? "发送相对身体" : "发送相对末端")
+                                : "发送相对基座");
+                    }
+                    else
+                    {
+                        send_button_->setText(
+                            current_category_ == "body" ? "发送身体位姿" : "发送末端位姿");
+                    }
                 }
                 else
                 {
@@ -1053,11 +1115,13 @@ namespace arms_rviz_control_plugin
         joint_position_publisher_.reset();
         left_target_publisher_.reset();
         right_target_publisher_.reset();
+        body_target_publisher_.reset();
         left_relative_publisher_.reset();
         right_relative_publisher_.reset();
+        body_relative_publisher_.reset();
 
-        // For left/right category:
-        // - OCS2 mode (command == 3): use PoseStamped publisher (end-effector pose)
+        // For left/right/body category:
+        // - OCS2 mode (command == 3): use PoseStamped / relative publishers
         // - MOVEJ mode (command == 4): use joint position publisher
         if (current_category_ == "left")
         {
@@ -1073,7 +1137,6 @@ namespace arms_rviz_control_plugin
             }
             else
             {
-                left_relative_publisher_.reset();
                 std::string topic_name = getControllerNameForCategory(current_category_);
                 if (topic_name.empty())
                 {
@@ -1100,7 +1163,6 @@ namespace arms_rviz_control_plugin
             }
             else
             {
-                right_relative_publisher_.reset();
                 std::string topic_name = getControllerNameForCategory(current_category_);
                 if (topic_name.empty())
                 {
@@ -1112,6 +1174,16 @@ namespace arms_rviz_control_plugin
                     topic_name, 10);
                 RCLCPP_INFO(node_->get_logger(), "Updated publisher to topic: %s", topic_name.c_str());
             }
+        }
+        else if (current_category_ == "body" && isBodyTrackingPoseMode())
+        {
+            body_target_publisher_ = node_->create_publisher<geometry_msgs::msg::PoseStamped>(
+                "body_target/stamped", 10);
+            body_relative_publisher_ = node_->create_publisher<geometry_msgs::msg::TwistStamped>(
+                "body_target/relative", 10);
+            refreshOcs2FrameParams();
+            RCLCPP_INFO(node_->get_logger(),
+                        "Updated publishers: body_target/stamped + body_target/relative");
         }
         else
         {
@@ -1211,17 +1283,17 @@ namespace arms_rviz_control_plugin
 
         if (is_dual_arm_mode)
         {
-            // OCS2：绝对 xyz+四元数（7 行）/ 相对 xyz+rpy（隐藏 qw），仅 command==3
+            // OCS2：绝对米/弧度 xyz+四元数（7）；绝对厘米/角度与相对 xyz+rpy（隐藏 qw），仅 command==3
             // MOVEJ (command==4) 隐藏位姿 UI，改用关节 spinbox
             bool show_left = (current_category_ == "left" && current_command_ == 3);
             bool show_right = (current_category_ == "right" && current_command_ == 3);
+            const bool hide_qw = use_relative_pose_ || useAbsoluteRpyUi();
 
             for (size_t i = 0; i < left_arm_row_layouts_.size(); ++i)
             {
                 if (left_arm_row_layouts_[i])
                 {
-                    const bool row_visible =
-                        show_left && !(use_relative_pose_ && i == 6);
+                    const bool row_visible = show_left && !(hide_qw && i == 6);
                     for (int j = 0; j < left_arm_row_layouts_[i]->count(); ++j)
                     {
                         QLayoutItem* item = left_arm_row_layouts_[i]->itemAt(j);
@@ -1237,11 +1309,31 @@ namespace arms_rviz_control_plugin
             {
                 if (right_arm_row_layouts_[i])
                 {
-                    const bool row_visible =
-                        show_right && !(use_relative_pose_ && i == 6);
+                    const bool row_visible = show_right && !(hide_qw && i == 6);
                     for (int j = 0; j < right_arm_row_layouts_[i]->count(); ++j)
                     {
                         QLayoutItem* item = right_arm_row_layouts_[i]->itemAt(j);
+                        if (item && item->widget())
+                        {
+                            item->widget()->setVisible(row_visible);
+                        }
+                    }
+                }
+            }
+        }
+
+        // Body Cartesian pose UI: OCS2 + BODY_TRACKING
+        {
+            const bool show_body = isBodyTrackingPoseMode();
+            const bool hide_qw = use_relative_pose_ || useAbsoluteRpyUi();
+            for (size_t i = 0; i < body_pose_row_layouts_.size(); ++i)
+            {
+                if (body_pose_row_layouts_[i])
+                {
+                    const bool row_visible = show_body && !(hide_qw && i == 6);
+                    for (int j = 0; j < body_pose_row_layouts_[i]->count(); ++j)
+                    {
+                        QLayoutItem* item = body_pose_row_layouts_[i]->itemAt(j);
                         if (item && item->widget())
                         {
                             item->widget()->setVisible(row_visible);
@@ -1266,11 +1358,16 @@ namespace arms_rviz_control_plugin
                 if (it != joint_to_category_.end() && it->second == current_category_)
                 {
                     // For left/right category:
-                    // - OCS2 mode (command == 3): hide joints (show xyz/quaternion instead)
-                    // - MOVEJ mode (command == 4): show joints (hide xyz/quaternion)
+                    // - OCS2 mode (command == 3): hide joints (show pose UI instead)
+                    // - MOVEJ mode (command == 4): show joints (hide pose UI)
+                    // Body + TRACKING: hide joints (show body pose UI)
                     if (it->second == "left" || it->second == "right")
                     {
                         visible = (current_command_ == 4); // Show joints only in MOVEJ mode
+                    }
+                    else if (it->second == "body" && isBodyTrackingPoseMode())
+                    {
+                        visible = false;
                     }
                     else
                     {
@@ -1329,6 +1426,11 @@ namespace arms_rviz_control_plugin
         if (current_category_ == "right" && current_command_ == 3)
         {
             publishOcs2ArmPose(false);
+            return;
+        }
+        if (isBodyTrackingPoseMode())
+        {
+            publishOcs2BodyPose();
             return;
         }
 
@@ -1924,9 +2026,20 @@ namespace arms_rviz_control_plugin
 
     bool JointControlPanel::isPoseTargetCommand() const
     {
+        if (current_command_ != 3)
+        {
+            return false;
+        }
+        return current_category_ == "left" ||
+               current_category_ == "right" ||
+               isBodyTrackingPoseMode();
+    }
+
+    bool JointControlPanel::isBodyTrackingPoseMode() const
+    {
         return current_command_ == 3 &&
-               (current_category_ == "left" ||
-                current_category_ == "right");
+               current_category_ == "body" &&
+               wbc_body_state_ == arms_ros2_control_msgs::msg::WbcCurrentState::BODY_TRACKING;
     }
 
     void JointControlPanel::onDisplayUnitChanged()
@@ -1954,8 +2067,10 @@ namespace arms_rviz_control_plugin
 
         const geometry_msgs::msg::Pose left_abs = getArmPoseFromSpinboxes(left_arm_spinboxes_);
         const geometry_msgs::msg::Pose right_abs = getArmPoseFromSpinboxes(right_arm_spinboxes_);
+        const geometry_msgs::msg::Pose body_abs = getArmPoseFromSpinboxes(body_pose_spinboxes_);
         const PoseXyzRpy left_rel = getArmRelativeSpinboxesRadians(left_arm_spinboxes_);
         const PoseXyzRpy right_rel = getArmRelativeSpinboxesRadians(right_arm_spinboxes_);
+        const PoseXyzRpy body_rel = getArmRelativeSpinboxesRadians(body_pose_spinboxes_);
 
         use_cm_deg_ = new_use_cm_deg;
         applyDisplayUnitToJointSpinboxes();
@@ -1970,22 +2085,62 @@ namespace arms_rviz_control_plugin
 
         applyDisplayUnitToPoseSpinboxes(left_arm_spinboxes_);
         applyDisplayUnitToPoseSpinboxes(right_arm_spinboxes_);
+        applyDisplayUnitToPoseSpinboxes(body_pose_spinboxes_);
+        // 绝对模式下单位切换会在四元数 / RPY UI 间切换
+        applyArmPoseUiMode("Left", left_arm_labels_, left_arm_spinboxes_, left_arm_row_layouts_);
+        applyArmPoseUiMode("Right", right_arm_labels_, right_arm_spinboxes_, right_arm_row_layouts_);
+        applyArmPoseUiMode("Body", body_pose_labels_, body_pose_spinboxes_, body_pose_row_layouts_);
         if (use_relative_pose_)
         {
             setArmRelativeSpinboxes(left_arm_spinboxes_, left_rel);
             setArmRelativeSpinboxes(right_arm_spinboxes_, right_rel);
+            setArmRelativeSpinboxes(body_pose_spinboxes_, body_rel);
         }
         else
         {
             setArmPoseSpinboxesFromPose(left_arm_spinboxes_, left_abs);
             setArmPoseSpinboxesFromPose(right_arm_spinboxes_, right_abs);
+            setArmPoseSpinboxesFromPose(body_pose_spinboxes_, body_abs);
         }
+        updateJointVisibility();
     }
 
     void JointControlPanel::setArmPoseSpinboxesFromPose(
         std::vector<std::unique_ptr<QDoubleSpinBox>>& spinboxes,
         const geometry_msgs::msg::Pose& pose)
     {
+        if (useAbsoluteRpyUi())
+        {
+            if (spinboxes.size() < 6)
+            {
+                return;
+            }
+            double roll = 0.0;
+            double pitch = 0.0;
+            double yaw = 0.0;
+            eulerZyx(pose.orientation, roll, pitch, yaw);
+            const double vals[6] = {
+                toDisplayLength(pose.position.x),
+                toDisplayLength(pose.position.y),
+                toDisplayLength(pose.position.z),
+                toDisplayAngle(roll),
+                toDisplayAngle(pitch),
+                toDisplayAngle(yaw)
+            };
+            for (size_t i = 0; i < 6; ++i)
+            {
+                if (!spinboxes[i])
+                {
+                    continue;
+                }
+                bool blocked = spinboxes[i]->blockSignals(true);
+                spinboxes[i]->setValue(vals[i]);
+                spinboxes[i]->blockSignals(blocked);
+            }
+            return;
+        }
+
+        // 米/弧度绝对：直接显示四元数
         if (spinboxes.size() < 7)
         {
             return;
@@ -2012,6 +2167,22 @@ namespace arms_rviz_control_plugin
         const std::vector<std::unique_ptr<QDoubleSpinBox>>& spinboxes) const
     {
         geometry_msgs::msg::Pose pose;
+        if (useAbsoluteRpyUi())
+        {
+            if (spinboxes.size() < 6)
+            {
+                return pose;
+            }
+            pose.position.x = fromDisplayLength(spinboxes[0] ? spinboxes[0]->value() : 0.0);
+            pose.position.y = fromDisplayLength(spinboxes[1] ? spinboxes[1]->value() : 0.0);
+            pose.position.z = fromDisplayLength(spinboxes[2] ? spinboxes[2]->value() : 0.0);
+            const double roll = fromDisplayAngle(spinboxes[3] ? spinboxes[3]->value() : 0.0);
+            const double pitch = fromDisplayAngle(spinboxes[4] ? spinboxes[4]->value() : 0.0);
+            const double yaw = fromDisplayAngle(spinboxes[5] ? spinboxes[5]->value() : 0.0);
+            pose.orientation = orientZyx(roll, pitch, yaw);
+            return pose;
+        }
+
         if (spinboxes.size() < 7)
         {
             return pose;
@@ -2040,9 +2211,16 @@ namespace arms_rviz_control_plugin
             spinbox->setDecimals(use_cm_deg_ ? 2 : 4);
             spinbox->setSingleStep(use_cm_deg_ ? 1.0 : 0.01);
         }
+        else if (useAbsoluteRpyUi() && index < 6)
+        {
+            spinbox->setSuffix(" deg");
+            spinbox->setDecimals(2);
+            spinbox->setSingleStep(1.0);
+            spinbox->setValue(0.0);
+        }
         else
         {
-            // 默认按绝对四元数配置；相对模式由 applyArmPoseUiMode 覆盖
+            // 绝对米/弧度：四元数分量无单位；相对模式由 applyArmPoseUiMode 覆盖
             spinbox->setSuffix("");
             spinbox->setDecimals(4);
             spinbox->setSingleStep(0.01);
@@ -2052,7 +2230,7 @@ namespace arms_rviz_control_plugin
     void JointControlPanel::applyDisplayUnitToPoseSpinboxes(
         std::vector<std::unique_ptr<QDoubleSpinBox>>& spinboxes)
     {
-        for (size_t i = 0; i < spinboxes.size() && i < 6; ++i)
+        for (size_t i = 0; i < spinboxes.size() && i < 7; ++i)
         {
             if (!spinboxes[i])
             {
@@ -2065,11 +2243,21 @@ namespace arms_rviz_control_plugin
                 spinboxes[i]->setDecimals(use_cm_deg_ ? 2 : 4);
                 spinboxes[i]->setSingleStep(use_cm_deg_ ? 1.0 : 0.01);
             }
-            else if (use_relative_pose_)
+            else if (use_relative_pose_ || useAbsoluteRpyUi())
             {
-                spinboxes[i]->setSuffix(use_cm_deg_ ? " deg" : " rad");
-                spinboxes[i]->setDecimals(use_cm_deg_ ? 2 : 4);
-                spinboxes[i]->setSingleStep(use_cm_deg_ ? 1.0 : 0.01);
+                if (i < 6)
+                {
+                    spinboxes[i]->setSuffix(use_cm_deg_ ? " deg" : " rad");
+                    spinboxes[i]->setDecimals(use_cm_deg_ ? 2 : 4);
+                    spinboxes[i]->setSingleStep(use_cm_deg_ ? 1.0 : 0.01);
+                }
+            }
+            else
+            {
+                // 绝对米/弧度：qx/qy/qz/qw
+                spinboxes[i]->setSuffix("");
+                spinboxes[i]->setDecimals(4);
+                spinboxes[i]->setSingleStep(0.01);
             }
             spinboxes[i]->blockSignals(blocked);
         }
@@ -2131,9 +2319,10 @@ namespace arms_rviz_control_plugin
             return;
         }
 
-        static const char* kAbsNames[] = {"x", "y", "z", "qx", "qy", "qz", "qw"};
-        static const char* kRelNames[] = {"x", "y", "z", "roll", "pitch", "yaw", "qw"};
-        const char** names = use_relative_pose_ ? kRelNames : kAbsNames;
+        static const char* kQuatNames[] = {"x", "y", "z", "qx", "qy", "qz", "qw"};
+        static const char* kRpyNames[] = {"x", "y", "z", "roll", "pitch", "yaw", "qw"};
+        const bool rpy_ui = use_relative_pose_ || useAbsoluteRpyUi();
+        const char** names = rpy_ui ? kRpyNames : kQuatNames;
 
         for (size_t i = 0; i < 7; ++i)
         {
@@ -2152,7 +2341,7 @@ namespace arms_rviz_control_plugin
                 spinboxes[i]->setDecimals(use_cm_deg_ ? 2 : 4);
                 spinboxes[i]->setSingleStep(use_cm_deg_ ? 1.0 : 0.01);
             }
-            else if (use_relative_pose_ && i < 6)
+            else if (rpy_ui && i < 6)
             {
                 spinboxes[i]->setSuffix(use_cm_deg_ ? " deg" : " rad");
                 spinboxes[i]->setDecimals(use_cm_deg_ ? 2 : 4);
@@ -2167,8 +2356,7 @@ namespace arms_rviz_control_plugin
             spinboxes[i]->blockSignals(blocked);
         }
 
-        // 相对模式隐藏 qw 行
-        const bool show_qw = !use_relative_pose_;
+        // RPY UI 隐藏 qw；米/弧度绝对模式显示四元数含 qw
         if (layouts[6])
         {
             for (int j = 0; j < layouts[6]->count(); ++j)
@@ -2176,7 +2364,7 @@ namespace arms_rviz_control_plugin
                 QLayoutItem* item = layouts[6]->itemAt(j);
                 if (item && item->widget())
                 {
-                    item->widget()->setVisible(show_qw);
+                    item->widget()->setVisible(!rpy_ui);
                 }
             }
         }
@@ -2200,7 +2388,9 @@ namespace arms_rviz_control_plugin
         const bool show_pose_mode =
             is_joint_control_enabled_ &&
             current_command_ == 3 &&
-            (current_category_ == "left" || current_category_ == "right");
+            (current_category_ == "left" ||
+             current_category_ == "right" ||
+             isBodyTrackingPoseMode());
         if (pose_mode_label_)
         {
             pose_mode_label_->setVisible(show_pose_mode);
@@ -2208,6 +2398,14 @@ namespace arms_rviz_control_plugin
         if (pose_mode_combo_)
         {
             pose_mode_combo_->setVisible(show_pose_mode);
+            // Body：相对末端文案改为「相对身体」语义（数据仍用 relative_ee）
+            const int ee_idx = pose_mode_combo_->findData("relative_ee");
+            if (ee_idx >= 0)
+            {
+                pose_mode_combo_->setItemText(
+                    ee_idx,
+                    current_category_ == "body" ? QStringLiteral("相对身体") : QStringLiteral("相对末端"));
+            }
         }
         if (relative_keep_input_checkbox_)
         {
@@ -2231,11 +2429,13 @@ namespace arms_rviz_control_plugin
 
         applyArmPoseUiMode("Left", left_arm_labels_, left_arm_spinboxes_, left_arm_row_layouts_);
         applyArmPoseUiMode("Right", right_arm_labels_, right_arm_spinboxes_, right_arm_row_layouts_);
+        applyArmPoseUiMode("Body", body_pose_labels_, body_pose_spinboxes_, body_pose_row_layouts_);
 
         if (use_relative_pose_)
         {
             zeroArmPoseSpinboxes(left_arm_spinboxes_);
             zeroArmPoseSpinboxes(right_arm_spinboxes_);
+            zeroArmPoseSpinboxes(body_pose_spinboxes_);
             refreshOcs2FrameParams();
         }
         else
@@ -2248,6 +2448,10 @@ namespace arms_rviz_control_plugin
             {
                 setArmPoseSpinboxesFromPose(right_arm_spinboxes_, right_current_pose_);
             }
+            if (body_current_pose_valid_)
+            {
+                setArmPoseSpinboxesFromPose(body_pose_spinboxes_, body_current_pose_);
+            }
         }
         updatePoseModeControlsVisibility();
         updatePanelVisibility();
@@ -2255,6 +2459,11 @@ namespace arms_rviz_control_plugin
 
     std::string JointControlPanel::getOcs2ControllerName() const
     {
+        auto body_it = category_to_controller_.find("body");
+        if (body_it != category_to_controller_.end() && !body_it->second.empty())
+        {
+            return body_it->second;
+        }
         auto left_it = category_to_controller_.find("left");
         if (left_it != category_to_controller_.end() && !left_it->second.empty())
         {
@@ -2301,10 +2510,14 @@ namespace arms_rviz_control_plugin
             {
                 right_ee_frame_ = param_client->get_parameter<std::string>("right_ee_frame");
             }
+            if (param_client->has_parameter("body_frame"))
+            {
+                body_frame_ = param_client->get_parameter<std::string>("body_frame");
+            }
             RCLCPP_INFO(node_->get_logger(),
-                        "OCS2 frames from %s: base='%s' left_ee='%s' right_ee='%s'",
+                        "OCS2 frames from %s: base='%s' left_ee='%s' right_ee='%s' body='%s'",
                         controller.c_str(), ocs2_base_frame_.c_str(),
-                        left_ee_frame_.c_str(), right_ee_frame_.c_str());
+                        left_ee_frame_.c_str(), right_ee_frame_.c_str(), body_frame_.c_str());
         }
         catch (const std::exception& e)
         {
@@ -2371,7 +2584,7 @@ namespace arms_rviz_control_plugin
             return true;
         }
 
-        if (spinboxes.size() < 7)
+        if (spinboxes.size() < (useAbsoluteRpyUi() ? 6u : 7u))
         {
             return false;
         }
@@ -2390,8 +2603,82 @@ namespace arms_rviz_control_plugin
                                       : frame;
         }
         msg.header.stamp = node_->get_clock()->now();
+        // 米/弧度：直接读四元数；厘米/角度：RPY → OrientZYX 四元数
         msg.pose = getArmPoseFromSpinboxes(spinboxes);
         pub->publish(msg);
+        return true;
+    }
+
+    bool JointControlPanel::publishOcs2BodyPose()
+    {
+        if (use_relative_pose_)
+        {
+            if (body_pose_spinboxes_.size() < 6)
+            {
+                return false;
+            }
+            if (!body_relative_publisher_)
+            {
+                return false;
+            }
+
+            std::string frame_id;
+            {
+                std::lock_guard<std::mutex> lock(frame_id_mutex_);
+                if (pose_mode_ == "relative_ee")
+                {
+                    frame_id = body_frame_;
+                    if (frame_id.empty())
+                    {
+                        RCLCPP_WARN(node_->get_logger(),
+                                    "相对身体需要 body_frame 参数，请确认 ocs2_wbc_controller 已加载");
+                        return false;
+                    }
+                }
+                else
+                {
+                    frame_id = !body_target_frame_id_.empty()
+                                   ? body_target_frame_id_
+                                   : (!ocs2_base_frame_.empty() ? ocs2_base_frame_ : "base_link");
+                }
+            }
+
+            const PoseXyzRpy values = getArmRelativeSpinboxesRadians(body_pose_spinboxes_);
+            geometry_msgs::msg::TwistStamped msg;
+            msg.header.stamp = node_->get_clock()->now();
+            msg.header.frame_id = frame_id;
+            msg.twist.linear.x = values.x;
+            msg.twist.linear.y = values.y;
+            msg.twist.linear.z = values.z;
+            msg.twist.angular.x = values.roll;
+            msg.twist.angular.y = values.pitch;
+            msg.twist.angular.z = values.yaw;
+            body_relative_publisher_->publish(msg);
+            if (!relative_keep_input_)
+            {
+                zeroArmPoseSpinboxes(body_pose_spinboxes_);
+            }
+            return true;
+        }
+
+        if (body_pose_spinboxes_.size() < (useAbsoluteRpyUi() ? 6u : 7u))
+        {
+            return false;
+        }
+        if (!body_target_publisher_)
+        {
+            return false;
+        }
+        geometry_msgs::msg::PoseStamped msg;
+        {
+            std::lock_guard<std::mutex> lock(frame_id_mutex_);
+            msg.header.frame_id = body_target_frame_id_.empty()
+                                      ? (!ocs2_base_frame_.empty() ? ocs2_base_frame_ : "base_link")
+                                      : body_target_frame_id_;
+        }
+        msg.header.stamp = node_->get_clock()->now();
+        msg.pose = getArmPoseFromSpinboxes(body_pose_spinboxes_);
+        body_target_publisher_->publish(msg);
         return true;
     }
 
@@ -2631,49 +2918,62 @@ namespace arms_rviz_control_plugin
         right_arm_row_layouts_.clear();
         right_arm_labels_.clear();
         right_arm_spinboxes_.clear();
+        body_pose_row_layouts_.clear();
+        body_pose_labels_.clear();
+        body_pose_spinboxes_.clear();
 
         joint_positions_.resize(joint_names_.size(), 0.0);
 
-        // Dual-arm / single-arm OCS2 UI: 绝对 xyz+四元数（7）；相对复用前 6 为 xyz+rpy
+        const std::vector<std::string> param_names = {"x", "y", "z", "qx", "qy", "qz", "qw"};
+
+        auto create_pose_ui = [&](const std::string& side_prefix,
+                                  std::vector<std::unique_ptr<QLabel>>& labels,
+                                  std::vector<std::unique_ptr<QDoubleSpinBox>>& spinboxes,
+                                  std::vector<std::unique_ptr<QVBoxLayout>>& layouts)
+        {
+            for (size_t i = 0; i < 7; ++i)
+            {
+                auto row_layout = std::make_unique<QVBoxLayout>();
+                row_layout->setSpacing(2);
+
+                std::string label_text = side_prefix + " " + param_names[i];
+                auto label = std::make_unique<QLabel>(QString::fromStdString(label_text),
+                                                      joint_control_group_.get());
+                label->setStyleSheet("QLabel { font-weight: bold; }");
+                row_layout->addWidget(label.get());
+                labels.push_back(std::move(label));
+
+                auto spinbox = std::make_unique<QDoubleSpinBox>(joint_control_group_.get());
+                configureArmPoseSpinbox(spinbox.get(), i);
+                row_layout->addWidget(spinbox.get());
+                spinboxes.push_back(std::move(spinbox));
+
+                joint_layout_->addLayout(row_layout.get());
+                layouts.push_back(std::move(row_layout));
+            }
+        };
+
+        // Dual-arm / single-arm OCS2 UI: 7 行槽位；绝对米/弧度用四元数，厘米/角度与相对用 rpy
         if (is_dual_arm_mode)
         {
-            const std::vector<std::string> param_names = {"x", "y", "z", "qx", "qy", "qz", "qw"};
-
-            auto create_arm_pose_ui = [&](const std::string& side_prefix,
-                                         std::vector<std::unique_ptr<QLabel>>& labels,
-                                         std::vector<std::unique_ptr<QDoubleSpinBox>>& spinboxes,
-                                         std::vector<std::unique_ptr<QVBoxLayout>>& layouts)
-            {
-                for (size_t i = 0; i < 7; ++i)
-                {
-                    auto row_layout = std::make_unique<QVBoxLayout>();
-                    row_layout->setSpacing(2);
-
-                    std::string label_text = side_prefix + " " + param_names[i];
-                    auto label = std::make_unique<QLabel>(QString::fromStdString(label_text),
-                                                          joint_control_group_.get());
-                    label->setStyleSheet("QLabel { font-weight: bold; }");
-                    row_layout->addWidget(label.get());
-                    labels.push_back(std::move(label));
-
-                    auto spinbox = std::make_unique<QDoubleSpinBox>(joint_control_group_.get());
-                    configureArmPoseSpinbox(spinbox.get(), i);
-                    row_layout->addWidget(spinbox.get());
-                    spinboxes.push_back(std::move(spinbox));
-
-                    joint_layout_->addLayout(row_layout.get());
-                    layouts.push_back(std::move(row_layout));
-                }
-            };
-
             if (has_left_joints)
             {
-                create_arm_pose_ui("Left", left_arm_labels_, left_arm_spinboxes_, left_arm_row_layouts_);
+                create_pose_ui("Left", left_arm_labels_, left_arm_spinboxes_, left_arm_row_layouts_);
+                applyArmPoseUiMode("Left", left_arm_labels_, left_arm_spinboxes_, left_arm_row_layouts_);
             }
             if (has_right_joints)
             {
-                create_arm_pose_ui("Right", right_arm_labels_, right_arm_spinboxes_, right_arm_row_layouts_);
+                create_pose_ui("Right", right_arm_labels_, right_arm_spinboxes_, right_arm_row_layouts_);
+                applyArmPoseUiMode(
+                    "Right", right_arm_labels_, right_arm_spinboxes_, right_arm_row_layouts_);
             }
+        }
+
+        // Body Cartesian pose UI (shown only in BODY_TRACKING)
+        if (has_body_joints)
+        {
+            create_pose_ui("Body", body_pose_labels_, body_pose_spinboxes_, body_pose_row_layouts_);
+            applyArmPoseUiMode("Body", body_pose_labels_, body_pose_spinboxes_, body_pose_row_layouts_);
         }
 
         // Create UI elements for each joint (both single-arm and dual-arm mode)
