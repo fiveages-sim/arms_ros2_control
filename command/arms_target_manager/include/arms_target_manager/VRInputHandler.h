@@ -53,7 +53,7 @@ namespace arms_ros2_control::command
          * @param handControllers 手部/夹爪控制器名称列表（用于映射夹爪命令）
          * @param vr_thumbstick_linear_scale VR摇杆线性缩放因子（单位 m/step）
          * @param vr_thumbstick_angular_scale VR摇杆角度缩放因子（单位 rad/step）
-         * @param vr_pose_scale 手柄位姿位置缩放因子（左右共用，可由组合键动态校准）
+         * @param vr_pose_scale 手柄位姿位置缩放因子（左右共用；事件 15 左Y+右B 固定按左侧 Z 距校准）
          * @param reference_link 参考link名称（例如 head_link2），用于VR/头显关联
          * @param vr_follow_frame FULL_BODY 下 VR 末端目标计算坐标系（默认 base_footprint）
          */
@@ -297,10 +297,31 @@ namespace arms_ros2_control::command
         void publishGripperPercent(const std::string& controller_name, double percent);
 
         /**
-         * 模式切换后先把左右手同步到张开状态，避免旧模式目标和新模式目标冲突
-         * @param percent_mode true=用target_percent张开, false=用target_command张开
+         * 查询目标夹爪是否处于百分比模式
+         * @param is_target_left_arm true=左夹爪, false=右夹爪
          */
-        void openGrippersAfterModeSwitch(bool percent_mode);
+        bool isGripperPercentMode(bool is_target_left_arm) const;
+
+        /**
+         * 按当前扳机映射翻转目标夹爪的百分比/开合模式（含镜像）
+         * @param is_left_trigger true=事件13路径（左扳机）, false=事件14路径（右扳机）
+         */
+        void toggleGripperPercentMode(bool is_left_trigger);
+
+        /**
+         * 模式切换时的状态准备：不发任何夹爪指令，夹爪保持当前位置
+         * 切到百分比：清 last_gripper_percent_ 缓存并置 armed=false，等扳机回中后才跟随
+         * 切到开合：用最后一次百分比把 *_gripper_open_ 对齐到实际位置，避免 9/10 方向反了
+         * @param is_target_left_arm true=左夹爪
+         * @param percent_mode true=切到百分比模式, false=切到开合模式
+         */
+        void prepareGripperForModeSwitch(bool is_target_left_arm, bool percent_mode);
+
+        /**
+         * 尺度校准。事件 15 固定传 use_left_z=true。
+         * @param use_left_z true=头显-左手柄 Z 与左臂末端 Z（现行入口）；false=右手柄路径（保留，热路径不传）
+         */
+        void runScaleCalibration(bool use_left_z);
 
         /**
          * 按镜像模式解析左右扳机对应的手控制器
@@ -637,14 +658,28 @@ namespace arms_ros2_control::command
         // 夹爪状态跟踪
         std::atomic<bool> left_gripper_open_;
         std::atomic<bool> right_gripper_open_;
-        std::atomic<bool> trigger_percent_mode_;
-        std::chrono::steady_clock::time_point last_trigger_mode_toggle_time_{};
-        std::chrono::steady_clock::time_point trigger_percent_resume_time_{};
+        std::atomic<bool> left_gripper_percent_mode_;
+        std::atomic<bool> right_gripper_percent_mode_;
+        // 切到百分比后的三段式接管，避免"切换即张开/切换即夹死"：
+        //   ① saw_release=false：组合键的收尾释放期，不发任何指令
+        //      （13/14 的触发条件是"握把按住时扳机上升沿"，见 xr_target_node.py:651，
+        //        按下组合键时扳机必然扣着，松开它只是收尾动作，不算夹爪指令）
+        //   ② saw_release=true 且 hand_percent > hold：等新指令，夹爪停在 hold
+        //   ③ hand_percent <= hold：armed=true，从夹爪当前位置 1:1 接管，无跳变
+        std::atomic<bool> left_gripper_percent_armed_;
+        std::atomic<bool> right_gripper_percent_armed_;
+        std::atomic<bool> left_gripper_percent_saw_release_;
+        std::atomic<bool> right_gripper_percent_saw_release_;
+        // 切换瞬间夹爪所在位置（0.0=闭合, 1.0=张开），接管点
+        std::atomic<double> left_gripper_percent_hold_;
+        std::atomic<double> right_gripper_percent_hold_;
+        std::chrono::steady_clock::time_point last_left_gripper_mode_toggle_time_{};
+        std::chrono::steady_clock::time_point last_right_gripper_mode_toggle_time_{};
 
         // VR控制缩放参数（从配置文件读取 / 固定配置）
         double vr_thumbstick_linear_scale_; // 摇杆位置缩放因子（单位 m/step）
         double vr_thumbstick_angular_scale_; // 摇杆旋转缩放因子（单位 rad/step）
-        double vr_pose_scale_;  // 手柄位姿位置缩放因子（左右共用，可由组合键动态校准）
+        double vr_pose_scale_;  // 手柄位姿位置缩放因子（左右共用；事件 15 按左侧校准）
 
         // 底盘/腰部控制硬编码速度比例（后续可参数化，参考 joystick_teleop.cpp）
         static constexpr double chassis_linear_scale_ = 0.25;   // 底盘线速度比例

@@ -18,6 +18,7 @@
 #include <algorithm>
 #include <cctype>
 #include <cmath>
+#include <limits>
 #include <tf2_geometry_msgs/tf2_geometry_msgs.hpp>
 
 namespace arms_ros2_control::command
@@ -54,7 +55,14 @@ namespace arms_ros2_control::command
           , hand_controllers_(handControllers)
           , left_gripper_open_(false)
           , right_gripper_open_(false)
-          , trigger_percent_mode_(true)
+          , left_gripper_percent_mode_(true)
+          , right_gripper_percent_mode_(true)
+          , left_gripper_percent_armed_(false)
+          , right_gripper_percent_armed_(false)
+          , left_gripper_percent_saw_release_(false)
+          , right_gripper_percent_saw_release_(false)
+          , left_gripper_percent_hold_(1.0)
+          , right_gripper_percent_hold_(1.0)
           , vr_thumbstick_linear_scale_(vr_thumbstick_linear_scale)
           , vr_thumbstick_angular_scale_(vr_thumbstick_angular_scale)
           , vr_pose_scale_(vr_pose_scale)
@@ -274,6 +282,11 @@ namespace arms_ros2_control::command
         auto target_msg = std_msgs::msg::Int32();
         target_msg.data = command;
         gripper_command_publishers_[controller_name]->publish(target_msg);
+
+        // 开关命令也要写进位置缓存：last_gripper_percent_ 是"最后一次下发的夹爪位置"
+        // 的唯一真相，百分比/开合两种模式都必须维护它，否则模式切回百分比时
+        // 取不到真实的接管点 hold。
+        last_gripper_percent_[controller_name] = (command == 1) ? 1.0 : 0.0;
     }
 
     void VRInputHandler::publishGripperPercent(const std::string& controller_name, double percent)
@@ -304,24 +317,337 @@ namespace arms_ros2_control::command
         gripper_percent_publishers_[controller_name]->publish(target_msg);
     }
 
-    void VRInputHandler::openGrippersAfterModeSwitch(bool percent_mode)
+    bool VRInputHandler::isGripperPercentMode(bool is_target_left_arm) const
     {
+        return is_target_left_arm ? left_gripper_percent_mode_.load()
+                                  : right_gripper_percent_mode_.load();
+    }
+
+    void VRInputHandler::prepareGripperForModeSwitch(bool is_target_left_arm, bool percent_mode)
+    {
+        const std::string& controller_name = is_target_left_arm
+            ? left_gripper_controller_name_
+            : right_gripper_controller_name_;
+        if (controller_name.empty())
+        {
+            RCLCPP_WARN(node_->get_logger(),
+                        "🕹️ [夹爪模式切换] 未检测到%s臂控制器，模式已切换但不会生效",
+                        is_target_left_arm ? "左" : "右");
+            return;
+        }
+
         if (percent_mode)
         {
-            // 切回比例模式时强制重发1.0，避免缓存认为“已经张开”而漏发同步目标。
-            last_gripper_percent_.erase(left_gripper_controller_name_);
-            last_gripper_percent_.erase(right_gripper_controller_name_);
-            publishGripperPercent(left_gripper_controller_name_, 1.0);
-            publishGripperPercent(right_gripper_controller_name_, 1.0);
+            // 切到百分比：不发任何指令，夹爪停在切换前的位置。
+            // 记下接管点 hold——注意不能清 last_gripper_percent_，它现在由
+            // publishGripperCommand 和两个 GripperStateCallback 一起维护，
+            // 对开合模式同样有效，是"夹爪当前在哪"的唯一真相。
+            auto it = last_gripper_percent_.find(controller_name);
+            const double hold = (it != last_gripper_percent_.end())
+                ? std::clamp(it->second, 0.0, 1.0)
+                : 1.0;  // 查不到说明该侧还没收到过任何夹爪指令，按张开处理
+
+            if (is_target_left_arm)
+            {
+                left_gripper_percent_hold_.store(hold);
+                left_gripper_percent_saw_release_.store(false);
+                left_gripper_percent_armed_.store(false);
+            }
+            else
+            {
+                right_gripper_percent_hold_.store(hold);
+                right_gripper_percent_saw_release_.store(false);
+                right_gripper_percent_armed_.store(false);
+            }
+
+            RCLCPP_INFO(node_->get_logger(),
+                        "🕹️ [夹爪模式切换] %s夹爪保持在 %.2f，松开扳机不会动它；"
+                        "把扳机扣到该位置（hand_percent<=%.2f）才接管",
+                        is_target_left_arm ? "左" : "右", hold, hold);
         }
         else
         {
-            publishGripperCommand(left_gripper_controller_name_, 1);
-            publishGripperCommand(right_gripper_controller_name_, 1);
+            // 切到开合：同样不发指令，但要把开合 flag 对齐到夹爪当前实际位置。
+            // left/right_gripper_open_ 只订阅 /<controller>/target_command
+            // （VRInputHandler.cpp:82-100），完全看不到 percent 命令，在百分比模式
+            // 待过一段后必然是陈旧的；不对齐则下一次 case 9/10 的开合方向会反。
+            auto it = last_gripper_percent_.find(controller_name);
+            if (it != last_gripper_percent_.end())
+            {
+                // >0 视为仍张开：半闭（如 0.3）下次 9/10 应闭合，而不是按 0.5 阈值
+                // 被当成已关闭后反向张开。完全闭合（0）才视为 close，下次打开。
+                const bool open_now = it->second > 0.0;
+                if (is_target_left_arm)
+                {
+                    left_gripper_open_.store(open_now);
+                }
+                else
+                {
+                    right_gripper_open_.store(open_now);
+                }
+            }
+            // 查不到缓存说明该侧从未走过百分比，保持原 flag 不动
+        }
+    }
+
+    void VRInputHandler::toggleGripperPercentMode(bool is_left_trigger)
+    {
+        std::string controller_name;
+        bool is_target_left_arm = true;
+        resolveTriggerTarget(is_left_trigger, controller_name, is_target_left_arm);
+
+        auto& last_toggle = is_target_left_arm
+            ? last_left_gripper_mode_toggle_time_
+            : last_right_gripper_mode_toggle_time_;
+        const auto now = std::chrono::steady_clock::now();
+        if (now - last_toggle < std::chrono::milliseconds(500))
+        {
+            RCLCPP_DEBUG(node_->get_logger(),
+                         "🔘 [%s] 夹爪模式切换过近，已忽略防抖",
+                         is_left_trigger ? "左握把+左扳机" : "右握把+右扳机");
+            return;
+        }
+        last_toggle = now;
+
+        auto& mode_flag = is_target_left_arm
+            ? left_gripper_percent_mode_
+            : right_gripper_percent_mode_;
+        const bool new_mode = !mode_flag.load();
+        mode_flag.store(new_mode);
+
+        prepareGripperForModeSwitch(is_target_left_arm, new_mode);
+        RCLCPP_INFO(node_->get_logger(),
+                    "🔘 [%s] %s夹爪切换为: %s，夹爪保持当前位置%s%s ｜ 当前模式 左=%s 右=%s",
+                    is_left_trigger ? "左握把+左扳机" : "右握把+右扳机",
+                    is_target_left_arm ? "左" : "右",
+                    new_mode ? "比例控制(0~1，按压深度控制闭合)" : "开关控制(0/1，按一下开/关)",
+                    new_mode ? "，扣扳机回到该位置才接管" : "",
+                    mirror_mode_.load() ? " [镜像模式]" : "",
+                    left_gripper_percent_mode_.load() ? "比例" : "开关",
+                    right_gripper_percent_mode_.load() ? "比例" : "开关");
+    }
+
+    void VRInputHandler::runScaleCalibration(bool use_left_z)
+    {
+        const char* tag = use_left_z ? "左组合键" : "右组合键";
+
+        mirror_mode_.store(false);
+        RCLCPP_INFO(node_->get_logger(), "🔘 [%s] 已切换至非镜像模式", tag);
+        is_update_mode_.store(false);
+        RCLCPP_INFO(node_->get_logger(),
+                    "🔘 [%s] 自动切换到 STORAGE 模式 - 正在更新映射尺度，请重新进入 UPDATE 模式",
+                    tag);
+
+        const double head_ctrl_dist = use_left_z
+            ? std::abs(vr_head_position_.z() - vr_left_position_raw_.z())
+            : std::abs(vr_head_position_.z() - vr_right_position_raw_.z());
+        RCLCPP_INFO(node_->get_logger(),
+                    "🕹️🕶️🕹️ [%s][校准调试] frame初始化=%s, ee_frame_id='%s', reference_link='%s'",
+                    tag,
+                    ee_frame_id_initialized_ ? "true" : "false",
+                    ee_frame_id_.c_str(),
+                    reference_link_.c_str());
+        RCLCPP_INFO(node_->get_logger(),
+                    "🕹️🕶️🕹️ [%s][校准调试] VR raw: head=[%.4f, %.4f, %.4f], "
+                    "left=[%.4f, %.4f, %.4f], right=[%.4f, %.4f, %.4f], head_ctrl_z_dist=%.6f",
+                    tag,
+                    vr_head_position_.x(), vr_head_position_.y(), vr_head_position_.z(),
+                    vr_left_position_raw_.x(), vr_left_position_raw_.y(), vr_left_position_raw_.z(),
+                    vr_right_position_raw_.x(), vr_right_position_raw_.y(), vr_right_position_raw_.z(),
+                    head_ctrl_dist);
+
+        double ee_dist_from_ref = std::numeric_limits<double>::quiet_NaN();
+        Eigen::Vector3d p_F_ref = Eigen::Vector3d::Zero();
+        if (ee_frame_id_initialized_)
+        {
+            try
+            {
+                geometry_msgs::msg::TransformStamped tf_ref_in_F =
+                    tf_buffer_->lookupTransform(
+                        ee_frame_id_,
+                        reference_link_,
+                        tf2::TimePointZero);
+
+                p_F_ref = Eigen::Vector3d(
+                    tf_ref_in_F.transform.translation.x,
+                    tf_ref_in_F.transform.translation.y,
+                    tf_ref_in_F.transform.translation.z);
+                RCLCPP_INFO(node_->get_logger(),
+                            "🕹️🕶️🕹️ [%s][校准调试] TF %s -> %s: translation=[%.4f, %.4f, %.4f], "
+                            "rotation=[x=%.4f, y=%.4f, z=%.4f, w=%.4f]",
+                            tag,
+                            reference_link_.c_str(), ee_frame_id_.c_str(),
+                            p_F_ref.x(), p_F_ref.y(), p_F_ref.z(),
+                            tf_ref_in_F.transform.rotation.x,
+                            tf_ref_in_F.transform.rotation.y,
+                            tf_ref_in_F.transform.rotation.z,
+                            tf_ref_in_F.transform.rotation.w);
+
+                const Eigen::Vector3d& robot_ee = use_left_z
+                    ? robot_current_left_position_
+                    : robot_current_right_position_;
+                ee_dist_from_ref = std::abs(robot_ee.z() - p_F_ref.z());
+                RCLCPP_INFO(node_->get_logger(),
+                            "🕹️🕶️🕹️ [%s][校准调试] Robot current: left=[%.4f, %.4f, %.4f], "
+                            "right=[%.4f, %.4f, %.4f], ref_in_%s=[%.4f, %.4f, %.4f], ee_z_dist=%.6f",
+                            tag,
+                            robot_current_left_position_.x(), robot_current_left_position_.y(),
+                            robot_current_left_position_.z(),
+                            robot_current_right_position_.x(), robot_current_right_position_.y(),
+                            robot_current_right_position_.z(),
+                            ee_frame_id_.c_str(),
+                            p_F_ref.x(), p_F_ref.y(), p_F_ref.z(),
+                            ee_dist_from_ref);
+            }
+            catch (const tf2::TransformException& ex)
+            {
+                RCLCPP_WARN(node_->get_logger(),
+                            "Failed to compute Z-dist(robot_%s_ee, %s) in frame %s: %s",
+                            use_left_z ? "left" : "right",
+                            reference_link_.c_str(), ee_frame_id_.c_str(), ex.what());
+            }
+        }
+        else
+        {
+            RCLCPP_WARN(node_->get_logger(),
+                        "🕹️🕶️🕹️ [%s][校准调试] 无法查询TF：ee_frame_id_尚未从current_pose初始化",
+                        tag);
         }
 
-        left_gripper_open_.store(true);
-        right_gripper_open_.store(true);
+        if (!std::isnan(ee_dist_from_ref) && head_ctrl_dist > 1e-6)
+        {
+            const double unclamped_scale = ee_dist_from_ref / head_ctrl_dist;
+            vr_pose_scale_ = std::clamp(unclamped_scale, 0.75, 1.5);
+            RCLCPP_INFO(node_->get_logger(),
+                        "🕹️🕶️🕹️ [%s][校准调试] scale计算: robot_z_dist=%.6f / "
+                        "vr_z_dist=%.6f => raw_scale=%.6f, clamped_scale=%.6f",
+                        tag, ee_dist_from_ref, head_ctrl_dist, unclamped_scale, vr_pose_scale_);
+
+            const Eigen::Vector3d left_target_pos =
+                p_F_ref + (vr_left_position_raw_ - vr_head_position_) * vr_pose_scale_;
+            const Eigen::Vector3d right_target_pos =
+                p_F_ref + (vr_right_position_raw_ - vr_head_position_) * vr_pose_scale_;
+            RCLCPP_INFO(node_->get_logger(),
+                        "🕹️🕶️🕹️ [%s][校准调试] VR offset raw: left-head=[%.4f, %.4f, %.4f], "
+                        "right-head=[%.4f, %.4f, %.4f]",
+                        tag,
+                        (vr_left_position_raw_ - vr_head_position_).x(),
+                        (vr_left_position_raw_ - vr_head_position_).y(),
+                        (vr_left_position_raw_ - vr_head_position_).z(),
+                        (vr_right_position_raw_ - vr_head_position_).x(),
+                        (vr_right_position_raw_ - vr_head_position_).y(),
+                        (vr_right_position_raw_ - vr_head_position_).z());
+            RCLCPP_INFO(node_->get_logger(),
+                        "🕹️🕶️🕹️ [%s] vr_pose_scale_ 已更新: "
+                        "robot_z_dist=%.4f, vr_z_dist=%.4f, scale=%.4f",
+                        tag, ee_dist_from_ref, head_ctrl_dist, vr_pose_scale_);
+            RCLCPP_INFO(node_->get_logger(),
+                        "🕹️🕶️🕹️ [%s] 左臂目标: [%.3f, %.3f, %.3f]  右臂目标: [%.3f, %.3f, %.3f]",
+                        tag,
+                        left_target_pos.x(), left_target_pos.y(), left_target_pos.z(),
+                        right_target_pos.x(), right_target_pos.y(), right_target_pos.z());
+
+            if (pub_dual_target_stamped_)
+            {
+                nav_msgs::msg::Path dual_path;
+                dual_path.header.stamp = node_->get_clock()->now();
+                dual_path.header.frame_id = ee_frame_id_;
+                dual_path.poses.resize(2);
+                dual_path.poses[0].header = dual_path.header;
+                dual_path.poses[0].pose.position.x = left_target_pos.x();
+                dual_path.poses[0].pose.position.y = left_target_pos.y();
+                dual_path.poses[0].pose.position.z = left_target_pos.z();
+                dual_path.poses[0].pose.orientation.x = robot_current_left_orientation_.x();
+                dual_path.poses[0].pose.orientation.y = robot_current_left_orientation_.y();
+                dual_path.poses[0].pose.orientation.z = robot_current_left_orientation_.z();
+                dual_path.poses[0].pose.orientation.w = robot_current_left_orientation_.w();
+                dual_path.poses[1].header = dual_path.header;
+                dual_path.poses[1].pose.position.x = right_target_pos.x();
+                dual_path.poses[1].pose.position.y = right_target_pos.y();
+                dual_path.poses[1].pose.position.z = right_target_pos.z();
+                dual_path.poses[1].pose.orientation.x = robot_current_right_orientation_.x();
+                dual_path.poses[1].pose.orientation.y = robot_current_right_orientation_.y();
+                dual_path.poses[1].pose.orientation.z = robot_current_right_orientation_.z();
+                dual_path.poses[1].pose.orientation.w = robot_current_right_orientation_.w();
+                pub_dual_target_stamped_->publish(dual_path);
+                RCLCPP_INFO(node_->get_logger(),
+                            "🕹️🕶️🕹️ [%s] 已发布校准目标到 /dual_target/stamped (frame: %s)",
+                            tag, ee_frame_id_.c_str());
+
+                // 校准绕过 publishTargetPoseDirect 直接改变了机器人目标，缓存的
+                // command target 已经过期；不处理的话，下次进入 UPDATE 会拿校准前的
+                // 旧目标当锚点，手臂会从校准位姿弹回旧位置。
+                // 这里把校准终点当作"刚刚发布过的目标"写回缓存：锚点即终点，
+                // 于是不必等手臂收敛就能进 UPDATE，未走完的运动会继续走完。
+                const Eigen::Quaterniond left_target_ori =
+                    robot_current_left_orientation_.normalized();
+                const Eigen::Quaterniond right_target_ori =
+                    robot_current_right_orientation_.normalized();
+
+                // last_published_* 存的是计算系的值。ee_frame_id_ 与 vr_follow_frame_
+                // 同名时（固定基座配置，两者都是 base_footprint）计算系就是 ee_frame_id_，
+                // 校准目标可直接写回；不同名时（轮式底盘下 ee_frame_id_ 为 world）
+                // 需要反向转到 vr_follow_frame_。
+                Eigen::Vector3d left_anchor_pos = left_target_pos;
+                Eigen::Quaterniond left_anchor_ori = left_target_ori;
+                Eigen::Vector3d right_anchor_pos = right_target_pos;
+                Eigen::Quaterniond right_anchor_ori = right_target_ori;
+                bool anchors_ready = true;
+                if (ee_frame_id_ != vr_follow_frame_)
+                {
+                    anchors_ready =
+                        transformPoseBetweenFrames(
+                            "left", left_target_pos, left_target_ori,
+                            ee_frame_id_, vr_follow_frame_,
+                            left_anchor_pos, left_anchor_ori) &&
+                        transformPoseBetweenFrames(
+                            "right", right_target_pos, right_target_ori,
+                            ee_frame_id_, vr_follow_frame_,
+                            right_anchor_pos, right_anchor_ori);
+                }
+
+                if (anchors_ready)
+                {
+                    recordLastPublishedTarget("left", left_anchor_pos, left_anchor_ori);
+                    recordLastPublishedTarget("right", right_anchor_pos, right_anchor_ori);
+                    // 让 robot_base_* 失效，下次进 UPDATE 从上面写回的 command target 重新派生
+                    left_robot_base_valid_ = false;
+                    right_robot_base_valid_ = false;
+                    // prev_calculated_* 存的是发布系（ee_frame_id_）的值，即校准目标原值；
+                    // 它没有标志位保护、被 hasPoseChanged() 无条件读取，必须同步。
+                    prev_calculated_left_position_ = left_target_pos;
+                    prev_calculated_left_orientation_ = left_target_ori;
+                    prev_calculated_right_position_ = right_target_pos;
+                    prev_calculated_right_orientation_ = right_target_ori;
+                    RCLCPP_INFO(node_->get_logger(),
+                                "🕹️🕶️🕹️ [%s] 已将校准终点写回 command target 缓存"
+                                "（锚点系: %s）；无需等手臂收敛即可进入 UPDATE",
+                                tag, vr_follow_frame_.c_str());
+                }
+                else
+                {
+                    // TF 不可用：退回作废缓存，下次进 UPDATE 改从 current pose 锚定
+                    clearLastPublishedTargets();
+                    prev_calculated_left_position_ = robot_current_left_position_;
+                    prev_calculated_left_orientation_ = left_target_ori;
+                    prev_calculated_right_position_ = robot_current_right_position_;
+                    prev_calculated_right_orientation_ = right_target_ori;
+                    RCLCPP_WARN(node_->get_logger(),
+                                "🕹️🕶️🕹️ [%s] %s -> %s 变换不可用，已作废缓存的 command target；"
+                                "请等手臂停稳后再进入 UPDATE",
+                                tag, ee_frame_id_.c_str(), vr_follow_frame_.c_str());
+                }
+            }
+        }
+        else
+        {
+            RCLCPP_WARN(node_->get_logger(),
+                        "🕹️🕶️🕹️ [%s] 无法更新 vr_pose_scale_: "
+                        "robot_z_dist=%s, vr_z_dist=%.4f",
+                        tag,
+                        std::isnan(ee_dist_from_ref) ? "NaN" : std::to_string(ee_dist_from_ref).c_str(),
+                        head_ctrl_dist);
+        }
     }
 
     void VRInputHandler::resolveTriggerTarget(bool is_left_trigger,
@@ -387,7 +713,12 @@ namespace arms_ros2_control::command
     {
         // 同步左夹爪状态（从 topic 中获取）
         left_gripper_open_.store(msg->data == 1);
-        RCLCPP_DEBUG(node_->get_logger(), "🕹️🕶️🕹️ Left gripper state synced: %s", 
+        // 同步位置缓存，覆盖外部节点（rviz 面板 / teleop）下发的开关命令
+        if (!left_gripper_controller_name_.empty())
+        {
+            last_gripper_percent_[left_gripper_controller_name_] = (msg->data == 1) ? 1.0 : 0.0;
+        }
+        RCLCPP_DEBUG(node_->get_logger(), "🕹️🕶️🕹️ Left gripper state synced: %s",
                      (msg->data == 1) ? "open" : "close");
     }
 
@@ -395,7 +726,12 @@ namespace arms_ros2_control::command
     {
         // 同步右夹爪状态（从 topic 中获取）
         right_gripper_open_.store(msg->data == 1);
-        RCLCPP_DEBUG(node_->get_logger(), "🕹️🕶️🕹️ Right gripper state synced: %s", 
+        // 同步位置缓存，覆盖外部节点（rviz 面板 / teleop）下发的开关命令
+        if (!right_gripper_controller_name_.empty())
+        {
+            last_gripper_percent_[right_gripper_controller_name_] = (msg->data == 1) ? 1.0 : 0.0;
+        }
+        RCLCPP_DEBUG(node_->get_logger(), "🕹️🕶️🕹️ Right gripper state synced: %s",
                      (msg->data == 1) ? "open" : "close");
     }
 
@@ -1333,35 +1669,64 @@ namespace arms_ros2_control::command
 
     void VRInputHandler::triggerValuesCallback(const geometry_msgs::msg::Twist::SharedPtr msg)
     {
-        if (!trigger_percent_mode_.load())
-        {
-            return;
-        }
-
-        const auto now = std::chrono::steady_clock::now();
-        if (now < trigger_percent_resume_time_)
-        {
-            return;
-        }
-
         const double left_trigger_pull = std::clamp(msg->linear.x, 0.0, 1.0);
         const double right_trigger_pull = std::clamp(msg->angular.x, 0.0, 1.0);
-
-        // BasicJointController 的 target_percent: 0.0=闭合, 1.0=张开。
-        // VR 扳机语义: 0.0=松开, 1.0=拉满，所以这里反向映射。
         const double left_hand_percent = 1.0 - left_trigger_pull;
         const double right_hand_percent = 1.0 - right_trigger_pull;
 
-        if (mirror_mode_.load())
-        {
-            publishGripperPercent(right_gripper_controller_name_, left_hand_percent);
-            publishGripperPercent(left_gripper_controller_name_, right_hand_percent);
-        }
-        else
-        {
-            publishGripperPercent(left_gripper_controller_name_, left_hand_percent);
-            publishGripperPercent(right_gripper_controller_name_, right_hand_percent);
-        }
+        auto publishIfPercent = [&](bool is_left_trigger, double hand_percent) {
+            std::string controller_name;
+            bool is_target_left_arm = true;
+            resolveTriggerTarget(is_left_trigger, controller_name, is_target_left_arm);
+            if (!isGripperPercentMode(is_target_left_arm))
+            {
+                return;
+            }
+            auto& armed = is_target_left_arm ? left_gripper_percent_armed_
+                                             : right_gripper_percent_armed_;
+            if (!armed.load())
+            {
+                const char* side = is_target_left_arm ? "左" : "右";
+                auto& saw_release = is_target_left_arm ? left_gripper_percent_saw_release_
+                                                       : right_gripper_percent_saw_release_;
+
+                // ① 组合键的收尾释放期：13/14 必须扣着扳机才能触发，松开它只是
+                //    收尾动作，不是夹爪指令，所以这一段一条指令都不发。
+                if (!saw_release.load())
+                {
+                    if (hand_percent >= 0.9)
+                    {
+                        saw_release.store(true);
+                    }
+                    RCLCPP_INFO_THROTTLE(
+                        node_->get_logger(), *node_->get_clock(), 2000,
+                        "🕹️ [%s夹爪] 已切到比例控制，等扳机松开（当前保持原位）", side);
+                    return;
+                }
+
+                // ② 已松开过，但扳机还没扣回到夹爪所在位置：继续保持原位。
+                //    这一段就是"松开扳机夹爪不动，直到再次收到夹爪指令"。
+                const double hold = is_target_left_arm ? left_gripper_percent_hold_.load()
+                                                       : right_gripper_percent_hold_.load();
+                if (hand_percent > hold)
+                {
+                    RCLCPP_INFO_THROTTLE(
+                        node_->get_logger(), *node_->get_clock(), 2000,
+                        "🕹️ [%s夹爪] 保持在 %.2f，扣扳机到该位置（当前 %.2f）才接管",
+                        side, hold, hand_percent);
+                    return;
+                }
+
+                // ③ 扳机已走到夹爪当前位置：从这里 1:1 接管，接管点即当前位置，无跳变。
+                armed.store(true);
+                RCLCPP_INFO(node_->get_logger(),
+                            "🕹️ [%s夹爪] 比例控制已接管（接管点 %.2f）", side, hand_percent);
+            }
+            publishGripperPercent(controller_name, hand_percent);
+        };
+
+        publishIfPercent(true, left_hand_percent);
+        publishIfPercent(false, right_hand_percent);
     }
     
     void VRInputHandler::processLeftThumbstickAxes()
@@ -2679,10 +3044,15 @@ namespace arms_ros2_control::command
             }
             case 9:  // 左扳机按钮
             {
-                if (trigger_percent_mode_.load())
+                std::string controller_name;
+                bool is_target_left_arm = true;
+                resolveTriggerTarget(true, controller_name, is_target_left_arm);
+                if (isGripperPercentMode(is_target_left_arm))
                 {
                     RCLCPP_DEBUG(node_->get_logger(),
-                                 "🔘 [左扳机按钮] 按下 - 当前为比例控制(0~1)，忽略旧的开关事件");
+                                 "🔘 [左扳机按钮] 目标%s夹爪为比例控制(0~1)，忽略开关事件%s",
+                                 is_target_left_arm ? "左" : "右",
+                                 mirror_mode_.load() ? " [镜像模式]" : "");
                 }
                 else
                 {
@@ -2692,10 +3062,15 @@ namespace arms_ros2_control::command
             }
             case 10: // 右扳机按钮
             {
-                if (trigger_percent_mode_.load())
+                std::string controller_name;
+                bool is_target_left_arm = true;
+                resolveTriggerTarget(false, controller_name, is_target_left_arm);
+                if (isGripperPercentMode(is_target_left_arm))
                 {
                     RCLCPP_DEBUG(node_->get_logger(),
-                                 "🔘 [右扳机按钮] 按下 - 当前为比例控制(0~1)，忽略旧的开关事件");
+                                 "🔘 [右扳机按钮] 目标%s夹爪为比例控制(0~1)，忽略开关事件%s",
+                                 is_target_left_arm ? "左" : "右",
+                                 mirror_mode_.load() ? " [镜像模式]" : "");
                 }
                 else
                 {
@@ -2752,332 +3127,19 @@ namespace arms_ros2_control::command
                 }
                 break;
             }
-            case 13: // 左握把+左扳机组合键
+            case 13: // 左握把+左扳机：切换左扳机所映射夹爪的百分比/开合
             {
-                // 取消镜像模式，确保尺度校准基于正常模式（左手→左臂，右手→右臂）
-                mirror_mode_.store(false);
-                RCLCPP_INFO(node_->get_logger(), "🔘 [左组合键] 已切换至非镜像模式");
-                // 先切换到 STORAGE 模式，避免尺度更新期间发送错误目标
-                is_update_mode_.store(false);
-                RCLCPP_INFO(node_->get_logger(), "🔘 [左组合键] 自动切换到 STORAGE 模式 - 正在更新映射尺度，请重新进入 UPDATE 模式");
-
-                // 计算 VR 头显与 VR 左手柄之间的 Z 轴距离（使用未缩放的原始左手柄位姿）
-                double head_left_dist = std::abs(vr_head_position_.z() - vr_left_position_raw_.z());
-                RCLCPP_INFO(node_->get_logger(),
-                            "🕹️🕶️🕹️ [左组合键][校准调试] frame初始化=%s, ee_frame_id='%s', reference_link='%s'",
-                            ee_frame_id_initialized_ ? "true" : "false",
-                            ee_frame_id_.c_str(),
-                            reference_link_.c_str());
-                RCLCPP_INFO(node_->get_logger(),
-                            "🕹️🕶️🕹️ [左组合键][校准调试] VR raw: head=[%.4f, %.4f, %.4f], "
-                            "left=[%.4f, %.4f, %.4f], right=[%.4f, %.4f, %.4f], head_left_z_dist=%.6f",
-                            vr_head_position_.x(), vr_head_position_.y(), vr_head_position_.z(),
-                            vr_left_position_raw_.x(), vr_left_position_raw_.y(), vr_left_position_raw_.z(),
-                            vr_right_position_raw_.x(), vr_right_position_raw_.y(), vr_right_position_raw_.z(),
-                            head_left_dist);
-
-                // 计算机器人左末端与 reference_link_ 之间的 Z 轴距离
-                double left_ee_dist_from_ref = std::numeric_limits<double>::quiet_NaN();
-                Eigen::Vector3d p_F_ref = Eigen::Vector3d::Zero();
-                if (ee_frame_id_initialized_)
-                {
-                    try
-                    {
-                        // 查询 reference_link_ 在 ee_frame_id_ 下的位置
-                        geometry_msgs::msg::TransformStamped tf_ref_in_F =
-                            tf_buffer_->lookupTransform(
-                                ee_frame_id_,      // target_frame: F
-                                reference_link_,   // source_frame: ref
-                                tf2::TimePointZero);
-
-                        p_F_ref = Eigen::Vector3d(
-                            tf_ref_in_F.transform.translation.x,
-                            tf_ref_in_F.transform.translation.y,
-                            tf_ref_in_F.transform.translation.z);
-                        RCLCPP_INFO(node_->get_logger(),
-                                    "🕹️🕶️🕹️ [左组合键][校准调试] TF %s -> %s: translation=[%.4f, %.4f, %.4f], "
-                                    "rotation=[x=%.4f, y=%.4f, z=%.4f, w=%.4f]",
-                                    reference_link_.c_str(), ee_frame_id_.c_str(),
-                                    p_F_ref.x(), p_F_ref.y(), p_F_ref.z(),
-                                    tf_ref_in_F.transform.rotation.x,
-                                    tf_ref_in_F.transform.rotation.y,
-                                    tf_ref_in_F.transform.rotation.z,
-                                    tf_ref_in_F.transform.rotation.w);
-
-                        // 取左末端 Z 轴距离
-                        left_ee_dist_from_ref = std::abs(robot_current_left_position_.z() - p_F_ref.z());
-                        RCLCPP_INFO(node_->get_logger(),
-                                    "🕹️🕶️🕹️ [左组合键][校准调试] Robot current: left=[%.4f, %.4f, %.4f], "
-                                    "right=[%.4f, %.4f, %.4f], ref_in_%s=[%.4f, %.4f, %.4f], left_z_dist=%.6f",
-                                    robot_current_left_position_.x(), robot_current_left_position_.y(),
-                                    robot_current_left_position_.z(),
-                                    robot_current_right_position_.x(), robot_current_right_position_.y(),
-                                    robot_current_right_position_.z(),
-                                    ee_frame_id_.c_str(),
-                                    p_F_ref.x(), p_F_ref.y(), p_F_ref.z(),
-                                    left_ee_dist_from_ref);
-                    }
-                    catch (const tf2::TransformException& ex)
-                    {
-                        RCLCPP_WARN(node_->get_logger(),
-                                    "Failed to compute Z-dist(robot_left_ee, %s) in frame %s: %s",
-                                    reference_link_.c_str(), ee_frame_id_.c_str(), ex.what());
-                    }
-                }
-                else
-                {
-                    RCLCPP_WARN(node_->get_logger(),
-                                "🕹️🕶️🕹️ [左组合键][校准调试] 无法查询TF：ee_frame_id_尚未从current_pose初始化");
-                }
-
-                // 用机器人Z轴距离除以VR Z轴距离，更新尺度
-                if (!std::isnan(left_ee_dist_from_ref) && head_left_dist > 1e-6)
-                {
-                    double unclamped_scale = left_ee_dist_from_ref / head_left_dist;
-                    vr_pose_scale_ = std::clamp(unclamped_scale, 0.75, 1.5);
-                    RCLCPP_INFO(node_->get_logger(),
-                                "🕹️🕶️🕹️ [左组合键][校准调试] scale计算: robot_z_dist=%.6f / "
-                                "vr_z_dist=%.6f => raw_scale=%.6f, clamped_scale=%.6f",
-                                left_ee_dist_from_ref, head_left_dist, unclamped_scale, vr_pose_scale_);
-
-                    // VR左手柄相对头显的偏移 × scale = 左末端相对 reference_link_ 的目标偏移
-                    Eigen::Vector3d left_target_pos = p_F_ref + (vr_left_position_raw_ - vr_head_position_) * vr_pose_scale_;
-                    // VR右手柄相对头显的偏移 × scale = 右末端相对 reference_link_ 的目标偏移
-                    Eigen::Vector3d right_target_pos = p_F_ref + (vr_right_position_raw_ - vr_head_position_) * vr_pose_scale_;
-                    RCLCPP_INFO(node_->get_logger(),
-                                "🕹️🕶️🕹️ [左组合键][校准调试] VR offset raw: left-head=[%.4f, %.4f, %.4f], "
-                                "right-head=[%.4f, %.4f, %.4f]",
-                                (vr_left_position_raw_ - vr_head_position_).x(),
-                                (vr_left_position_raw_ - vr_head_position_).y(),
-                                (vr_left_position_raw_ - vr_head_position_).z(),
-                                (vr_right_position_raw_ - vr_head_position_).x(),
-                                (vr_right_position_raw_ - vr_head_position_).y(),
-                                (vr_right_position_raw_ - vr_head_position_).z());
-
-                    RCLCPP_INFO(node_->get_logger(),
-                                "🕹️🕶️🕹️ [左组合键] vr_pose_scale_ 已更新: "
-                                "robot_z_dist=%.4f, vr_z_dist=%.4f, scale=%.4f",
-                                left_ee_dist_from_ref, head_left_dist, vr_pose_scale_);
-                    RCLCPP_INFO(node_->get_logger(),
-                                "🕹️🕶️🕹️ [左组合键] 左臂目标: [%.3f, %.3f, %.3f]  右臂目标: [%.3f, %.3f, %.3f]",
-                                left_target_pos.x(), left_target_pos.y(), left_target_pos.z(),
-                                right_target_pos.x(), right_target_pos.y(), right_target_pos.z());
-
-                    // 发布到 /dual_target/stamped（仅双臂模式）
-                    if (pub_dual_target_stamped_)
-                    {
-                        nav_msgs::msg::Path dual_path;
-                        dual_path.header.stamp = node_->get_clock()->now();
-                        dual_path.header.frame_id = ee_frame_id_;
-                        dual_path.poses.resize(2);
-                        // 左臂（poses[0]）：位置用校准值，姿态保持机器人当前末端朝向
-                        dual_path.poses[0].header = dual_path.header;
-                        dual_path.poses[0].pose.position.x = left_target_pos.x();
-                        dual_path.poses[0].pose.position.y = left_target_pos.y();
-                        dual_path.poses[0].pose.position.z = left_target_pos.z();
-                        dual_path.poses[0].pose.orientation.x = robot_current_left_orientation_.x();
-                        dual_path.poses[0].pose.orientation.y = robot_current_left_orientation_.y();
-                        dual_path.poses[0].pose.orientation.z = robot_current_left_orientation_.z();
-                        dual_path.poses[0].pose.orientation.w = robot_current_left_orientation_.w();
-                        // 右臂（poses[1]）：位置用校准值，姿态保持机器人当前末端朝向
-                        dual_path.poses[1].header = dual_path.header;
-                        dual_path.poses[1].pose.position.x = right_target_pos.x();
-                        dual_path.poses[1].pose.position.y = right_target_pos.y();
-                        dual_path.poses[1].pose.position.z = right_target_pos.z();
-                        dual_path.poses[1].pose.orientation.x = robot_current_right_orientation_.x();
-                        dual_path.poses[1].pose.orientation.y = robot_current_right_orientation_.y();
-                        dual_path.poses[1].pose.orientation.z = robot_current_right_orientation_.z();
-                        dual_path.poses[1].pose.orientation.w = robot_current_right_orientation_.w();
-                        pub_dual_target_stamped_->publish(dual_path);
-                        RCLCPP_INFO(node_->get_logger(),
-                                    "🕹️🕶️🕹️ [左组合键] 已发布校准目标到 /dual_target/stamped (frame: %s)",
-                                    ee_frame_id_.c_str());
-                    }
-                }
-                else
-                {
-                    RCLCPP_WARN(node_->get_logger(),
-                                "🕹️🕶️🕹️ [左组合键] 无法更新 vr_pose_scale_: "
-                                "robot_z_dist=%s, vr_z_dist=%.4f",
-                                std::isnan(left_ee_dist_from_ref) ? "NaN" : std::to_string(left_ee_dist_from_ref).c_str(),
-                                head_left_dist);
-                }
-
+                toggleGripperPercentMode(true);
                 break;
             }
-            case 14: // 右握把+右扳机组合键
+            case 14: // 右握把+右扳机：切换右扳机所映射夹爪的百分比/开合
             {
-                // 取消镜像模式，确保尺度校准基于正常模式（左手→左臂，右手→右臂）
-                mirror_mode_.store(false);
-                RCLCPP_INFO(node_->get_logger(), "🔘 [右组合键] 已切换至非镜像模式");
-                // 先切换到 STORAGE 模式，避免尺度更新期间发送错误目标
-                is_update_mode_.store(false);
-                RCLCPP_INFO(node_->get_logger(), "🔘 [右组合键] 自动切换到 STORAGE 模式 - 正在更新映射尺度，请重新进入 UPDATE 模式");
-
-                // 计算 VR 头显与 VR 右手柄之间的 Z 轴距离（使用未缩放的原始右手柄位姿）
-                double head_right_dist = std::abs(vr_head_position_.z() - vr_right_position_raw_.z());
-                RCLCPP_INFO(node_->get_logger(),
-                            "🕹️🕶️🕹️ [右组合键][校准调试] frame初始化=%s, ee_frame_id='%s', reference_link='%s'",
-                            ee_frame_id_initialized_ ? "true" : "false",
-                            ee_frame_id_.c_str(),
-                            reference_link_.c_str());
-                RCLCPP_INFO(node_->get_logger(),
-                            "🕹️🕶️🕹️ [右组合键][校准调试] VR raw: head=[%.4f, %.4f, %.4f], "
-                            "left=[%.4f, %.4f, %.4f], right=[%.4f, %.4f, %.4f], head_right_z_dist=%.6f",
-                            vr_head_position_.x(), vr_head_position_.y(), vr_head_position_.z(),
-                            vr_left_position_raw_.x(), vr_left_position_raw_.y(), vr_left_position_raw_.z(),
-                            vr_right_position_raw_.x(), vr_right_position_raw_.y(), vr_right_position_raw_.z(),
-                            head_right_dist);
-
-                // 计算机器人右末端与 reference_link_ 之间的 Z 轴距离
-                double right_ee_dist_from_ref = std::numeric_limits<double>::quiet_NaN();
-                Eigen::Vector3d p_F_ref = Eigen::Vector3d::Zero();
-                if (ee_frame_id_initialized_)
-                {
-                    try
-                    {
-                        // 查询 reference_link_ 在 ee_frame_id_ 下的位置
-                        geometry_msgs::msg::TransformStamped tf_ref_in_F =
-                            tf_buffer_->lookupTransform(
-                                ee_frame_id_,      // target_frame: F
-                                reference_link_,   // source_frame: ref
-                                tf2::TimePointZero);
-
-                        p_F_ref = Eigen::Vector3d(
-                            tf_ref_in_F.transform.translation.x,
-                            tf_ref_in_F.transform.translation.y,
-                            tf_ref_in_F.transform.translation.z);
-                        RCLCPP_INFO(node_->get_logger(),
-                                    "🕹️🕶️🕹️ [右组合键][校准调试] TF %s -> %s: translation=[%.4f, %.4f, %.4f], "
-                                    "rotation=[x=%.4f, y=%.4f, z=%.4f, w=%.4f]",
-                                    reference_link_.c_str(), ee_frame_id_.c_str(),
-                                    p_F_ref.x(), p_F_ref.y(), p_F_ref.z(),
-                                    tf_ref_in_F.transform.rotation.x,
-                                    tf_ref_in_F.transform.rotation.y,
-                                    tf_ref_in_F.transform.rotation.z,
-                                    tf_ref_in_F.transform.rotation.w);
-
-                        // 取右末端 Z 轴距离
-                        right_ee_dist_from_ref = std::abs(robot_current_right_position_.z() - p_F_ref.z());
-                        RCLCPP_INFO(node_->get_logger(),
-                                    "🕹️🕶️🕹️ [右组合键][校准调试] Robot current: left=[%.4f, %.4f, %.4f], "
-                                    "right=[%.4f, %.4f, %.4f], ref_in_%s=[%.4f, %.4f, %.4f], right_z_dist=%.6f",
-                                    robot_current_left_position_.x(), robot_current_left_position_.y(),
-                                    robot_current_left_position_.z(),
-                                    robot_current_right_position_.x(), robot_current_right_position_.y(),
-                                    robot_current_right_position_.z(),
-                                    ee_frame_id_.c_str(),
-                                    p_F_ref.x(), p_F_ref.y(), p_F_ref.z(),
-                                    right_ee_dist_from_ref);
-                    }
-                    catch (const tf2::TransformException& ex)
-                    {
-                        RCLCPP_WARN(node_->get_logger(),
-                                    "Failed to compute Z-dist(robot_right_ee, %s) in frame %s: %s",
-                                    reference_link_.c_str(), ee_frame_id_.c_str(), ex.what());
-                    }
-                }
-                else
-                {
-                    RCLCPP_WARN(node_->get_logger(),
-                                "🕹️🕶️🕹️ [右组合键][校准调试] 无法查询TF：ee_frame_id_尚未从current_pose初始化");
-                }
-
-                // 用机器人Z轴距离除以VR Z轴距离，更新尺度
-                if (!std::isnan(right_ee_dist_from_ref) && head_right_dist > 1e-6)
-                {
-                    double unclamped_scale = right_ee_dist_from_ref / head_right_dist;
-                    vr_pose_scale_ = std::clamp(unclamped_scale, 0.75, 1.5);
-                    RCLCPP_INFO(node_->get_logger(),
-                                "🕹️🕶️🕹️ [右组合键][校准调试] scale计算: robot_z_dist=%.6f / "
-                                "vr_z_dist=%.6f => raw_scale=%.6f, clamped_scale=%.6f",
-                                right_ee_dist_from_ref, head_right_dist, unclamped_scale, vr_pose_scale_);
-
-                    // VR左手柄相对头显的偏移 × scale = 左末端相对 reference_link_ 的目标偏移
-                    Eigen::Vector3d left_target_pos = p_F_ref + (vr_left_position_raw_ - vr_head_position_) * vr_pose_scale_;
-                    // VR右手柄相对头显的偏移 × scale = 右末端相对 reference_link_ 的目标偏移
-                    Eigen::Vector3d right_target_pos = p_F_ref + (vr_right_position_raw_ - vr_head_position_) * vr_pose_scale_;
-                    RCLCPP_INFO(node_->get_logger(),
-                                "🕹️🕶️🕹️ [右组合键][校准调试] VR offset raw: left-head=[%.4f, %.4f, %.4f], "
-                                "right-head=[%.4f, %.4f, %.4f]",
-                                (vr_left_position_raw_ - vr_head_position_).x(),
-                                (vr_left_position_raw_ - vr_head_position_).y(),
-                                (vr_left_position_raw_ - vr_head_position_).z(),
-                                (vr_right_position_raw_ - vr_head_position_).x(),
-                                (vr_right_position_raw_ - vr_head_position_).y(),
-                                (vr_right_position_raw_ - vr_head_position_).z());
-
-                    RCLCPP_INFO(node_->get_logger(),
-                                "🕹️🕶️🕹️ [右组合键] vr_pose_scale_ 已更新: "
-                                "robot_z_dist=%.4f, vr_z_dist=%.4f, scale=%.4f",
-                                right_ee_dist_from_ref, head_right_dist, vr_pose_scale_);
-                    RCLCPP_INFO(node_->get_logger(),
-                                "🕹️🕶️🕹️ [右组合键] 左臂目标: [%.3f, %.3f, %.3f]  右臂目标: [%.3f, %.3f, %.3f]",
-                                left_target_pos.x(), left_target_pos.y(), left_target_pos.z(),
-                                right_target_pos.x(), right_target_pos.y(), right_target_pos.z());
-
-                    // 发布到 /dual_target/stamped（仅双臂模式）
-                    if (pub_dual_target_stamped_)
-                    {
-                        nav_msgs::msg::Path dual_path;
-                        dual_path.header.stamp = node_->get_clock()->now();
-                        dual_path.header.frame_id = ee_frame_id_;
-                        dual_path.poses.resize(2);
-                        // 左臂（poses[0]）：位置用校准值，姿态保持机器人当前末端朝向
-                        dual_path.poses[0].header = dual_path.header;
-                        dual_path.poses[0].pose.position.x = left_target_pos.x();
-                        dual_path.poses[0].pose.position.y = left_target_pos.y();
-                        dual_path.poses[0].pose.position.z = left_target_pos.z();
-                        dual_path.poses[0].pose.orientation.x = robot_current_left_orientation_.x();
-                        dual_path.poses[0].pose.orientation.y = robot_current_left_orientation_.y();
-                        dual_path.poses[0].pose.orientation.z = robot_current_left_orientation_.z();
-                        dual_path.poses[0].pose.orientation.w = robot_current_left_orientation_.w();
-                        // 右臂（poses[1]）：位置用校准值，姿态保持机器人当前末端朝向
-                        dual_path.poses[1].header = dual_path.header;
-                        dual_path.poses[1].pose.position.x = right_target_pos.x();
-                        dual_path.poses[1].pose.position.y = right_target_pos.y();
-                        dual_path.poses[1].pose.position.z = right_target_pos.z();
-                        dual_path.poses[1].pose.orientation.x = robot_current_right_orientation_.x();
-                        dual_path.poses[1].pose.orientation.y = robot_current_right_orientation_.y();
-                        dual_path.poses[1].pose.orientation.z = robot_current_right_orientation_.z();
-                        dual_path.poses[1].pose.orientation.w = robot_current_right_orientation_.w();
-                        pub_dual_target_stamped_->publish(dual_path);
-                        RCLCPP_INFO(node_->get_logger(),
-                                    "🕹️🕶️🕹️ [右组合键] 已发布校准目标到 /dual_target/stamped (frame: %s)",
-                                    ee_frame_id_.c_str());
-                    }
-
-                }
-                else
-                {
-                    RCLCPP_WARN(node_->get_logger(),
-                                "🕹️🕶️🕹️ [右组合键] 无法更新 vr_pose_scale_: "
-                                "robot_z_dist=%s, vr_z_dist=%.4f",
-                                std::isnan(right_ee_dist_from_ref) ? "NaN" : std::to_string(right_ee_dist_from_ref).c_str(),
-                                head_right_dist);
-                }
-
+                toggleGripperPercentMode(false);
                 break;
             }
-            case 15: // 左Y+右B组合键：切换扳机控制模式
+            case 15: // 左Y+右B：尺度对齐（固定用左侧 Z 距）
             {
-                const auto now = std::chrono::steady_clock::now();
-                if (now - last_trigger_mode_toggle_time_ < std::chrono::milliseconds(500))
-                {
-                    RCLCPP_DEBUG(node_->get_logger(),
-                                 "🔘 [左Y+右B组合键] 扳机模式切换事件过近，已忽略防抖");
-                    break;
-                }
-                last_trigger_mode_toggle_time_ = now;
-
-                bool new_mode = !trigger_percent_mode_.load();
-                trigger_percent_mode_.store(new_mode);
-                trigger_percent_resume_time_ = new_mode ? now + std::chrono::milliseconds(350)
-                                                        : std::chrono::steady_clock::time_point{};
-                openGrippersAfterModeSwitch(new_mode);
-                RCLCPP_INFO(node_->get_logger(),
-                            "🔘 [左Y+右B组合键] 扳机手部控制模式切换为: %s，已先同步左右手张开",
-                            new_mode ? "比例控制(0~1，按压深度控制闭合)" : "开关控制(0/1，按一下开/关)");
+                runScaleCalibration(true);
                 break;
             }
             case 20: // 左摇杆 + 右摇杆同时按下（切换底盘/末端控制模式）
