@@ -15,7 +15,7 @@ namespace arms_controller_common
     enum class ControlMode
     {
         POSITION,    // Position control only
-        MIX,         // Mixed control with kp, kd, velocity, effort, position
+        MIX,         // Mixed: position + velocity + effort (+ optional kp/kd for HT)
         AUTO         // Automatic detection based on available interfaces
     };
 
@@ -85,20 +85,17 @@ namespace arms_controller_common
         {
             if (mode_detected_) return;
 
-            // Check if command interfaces include kp, kd, velocity, effort, position
-            bool has_kp_cmd = !joint_kp_command_interface_.empty();
-            bool has_kd_cmd = !joint_kd_command_interface_.empty();
-            bool has_velocity_cmd = !joint_velocity_command_interface_.empty();
-            bool has_effort_cmd = !joint_force_command_interface_.empty();
-            bool has_position_cmd = !joint_position_command_interface_.empty();
+            // MIX = pos+vel+effort on both command and state.
+            // kp/kd are optional (HT claims them; ARX gains live in HI params only).
+            const bool has_velocity_cmd = !joint_velocity_command_interface_.empty();
+            const bool has_effort_cmd = !joint_force_command_interface_.empty();
+            const bool has_position_cmd = !joint_position_command_interface_.empty();
 
-            // Check if state interfaces include velocity, effort, position
-            bool has_velocity_state = !joint_velocity_state_interface_.empty();
-            bool has_effort_state = !joint_force_state_interface_.empty();
-            bool has_position_state = !joint_position_state_interface_.empty();
+            const bool has_velocity_state = !joint_velocity_state_interface_.empty();
+            const bool has_effort_state = !joint_force_state_interface_.empty();
+            const bool has_position_state = !joint_position_state_interface_.empty();
 
-            // Determine control mode based on available interfaces
-            if (has_kp_cmd && has_kd_cmd && has_velocity_cmd && has_effort_cmd && has_position_cmd &&
+            if (has_velocity_cmd && has_effort_cmd && has_position_cmd &&
                 has_velocity_state && has_effort_state && has_position_state)
             {
                 control_mode_ = ControlMode::MIX;

@@ -95,6 +95,7 @@ def build_ocs2_control_context(context) -> Ocs2ControlContext:
         control_right=control_right,
         control_patch=control_patch,
         robot_variant=robot_variant,
+        hardware=hardware,
     )
 
     return Ocs2ControlContext(
