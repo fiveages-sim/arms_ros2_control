@@ -187,6 +187,12 @@ namespace basic_joint_controller
                     auto_declare<double>("waist_single_joint_pitch_offset", 0.0);
                 }
 
+                // Absolute pose TF frames（默认 FiveAges W2；其它机型用 yaml 覆盖）
+                waist_absolute_source_frame_ = auto_declare<std::string>(
+                    "waist_absolute_source_frame", waist_absolute_source_frame_);
+                waist_absolute_target_frame_ = auto_declare<std::string>(
+                    "waist_absolute_target_frame", waist_absolute_target_frame_);
+
                 RCLCPP_INFO(get_node()->get_logger(),
                             "Waist lifting enabled for controller %s",
                             controller_name_.c_str());
