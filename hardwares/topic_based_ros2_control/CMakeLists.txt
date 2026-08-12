@@ -69,6 +69,9 @@ if(BUILD_TESTING)
   set(ament_cmake_pep257_FOUND TRUE)
   set(ament_cmake_cpplint_FOUND TRUE)
   set(ament_cmake_uncrustify_FOUND TRUE)
+  # Silence transitive deprecation from controller_manager -> parameter_traits -> tl_expected.
+  # This package does not use tl_expected; the ROS package is deprecated until Lyrical Luth.
+  set(tl_expected_DEPRECATED_QUIET TRUE)
   ament_lint_auto_find_test_dependencies()
 
   # GTests

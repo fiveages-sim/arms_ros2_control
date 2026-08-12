@@ -58,7 +58,7 @@ sudo dpkg -i ros-jazzy-arms-ros2-control_2.0.0_amd64.deb
 | 包名 | 适用场景 |
 |------|----------|
 | `ros-jazzy-arms-ros2-control` | WBC 完整栈：`lina_planning`、`ocs2_humanoid`、`ocs2_wbc_controller`、command、controllers、公共库、`topic_based_ros2_control` 等（amd64 + arm64）；`Provides: arms-ros2-control-jazzy` |
-| `ros-jazzy-arms-ros2-control-full` | 上表 + `gripper_hardware_common` + `marvin_ros2_control` + `modbus_ros2_control` + `can_ros2_control` + `juxie_ros2_control` + `rokae_ros2_control` + `ht_ros2_control`（amd64 + arm64） |
+| `ros-jazzy-arms-ros2-control-full` | 上表 + `gripper_hardware_common` + `marvin_ros2_control` + `modbus_ros2_control` + `can_ros2_control` + `juxie_ros2_control` + `rokae_ros2_control` + `ht_ros2_control` + `arx_ros2_control`（amd64 + arm64） |
 
 运行时依赖：`ros-jazzy-ocs2`、`ros-jazzy-robot-descriptions-common`（旧 OCS2 包名见 `ros-jazzy-ocs2` 的 `Provides` 字段）。
 
@@ -79,11 +79,12 @@ sudo dpkg -i ros-jazzy-arms-ros2-control_2.0.0_amd64.deb
     - **Repository access**：All repositories（或至少下列每一个）
     - **Permissions → Repository → Contents: Read-only**（克隆子模块只需读；没有 Contents 读权限时 Git 会报 `Write access not granted`）
     - 组织若启用 **SAML SSO**：到 [Fine-grained tokens](https://github.com/settings/tokens?type=beta) 对该 PAT 点 **Configure SSO → Authorize**
-  - 子模块仓库：`lina_planning`、`ocs2-humanoid`、`ocs2-wbc-controller`；full 另需 `marvin-ros2-control`、`modbus-ros2-control`、`can-ros2-control`、`juxie-ros2-control`、`rokae-ros2-control`、`ht-ros2-control`
-- Workflow 只 **按需** `git submodule update` 上述路径；不克隆 arx / dobot / eyou / unitree 等未打包子模块
+  - 子模块仓库：`lina_planning`、`ocs2-humanoid`、`ocs2-wbc-controller`；full 另需 `marvin-ros2-control`、`modbus-ros2-control`、`can-ros2-control`、`juxie-ros2-control`、`rokae-ros2-control`、`ht-ros2-control`、`arx-ros2-control`
+- Workflow 只 **按需** `git submodule update` 上述路径；不克隆 dobot / eyou / unitree 等未打包子模块
 - **`topic_based_ros2_control`** 为 monorepo 内 vendored 源码（非子模块），standard / full 两种 deb 均包含
 - CI 容器无 `ssh`：子模块 URL 改为 **仅** `https://x-access-token:<PAT>@github.com/...`（不要同时设 `http.extraHeader: Authorization`，否则会 `Duplicate header` / 400）
 - **`full` bundle**：构建前删除误提交的 `libKine.so` / `libMarvinSDK.so`，按 runner 架构从源码重编 Marvin SDK
+- **`arx_ros2_control`**：vendored 预编译库按架构选择 `external/arx5-sdk/lib/{x86_64,aarch64}`；`libarx_lift_src.so` 与独立 `libsoem.so` 目前仅 x86_64 入库，aarch64 上 CMake 会跳过 Lift2S / 跳过 SOEM（不阻塞 arm64 CI）
 - 产物仅含 colcon **install**（二进制 + 公共头文件 + 配置）；CI 拒绝误打包的 `*/src/*` 源码树（**允许** rosidl 生成的 `*_s.c` / `__type_support.cpp` 等）
 
 ## 子模块仓库

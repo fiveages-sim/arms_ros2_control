@@ -10,6 +10,7 @@
 #include "ocs2_arm_controller/FSM/StateMoveJ.h"
 #include <arms_controller_common/utils/GravityCompensation.h>
 #include "arms_controller_common/utils/Kinematics.h"
+#include <ocs2_controller_common/mpc/MpcExecutionParams.hpp>
 
 namespace ocs2::mobile_manipulator
 {
@@ -59,6 +60,8 @@ namespace ocs2::mobile_manipulator
     {
         // Publish end effector pose (regardless of current state)
         ctrl_comp_->updateObservation(time);
+        // Self-collision / traj record: throttled snapshot for viz thread (all FSM states).
+        ctrl_comp_->maybeRequestVisualizationUpdate(time);
 
         if (mode_ == FSMMode::NORMAL)
         {
@@ -74,12 +77,47 @@ namespace ocs2::mobile_manipulator
         }
         else if (mode_ == FSMMode::CHANGE)
         {
-            current_state_->exit();
-            current_state_ = next_state_;
-            current_state_->enter();
-            publishCurrentFsmState();
-            mode_ = FSMMode::NORMAL;
-            ctrl_interfaces_.fsm_command_ = 0;
+            // OCS2 joins MPC/viz threads — must not block a single RT update cycle.
+            if (current_state_->needsAsyncExit())
+            {
+                if (!async_exit_started_)
+                {
+                    current_state_->beginExit();
+                    async_exit_started_ = true;
+                    ctrl_comp_->holdLastSentPositions();
+                }
+                else if (current_state_->tryFinishExit())
+                {
+                    current_state_ = next_state_;
+                    current_state_->enter();
+                    publishCurrentFsmState();
+                    // Republish after FSM is OCS2 so ArmsTargetManager applies setPose (HOLD skips it).
+                    if (current_state_->state_name == FSMStateName::OCS2)
+                    {
+                        ctrl_comp_->publishCachedCurrentTargets();
+                    }
+                    async_exit_started_ = false;
+                    mode_ = FSMMode::NORMAL;
+                    ctrl_interfaces_.fsm_command_ = 0;
+                }
+                else
+                {
+                    ctrl_comp_->holdLastSentPositions();
+                }
+            }
+            else
+            {
+                current_state_->exit();
+                current_state_ = next_state_;
+                current_state_->enter();
+                publishCurrentFsmState();
+                if (current_state_->state_name == FSMStateName::OCS2)
+                {
+                    ctrl_comp_->publishCachedCurrentTargets();
+                }
+                mode_ = FSMMode::NORMAL;
+                ctrl_interfaces_.fsm_command_ = 0;
+            }
         }
 
         return controller_interface::return_type::OK;
@@ -265,9 +303,9 @@ namespace ocs2::mobile_manipulator
                 if (ctrl_comp_->interface_->isSelfCollisionEnabled())
                 {
                     state_list_.movej->setCollisionCheckCallback(
-                        [ctrl_comp = ctrl_comp_](double threshold)
+                        [ctrl_comp = ctrl_comp_](double /*threshold*/)
                         {
-                            return ctrl_comp && ctrl_comp->isCollisionDetected(threshold);
+                            return ctrl_comp && ctrl_comp->isSelfCollisionActive();
                         });
                     state_list_.movej->setCollisionEnabled(true);
                     state_list_.movej->setCollisionThreshold(
@@ -439,6 +477,14 @@ namespace ocs2::mobile_manipulator
         }
 
         ctrl_interfaces_.initializeLastSentPositions();
+        // Visualization thread: whole controller active lifetime (HOLD/MOVEJ/OCS2).
+        {
+            const auto mpc_params = ocs2::controller_common::computeMpcExecutionParams(
+                static_cast<double>(ctrl_interfaces_.frequency_),
+                get_node()->get_parameter("mpc_frequency").as_int(),
+                get_node()->get_logger());
+            ctrl_comp_->startVisualizationThread(mpc_params.thread_sleep_ms, mpc_params.mpc_period_sec);
+        }
         // Initialize FSM
         current_state_ = state_list_.hold;
         current_state_->enter();
@@ -453,6 +499,10 @@ namespace ocs2::mobile_manipulator
     controller_interface::CallbackReturn Ocs2ArmController::on_deactivate(
         const rclcpp_lifecycle::State& /*previous_state*/)
     {
+        if (ctrl_comp_)
+        {
+            ctrl_comp_->stopVisualizationThread();
+        }
         release_interfaces();
         return CallbackReturn::SUCCESS;
     }

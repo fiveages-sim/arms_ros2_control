@@ -86,6 +86,8 @@ namespace ocs2::mobile_manipulator
         std::shared_ptr<FSMState> next_state_;
         FSMStateName next_state_name_{FSMStateName::INVALID};
         FSMMode mode_{FSMMode::NORMAL};
+        /** True while an async-exit state (OCS2) has beginExit()'d but not tryFinishExit()'d yet. */
+        bool async_exit_started_{false};
 
         // State machine parameters
         std::vector<double> home_pos_;

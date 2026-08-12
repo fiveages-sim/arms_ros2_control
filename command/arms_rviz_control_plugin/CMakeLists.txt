@@ -14,6 +14,8 @@ find_package(rviz_common REQUIRED)
 find_package(arms_controller_common REQUIRED)
 find_package(sensor_msgs REQUIRED)
 find_package(std_msgs REQUIRED)
+find_package(geometry_msgs REQUIRED)
+find_package(tf2 REQUIRED)
 find_package(arms_ros2_control_msgs REQUIRED)
 
 # rviz2 is built against Qt5 on Jazzy and Qt6 on Kilted+ / Lyrical. A plugin
@@ -60,6 +62,8 @@ target_link_libraries(${PROJECT_NAME} PUBLIC
   arms_controller_common::arms_controller_common
   ${sensor_msgs_TARGETS}
   ${std_msgs_TARGETS}
+  ${geometry_msgs_TARGETS}
+  tf2::tf2
   ${arms_ros2_control_msgs_TARGETS}
 )
 
