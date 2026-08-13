@@ -1,20 +1,29 @@
 /**:
   ros__parameters:
-    # 线性控制缩放因子（用于手柄/键盘控制）
-    linear_scale: 0.005
-    
-    # 角度控制缩放因子（用于手柄/键盘控制）
-    angular_scale: 0.05
-    
+    # 手柄/键盘 → left/right_target/twist：
+    #   twist.linear  = Inputs.{x,y,z} * linear_scale          # 单位 m/s
+    #   twist.angular = Inputs.{roll,pitch,yaw} * angular_scale # 单位 rad/s
+    # 满杆时即为最大指令速度。
+    linear_scale: 0.1
+
+    # 同上，单位 rad/s
+    angular_scale: 0.25
+
+    # control_input 典型发布频率 (Hz)，仅用于文档/手感估算；不参与实时换算
+    # （OCS2 按自身 dt 对 twist 积分）
+    control_input_rate: 50.0
+
     # VR摇杆：线性缩放因子（单位 m/step）
     vr_thumbstick_linear_scale: 0.005
-    
+
     # VR摇杆：角度缩放因子（单位 rad/step）
     vr_thumbstick_angular_scale: 0.05
 
     # VR手柄位姿缩放因子（左右共用，可由组合键动态校准，范围建议 [0.75, 1.5]）
     vr_pose_scale: 1.0
-    
+
+    # FULL_BODY 下 VR 末端目标保持所在的机器人跟随坐标系
+    vr_follow_frame: base_footprint
+
     # 是否启用VR输入处理
     enable_vr: false
-

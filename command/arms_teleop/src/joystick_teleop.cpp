@@ -36,6 +36,12 @@ bool param_bool(rclcpp::Node * node, const char * name, bool default_value)
 
 JoystickTeleop::JoystickTeleop() : Node("joystick_teleop_node") {
     publisher_ = create_publisher<arms_ros2_control_msgs::msg::Inputs>("control_input", 10);
+    {
+        rclcpp::QoS qos(1);
+        qos.reliable().transient_local();
+        teleop_mode_publisher_ =
+            create_publisher<arms_ros2_control_msgs::msg::TeleopMode>("teleop_mode", qos);
+    }
     fsm_command_publisher_ = create_publisher<std_msgs::msg::Int32>("/fsm_command", 10);
     chassis_publisher_ = create_publisher<geometry_msgs::msg::Twist>("/cmd_vel", 10);
     subscription_ = create_subscription<
@@ -105,6 +111,8 @@ JoystickTeleop::JoystickTeleop() : Node("joystick_teleop_node") {
     
     // Print button mapping configuration
     printButtonMapping();
+
+    publishTeleopMode();
 }
 
 void JoystickTeleop::loadParameters() {
@@ -192,6 +200,19 @@ void JoystickTeleop::printButtonMapping() {
                     axes_map_.trigger_deadzone, gripper_step_per_tick_);
     }
     RCLCPP_INFO(get_logger(), "📋 Mirror Movement:     %s", mirror_movement_ ? "ENABLED" : "DISABLED");
+}
+
+void JoystickTeleop::publishTeleopMode() {
+    arms_ros2_control_msgs::msg::TeleopMode msg;
+    msg.stamp = now();
+    msg.active = enabled_;
+    msg.control_mode = (current_mode_ == ARM_MODE)
+                           ? arms_ros2_control_msgs::msg::TeleopMode::CONTROL_ARM
+                           : arms_ros2_control_msgs::msg::TeleopMode::CONTROL_CHASSIS;
+    msg.mirror_movement = mirror_movement_;
+    msg.speed_level = high_speed_mode_ ? 1 : 0;
+    msg.speed_scale = static_cast<float>(high_speed_mode_ ? high_speed_scale_ : low_speed_scale_);
+    teleop_mode_publisher_->publish(msg);
 }
 
 void JoystickTeleop::joy_callback(sensor_msgs::msg::Joy::SharedPtr msg) {
@@ -293,6 +314,7 @@ void JoystickTeleop::processButtons(const sensor_msgs::msg::Joy::SharedPtr msg) 
                 chassis_publisher_->publish(chassis_cmd_);
             }
         }
+        publishTeleopMode();
     }
     
     // RB button: switch between ARM and CHASSIS control modes
@@ -316,6 +338,7 @@ void JoystickTeleop::processButtons(const sensor_msgs::msg::Joy::SharedPtr msg) 
             inputs_.yaw = 0.0;
             publisher_->publish(inputs_);
         }
+        publishTeleopMode();
     }
     
     // Back button: toggle mirror movement mode (works in both ARM and CHASSIS modes)
@@ -323,6 +346,7 @@ void JoystickTeleop::processButtons(const sensor_msgs::msg::Joy::SharedPtr msg) 
         mirror_movement_ = !mirror_movement_;
         RCLCPP_INFO(get_logger(), "🎮 Mirror movement mode: %s", 
                     mirror_movement_ ? "ENABLED" : "DISABLED");
+        publishTeleopMode();
     }
 
     // Only process other functions if joystick is enabled
@@ -399,6 +423,7 @@ void JoystickTeleop::processButtons(const sensor_msgs::msg::Joy::SharedPtr msg) 
                 RCLCPP_INFO(get_logger(), "🎮 Speed mode switched to: %s (Scale: %.2f)",
                            high_speed_mode_ ? "HIGH" : "LOW",
                            high_speed_mode_ ? high_speed_scale_ : low_speed_scale_);
+                publishTeleopMode();
             }
         }
     }

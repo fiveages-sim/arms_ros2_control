@@ -3,9 +3,11 @@
 from __future__ import annotations
 
 import os
+import copy
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional, Tuple
 
+import yaml
 from ament_index_python.packages import get_package_share_directory
 from launch.actions import IncludeLaunchDescription
 from launch.launch_description_sources import PythonLaunchDescriptionSource
@@ -44,6 +46,7 @@ class Ocs2ControlContext:
     control_left: str
     control_right: str
     control_patch: dict
+    robot_variant: str
     config: dict
     meta: RobotConfigMeta
     launch_mode: str
@@ -69,6 +72,21 @@ def build_ocs2_control_context(context) -> Ocs2ControlContext:
     control_patch = resolve_control_patch(profile)
     robot_variant = resolve_robot_variant(configs, profile)
 
+    # Keep the arm controller's task/config package aligned with the unified
+    # mechanical variant.  Full-body common.yaml historically names ar5_ccs;
+    # without this override an SRS planning URDF would still load CCS task.info.
+    variant_arm_robot = {
+        "base_ar5_ccs": "ar5_ccs",
+        "base_ar5_ccs_v2": "ar5_ccs",
+        "base_ar5_srs": "ar5_srs",
+    }.get(robot_variant)
+    if variant_arm_robot:
+        control_patch = copy.deepcopy(control_patch)
+        arm_params = control_patch.setdefault(
+            "ocs2_arm_controller", {}
+        ).setdefault("ros__parameters", {})
+        arm_params["robot_name"] = variant_arm_robot
+
     config, _path, meta = load_robot_config(
         robot_name,
         "ros2_control",
@@ -77,6 +95,7 @@ def build_ocs2_control_context(context) -> Ocs2ControlContext:
         control_right=control_right,
         control_patch=control_patch,
         robot_variant=robot_variant,
+        hardware=hardware,
     )
 
     return Ocs2ControlContext(
@@ -89,6 +108,7 @@ def build_ocs2_control_context(context) -> Ocs2ControlContext:
         control_left=control_left,
         control_right=control_right,
         control_patch=control_patch,
+        robot_variant=robot_variant,
         config=config or {},
         meta=meta,
         launch_mode=launch_mode,
@@ -102,6 +122,7 @@ def resolve_planning_robot_name_from_config(
     config: dict,
     controller_key: str,
     robot_name: str,
+    robot_variant: str = "",
 ) -> str:
     planning_robot_name = robot_name
     if not config:
@@ -118,6 +139,23 @@ def resolve_planning_robot_name_from_config(
                 )
     except KeyError:
         pass
+
+    # Arms-only planning uses a standalone arm description package.  The
+    # unified variant is authoritative when selecting the CCS or SRS family;
+    # a static robot_name in common.yaml must not override it.
+    if planning_robot_name in ("ar5_ccs", "ar5_srs"):
+        variant_key = str(robot_variant or "").strip()
+        variant_robot_name = {
+            "base_ar5_ccs": "ar5_ccs",
+            "base_ar5_ccs_v2": "ar5_ccs",
+            "base_ar5_srs": "ar5_srs",
+        }.get(variant_key)
+        if variant_robot_name and variant_robot_name != planning_robot_name:
+            print(
+                f"[INFO] Unified variant '{variant_key}' selects planning robot "
+                f"'{variant_robot_name}' (config requested: {planning_robot_name})"
+            )
+            planning_robot_name = variant_robot_name
     return planning_robot_name
 
 
@@ -238,6 +276,54 @@ def setup_body_controllers(
         control_patch=ctx.control_patch,
         ros2_control_config=ctx.config,
     )
+    return controllers, create_controller_spawners(controllers, ctx.use_sim_time)
+
+
+def _resolve_ft_sides(ctx: Ocs2ControlContext) -> Tuple[bool, bool]:
+    configs = ctx.launch_configurations
+    ft: Dict[str, str] = {}
+    for side in ("left", "right"):
+        key = f"{side}_ft"
+        val = str(configs.get(f"hardware_{key}", "") or "").strip()
+        if val:
+            ft[key] = val
+
+    profile_path = ctx.profile_path or ""
+    if profile_path and os.path.isfile(profile_path):
+        with open(profile_path, encoding="utf-8") as handle:
+            raw = yaml.safe_load(handle) or {}
+        hw = raw.get("hardware")
+        if isinstance(hw, dict):
+            for side in ("left", "right"):
+                key = f"{side}_ft"
+                if key not in ft and hw.get(key) is not None:
+                    ft[key] = str(hw[key]).strip()
+
+    def enabled(key: str) -> bool:
+        val = str(ft.get(key, "") or "").strip().lower()
+        return bool(val) and val != "none"
+
+    return enabled("left_ft"), enabled("right_ft")
+
+
+def setup_ft_broadcasters(
+    ctx: Ocs2ControlContext,
+) -> Tuple[List[dict], List[Node]]:
+    controllers = detect_controllers(
+        ctx.robot_name,
+        ctx.robot_type,
+        ["ft_broadcaster"],
+        ros2_control_config=ctx.config,
+    )
+    left_on, right_on = _resolve_ft_sides(ctx)
+    controllers = [
+        c
+        for c in controllers
+        if (c["name"].startswith("left_") and left_on)
+        or (c["name"].startswith("right_") and right_on)
+    ]
+    for c in controllers:
+        print(f"[INFO] FT broadcaster enabled: {c['name']}")
     return controllers, create_controller_spawners(controllers, ctx.use_sim_time)
 
 

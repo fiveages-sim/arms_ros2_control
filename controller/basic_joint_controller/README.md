@@ -60,11 +60,33 @@ my_controller:
     waist_lifting_duration: 3.0
     waist_lifting_default_parameter: [0.25, 1.0, 5.0]  # [max_speed, accel, decel]
     waist_turning_default_parameter: [0.25, 1.0, 5.0]  # [max_speed, accel, decel]
+    # Absolute pose TF frames (used by waist_lifting_pose_absolute only)
+    # Defaults match FiveAges W2; override for robots without these link names.
+    waist_absolute_source_frame: "base_footprint"  # frame for absolute (x, z)
+    waist_absolute_target_frame: "body_base"       # frame for phi / relative planning
     # (three_joint only)
     waist_l1: 0.322
     waist_l2: 0.355
     waist_rotation_direction: [1.0, 1.0, 1.0]
     waist_angle_offset: [0.0, 0.0, 0.0]
+    # (single_joint only — e.g. ARX Lift / Lift2S prismatic column)
+    waist_single_joint_direction: 1.0
+    waist_single_joint_offset: 0.0
+    waist_single_joint_pitch_joint: "_no_pitch_"   # name not in joints → pitch disabled
+    waist_single_joint_pitch_direction: 1.0
+    waist_single_joint_pitch_offset: 0.0
+```
+
+Examples for non-W2 robots:
+
+```yaml
+# ARX Lift / Lift2S
+body_joint_controller:
+  ros__parameters:
+    waist_lifting_enabled: true
+    waist_lifting_type: single_joint
+    waist_absolute_source_frame: base_link
+    waist_absolute_target_frame: lift_link
 ```
 
 ---
@@ -186,8 +208,18 @@ ros2 topic pub --once /body_controller/waist_lifting_pose_relative \
 **Type:** `std_msgs/Float64MultiArray`  
 **Requires:** `waist_lifting_enabled: true`, active state: MOVEJ
 
-Semantics: `data: [x, z, phi]`. Position `(x, z)` is interpreted in `base_footprint`; `phi` is the planar angle in `body_base`, in radians.  
-The controller transforms the position into `body_base`, then computes a relative delta from the current `(x, z, phi)` before planning.
+Semantics: `data: [x, z, phi]`.
+
+| Field | Frame (default) | Notes |
+|---|---|---|
+| `(x, z)` | `waist_absolute_source_frame` (default `base_footprint`) | Absolute position in the source frame |
+| `phi` | planar angle about `waist_absolute_target_frame` (default `body_base`) | Radians |
+
+The controller looks up TF `source → target`, transforms `(x, z)` into the target frame, then computes a relative delta from the current waist pose before planning.
+
+Defaults match **FiveAges W2** (`base_footprint` / `body_base`). Robots without those links must override the parameters, e.g. ARX Lift / Lift2S: `base_link` / `lift_link`.
+
+Height-only commands (`waist_lifting`, `waist_lifting_command`, `target_joint_position`) do **not** use these frames.
 
 ```bash
 ros2 topic pub --once /body_controller/waist_lifting_pose_absolute \
@@ -236,7 +268,7 @@ Assuming controller name `my_controller`, joint name `j1`:
 | `/my_controller/target_percent` | `Float64` (0~1) | MOVEJ | Hand proportional control |
 | `/my_controller/waist_lifting` | `Float64` | MOVEJ | Waist position delta |
 | `/my_controller/waist_lifting_pose_relative` | `Float64MultiArray` | MOVEJ | Waist local relative `[dx, dz, dphi]` |
-| `/my_controller/waist_lifting_pose_absolute` | `Float64MultiArray` | MOVEJ | Waist absolute target `[x, z, phi]` |
+| `/my_controller/waist_lifting_pose_absolute` | `Float64MultiArray` | MOVEJ | Absolute `[x, z, phi]` (TF frames configurable) |
 | `/my_controller/waist_lifting_command` | `Float64` | MOVEJ | Waist velocity factor |
 | `/my_controller/waist_turning_command` | `Float64` | MOVEJ | Waist turning velocity factor |
 

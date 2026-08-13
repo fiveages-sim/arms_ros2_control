@@ -12,6 +12,7 @@ BodyMarker::BodyMarker(
     rclcpp::Publisher<geometry_msgs::msg::Pose>::SharedPtr target_publisher,
     rclcpp::Publisher<geometry_msgs::msg::PoseStamped>::SharedPtr target_stamped_publisher,
     const std::string& current_pose_topic,
+    const std::string& current_target_topic,
     double publish_rate,
     UpdateCallback update_callback)
     : node_(std::move(node))
@@ -24,6 +25,8 @@ BodyMarker::BodyMarker(
     , publish_rate_(publish_rate)
     , last_publish_time_(node_->now())
     , last_subscription_update_time_(node_->now())
+    , last_marker_command_time_(
+          rclcpp::Time(0, 0, node_->get_clock()->get_clock_type()))
     , update_callback_(std::move(update_callback))
 {
     pose_.position.x = 0.0;
@@ -42,6 +45,14 @@ BodyMarker::BodyMarker(
     current_pose_subscription_ =
         node_->create_subscription<geometry_msgs::msg::PoseStamped>(
             current_pose_topic, 10, callback);
+
+    current_target_subscription_ =
+        node_->create_subscription<geometry_msgs::msg::PoseStamped>(
+            current_target_topic, 10,
+            [this](const geometry_msgs::msg::PoseStamped::ConstSharedPtr msg)
+            {
+                updateTargetFromTopic(msg);
+            });
 }
 
 visualization_msgs::msg::InteractiveMarker BodyMarker::createMarker(
@@ -99,6 +110,43 @@ void BodyMarker::updateFromTopic(
     }
 }
 
+void BodyMarker::updateTargetFromTopic(
+    const geometry_msgs::msg::PoseStamped::ConstSharedPtr& pose_msg)
+{
+    if (!pose_msg)
+    {
+        return;
+    }
+
+    latest_current_target_pose_ = *pose_msg;
+    has_latest_current_target_pose_ = true;
+
+    if (pose_msg->header.frame_id.empty())
+    {
+        return;
+    }
+
+    if (target_state_check_callback_ && !target_state_check_callback_())
+    {
+        return;
+    }
+
+    const auto now = node_->now();
+    if (last_marker_command_time_.nanoseconds() > 0 &&
+        (now - last_marker_command_time_).seconds() < 1.0)
+    {
+        return;
+    }
+
+    pose_ = transformPose(
+        pose_msg->pose, pose_msg->header.frame_id, frame_id_);
+
+    if (update_callback_)
+    {
+        update_callback_(getMarkerName(), pose_);
+    }
+}
+
 bool BodyMarker::publishTargetPose(bool force)
 {
     // 单次发送（force=true）走 stamped（插值）；连续发送走 pose（不插值），与双臂逻辑保持一致。
@@ -113,6 +161,7 @@ bool BodyMarker::publishTargetPose(bool force)
         msg.header.frame_id = control_base_frame_;
         msg.pose = transformPose(pose_, frame_id_, control_base_frame_);
         target_stamped_publisher_->publish(msg);
+        last_marker_command_time_ = node_->now();
         last_publish_time_ = node_->now();
         return true;
     }
@@ -128,6 +177,7 @@ bool BodyMarker::publishTargetPose(bool force)
 
     geometry_msgs::msg::Pose msg = transformPose(pose_, frame_id_, control_base_frame_);
     target_publisher_->publish(msg);
+    last_marker_command_time_ = node_->now();
     return true;
 }
 

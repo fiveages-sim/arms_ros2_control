@@ -45,6 +45,15 @@ namespace arms_controller_common
         virtual void exit() = 0;
         virtual FSMStateName checkChange() { return FSMStateName::INVALID; }
 
+        /**
+         * Optional async exit for states that join worker threads (must not block RT update).
+         * When needsAsyncExit(): controller calls beginExit() once, then polls tryFinishExit()
+         * across cycles before enter() of the next state. Default: synchronous exit().
+         */
+        [[nodiscard]] virtual bool needsAsyncExit() const { return false; }
+        virtual void beginExit() { exit(); }
+        [[nodiscard]] virtual bool tryFinishExit() { return true; }
+
         FSMStateName state_name;
         std::string state_name_string;
 
