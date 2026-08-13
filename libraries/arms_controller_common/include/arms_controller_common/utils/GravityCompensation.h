@@ -45,21 +45,22 @@ namespace arms_controller_common
 
         /**
          * @brief Calculate static torques for given joint positions
-         * @param joint_positions Current joint positions (radians)
-         * @return Static torques (gravity compensation) for each joint
+         * @param joint_positions Controlled-joint positions (same order as HW / OCS2 arm segment).
+         *        When the Pinocchio model has a virtual mobile base prefix (e.g. XY-yaw, nq = 3 + arm),
+         *        pass only the arm joints; base q is padded with zeros and only arm τ is returned.
+         * @return Static torques matching joint_positions size (not full model nq)
          */
         std::vector<double> calculateStaticTorques(const std::vector<double>& joint_positions) const;
 
         /**
          * @brief Calculate static torques using Eigen vector
-         * @param joint_positions Current joint positions as Eigen vector
-         * @return Static torques as Eigen vector
+         * @param joint_positions Controlled-joint positions (see calculateStaticTorques)
+         * @return Static torques matching joint_positions size
          */
         Eigen::VectorXd calculateStaticTorquesEigen(const Eigen::VectorXd& joint_positions) const;
 
         /**
-         * @brief Get number of joints in the model
-         * @return Number of joints
+         * @brief Get number of configuration DOFs in the Pinocchio model (may include virtual base)
          */
         size_t getNumJoints() const { return model_.nq; }
 
@@ -70,8 +71,12 @@ namespace arms_controller_common
         bool isValid() const { return model_.nq > 0; }
 
     private:
+        /** Build full q, run RNEA, return τ for the controlled joints only. */
+        Eigen::VectorXd computeStaticTorques(const Eigen::VectorXd& joint_positions) const;
+
         pinocchio::Model model_;
         mutable pinocchio::Data data_;  // Mutable for const methods
+        mutable bool logged_base_pad_ = false;
     };
 } // namespace arms_controller_common
 

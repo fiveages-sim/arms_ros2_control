@@ -468,7 +468,8 @@ namespace ocs2::mobile_manipulator
         if (ctrl_interfaces_.control_mode_ == ControlMode::MIX)
         {
             RCLCPP_INFO(get_node()->get_logger(),
-                        "Mixed control mode enabled - detected kp, kd, velocity, effort, position interfaces");
+                        "Mixed control mode enabled - detected position, velocity, effort interfaces"
+                        " (kp/kd optional)");
         }
         else
         {
