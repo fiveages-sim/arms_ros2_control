@@ -456,55 +456,94 @@ namespace arms_ros2_control::command
                     vr_right_position_raw_.x(), vr_right_position_raw_.y(), vr_right_position_raw_.z(),
                     head_ctrl_dist);
 
+        // 计算系：与 publishTargetPoseDirect 保持一致——FULL_BODY 下目标相对底盘保持
+        // （vr_follow_frame_），其余情况计算系就是发布系。
+        // 手柄-头显偏移量来自 VR 世界系（已在 xr 侧转成前x/左y/上z，与底盘轴系同向），
+        // 必须在底盘系里做加法。直接加在 ee_frame_id_ 上时，轮式底盘的 ee_frame_id_
+        // 是 world，底盘一转向偏移方向就整体转错。
+        const std::string& calc_frame =
+            isFullBodyMode() ? vr_follow_frame_ : ee_frame_id_;
+
         double ee_dist_from_ref = std::numeric_limits<double>::quiet_NaN();
-        Eigen::Vector3d p_F_ref = Eigen::Vector3d::Zero();
+        Eigen::Vector3d p_C_ref = Eigen::Vector3d::Zero();
+        Eigen::Vector3d robot_left_pos_calc = Eigen::Vector3d::Zero();
+        Eigen::Quaterniond robot_left_ori_calc = Eigen::Quaterniond::Identity();
+        Eigen::Vector3d robot_right_pos_calc = Eigen::Vector3d::Zero();
+        Eigen::Quaterniond robot_right_ori_calc = Eigen::Quaterniond::Identity();
+        bool calc_frame_ready = false;
         if (ee_frame_id_initialized_)
         {
             try
             {
-                geometry_msgs::msg::TransformStamped tf_ref_in_F =
+                geometry_msgs::msg::TransformStamped tf_ref_in_C =
                     tf_buffer_->lookupTransform(
-                        ee_frame_id_,
+                        calc_frame,
                         reference_link_,
                         tf2::TimePointZero);
 
-                p_F_ref = Eigen::Vector3d(
-                    tf_ref_in_F.transform.translation.x,
-                    tf_ref_in_F.transform.translation.y,
-                    tf_ref_in_F.transform.translation.z);
+                p_C_ref = Eigen::Vector3d(
+                    tf_ref_in_C.transform.translation.x,
+                    tf_ref_in_C.transform.translation.y,
+                    tf_ref_in_C.transform.translation.z);
                 RCLCPP_INFO(node_->get_logger(),
                             "🕹️🕶️🕹️ [%s][校准调试] TF %s -> %s: translation=[%.4f, %.4f, %.4f], "
                             "rotation=[x=%.4f, y=%.4f, z=%.4f, w=%.4f]",
                             tag,
-                            reference_link_.c_str(), ee_frame_id_.c_str(),
-                            p_F_ref.x(), p_F_ref.y(), p_F_ref.z(),
-                            tf_ref_in_F.transform.rotation.x,
-                            tf_ref_in_F.transform.rotation.y,
-                            tf_ref_in_F.transform.rotation.z,
-                            tf_ref_in_F.transform.rotation.w);
+                            reference_link_.c_str(), calc_frame.c_str(),
+                            p_C_ref.x(), p_C_ref.y(), p_C_ref.z(),
+                            tf_ref_in_C.transform.rotation.x,
+                            tf_ref_in_C.transform.rotation.y,
+                            tf_ref_in_C.transform.rotation.z,
+                            tf_ref_in_C.transform.rotation.w);
 
-                const Eigen::Vector3d& robot_ee = use_left_z
-                    ? robot_current_left_position_
-                    : robot_current_right_position_;
-                ee_dist_from_ref = std::abs(robot_ee.z() - p_F_ref.z());
-                RCLCPP_INFO(node_->get_logger(),
-                            "🕹️🕶️🕹️ [%s][校准调试] Robot current: left=[%.4f, %.4f, %.4f], "
-                            "right=[%.4f, %.4f, %.4f], ref_in_%s=[%.4f, %.4f, %.4f], ee_z_dist=%.6f",
-                            tag,
-                            robot_current_left_position_.x(), robot_current_left_position_.y(),
-                            robot_current_left_position_.z(),
-                            robot_current_right_position_.x(), robot_current_right_position_.y(),
-                            robot_current_right_position_.z(),
-                            ee_frame_id_.c_str(),
-                            p_F_ref.x(), p_F_ref.y(), p_F_ref.z(),
-                            ee_dist_from_ref);
+                // 机器人当前末端位姿来自 current_pose（ee_frame_id_），先转到计算系，
+                // 保证尺度用的 Z 距离和后面的加法在同一个系里。
+                calc_frame_ready =
+                    transformPoseBetweenFrames(
+                        "left",
+                        robot_current_left_position_,
+                        robot_current_left_orientation_,
+                        ee_frame_id_, calc_frame,
+                        robot_left_pos_calc, robot_left_ori_calc) &&
+                    transformPoseBetweenFrames(
+                        "right",
+                        robot_current_right_position_,
+                        robot_current_right_orientation_,
+                        ee_frame_id_, calc_frame,
+                        robot_right_pos_calc, robot_right_ori_calc);
+
+                if (calc_frame_ready)
+                {
+                    const Eigen::Vector3d& robot_ee = use_left_z
+                        ? robot_left_pos_calc
+                        : robot_right_pos_calc;
+                    ee_dist_from_ref = std::abs(robot_ee.z() - p_C_ref.z());
+                    RCLCPP_INFO(node_->get_logger(),
+                                "🕹️🕶️🕹️ [%s][校准调试] Robot current in %s: left=[%.4f, %.4f, %.4f], "
+                                "right=[%.4f, %.4f, %.4f], ref=[%.4f, %.4f, %.4f], ee_z_dist=%.6f",
+                                tag,
+                                calc_frame.c_str(),
+                                robot_left_pos_calc.x(), robot_left_pos_calc.y(),
+                                robot_left_pos_calc.z(),
+                                robot_right_pos_calc.x(), robot_right_pos_calc.y(),
+                                robot_right_pos_calc.z(),
+                                p_C_ref.x(), p_C_ref.y(), p_C_ref.z(),
+                                ee_dist_from_ref);
+                }
+                else
+                {
+                    RCLCPP_WARN(node_->get_logger(),
+                                "🕹️🕶️🕹️ [%s][校准调试] %s -> %s 变换不可用，"
+                                "无法把机器人当前位姿转到计算系",
+                                tag, ee_frame_id_.c_str(), calc_frame.c_str());
+                }
             }
             catch (const tf2::TransformException& ex)
             {
                 RCLCPP_WARN(node_->get_logger(),
                             "Failed to compute Z-dist(robot_%s_ee, %s) in frame %s: %s",
                             use_left_z ? "left" : "right",
-                            reference_link_.c_str(), ee_frame_id_.c_str(), ex.what());
+                            reference_link_.c_str(), calc_frame.c_str(), ex.what());
             }
         }
         else
@@ -514,7 +553,7 @@ namespace arms_ros2_control::command
                         tag);
         }
 
-        if (!std::isnan(ee_dist_from_ref) && head_ctrl_dist > 1e-6)
+        if (calc_frame_ready && !std::isnan(ee_dist_from_ref) && head_ctrl_dist > 1e-6)
         {
             const double unclamped_scale = ee_dist_from_ref / head_ctrl_dist;
             vr_pose_scale_ = std::clamp(unclamped_scale, 0.75, 1.5);
@@ -523,10 +562,15 @@ namespace arms_ros2_control::command
                         "vr_z_dist=%.6f => raw_scale=%.6f, clamped_scale=%.6f",
                         tag, ee_dist_from_ref, head_ctrl_dist, unclamped_scale, vr_pose_scale_);
 
-            const Eigen::Vector3d left_target_pos =
-                p_F_ref + (vr_left_position_raw_ - vr_head_position_) * vr_pose_scale_;
-            const Eigen::Vector3d right_target_pos =
-                p_F_ref + (vr_right_position_raw_ - vr_head_position_) * vr_pose_scale_;
+            // 加法在计算系里做：p_C_ref 与 (手柄-头显) 偏移都表达在 calc_frame 轴系
+            const Eigen::Vector3d left_target_pos_calc =
+                p_C_ref + (vr_left_position_raw_ - vr_head_position_) * vr_pose_scale_;
+            const Eigen::Vector3d right_target_pos_calc =
+                p_C_ref + (vr_right_position_raw_ - vr_head_position_) * vr_pose_scale_;
+            const Eigen::Quaterniond left_target_ori_calc =
+                robot_left_ori_calc.normalized();
+            const Eigen::Quaterniond right_target_ori_calc =
+                robot_right_ori_calc.normalized();
             RCLCPP_INFO(node_->get_logger(),
                         "🕹️🕶️🕹️ [%s][校准调试] VR offset raw: left-head=[%.4f, %.4f, %.4f], "
                         "right-head=[%.4f, %.4f, %.4f]",
@@ -542,109 +586,96 @@ namespace arms_ros2_control::command
                         "robot_z_dist=%.4f, vr_z_dist=%.4f, scale=%.4f",
                         tag, ee_dist_from_ref, head_ctrl_dist, vr_pose_scale_);
             RCLCPP_INFO(node_->get_logger(),
-                        "🕹️🕶️🕹️ [%s] 左臂目标: [%.3f, %.3f, %.3f]  右臂目标: [%.3f, %.3f, %.3f]",
-                        tag,
-                        left_target_pos.x(), left_target_pos.y(), left_target_pos.z(),
-                        right_target_pos.x(), right_target_pos.y(), right_target_pos.z());
+                        "🕹️🕶️🕹️ [%s] 计算系(%s) 左臂目标: [%.3f, %.3f, %.3f]  "
+                        "右臂目标: [%.3f, %.3f, %.3f]",
+                        tag, calc_frame.c_str(),
+                        left_target_pos_calc.x(), left_target_pos_calc.y(), left_target_pos_calc.z(),
+                        right_target_pos_calc.x(), right_target_pos_calc.y(), right_target_pos_calc.z());
 
             if (pub_dual_target_stamped_)
             {
+                // 计算完毕，转回发布系（ee_frame_id_）再发出去
+                Eigen::Vector3d left_pub_pos = left_target_pos_calc;
+                Eigen::Quaterniond left_pub_ori = left_target_ori_calc;
+                Eigen::Vector3d right_pub_pos = right_target_pos_calc;
+                Eigen::Quaterniond right_pub_ori = right_target_ori_calc;
+                if (calc_frame != ee_frame_id_ &&
+                    !(transformPoseBetweenFrames(
+                          "left", left_target_pos_calc, left_target_ori_calc,
+                          calc_frame, ee_frame_id_,
+                          left_pub_pos, left_pub_ori) &&
+                      transformPoseBetweenFrames(
+                          "right", right_target_pos_calc, right_target_ori_calc,
+                          calc_frame, ee_frame_id_,
+                          right_pub_pos, right_pub_ori)))
+                {
+                    // 转不回发布系就整个放弃：不发布也不动缓存，机器人保持原状，
+                    // 比发一个系错了的目标安全。
+                    RCLCPP_WARN(node_->get_logger(),
+                                "🕹️🕶️🕹️ [%s] %s -> %s 变换不可用，本次校准目标未发布；"
+                                "请等 TF 就绪后重新校准",
+                                tag, calc_frame.c_str(), ee_frame_id_.c_str());
+                    return;
+                }
+
                 nav_msgs::msg::Path dual_path;
                 dual_path.header.stamp = node_->get_clock()->now();
                 dual_path.header.frame_id = ee_frame_id_;
                 dual_path.poses.resize(2);
                 dual_path.poses[0].header = dual_path.header;
-                dual_path.poses[0].pose.position.x = left_target_pos.x();
-                dual_path.poses[0].pose.position.y = left_target_pos.y();
-                dual_path.poses[0].pose.position.z = left_target_pos.z();
-                dual_path.poses[0].pose.orientation.x = robot_current_left_orientation_.x();
-                dual_path.poses[0].pose.orientation.y = robot_current_left_orientation_.y();
-                dual_path.poses[0].pose.orientation.z = robot_current_left_orientation_.z();
-                dual_path.poses[0].pose.orientation.w = robot_current_left_orientation_.w();
+                dual_path.poses[0].pose.position.x = left_pub_pos.x();
+                dual_path.poses[0].pose.position.y = left_pub_pos.y();
+                dual_path.poses[0].pose.position.z = left_pub_pos.z();
+                dual_path.poses[0].pose.orientation.x = left_pub_ori.x();
+                dual_path.poses[0].pose.orientation.y = left_pub_ori.y();
+                dual_path.poses[0].pose.orientation.z = left_pub_ori.z();
+                dual_path.poses[0].pose.orientation.w = left_pub_ori.w();
                 dual_path.poses[1].header = dual_path.header;
-                dual_path.poses[1].pose.position.x = right_target_pos.x();
-                dual_path.poses[1].pose.position.y = right_target_pos.y();
-                dual_path.poses[1].pose.position.z = right_target_pos.z();
-                dual_path.poses[1].pose.orientation.x = robot_current_right_orientation_.x();
-                dual_path.poses[1].pose.orientation.y = robot_current_right_orientation_.y();
-                dual_path.poses[1].pose.orientation.z = robot_current_right_orientation_.z();
-                dual_path.poses[1].pose.orientation.w = robot_current_right_orientation_.w();
+                dual_path.poses[1].pose.position.x = right_pub_pos.x();
+                dual_path.poses[1].pose.position.y = right_pub_pos.y();
+                dual_path.poses[1].pose.position.z = right_pub_pos.z();
+                dual_path.poses[1].pose.orientation.x = right_pub_ori.x();
+                dual_path.poses[1].pose.orientation.y = right_pub_ori.y();
+                dual_path.poses[1].pose.orientation.z = right_pub_ori.z();
+                dual_path.poses[1].pose.orientation.w = right_pub_ori.w();
                 pub_dual_target_stamped_->publish(dual_path);
                 RCLCPP_INFO(node_->get_logger(),
-                            "🕹️🕶️🕹️ [%s] 已发布校准目标到 /dual_target/stamped (frame: %s)",
-                            tag, ee_frame_id_.c_str());
+                            "🕹️🕶️🕹️ [%s] 已发布校准目标到 /dual_target/stamped (frame: %s): "
+                            "left=[%.3f, %.3f, %.3f], right=[%.3f, %.3f, %.3f]",
+                            tag, ee_frame_id_.c_str(),
+                            left_pub_pos.x(), left_pub_pos.y(), left_pub_pos.z(),
+                            right_pub_pos.x(), right_pub_pos.y(), right_pub_pos.z());
 
                 // 校准绕过 publishTargetPoseDirect 直接改变了机器人目标，缓存的
                 // command target 已经过期；不处理的话，下次进入 UPDATE 会拿校准前的
                 // 旧目标当锚点，手臂会从校准位姿弹回旧位置。
                 // 这里把校准终点当作"刚刚发布过的目标"写回缓存：锚点即终点，
                 // 于是不必等手臂收敛就能进 UPDATE，未走完的运动会继续走完。
-                const Eigen::Quaterniond left_target_ori =
-                    robot_current_left_orientation_.normalized();
-                const Eigen::Quaterniond right_target_ori =
-                    robot_current_right_orientation_.normalized();
-
-                // last_published_* 存的是计算系的值。ee_frame_id_ 与 vr_follow_frame_
-                // 同名时（固定基座配置，两者都是 base_footprint）计算系就是 ee_frame_id_，
-                // 校准目标可直接写回；不同名时（轮式底盘下 ee_frame_id_ 为 world）
-                // 需要反向转到 vr_follow_frame_。
-                Eigen::Vector3d left_anchor_pos = left_target_pos;
-                Eigen::Quaterniond left_anchor_ori = left_target_ori;
-                Eigen::Vector3d right_anchor_pos = right_target_pos;
-                Eigen::Quaterniond right_anchor_ori = right_target_ori;
-                bool anchors_ready = true;
-                if (ee_frame_id_ != vr_follow_frame_)
-                {
-                    anchors_ready =
-                        transformPoseBetweenFrames(
-                            "left", left_target_pos, left_target_ori,
-                            ee_frame_id_, vr_follow_frame_,
-                            left_anchor_pos, left_anchor_ori) &&
-                        transformPoseBetweenFrames(
-                            "right", right_target_pos, right_target_ori,
-                            ee_frame_id_, vr_follow_frame_,
-                            right_anchor_pos, right_anchor_ori);
-                }
-
-                if (anchors_ready)
-                {
-                    recordLastPublishedTarget("left", left_anchor_pos, left_anchor_ori);
-                    recordLastPublishedTarget("right", right_anchor_pos, right_anchor_ori);
-                    // 让 robot_base_* 失效，下次进 UPDATE 从上面写回的 command target 重新派生
-                    left_robot_base_valid_ = false;
-                    right_robot_base_valid_ = false;
-                    // prev_calculated_* 存的是发布系（ee_frame_id_）的值，即校准目标原值；
-                    // 它没有标志位保护、被 hasPoseChanged() 无条件读取，必须同步。
-                    prev_calculated_left_position_ = left_target_pos;
-                    prev_calculated_left_orientation_ = left_target_ori;
-                    prev_calculated_right_position_ = right_target_pos;
-                    prev_calculated_right_orientation_ = right_target_ori;
-                    RCLCPP_INFO(node_->get_logger(),
-                                "🕹️🕶️🕹️ [%s] 已将校准终点写回 command target 缓存"
-                                "（锚点系: %s）；无需等手臂收敛即可进入 UPDATE",
-                                tag, vr_follow_frame_.c_str());
-                }
-                else
-                {
-                    // TF 不可用：退回作废缓存，下次进 UPDATE 改从 current pose 锚定
-                    clearLastPublishedTargets();
-                    prev_calculated_left_position_ = robot_current_left_position_;
-                    prev_calculated_left_orientation_ = left_target_ori;
-                    prev_calculated_right_position_ = robot_current_right_position_;
-                    prev_calculated_right_orientation_ = right_target_ori;
-                    RCLCPP_WARN(node_->get_logger(),
-                                "🕹️🕶️🕹️ [%s] %s -> %s 变换不可用，已作废缓存的 command target；"
-                                "请等手臂停稳后再进入 UPDATE",
-                                tag, ee_frame_id_.c_str(), vr_follow_frame_.c_str());
-                }
+                // last_published_* 存计算系的值（与 publishTargetPoseDirect 一致），
+                // prev_calculated_* 存发布系的值——它被 hasPoseChanged() 无条件读取。
+                recordLastPublishedTarget("left", left_target_pos_calc, left_target_ori_calc);
+                recordLastPublishedTarget("right", right_target_pos_calc, right_target_ori_calc);
+                // 让 robot_base_* 失效，下次进 UPDATE 从上面写回的 command target 重新派生
+                left_robot_base_valid_ = false;
+                right_robot_base_valid_ = false;
+                prev_calculated_left_position_ = left_pub_pos;
+                prev_calculated_left_orientation_ = left_pub_ori;
+                prev_calculated_right_position_ = right_pub_pos;
+                prev_calculated_right_orientation_ = right_pub_ori;
+                RCLCPP_INFO(node_->get_logger(),
+                            "🕹️🕶️🕹️ [%s] 已将校准终点写回 command target 缓存"
+                            "（锚点系: %s）；无需等手臂收敛即可进入 UPDATE",
+                            tag, calc_frame.c_str());
             }
         }
         else
         {
             RCLCPP_WARN(node_->get_logger(),
                         "🕹️🕶️🕹️ [%s] 无法更新 vr_pose_scale_: "
-                        "robot_z_dist=%s, vr_z_dist=%.4f",
+                        "计算系(%s)就绪=%s, robot_z_dist=%s, vr_z_dist=%.4f",
                         tag,
+                        calc_frame.c_str(),
+                        calc_frame_ready ? "true" : "false",
                         std::isnan(ee_dist_from_ref) ? "NaN" : std::to_string(ee_dist_from_ref).c_str(),
                         head_ctrl_dist);
         }

@@ -60,11 +60,33 @@ my_controller:
     waist_lifting_duration: 3.0
     waist_lifting_default_parameter: [0.25, 1.0, 5.0]  # [最大速度, 加速度, 减速度]
     waist_turning_default_parameter: [0.25, 1.0, 5.0]  # [最大速度, 加速度, 减速度]
+    # 绝对位姿 TF 坐标系（仅 waist_lifting_pose_absolute 使用）
+    # 默认对齐 FiveAges W2；机型无对应 link 时需覆盖
+    waist_absolute_source_frame: "base_footprint"  # 绝对 (x, z) 所在坐标系
+    waist_absolute_target_frame: "body_base"       # phi / 相对规划坐标系
     # (three_joint 模式专用)
     waist_l1: 0.322
     waist_l2: 0.355
     waist_rotation_direction: [1.0, 1.0, 1.0]
     waist_angle_offset: [0.0, 0.0, 0.0]
+    # (single_joint 模式专用 — 如 ARX Lift / Lift2S 棱柱升降)
+    waist_single_joint_direction: 1.0
+    waist_single_joint_offset: 0.0
+    waist_single_joint_pitch_joint: "_no_pitch_"   # 不在 joints 中则禁用俯仰
+    waist_single_joint_pitch_direction: 1.0
+    waist_single_joint_pitch_offset: 0.0
+```
+
+非 W2 机型示例：
+
+```yaml
+# ARX Lift / Lift2S
+body_joint_controller:
+  ros__parameters:
+    waist_lifting_enabled: true
+    waist_lifting_type: single_joint
+    waist_absolute_source_frame: base_link
+    waist_absolute_target_frame: lift_link
 ```
 
 ---
@@ -182,12 +204,22 @@ ros2 topic pub --once /body_controller/waist_lifting_pose_relative \
 
 ### 5.7 腰部升降 — x/z/phi 绝对目标
 
-**话题：** `/{controller_name}/waist_lifting_pose_absolute`
-**消息类型：** `std_msgs/Float64MultiArray`
+**话题：** `/{controller_name}/waist_lifting_pose_absolute`  
+**消息类型：** `std_msgs/Float64MultiArray`  
 **前提：** `waist_lifting_enabled: true`，当前状态 MOVEJ
 
-语义：`data: [x, z, phi]`，表示位置 `(x, z)` 在 `base_footprint` 坐标系下，`phi` 为 `body_base` 平面角，单位 rad。  
-控制器会先将位置点变换到 `body_base` 坐标系，再在实际执行前读取当前腰部 `(x, z, phi)` 计算相对位移并复用现有规划逻辑。
+语义：`data: [x, z, phi]`。
+
+| 字段 | 坐标系（默认） | 说明 |
+|---|---|---|
+| `(x, z)` | `waist_absolute_source_frame`（默认 `base_footprint`） | 绝对位置 |
+| `phi` | 绕 `waist_absolute_target_frame`（默认 `body_base`）的平面角 | 单位 rad |
+
+控制器查询 TF `source → target`，将 `(x, z)` 变换到 target 系，再相对当前腰部位姿求增量后规划。
+
+默认对齐 **FiveAges W2**（`base_footprint` / `body_base`）。没有这两个 link 的机型需覆盖，例如 ARX Lift / Lift2S：`base_link` / `lift_link`。
+
+仅高度类指令（`waist_lifting`、`waist_lifting_command`、`target_joint_position`）**不依赖**这两个坐标系。
 
 ```bash
 ros2 topic pub --once /body_controller/waist_lifting_pose_absolute \
@@ -234,7 +266,7 @@ ros2 topic pub /body_controller/waist_turning_command std_msgs/msg/Float64 "data
 | `/my_controller/target_percent` | `Float64` (0~1) | MOVEJ | 灵巧手比例控制 |
 | `/my_controller/waist_lifting` | `Float64` | MOVEJ | 腰部升降距离 |
 | `/my_controller/waist_lifting_pose_relative` | `Float64MultiArray` | MOVEJ | 腰部局部相对位移 `[dx, dz, dphi]` |
-| `/my_controller/waist_lifting_pose_absolute` | `Float64MultiArray` | MOVEJ | 腰部绝对目标 `[x, z, phi]` |
+| `/my_controller/waist_lifting_pose_absolute` | `Float64MultiArray` | MOVEJ | 绝对目标 `[x, z, phi]`（TF 坐标系可配置） |
 | `/my_controller/waist_lifting_command` | `Float64` | MOVEJ | 腰部升降速度系数 |
 | `/my_controller/waist_turning_command` | `Float64` | MOVEJ | 腰部转向速度系数 |
 
