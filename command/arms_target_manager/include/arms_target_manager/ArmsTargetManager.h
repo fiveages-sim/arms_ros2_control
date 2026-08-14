@@ -94,6 +94,7 @@ namespace arms_ros2_control::command
         int getCurrentBimanualState() const;
         int getCurrentLeftArmState() const;
         int getCurrentRightArmState() const;
+        const std::string& getCurrentFsmState() const { return current_fsm_state_; }
 
         void markPendingChanges();
 
@@ -146,6 +147,18 @@ namespace arms_ros2_control::command
         void updateBodyMarkerVisibility();
         void refreshArmMarkersFromLatestCurrentTargets();
         void refreshArmMarkersFromLatestCurrentPoses();
+
+        [[nodiscard]] bool isBimanualCoupled() const;
+
+        void followCoupledRightMarker(
+            const geometry_msgs::msg::Pose& old_left_pose,
+            const geometry_msgs::msg::Pose& old_right_pose,
+            const geometry_msgs::msg::Pose& new_left_pose);
+
+        void followCoupledLeftMarker(
+            const geometry_msgs::msg::Pose& old_right_pose,
+            const geometry_msgs::msg::Pose& old_left_pose,
+            const geometry_msgs::msg::Pose& new_right_pose);
 
         static bool bodyJointTargetsChanged(
             const std::vector<double>& previous,

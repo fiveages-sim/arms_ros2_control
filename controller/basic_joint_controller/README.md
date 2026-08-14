@@ -97,17 +97,20 @@ State transitions are triggered by publishing to `/fsm_command` (`std_msgs/Int32
 
 | Value | Action |
 |---|---|
-| `1` | Switch to **HOME** |
-| `2` | Switch to **HOLD** |
-| `3` | Switch to **MOVEJ** |
+| `1` | Switch to **HOME** (only from HOLD) |
+| `2` | Switch to **HOLD** (from HOME / MOVEJ) |
+| `4` | Switch to **MOVEJ** (only from HOLD; canonical, same as the whole-body stack) |
+| `3` | Switch to **MOVEJ** (legacy alias for standalone use; on mixed OCS2/WBC stacks `3` means OCS2) |
 | `switch_command_base` (default `100`) | (HOME) Cycle to next configuration |
 | `switch_command_base + 1` (default `101`) | (HOME) Switch to configuration 0 |
 | `switch_command_base + 2` (default `102`) | (HOME) Switch to configuration 1 |
 | … | … |
 
+MOVEJ can only return to HOLD (`2`). Direct MOVEJ → HOME is rejected.
+
 ```bash
 ros2 topic pub --once /fsm_command std_msgs/msg/Int32 "data: 1"   # → HOME
-ros2 topic pub --once /fsm_command std_msgs/msg/Int32 "data: 3"   # → MOVEJ
+ros2 topic pub --once /fsm_command std_msgs/msg/Int32 "data: 4"   # → MOVEJ
 ```
 
 ---

@@ -82,6 +82,13 @@ public:
      */
     void setCoupledRightMarkerFromLeftPose(const vector_t& left_pose7_xyzw, bool publish = true);
 
+    /**
+     * Coupled leadership: record that the left arm just commanded.
+     * Call when entering BIMANUAL_COUPLED so VR right packets cannot steal leadership
+     * before the first left heartbeat.
+     */
+    void markLeftCouplingCommand();
+
     /** Build full reference state for SwitchedHumanoidReferenceManager (dual arms + body). */
     static vector_t assembleWheelHumanoidTargetState(const vector_t& left_pose7_xyzw, const vector_t& right_pose7_xyzw,
                                                      const vector_t& body_pose7_xyzw);
@@ -159,6 +166,12 @@ private:
     /** Wheel-humanoid COUPLED: after updating one arm target, set the other from captured relative pose (matches WheelHumanoidTargetNode).
      *  Returns true if the opposite arm target was synchronized. */
     [[nodiscard]] bool syncWheelHumanoidCoupledOppositeArmIfNeeded(bool left_target_was_updated);
+
+    /** True when dual-arm wheel-humanoid is in captured BIMANUAL_COUPLED. */
+    [[nodiscard]] bool isWheelHumanoidBimanualCoupled() const;
+
+    /** True if a left-originated command arrived within kCoupledLeftLeaderTimeoutSec_. */
+    [[nodiscard]] bool isCoupledLeftLeaderFresh() const;
 
     void rebuildTargetTrajectoriesFromActiveArmReferenceBuffers(double start_time,
                                                                   double minimum_duration);
@@ -248,6 +261,9 @@ private:
     std::chrono::steady_clock::time_point left_twist_stamp_{};
     std::chrono::steady_clock::time_point right_twist_stamp_{};
     static constexpr double kTwistTimeoutSec_{0.2};
+    /** Coupled: left remains leader while it keeps commanding; after this gap, right may lead. */
+    std::chrono::steady_clock::time_point last_left_coupling_command_stamp_{};
+    static constexpr double kCoupledLeftLeaderTimeoutSec_{0.2};
 
     double trajectory_duration_{2.0};
     double moveL_duration_{2.0};

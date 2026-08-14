@@ -97,17 +97,20 @@ body_joint_controller:
 
 | 值 | 动作 |
 |---|---|
-| `1` | 切换到 **HOME** |
-| `2` | 切换到 **HOLD** |
-| `3` | 切换到 **MOVEJ** |
+| `1` | 切换到 **HOME**（仅从 HOLD） |
+| `2` | 切换到 **HOLD**（从 HOME / MOVEJ） |
+| `4` | 切换到 **MOVEJ**（仅从 HOLD；与全身栈统一的规范命令） |
+| `3` | 切换到 **MOVEJ**（独立使用时的旧映射；在混合 OCS2/WBC 栈上 `3` 表示 OCS2） |
 | `switch_command_base`（默认 `100`） | (HOME) 循环切换到下一个构型 |
 | `switch_command_base + 1`（默认 `101`） | (HOME) 切换到构型 0 |
 | `switch_command_base + 2`（默认 `102`） | (HOME) 切换到构型 1 |
 | … | … |
 
+MOVEJ 只能回到 HOLD（`2`），不允许直接 MOVEJ → HOME。
+
 ```bash
 ros2 topic pub --once /fsm_command std_msgs/msg/Int32 "data: 1"   # → HOME
-ros2 topic pub --once /fsm_command std_msgs/msg/Int32 "data: 3"   # → MOVEJ
+ros2 topic pub --once /fsm_command std_msgs/msg/Int32 "data: 4"   # → MOVEJ
 ```
 
 ---

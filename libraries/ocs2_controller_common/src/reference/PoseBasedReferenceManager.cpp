@@ -990,6 +990,42 @@ namespace ocs2::controller_common
 #endif
     }
 
+    bool PoseBasedReferenceManager::isWheelHumanoidBimanualCoupled() const
+    {
+#ifndef HAS_OCS2_WHEEL_HUMANOID
+        return false;
+#else
+        if (!dual_arm_mode_ ||
+            effectiveTargetStateDim() != Ocs2ReferenceTargetContext::kWheelHumanoidTargetStateDim)
+        {
+            return false;
+        }
+        auto* sw = dynamic_cast<::ocs2::wheel_humanoid::SwitchedHumanoidReferenceManager*>(
+            referenceManagerPtr_.get());
+        if (sw == nullptr)
+        {
+            return false;
+        }
+        return sw->isBimanualCoupled(current_observation_.time) && sw->hasCapturedCoupling();
+#endif
+    }
+
+    void PoseBasedReferenceManager::markLeftCouplingCommand()
+    {
+        last_left_coupling_command_stamp_ = std::chrono::steady_clock::now();
+    }
+
+    bool PoseBasedReferenceManager::isCoupledLeftLeaderFresh() const
+    {
+        if (last_left_coupling_command_stamp_.time_since_epoch().count() == 0)
+        {
+            return false;
+        }
+        const double age = std::chrono::duration<double>(
+            std::chrono::steady_clock::now() - last_left_coupling_command_stamp_).count();
+        return age < kCoupledLeftLeaderTimeoutSec_;
+    }
+
     void PoseBasedReferenceManager::leftPoseCallback(
         const geometry_msgs::msg::Pose::SharedPtr msg)
     {
@@ -1034,6 +1070,8 @@ namespace ocs2::controller_common
 
     void PoseBasedReferenceManager::applyLeftAbsoluteTarget(const vector_t& goal7, bool interpolate)
     {
+        markLeftCouplingCommand();
+
         if (!interpolate)
         {
             // Continuous / marker Pose preempts this arm's moveL only.
@@ -1075,11 +1113,18 @@ namespace ocs2::controller_common
         }
 
         rebuildTargetTrajectoriesFromActiveArmReferenceBuffers(start_time, moveL_duration_);
-        publishCurrentTargets("left");
+        publishCurrentTargets(coupled ? "" : "left");
     }
 
     void PoseBasedReferenceManager::applyRightAbsoluteTarget(const vector_t& goal7, bool interpolate)
     {
+        if (isWheelHumanoidBimanualCoupled() && isCoupledLeftLeaderFresh())
+        {
+            // Left still owns coupling (VR both-hands heartbeat, or recent left teleop).
+            // Do not inverse-sync or push a second trajectory from right_target.
+            return;
+        }
+
         if (!interpolate)
         {
             resetArmReferenceBuffer(right_arm_reference_buffer_, goal7, current_observation_.time);
@@ -1119,7 +1164,7 @@ namespace ocs2::controller_common
         }
 
         rebuildTargetTrajectoriesFromActiveArmReferenceBuffers(start_time, moveL_duration_);
-        publishCurrentTargets("right");
+        publishCurrentTargets(coupled ? "" : "right");
     }
 
     void PoseBasedReferenceManager::applyBodyAbsoluteTarget(const vector_t& goal7, bool interpolate)
@@ -1227,12 +1272,16 @@ namespace ocs2::controller_common
         if (left_twist_active_)
         {
             // Preempt this arm's moveL; opposite arm preserved via rebuild below.
+            markLeftCouplingCommand();
             resetArmReferenceBuffer(left_arm_reference_buffer_, left_target_state_, t);
             left_target_state_ = integrateTwistVelocity(left_target_state_, left_latched_twist_, dt);
             (void)syncWheelHumanoidCoupledOppositeArmIfNeeded(true);
             updated = true;
         }
-        if (dual_arm_mode_ && right_twist_active_)
+        const bool allow_right_twist =
+            dual_arm_mode_ && right_twist_active_ &&
+            !(isWheelHumanoidBimanualCoupled() && isCoupledLeftLeaderFresh());
+        if (allow_right_twist)
         {
             resetArmReferenceBuffer(right_arm_reference_buffer_, right_target_state_, t);
             right_target_state_ = integrateTwistVelocity(right_target_state_, right_latched_twist_, dt);
@@ -1263,6 +1312,10 @@ namespace ocs2::controller_common
             std::abs(msg->linear.z) < 1e-9 && std::abs(msg->angular.x) < 1e-9 &&
             std::abs(msg->angular.y) < 1e-9 && std::abs(msg->angular.z) < 1e-9;
         left_twist_active_ = !is_zero;
+        if (left_twist_active_)
+        {
+            markLeftCouplingCommand();
+        }
     }
 
     void PoseBasedReferenceManager::rightTwistCallback(
@@ -1536,6 +1589,7 @@ namespace ocs2::controller_common
         {
             return;
         }
+        markLeftCouplingCommand();
 
         // 处理右臂（第二个pose）
         vector_t right_target_state;

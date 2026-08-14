@@ -4,12 +4,14 @@
 
 #include "arms_target_manager/VRInputHandler.h"
 #include "arms_target_manager/ArmsTargetManager.h"
+#include "arms_controller_common/utils/FSMStateTransitionValidator.h"
 #include <rclcpp/rclcpp.hpp>
 #include <geometry_msgs/msg/pose_stamped.hpp>
 #include <geometry_msgs/msg/pose.hpp>
 #include <geometry_msgs/msg/point.hpp>
 #include <geometry_msgs/msg/twist.hpp>
 #include <arms_ros2_control_msgs/msg/wbc_current_state.hpp>
+#include <arms_ros2_control_msgs/msg/wbc_capability.hpp>
 #include <std_msgs/msg/float64.hpp>
 #include <std_msgs/msg/int32.hpp>
 #include <nav_msgs/msg/path.hpp>
@@ -180,6 +182,15 @@ namespace arms_ros2_control::command
         // WBC 模式切换命令发布器（case 21–24 请求身体模式）
         pub_mode_command_ = node_->create_publisher<std_msgs::msg::String>("/mode_command", 10);
 
+        sub_wbc_capability_ =
+            node_->create_subscription<arms_ros2_control_msgs::msg::WbcCapability>(
+                "/ocs2_wbc_controller/wbc_capabilities",
+                rclcpp::QoS(1).transient_local(),
+                [this](const arms_ros2_control_msgs::msg::WbcCapability::ConstSharedPtr msg)
+                {
+                    this->wbcCapabilityCallback(msg);
+                });
+
         // 注意：FSM命令订阅已移除，改为在 arms_target_manager_node 中统一处理
         // 这样可以避免与 ArmsTargetManager 的订阅冲突
         // FSM状态更新现在通过 fsmCommandCallback() 方法由外部调用
@@ -196,7 +207,7 @@ namespace arms_ros2_control::command
             node_->get_logger(),
             "🕹️ FULL_BODY directions: "
             "left grip + left stick cases 21-24; "
-            "right grip + right stick cases 25-26 (27-28 unused)");
+            "right grip + right stick cases 25-26, 28 (27 unused)");
         RCLCPP_INFO(node_->get_logger(), "🕹️🕶️🕹️ Subscribed to button event topic: /xr/controller_state (Int32)");
         RCLCPP_INFO(node_->get_logger(), "🕹️🕶️🕹️ Subscribed to thumbstick axes topic: /xr/thumbstick_axes (ThumbstickAxes)");
         RCLCPP_INFO(node_->get_logger(), "🕹️🕶️🕹️ Subscribed to trigger values topic: /xr/trigger_values (linear.x=left, angular.x=right)");
@@ -206,7 +217,7 @@ namespace arms_ros2_control::command
         RCLCPP_INFO(node_->get_logger(), "🕹️🕶️🕹️ VR pose scale: left=%.3f, right=%.3f",
                     vr_pose_scale_, vr_pose_scale_);
         RCLCPP_INFO(node_->get_logger(),
-                    "🕹️🕶️🕹️ Grip button toggles thumbstick mode: XY-translation ↔ Z-height + Yaw-rotation");
+                    "🕹️🕶️🕹️ Grip short-press toggles thumbstick mode: XY-translation ↔ Z-height + Yaw-rotation");
         RCLCPP_INFO(node_->get_logger(), "🕹️🕶️🕹️ VR control is DISABLED by default.");
         RCLCPP_INFO(node_->get_logger(), "🕹️🕶️🕹️ Right thumbstick toggles between STORAGE and UPDATE modes.");
         RCLCPP_INFO(node_->get_logger(), "🕹️🕶️🕹️ STORAGE mode: Store VR and robot base poses (no marker update)");
@@ -773,6 +784,31 @@ namespace arms_ros2_control::command
         {
             fsm_command_publisher_->publishCommand(command);
         }
+    }
+
+    int32_t VRInputHandler::resolvedFsmState() const
+    {
+        if (target_manager_)
+        {
+            const std::string& name = target_manager_->getCurrentFsmState();
+            if (name == "HOME")
+            {
+                return 1;
+            }
+            if (name == "HOLD")
+            {
+                return 2;
+            }
+            if (name == "OCS2")
+            {
+                return 3;
+            }
+            if (name == "MOVEJ")
+            {
+                return 4;
+            }
+        }
+        return current_fsm_state_.load();
     }
 
     bool VRInputHandler::checkNodeExists(const std::shared_ptr<rclcpp::Node>& node, const std::string& targetNodeName)
@@ -1402,17 +1438,11 @@ namespace arms_ros2_control::command
         if (bimanualCoupled)
         {
             right_vr_target_suppressed_by_bimanual_ = true;
-            if (armType == "right")
-            {
-                RCLCPP_DEBUG_THROTTLE(
-                    node_->get_logger(), *node_->get_clock(), 2000,
-                    "🕹️ 双臂耦合中，忽略 VR right_target");
-                return false;
-            }
         }
 
         if (armType == "right" &&
-            right_vr_target_suppressed_by_bimanual_)
+            right_vr_target_suppressed_by_bimanual_ &&
+            !bimanualCoupled)
         {
             rebaseRightArmVrControl();
             right_vr_target_suppressed_by_bimanual_ = false;
@@ -1459,7 +1489,11 @@ namespace arms_ros2_control::command
         Eigen::Quaterniond& previousOrientation = isLeft
             ? prev_calculated_left_orientation_
             : prev_calculated_right_orientation_;
-        if (!hasPoseChanged(
+        // Coupled: keep left_target heartbeating even when the left controller is still,
+        // otherwise the 0.2s leader timeout lets right_target steal and inverse-sync left.
+        const bool leftCoupledHeartbeat = bimanualCoupled && isLeft;
+        if (!leftCoupledHeartbeat &&
+            !hasPoseChanged(
                 publishPosition,
                 publishOrientation,
                 previousPosition,
@@ -1600,9 +1634,21 @@ namespace arms_ros2_control::command
         right_thumbstick_axes_raw_ = right_thumbstick_axes_;
 
         // 读取左右握把实时状态（xr_target_node 复用 linear.z / angular.z 携带，1.0=按下）
-        // 末端控制路径不消费握把状态（末端用下降沿事件 case 2/5），仅 chassis 模式用作修饰符
-        left_grip_active_.store(msg->linear.z > 0.5);
-        right_grip_active_.store(msg->angular.z > 0.5);
+        // 短按（松开且未超时、未被组合键消费）才切换摇杆 XY / Z+Yaw；长按留给组合键。
+        const bool leftGripNow = msg->linear.z > 0.5;
+        const bool rightGripNow = msg->angular.z > 0.5;
+        const bool leftGripWas = left_grip_active_.load();
+        const bool rightGripWas = right_grip_active_.load();
+        left_grip_active_.store(leftGripNow);
+        right_grip_active_.store(rightGripNow);
+        if (leftGripNow != leftGripWas)
+        {
+            handleGripActiveEdge(true, leftGripNow);
+        }
+        if (rightGripNow != rightGripWas)
+        {
+            handleGripActiveEdge(false, rightGripNow);
+        }
 
         constexpr double direction_reset_threshold = 0.3;
 
@@ -2020,6 +2066,9 @@ namespace arms_ros2_control::command
                     target_manager_->getCurrentRightArmState() ==
                     WbcState::ARM_ENABLED;
                 return true;
+            case WbcToggleTarget::HOME_JOINT:
+                enabled = home_joint_reference_enabled_.load();
+                return true;
             case WbcToggleTarget::NONE:
                 return false;
         }
@@ -2039,6 +2088,16 @@ namespace arms_ros2_control::command
             RCLCPP_WARN(
                 node_->get_logger(),
                 "🔘 [case %d] 忽略%s：要求 VR enabled、FULL_BODY、OCS2",
+                eventCase, sourceDescription);
+            return;
+        }
+
+        if (target == WbcToggleTarget::HOME_JOINT &&
+            !has_home_joint_reference_.load())
+        {
+            RCLCPP_WARN(
+                node_->get_logger(),
+                "🔘 [case %d] 忽略%s：当前机器人没有参考关节能力",
                 eventCase, sourceDescription);
             return;
         }
@@ -2112,6 +2171,9 @@ namespace arms_ros2_control::command
                 break;
             case WbcToggleTarget::RIGHT_ARM:
                 command = expectedEnabled ? "RIGHT_ARM_ENABLE" : "RIGHT_ARM_DISABLE";
+                break;
+            case WbcToggleTarget::HOME_JOINT:
+                command = expectedEnabled ? "HOME_JOINT_ON" : "HOME_JOINT_OFF";
                 break;
             case WbcToggleTarget::NONE:
                 return;
@@ -2189,10 +2251,23 @@ namespace arms_ros2_control::command
             return;
         }
 
+        home_joint_reference_enabled_.store(msg->home_joint_reference_enabled);
+
         updateArmWbcVrState(
             WbcToggleTarget::LEFT_ARM, msg->left_arm_state);
         updateArmWbcVrState(
             WbcToggleTarget::RIGHT_ARM, msg->right_arm_state);
+    }
+
+    void VRInputHandler::wbcCapabilityCallback(
+        arms_ros2_control_msgs::msg::WbcCapability::ConstSharedPtr msg)
+    {
+        if (!msg)
+        {
+            return;
+        }
+
+        has_home_joint_reference_.store(msg->has_home_joint_reference);
     }
 
     void VRInputHandler::updateArmWbcVrState(
@@ -2838,10 +2913,91 @@ namespace arms_ros2_control::command
         }
     }
 
+    void VRInputHandler::handleGripActiveEdge(bool isLeft, bool pressed)
+    {
+        auto& armed = isLeft ? left_grip_press_armed_ : right_grip_press_armed_;
+        auto& comboConsumed = isLeft ? left_grip_combo_consumed_ : right_grip_combo_consumed_;
+        auto& pressStart = isLeft ? left_grip_press_start_ : right_grip_press_start_;
+
+        if (pressed)
+        {
+            pressStart = std::chrono::steady_clock::now();
+            comboConsumed.store(false);
+            armed.store(true);
+            return;
+        }
+
+        if (!armed.exchange(false))
+        {
+            return;
+        }
+
+        if (comboConsumed.load())
+        {
+            return;
+        }
+
+        if (std::chrono::steady_clock::now() - pressStart > grip_short_press_max_)
+        {
+            return;
+        }
+
+        applyGripShortPress(isLeft);
+    }
+
+    void VRInputHandler::applyGripShortPress(bool isLeft)
+    {
+        if (isLeft && isBodyTrackingActive())
+        {
+            const bool newMode = !body_thumbstick_z_yaw_mode_.load();
+            body_thumbstick_z_yaw_mode_.store(newMode);
+            RCLCPP_INFO(node_->get_logger(),
+                        "🔘 [左握把] 短按：腰部摇杆模式切换为 %s",
+                        newMode ? "Z+Yaw" : "XY");
+            return;
+        }
+
+        const bool isMirror = mirror_mode_.load();
+        const bool toggleRightArm = isLeft ? isMirror : !isMirror;
+        auto& gripMode = toggleRightArm ? right_grip_mode_ : left_grip_mode_;
+        const bool newMode = !gripMode.load();
+        gripMode.store(newMode);
+
+        const char* gripName = isLeft ? "左握把" : "右握把";
+        const char* armName = toggleRightArm ? "右臂" : "左臂";
+        const char* modeName = newMode
+            ? "Z轴+Yaw旋转模式 (Y→Z, X→Yaw)"
+            : "XY平移模式 (Y→X, X→Y)";
+        if (isMirror)
+        {
+            RCLCPP_INFO(node_->get_logger(),
+                        "🔘 [%s] 短按 - 功能: 切换%s摇杆控制模式 - 操作: 切换到 %s [镜像模式]",
+                        gripName, armName, modeName);
+        }
+        else
+        {
+            RCLCPP_INFO(node_->get_logger(),
+                        "🔘 [%s] 短按 - 功能: 切换%s摇杆控制模式 - 操作: 切换到 %s",
+                        gripName, armName, modeName);
+        }
+    }
+
+    void VRInputHandler::markGripComboConsumed(bool left, bool right)
+    {
+        if (left)
+        {
+            left_grip_combo_consumed_.store(true);
+        }
+        if (right)
+        {
+            right_grip_combo_consumed_.store(true);
+        }
+    }
+
     void VRInputHandler::processButtonEvent(const std_msgs::msg::Int32::SharedPtr msg)
     {
         // 处理按钮事件（button_event: 0=无事件, 1-6=按钮按下, 7=镜像模式切换, 9=左扳机, 10=右扳机）
-        // xr_target_node 已经进行上升沿检测，这里直接响应触发事件
+        // xr_target_node 对多数按键做上升沿检测；握把 case 2/5 不再切换摇杆模式，改由短按松开判定。
 
         switch (msg->data)
         {
@@ -2852,50 +3008,8 @@ namespace arms_ros2_control::command
                 // 这里保留空处理以保持兼容性
                 break;
             }
-            case 2:  // 左握把按钮
-            {
-                // 跟随模式下左握把改为切换腰部摇杆控制平面，不动左右臂的 *_grip_mode_
-                if (isBodyTrackingActive())
-                {
-                    const bool newMode = !body_thumbstick_z_yaw_mode_.load();
-                    body_thumbstick_z_yaw_mode_.store(newMode);
-                    RCLCPP_INFO(node_->get_logger(),
-                                "🔘 [左握把] 腰部摇杆模式切换为 %s",
-                                newMode ? "Z+Yaw" : "XY");
-                    break;
-                }
-
-                // 根据镜像模式决定切换哪个臂的模式
-                if (mirror_mode_.load())
-                {
-                    // 镜像模式：左话题数据用于右臂
-                    right_grip_mode_.store(!right_grip_mode_.load());
-
-                    if (right_grip_mode_.load())
-                    {
-                        RCLCPP_INFO(node_->get_logger(), "🔘 [左握把按钮] 按下 - 功能: 切换右臂摇杆控制模式 - 操作: 切换到 Z轴+Yaw旋转模式 (Y→Z, X→Yaw) [镜像模式]");
-                    }
-                    else
-                    {
-                        RCLCPP_INFO(node_->get_logger(), "🔘 [左握把按钮] 按下 - 功能: 切换右臂摇杆控制模式 - 操作: 切换到 XY平移模式 (Y→X, X→Y) [镜像模式]");
-                    }
-                }
-                else
-                {
-                    // 正常模式：左话题数据用于左臂
-                    left_grip_mode_.store(!left_grip_mode_.load());
-
-                    if (left_grip_mode_.load())
-                    {
-                        RCLCPP_INFO(node_->get_logger(), "🔘 [左握把按钮] 按下 - 功能: 切换左臂摇杆控制模式 - 操作: 切换到 Z轴+Yaw旋转模式 (Y→Z, X→Yaw)");
-                    }
-                    else
-                    {
-                        RCLCPP_INFO(node_->get_logger(), "🔘 [左握把按钮] 按下 - 功能: 切换左臂摇杆控制模式 - 操作: 切换到 XY平移模式 (Y→X, X→Y)");
-                    }
-                }
+            case 2:  // 左握把按钮：上升沿由 xr_target_node 发出；摇杆模式改由短按松开判定
                 break;
-            }
             case 3:  // 左Y按钮
             {
                 const auto topology = controlTopology();
@@ -3117,39 +3231,8 @@ namespace arms_ros2_control::command
                 }
                 break;
             }
-            case 5:  // 右握把按钮
-            {
-                // 根据镜像模式决定切换哪个臂的模式
-                if (mirror_mode_.load())
-                {
-                    // 镜像模式：右话题数据用于左臂
-                    left_grip_mode_.store(!left_grip_mode_.load());
-
-                    if (left_grip_mode_.load())
-                    {
-                        RCLCPP_INFO(node_->get_logger(), "🔘 [右握把按钮] 按下 - 功能: 切换左臂摇杆控制模式 - 操作: 切换到 Z轴+Yaw旋转模式 (Y→Z, X→Yaw) [镜像模式]");
-                    }
-                    else
-                    {
-                        RCLCPP_INFO(node_->get_logger(), "🔘 [右握把按钮] 按下 - 功能: 切换左臂摇杆控制模式 - 操作: 切换到 XY平移模式 (Y→X, X→Y) [镜像模式]");
-                    }
-                }
-                else
-                {
-                    // 正常模式：右话题数据用于右臂
-                    right_grip_mode_.store(!right_grip_mode_.load());
-
-                    if (right_grip_mode_.load())
-                    {
-                        RCLCPP_INFO(node_->get_logger(), "🔘 [右握把按钮] 按下 - 功能: 切换右臂摇杆控制模式 - 操作: 切换到 Z轴+Yaw旋转模式 (Y→Z, X→Yaw)");
-                    }
-                    else
-                    {
-                        RCLCPP_INFO(node_->get_logger(), "🔘 [右握把按钮] 按下 - 功能: 切换右臂摇杆控制模式 - 操作: 切换到 XY平移模式 (Y→X, X→Y)");
-                    }
-                }
+            case 5:  // 右握把按钮：上升沿由 xr_target_node 发出；摇杆模式改由短按松开判定
                 break;
-            }
             case 6:  // 右B按钮
             {
                 const auto topology = controlTopology();
@@ -3347,9 +3430,9 @@ namespace arms_ros2_control::command
             }
             case 11: // 右A按钮（FSM状态控制）
             {
-                // 根据当前FSM状态发送相应的转换命令
-                int32_t current_state = current_fsm_state_.load();
-                
+                // 与 ATM 共用校验后的状态，避免 RViz 切到 MOVEJ 后 VR 仍以为在 HOLD
+                const int32_t current_state = resolvedFsmState();
+
                 if (current_state == 2)  // HOLD
                 {
                     // HOLD → OCS2
@@ -3364,21 +3447,29 @@ namespace arms_ros2_control::command
                 }
                 else if (current_state == 3)  // OCS2
                 {
-                    // OCS2无法继续前进
                     RCLCPP_WARN(node_->get_logger(), "🔘 [右A按钮] 按下 - 功能: FSM状态前进 - 操作: 失败（已在OCS2状态，无法继续前进）");
+                }
+                else if (current_state == 4)  // MOVEJ
+                {
+                    RCLCPP_WARN(node_->get_logger(), "🔘 [右A按钮] 按下 - 功能: FSM状态前进 - 操作: 失败（MOVEJ 需先回 HOLD，不能直接进 OCS2）");
                 }
                 break;
             }
             case 12: // 左X按钮（FSM状态控制）
             {
-                // 根据当前FSM状态发送相应的转换命令
-                int32_t current_state = current_fsm_state_.load();
-                
+                const int32_t current_state = resolvedFsmState();
+
                 if (current_state == 3)  // OCS2
                 {
                     // OCS2 → HOLD
                     sendFsmCommand(2);
                     RCLCPP_INFO(node_->get_logger(), "🔘 [左X按钮] 按下 - 功能: FSM状态后退/切换 - 操作: OCS2 → HOLD");
+                }
+                else if (current_state == 4)  // MOVEJ
+                {
+                    // MOVEJ → HOLD（不能直接 HOME）
+                    sendFsmCommand(2);
+                    RCLCPP_INFO(node_->get_logger(), "🔘 [左X按钮] 按下 - 功能: FSM状态后退/切换 - 操作: MOVEJ → HOLD");
                 }
                 else if (current_state == 2)  // HOLD
                 {
@@ -3396,11 +3487,13 @@ namespace arms_ros2_control::command
             }
             case 13: // 左握把+左扳机：切换左扳机所映射夹爪的百分比/开合
             {
+                markGripComboConsumed(true, false);
                 toggleGripperPercentMode(true);
                 break;
             }
             case 14: // 右握把+右扳机：切换右扳机所映射夹爪的百分比/开合
             {
+                markGripComboConsumed(false, true);
                 toggleGripperPercentMode(false);
                 break;
             }
@@ -3410,6 +3503,7 @@ namespace arms_ros2_control::command
                 break;
             }
             case 16: // 左右握把+左Y+右B：切换 FULL_BODY 下 Y/B 禁用↔暂停
+                markGripComboConsumed(true, true);
                 handleCase16YbModeToggle();
                 break;
             case 20: // 左摇杆 + 右摇杆同时按下（切换底盘/末端控制模式）
@@ -3425,36 +3519,46 @@ namespace arms_ros2_control::command
                 break;
             }
             case 21: // 左握把 + 左摇杆向上：竖直
+                markGripComboConsumed(true, false);
                 requestBodyMode(
                     21, "向上", "竖直", "BODY_RELATIVE",
                     arms_ros2_control_msgs::msg::WbcCurrentState::BODY_VERTICAL);
                 break;
             case 22: // 左握把 + 左摇杆向下：锁定
+                markGripComboConsumed(true, false);
                 requestBodyMode(
                     22, "向下", "锁定", "BODY_LOCK",
                     arms_ros2_control_msgs::msg::WbcCurrentState::BODY_LOCKED);
                 break;
             case 23: // 左握把 + 左摇杆向左：跟随
+                markGripComboConsumed(true, false);
                 requestBodyMode(
                     23, "向左", "跟随", "BODY_TRACKING",
                     arms_ros2_control_msgs::msg::WbcCurrentState::BODY_TRACKING);
                 break;
             case 24: // 左握把 + 左摇杆向右：自定义
+                markGripComboConsumed(true, false);
                 requestBodyMode(
                     24, "向右", "自定义", "BODY_CUSTOM_LOCK",
                     arms_ros2_control_msgs::msg::WbcCurrentState::BODY_CUSTOM_LOCKED);
                 break;
             case 25: // 右握把 + 右摇杆向上：双臂耦合
+                markGripComboConsumed(false, true);
                 requestWbcToggle(
                     25, "右握把+右摇杆向上", WbcToggleTarget::BIMANUAL);
                 break;
             case 26: // 右握把 + 右摇杆向下：启用底盘
+                markGripComboConsumed(false, true);
                 requestWbcToggle(
                     26, "右握把+右摇杆向下", WbcToggleTarget::BASE);
                 break;
             case 27: // 右握把 + 右摇杆向左：预留，暂不处理
+                markGripComboConsumed(false, true);
                 break;
-            case 28: // 右握把 + 右摇杆向右：预留，暂不处理
+            case 28: // 右握把 + 右摇杆向右：参考关节追踪
+                markGripComboConsumed(false, true);
+                requestWbcToggle(
+                    28, "右握把+右摇杆向右", WbcToggleTarget::HOME_JOINT);
                 break;
             case 0:  // 无事件
             default:
@@ -3587,31 +3691,60 @@ namespace arms_ros2_control::command
             return;
         }
 
-        // 更新FSM状态
-        int32_t old_state = current_fsm_state_.load();
-        
-        // 根据command推断新状态
-        int32_t new_state = old_state;
-        if (command == 1)
+        // REST姿态切换命令（不改变状态，只切换姿态）
+        if (command == 100)
         {
-            new_state = 1; // HOME
-        }
-        else if (command == 2)
-        {
-            new_state = 2; // HOLD
-        }
-        else if (command == 3)
-        {
-            new_state = 3; // OCS2
-        }
-        else if (command == 100)
-        {
-            // REST姿态切换命令（不改变状态，只切换姿态）
-            // 状态保持为HOME，不需要更新状态
             return;
         }
 
-        // 更新状态
+        const int32_t old_state = current_fsm_state_.load();
+        std::string current_name;
+        switch (old_state)
+        {
+        case 1:
+            current_name = "HOME";
+            break;
+        case 3:
+            current_name = "OCS2";
+            break;
+        case 4:
+            current_name = "MOVEJ";
+            break;
+        case 2:
+        default:
+            current_name = "HOLD";
+            break;
+        }
+
+        // 与 ArmsTargetManager 使用同一套合法转换表（含 MOVEJ=4）
+        std::string new_name;
+        if (!arms_controller_common::FSMStateTransitionValidator::validateTransition(
+                current_name, command, new_name))
+        {
+            RCLCPP_DEBUG(node_->get_logger(),
+                         "🕹️🕶️🕹️ Ignore invalid FSM transition: %s + command=%d",
+                         current_name.c_str(), command);
+            return;
+        }
+
+        int32_t new_state = old_state;
+        if (new_name == "HOME")
+        {
+            new_state = 1;
+        }
+        else if (new_name == "HOLD")
+        {
+            new_state = 2;
+        }
+        else if (new_name == "OCS2")
+        {
+            new_state = 3;
+        }
+        else if (new_name == "MOVEJ")
+        {
+            new_state = 4;
+        }
+
         if (new_state != old_state)
         {
             if (old_state == 2 && new_state == 3)

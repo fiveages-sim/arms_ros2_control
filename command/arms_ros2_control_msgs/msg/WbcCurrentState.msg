@@ -23,3 +23,4 @@ uint8 body_state
 uint8 bimanual_state
 uint8 left_arm_state
 uint8 right_arm_state
+bool home_joint_reference_enabled

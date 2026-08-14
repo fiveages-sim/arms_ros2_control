@@ -116,7 +116,7 @@ twist.angular.{x,y,z} = Inputs.{roll,pitch,yaw} * angular_scale  # 单位：rad/
 - 事件 16（左右握把 + 左 Y + 右 B）在全身下锁存切换为暂停语义（需 UPDATE）；再按 16 切回禁用。SPLIT_BODY 忽略 16。
 - 切换时：已禁用臂 → ENABLE 后暂停；已暂停臂 → DISABLE 后清暂停；未动过的臂不变。双臂耦合时不能把暂停语义切回禁用。
 - 暂停语义下右摇杆进 UPDATE 不再清暂停。
-- 禁用语义下 Y/B 与 case 25–26 复用现有 WBC pending、2 秒超时和右摇杆回中安全门；case 27–28 预留，当前不处理。
+- 禁用语义下 Y/B 与 case 25–26、28 复用现有 WBC pending、2 秒超时和右摇杆回中安全门；case 27 预留，当前不处理。
 
 ### FULL_BODY 单臂禁用后的 VR 恢复
 

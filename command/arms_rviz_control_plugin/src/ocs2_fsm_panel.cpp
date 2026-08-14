@@ -5,14 +5,17 @@
 #include <QTimer>
 #include <QHBoxLayout>
 #include <QVBoxLayout>
+#include <QFont>
+#include <QFontMetrics>
 #include <QGridLayout>
 #include <QGuiApplication>
 #include <QScreen>
 #include <QSizePolicy>
 #include <algorithm>
 #include <cmath>
-#include <memory>
 #include <functional>
+#include <memory>
+#include <utility>
 #include <arms_controller_common/utils/FSMStateTransitionValidator.h>
 
 namespace arms_rviz_control_plugin
@@ -36,6 +39,16 @@ namespace arms_rviz_control_plugin
             return std::max(1, static_cast<int>(std::round(value * uiScale())));
         }
 
+        QFrame* makeVerticalDivider(QWidget* parent, int height)
+        {
+            auto* line = new QFrame(parent);
+            line->setFrameShape(QFrame::VLine);
+            line->setFrameShadow(QFrame::Sunken);
+            line->setFixedSize(scaled(2), height);
+            line->setSizePolicy(QSizePolicy::Fixed, QSizePolicy::Fixed);
+            return line;
+        }
+
         QString buttonStyle(const QString& background)
         {
             return QString("QPushButton { background-color: %1; color: white; font-weight: bold; font-size: %2px; }")
@@ -47,20 +60,33 @@ namespace arms_rviz_control_plugin
     OCS2FSMPanel::OCS2FSMPanel(QWidget* parent)
         : Panel(parent)
     {
-        const int panel_width = scaled(350);
         const int panel_min_height = scaled(180);
         const int title_font_size = scaled(14);
         const int badge_font_size = scaled(9);
         const int label_font_size = scaled(13);
-        const int label_min_width = scaled(74);
         const int switch_width = scaled(72);
         const int switch_height = scaled(32);
-        const int switch_cell_width = label_min_width + scaled(4) + switch_width;
+        const int inner_spacing = scaled(4);
+        const int compact_label_height = scaled(18);
+        const int compact_stack_height = compact_label_height + scaled(2) + switch_height;
         const int switch_cell_height = switch_height;
         const int combo_height = scaled(28);
         const int hold_button_height = scaled(28);
         const int grid_h_spacing = scaled(12);
         const int grid_v_spacing = scaled(4);
+        QFont wbc_label_font;
+        wbc_label_font.setPixelSize(label_font_size);
+        const QFontMetrics label_fm(wbc_label_font);
+        const int pair_label_width = std::max({
+            label_fm.horizontalAdvance(QString::fromUtf8("双臂耦合")),
+            label_fm.horizontalAdvance(QString::fromUtf8("身体模式")),
+            label_fm.horizontalAdvance(QString::fromUtf8("参考关节"))
+        }) + scaled(2);
+        const int pair_content_width = pair_label_width + inner_spacing + switch_width;
+        const int pair_cell_width = pair_content_width + scaled(12);
+        const int wbc_row_width = 2 * pair_cell_width + grid_h_spacing;
+        const int compact_cell_width = (wbc_row_width - 2 * grid_h_spacing) / 3;
+        const int panel_width = wbc_row_width;
         const int combo_padding_left = scaled(4);
         const int combo_padding_right = scaled(12);
         const int combo_dropdown_width = scaled(10);
@@ -151,101 +177,108 @@ namespace arms_rviz_control_plugin
         separator->setFrameShadow(QFrame::Sunken);
         wbc_layout_->addWidget(separator);
 
-        // Upper button layout (grid)
+        // Upper button layout (equal-width rows)
         upper_button_layout_ = std::make_unique<QGridLayout>();
-        upper_button_layout_->setHorizontalSpacing(grid_h_spacing);
+        upper_button_layout_->setHorizontalSpacing(0);
         upper_button_layout_->setVerticalSpacing(grid_v_spacing);
 
         const QString label_style = QString("QLabel { font-size: %1px; padding: 0px; }").arg(label_font_size);
 
-        // Base
-        base_label_ = std::make_unique<QLabel>("启用底盘:", this);
-        base_label_->setMinimumWidth(label_min_width);
-        base_label_->setSizePolicy(QSizePolicy::Minimum, QSizePolicy::Preferred);
-        base_label_->setStyleSheet(label_style);
+        auto makeDividerCol = [&](int height) {
+            auto* wrap = new QWidget(this);
+            wrap->setFixedSize(grid_h_spacing, height);
+            auto* wrap_layout = new QHBoxLayout(wrap);
+            wrap_layout->setContentsMargins(0, 0, 0, 0);
+            wrap_layout->addWidget(makeVerticalDivider(this, height), 0, Qt::AlignHCenter);
+            return wrap;
+        };
+
+        auto makeRow = [&](int height) {
+            auto* row = new QWidget(this);
+            row->setFixedSize(wbc_row_width, height);
+            auto* layout = new QHBoxLayout(row);
+            layout->setContentsMargins(0, 0, 0, 0);
+            layout->setSpacing(0);
+            return std::pair<QWidget*, QHBoxLayout*>{row, layout};
+        };
+
+        auto makeStackedSwitchCell = [&](QLabel* label, SwitchButton* sw) {
+            label->setAlignment(Qt::AlignHCenter | Qt::AlignVCenter);
+            label->setSizePolicy(QSizePolicy::Preferred, QSizePolicy::Fixed);
+            label->setFixedHeight(compact_label_height);
+            label->setStyleSheet(label_style);
+
+            auto* layout = new QVBoxLayout();
+            layout->setContentsMargins(0, 0, 0, 0);
+            layout->setSpacing(scaled(2));
+            layout->addWidget(label, 0, Qt::AlignHCenter);
+            layout->addWidget(sw, 0, Qt::AlignHCenter);
+
+            auto* widget = new QWidget(this);
+            widget->setFixedSize(compact_cell_width, compact_stack_height);
+            widget->setLayout(layout);
+            return widget;
+        };
+
+        auto [compact_row, compact_row_layout] = makeRow(compact_stack_height);
+
+        base_label_ = std::make_unique<QLabel>("底盘", this);
         base_switch_ = std::make_unique<SwitchButton>(this);
+        compact_row_layout->addWidget(makeStackedSwitchCell(base_label_.get(), base_switch_.get()));
+        compact_row_layout->addWidget(makeDividerCol(compact_stack_height));
 
-        auto* base_layout = new QHBoxLayout();
-        base_layout->setContentsMargins(0, 0, 0, 0);
-        base_layout->setSpacing(scaled(4));
-        base_layout->addWidget(base_label_.get());
-        base_layout->addWidget(base_switch_.get());
-        base_layout->addStretch();
-
-        auto* base_widget = new QWidget(this);
-        base_widget->setFixedSize(switch_cell_width, switch_cell_height);
-        base_widget->setLayout(base_layout);
-        upper_button_layout_->addWidget(base_widget, 0, 0);
-
-        // Bimanual
-        bimanual_label_ = std::make_unique<QLabel>("双臂耦合:", this);
-        bimanual_label_->setMinimumWidth(label_min_width);
-        bimanual_label_->setSizePolicy(QSizePolicy::Minimum, QSizePolicy::Preferred);
-        bimanual_label_->setStyleSheet(label_style);
-        bimanual_switch_ = std::make_unique<SwitchButton>(this);
-
-        auto* bimanual_layout = new QHBoxLayout();
-        bimanual_layout->setContentsMargins(0, 0, 0, 0);
-        bimanual_layout->setSpacing(scaled(4));
-        bimanual_layout->addWidget(bimanual_label_.get());
-        bimanual_layout->addWidget(bimanual_switch_.get());
-        bimanual_layout->addStretch();
-
-        auto* bimanual_widget = new QWidget(this);
-        bimanual_widget->setFixedSize(switch_cell_width, switch_cell_height);
-        bimanual_widget->setLayout(bimanual_layout);
-        upper_button_layout_->addWidget(bimanual_widget, 0, 1);
-
-        // Left arm
-        left_arm_label_ = std::make_unique<QLabel>("启用左臂:", this);
-        left_arm_label_->setMinimumWidth(label_min_width);
-        left_arm_label_->setSizePolicy(QSizePolicy::Minimum, QSizePolicy::Preferred);
-        left_arm_label_->setStyleSheet(label_style);
+        left_arm_label_ = std::make_unique<QLabel>("左臂", this);
         left_arm_switch_ = std::make_unique<SwitchButton>(this);
+        compact_row_layout->addWidget(makeStackedSwitchCell(left_arm_label_.get(), left_arm_switch_.get()));
+        compact_row_layout->addWidget(makeDividerCol(compact_stack_height));
 
-        auto* left_arm_layout = new QHBoxLayout();
-        left_arm_layout->setContentsMargins(0, 0, 0, 0);
-        left_arm_layout->setSpacing(scaled(4));
-        left_arm_layout->addWidget(left_arm_label_.get());
-        left_arm_layout->addWidget(left_arm_switch_.get());
-        left_arm_layout->addStretch();
-
-        auto* left_arm_widget = new QWidget(this);
-        left_arm_widget->setFixedSize(switch_cell_width, switch_cell_height);
-        left_arm_widget->setLayout(left_arm_layout);
-        upper_button_layout_->addWidget(left_arm_widget, 1, 0);
-
-        // Right arm
-        right_arm_label_ = std::make_unique<QLabel>("启用右臂:", this);
-        right_arm_label_->setMinimumWidth(label_min_width);
-        right_arm_label_->setSizePolicy(QSizePolicy::Minimum, QSizePolicy::Preferred);
-        right_arm_label_->setStyleSheet(label_style);
+        right_arm_label_ = std::make_unique<QLabel>("右臂", this);
         right_arm_switch_ = std::make_unique<SwitchButton>(this);
+        compact_row_layout->addWidget(makeStackedSwitchCell(right_arm_label_.get(), right_arm_switch_.get()));
 
-        auto* right_arm_layout = new QHBoxLayout();
-        right_arm_layout->setContentsMargins(0, 0, 0, 0);
-        right_arm_layout->setSpacing(scaled(4));
-        right_arm_layout->addWidget(right_arm_label_.get());
-        right_arm_layout->addWidget(right_arm_switch_.get());
-        right_arm_layout->addStretch();
+        upper_button_layout_->addWidget(compact_row, 0, 0);
 
-        auto* right_arm_widget = new QWidget(this);
-        right_arm_widget->setFixedSize(switch_cell_width, switch_cell_height);
-        right_arm_widget->setLayout(right_arm_layout);
-        upper_button_layout_->addWidget(right_arm_widget, 1, 1);
+        const int pair_block_height = 2 * switch_cell_height + grid_v_spacing;
+        auto* pair_block = new QWidget(this);
+        pair_block->setFixedSize(wbc_row_width, pair_block_height);
+        auto* pair_grid = new QGridLayout(pair_block);
+        pair_grid->setContentsMargins(0, 0, 0, 0);
+        pair_grid->setHorizontalSpacing(0);
+        pair_grid->setVerticalSpacing(grid_v_spacing);
+        pair_grid->setColumnMinimumWidth(0, pair_label_width);
+        pair_grid->setColumnMinimumWidth(1, inner_spacing);
+        pair_grid->setColumnMinimumWidth(2, switch_width);
+        pair_grid->setColumnMinimumWidth(3, 0);
+        pair_grid->setColumnMinimumWidth(4, grid_h_spacing);
+        pair_grid->setColumnMinimumWidth(5, pair_label_width);
+        pair_grid->setColumnMinimumWidth(6, inner_spacing);
+        pair_grid->setColumnMinimumWidth(7, switch_width);
+        pair_grid->setColumnStretch(3, 1);
+        pair_grid->setColumnStretch(8, 1);
 
-        // Body mode row shares the same grid columns as the switch rows.
-        auto* body_left_widget = new QWidget(this);
-        body_left_widget->setFixedSize(switch_cell_width, switch_cell_height);
-        body_control_layout_ = std::make_unique<QHBoxLayout>(body_left_widget);
-        body_control_layout_->setContentsMargins(0, 0, 0, 0);
-        body_control_layout_->setSpacing(scaled(4));
+        auto setupPairLabel = [&](QLabel* label) {
+            label->setFixedWidth(pair_label_width);
+            label->setSizePolicy(QSizePolicy::Fixed, QSizePolicy::Preferred);
+            label->setStyleSheet(label_style);
+            label->setAlignment(Qt::AlignLeft | Qt::AlignVCenter);
+        };
 
-        body_label_ = std::make_unique<QLabel>("身体模式:", this);
-        body_label_->setFixedWidth(label_min_width);
-        body_label_->setSizePolicy(QSizePolicy::Minimum, QSizePolicy::Preferred);
-        body_label_->setStyleSheet(label_style);
+        bimanual_label_ = std::make_unique<QLabel>("双臂耦合", this);
+        setupPairLabel(bimanual_label_.get());
+        bimanual_switch_ = std::make_unique<SwitchButton>(this);
+        pair_grid->addWidget(bimanual_label_.get(), 0, 0, Qt::AlignVCenter | Qt::AlignLeft);
+        pair_grid->addWidget(bimanual_switch_.get(), 0, 2, Qt::AlignVCenter | Qt::AlignLeft);
 
+        pair_grid->addWidget(makeDividerCol(pair_block_height), 0, 4, 2, 1, Qt::AlignHCenter);
+
+        home_pose_label_ = std::make_unique<QLabel>("参考关节", this);
+        setupPairLabel(home_pose_label_.get());
+        home_pose_switch_ = std::make_unique<SwitchButton>(this);
+        pair_grid->addWidget(home_pose_label_.get(), 0, 5, Qt::AlignVCenter | Qt::AlignLeft);
+        pair_grid->addWidget(home_pose_switch_.get(), 0, 7, Qt::AlignVCenter | Qt::AlignLeft);
+
+        body_label_ = std::make_unique<QLabel>("身体模式", this);
+        setupPairLabel(body_label_.get());
         body_combo_box_ = std::make_unique<QComboBox>(this);
         body_combo_box_->setFixedSize(switch_width, combo_height);
         body_combo_box_->setStyleSheet(QString(R"(
@@ -282,30 +315,15 @@ namespace arms_rviz_control_plugin
             .arg(combo_padding_left)
             .arg(scaled(6))
             .arg(combo_dropdown_width));
-
-        body_control_layout_->addWidget(body_label_.get());
-        body_control_layout_->addWidget(body_combo_box_.get());
-        body_control_layout_->addStretch();
-        upper_button_layout_->addWidget(body_left_widget, 2, 0);
-
-        // Add OCS2 to HOLD button on the right of body mode dropdown
-        auto* body_right_widget = new QWidget(this);
-        body_right_widget->setFixedSize(switch_cell_width, switch_cell_height);
-        auto* body_hold_layout = new QHBoxLayout(body_right_widget);
-        body_hold_layout->setContentsMargins(0, 0, 0, 0);
-        body_hold_layout->setSpacing(scaled(4));
-
-        auto* body_hold_spacer = new QWidget(this);
-        body_hold_spacer->setFixedWidth(label_min_width);
+        pair_grid->addWidget(body_label_.get(), 1, 0, Qt::AlignVCenter | Qt::AlignLeft);
+        pair_grid->addWidget(body_combo_box_.get(), 1, 2, Qt::AlignVCenter | Qt::AlignLeft);
 
         auto* ocs2_to_hold_wbc_btn = new QPushButton("HOLD", this);
         ocs2_to_hold_wbc_btn->setStyleSheet(buttonStyle("#FF9800"));
-        ocs2_to_hold_wbc_btn->setFixedSize(switch_width, hold_button_height);
+        ocs2_to_hold_wbc_btn->setFixedSize(pair_content_width, hold_button_height);
+        pair_grid->addWidget(ocs2_to_hold_wbc_btn, 1, 5, 1, 3, Qt::AlignVCenter | Qt::AlignLeft);
 
-        body_hold_layout->addWidget(body_hold_spacer);
-        body_hold_layout->addWidget(ocs2_to_hold_wbc_btn);
-        body_hold_layout->addStretch();
-        upper_button_layout_->addWidget(body_right_widget, 2, 1);
+        upper_button_layout_->addWidget(pair_block, 1, 0);
 
         wbc_layout_->addLayout(upper_button_layout_.get());
         wbc_container_->setFixedSize(panel_width, wbc_container_->sizeHint().height());
@@ -327,6 +345,7 @@ namespace arms_rviz_control_plugin
         connect(bimanual_switch_.get(), &SwitchButton::clicked, this, &OCS2FSMPanel::onBimanualToggled);
         connect(left_arm_switch_.get(), &SwitchButton::clicked, this, &OCS2FSMPanel::onLeftArmToggled);
         connect(right_arm_switch_.get(), &SwitchButton::clicked, this, &OCS2FSMPanel::onRightArmToggled);
+        connect(home_pose_switch_.get(), &SwitchButton::clicked, this, &OCS2FSMPanel::onHomePoseTrackingToggled);
         connect(body_combo_box_.get(), QOverload<int>::of(&QComboBox::currentIndexChanged), this, &OCS2FSMPanel::onBodyModeChanged);
         connect(ocs2_to_hold_wbc_btn, &QPushButton::clicked, this, &OCS2FSMPanel::onOCS2ToHold);
 
@@ -632,6 +651,7 @@ namespace arms_rviz_control_plugin
         capability_state_.has_custom_joint_lock = msg->has_custom_joint_lock;
         capability_state_.has_bimanual_coupling = msg->has_bimanual_coupling;
         capability_state_.body_tracking_ee_enabled = msg->body_tracking_ee_enabled;
+        capability_state_.has_home_joint_reference = msg->has_home_joint_reference;
 
         QMetaObject::invokeMethod(this, [this]() { refreshWbcUi(); }, Qt::QueuedConnection);
     }
@@ -645,6 +665,7 @@ namespace arms_rviz_control_plugin
         current_wbc_state_.bimanual_state = msg->bimanual_state;
         current_wbc_state_.left_arm_state = msg->left_arm_state;
         current_wbc_state_.right_arm_state = msg->right_arm_state;
+        current_wbc_state_.home_joint_reference_enabled = msg->home_joint_reference_enabled;
 
         QMetaObject::invokeMethod(this, [this]() { refreshWbcUi(); }, Qt::QueuedConnection);
     }
@@ -837,6 +858,10 @@ namespace arms_rviz_control_plugin
             updateSwitchVisualState(right_arm_switch_.get(), true, right_enabled);
         }
 
+        updateSwitchVisualState(home_pose_switch_.get(),
+                                capability_state_.has_home_joint_reference,
+                                current_wbc_state_.home_joint_reference_enabled);
+
         updateBodyComboBox();
     }
 
@@ -891,6 +916,14 @@ namespace arms_rviz_control_plugin
             return;
         }
         publishModeCommand(isRightArmEnabled() ? "RIGHT_ARM_DISABLE" : "RIGHT_ARM_ENABLE");
+    }
+
+    void OCS2FSMPanel::onHomePoseTrackingToggled()
+    {
+        if (!capability_state_.has_home_joint_reference) return;
+        publishModeCommand(current_wbc_state_.home_joint_reference_enabled
+                               ? "HOME_JOINT_OFF"
+                               : "HOME_JOINT_ON");
     }
 
     void OCS2FSMPanel::onBodyModeChanged(int index)
