@@ -240,6 +240,16 @@ namespace arms_ros2_control::command
             int armState);
         bool isArmVrInputSuppressed(WbcToggleTarget arm) const;
         bool prepareArmVrInput(WbcToggleTarget arm);
+        bool isFullBodyYbPauseMode() const noexcept
+        {
+            return full_body_yb_pause_mode_.load();
+        }
+        bool isYbModeConversionPending() const;
+        void resetYbModeLatchAndConversions();
+        void updateYbModeConversionState();
+        void applyPauseAfterRebase(WbcToggleTarget arm);
+        void clearArmPause(WbcToggleTarget arm);
+        bool handleCase16YbModeToggle();
         bool rebaseArmVrControlFromCurrentPose(WbcToggleTarget arm);
         bool setRobotBaseFromCurrentPose(const std::string& armType);
         void clearLastPublishedTarget(const std::string& armType);
@@ -582,6 +592,17 @@ namespace arms_ros2_control::command
         std::atomic<bool> right_wbc_vr_suppressed_{false};
         std::atomic<bool> left_wbc_rebase_pending_{false};
         std::atomic<bool> right_wbc_rebase_pending_{false};
+
+        // FULL_BODY 下 case 16 锁存：false=Y/B 为 WBC 单臂禁用，true=Y/B 为 VR 暂停
+        std::atomic<bool> full_body_yb_pause_mode_{false};
+        std::atomic<bool> left_pause_after_enable_{false};
+        std::atomic<bool> right_pause_after_enable_{false};
+        std::atomic<bool> left_clear_pause_after_disable_{false};
+        std::atomic<bool> right_clear_pause_after_disable_{false};
+        std::chrono::steady_clock::time_point left_yb_conversion_time_{};
+        std::chrono::steady_clock::time_point right_yb_conversion_time_{};
+        static constexpr auto yb_conversion_timeout_ =
+            std::chrono::seconds(2);
 
         std::atomic<bool> has_robot_current_left_pose_{false};
         std::atomic<bool> has_robot_current_right_pose_{false};

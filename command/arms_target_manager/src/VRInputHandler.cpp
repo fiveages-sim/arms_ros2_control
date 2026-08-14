@@ -196,7 +196,7 @@ namespace arms_ros2_control::command
             node_->get_logger(),
             "🕹️ FULL_BODY directions: "
             "left grip + left stick cases 21-24; "
-            "right grip + right stick cases 25-28");
+            "right grip + right stick cases 25-26 (27-28 unused)");
         RCLCPP_INFO(node_->get_logger(), "🕹️🕶️🕹️ Subscribed to button event topic: /xr/controller_state (Int32)");
         RCLCPP_INFO(node_->get_logger(), "🕹️🕶️🕹️ Subscribed to thumbstick axes topic: /xr/thumbstick_axes (ThumbstickAxes)");
         RCLCPP_INFO(node_->get_logger(), "🕹️🕶️🕹️ Subscribed to trigger values topic: /xr/trigger_values (linear.x=left, angular.x=right)");
@@ -810,6 +810,7 @@ namespace arms_ros2_control::command
         right_grip_direction_suppressed_.store(false);
         right_wbc_toggle_request_pending_.store(false);
         requested_wbc_toggle_target_.store(WbcToggleTarget::NONE);
+        resetYbModeLatchAndConversions();
         RCLCPP_INFO(node_->get_logger(), "🕹️🕶️🕹️ VR control DISABLED!");
 
         // 禁用 VR 控制时，若处于底盘模式则退出并清零底盘/腰部命令，防止残留运动
@@ -1661,6 +1662,7 @@ namespace arms_ros2_control::command
             }
         }
 
+        updateYbModeConversionState();
         if (updateRightWbcToggleRequestState())
         {
             right_thumbstick_axes_.setZero();
@@ -2228,6 +2230,18 @@ namespace arms_ros2_control::command
         {
             suppressed->store(true);
             rebasePending->store(false);
+            std::atomic<bool>* clearPause = arm == WbcToggleTarget::LEFT_ARM
+                ? &left_clear_pause_after_disable_
+                : &right_clear_pause_after_disable_;
+            if (clearPause->load())
+            {
+                clearArmPause(arm);
+                clearPause->store(false);
+                RCLCPP_INFO(
+                    node_->get_logger(),
+                    "🕹️ %s VR pause cleared after WBC disable (case 16)",
+                    armName);
+            }
             return;
         }
 
@@ -2432,6 +2446,19 @@ namespace arms_ros2_control::command
             return false;
         }
 
+        std::atomic<bool>* pauseAfterEnable = arm == WbcToggleTarget::LEFT_ARM
+            ? &left_pause_after_enable_
+            : &right_pause_after_enable_;
+        if (pauseAfterEnable->load())
+        {
+            applyPauseAfterRebase(arm);
+            pauseAfterEnable->store(false);
+            RCLCPP_INFO(
+                node_->get_logger(),
+                "🕹️ %s VR paused after WBC enable rebase (case 16)",
+                arm == WbcToggleTarget::LEFT_ARM ? "left" : "right");
+        }
+
         pending->store(false);
         suppressed->store(false);
         RCLCPP_INFO(
@@ -2451,6 +2478,185 @@ namespace arms_ros2_control::command
         std_msgs::msg::String msg;
         msg.data = command;
         pub_mode_command_->publish(msg);
+    }
+
+    bool VRInputHandler::isYbModeConversionPending() const
+    {
+        return left_pause_after_enable_.load() ||
+               right_pause_after_enable_.load() ||
+               left_clear_pause_after_disable_.load() ||
+               right_clear_pause_after_disable_.load();
+    }
+
+    void VRInputHandler::resetYbModeLatchAndConversions()
+    {
+        full_body_yb_pause_mode_.store(false);
+        left_pause_after_enable_.store(false);
+        right_pause_after_enable_.store(false);
+        left_clear_pause_after_disable_.store(false);
+        right_clear_pause_after_disable_.store(false);
+    }
+
+    void VRInputHandler::updateYbModeConversionState()
+    {
+        const auto now = std::chrono::steady_clock::now();
+        auto expire = [this, now](
+            std::atomic<bool>& flag,
+            std::chrono::steady_clock::time_point& started,
+            const char* what) {
+            if (!flag.load())
+            {
+                return;
+            }
+            if (now - started < yb_conversion_timeout_)
+            {
+                return;
+            }
+            flag.store(false);
+            RCLCPP_WARN(
+                node_->get_logger(),
+                "🔘 case 16 %s 未在 2 秒内由 WBC 确认，已丢弃转换标志（锁存保持）",
+                what);
+        };
+        expire(left_pause_after_enable_, left_yb_conversion_time_,
+               "left pause_after_enable");
+        expire(right_pause_after_enable_, right_yb_conversion_time_,
+               "right pause_after_enable");
+        expire(left_clear_pause_after_disable_, left_yb_conversion_time_,
+               "left clear_pause_after_disable");
+        expire(right_clear_pause_after_disable_, right_yb_conversion_time_,
+               "right clear_pause_after_disable");
+    }
+
+    void VRInputHandler::applyPauseAfterRebase(WbcToggleTarget arm)
+    {
+        const bool isLeftArm = arm == WbcToggleTarget::LEFT_ARM;
+        const bool isRightArm = arm == WbcToggleTarget::RIGHT_ARM;
+        if (!isLeftArm && !isRightArm)
+        {
+            return;
+        }
+        const bool useLeftVr = mirror_mode_.load() ? isRightArm : isLeftArm;
+        if (useLeftVr)
+        {
+            paused_left_position_ = left_position_;
+            paused_left_orientation_ = left_orientation_;
+        }
+        else
+        {
+            paused_right_position_ = right_position_;
+            paused_right_orientation_ = right_orientation_;
+        }
+        if (isLeftArm)
+        {
+            left_arm_paused_.store(true);
+        }
+        else
+        {
+            right_arm_paused_.store(true);
+        }
+    }
+
+    void VRInputHandler::clearArmPause(WbcToggleTarget arm)
+    {
+        const bool isLeftArm = arm == WbcToggleTarget::LEFT_ARM;
+        const bool isRightArm = arm == WbcToggleTarget::RIGHT_ARM;
+        if (!isLeftArm && !isRightArm)
+        {
+            return;
+        }
+        const bool useLeftVr = mirror_mode_.load() ? isRightArm : isLeftArm;
+        if (isLeftArm)
+        {
+            left_arm_paused_.store(false);
+        }
+        else
+        {
+            right_arm_paused_.store(false);
+        }
+        if (useLeftVr)
+        {
+            paused_left_position_ = Eigen::Vector3d::Zero();
+            paused_left_orientation_ = Eigen::Quaterniond::Identity();
+        }
+        else
+        {
+            paused_right_position_ = Eigen::Vector3d::Zero();
+            paused_right_orientation_ = Eigen::Quaterniond::Identity();
+        }
+    }
+
+    bool VRInputHandler::handleCase16YbModeToggle()
+    {
+        if (!enabled_.load() || !isFullBodyMode() ||
+            current_fsm_state_.load() != 3)
+        {
+            RCLCPP_WARN(node_->get_logger(),
+                        "🔘 [case 16] 忽略：要求 VR enabled、FULL_BODY、OCS2");
+            return false;
+        }
+        if (right_wbc_toggle_request_pending_.load() ||
+            isYbModeConversionPending())
+        {
+            RCLCPP_WARN(node_->get_logger(),
+                        "🔘 [case 16] 忽略：WBC 开关或 16 转换仍在 pending");
+            return false;
+        }
+
+        using WbcState = arms_ros2_control_msgs::msg::WbcCurrentState;
+        const bool turningToDisable = full_body_yb_pause_mode_.load();
+        const bool coupled = target_manager_ &&
+            target_manager_->getCurrentBimanualState() ==
+                WbcState::BIMANUAL_COUPLED;
+        if (turningToDisable && coupled)
+        {
+            RCLCPP_WARN(node_->get_logger(),
+                        "🔘 [case 16] 忽略：双臂耦合时禁止把暂停语义切回禁用");
+            return false;
+        }
+
+        const bool nowPause = !full_body_yb_pause_mode_.load();
+        full_body_yb_pause_mode_.store(nowPause);
+        RCLCPP_INFO(node_->get_logger(),
+                    "🔘 [case 16] Y/B 语义切换为 %s",
+                    nowPause ? "VR暂停" : "WBC单臂禁用");
+
+        const auto now = std::chrono::steady_clock::now();
+        if (nowPause)
+        {
+            if (target_manager_ &&
+                target_manager_->getCurrentLeftArmState() ==
+                    WbcState::ARM_DISABLED)
+            {
+                left_pause_after_enable_.store(true);
+                left_yb_conversion_time_ = now;
+                publishHumanoidModeCommand("LEFT_ARM_ENABLE");
+            }
+            if (target_manager_ &&
+                target_manager_->getCurrentRightArmState() ==
+                    WbcState::ARM_DISABLED)
+            {
+                right_pause_after_enable_.store(true);
+                right_yb_conversion_time_ = now;
+                publishHumanoidModeCommand("RIGHT_ARM_ENABLE");
+            }
+        }
+        else
+        {
+            if (left_arm_paused_.load())
+            {
+                left_clear_pause_after_disable_.store(true);
+                left_yb_conversion_time_ = now;
+                publishHumanoidModeCommand("LEFT_ARM_DISABLE");
+            }
+            if (right_arm_paused_.load())
+            {
+                right_clear_pause_after_disable_.store(true);
+                right_yb_conversion_time_ = now;
+                publishHumanoidModeCommand("RIGHT_ARM_DISABLE");
+            }
+        }
+        return true;
     }
 
     bool VRInputHandler::isBodyTrackingActive() const
@@ -2693,7 +2899,20 @@ namespace arms_ros2_control::command
             case 3:  // 左Y按钮
             {
                 const auto topology = controlTopology();
-                if (topology == ControlTopology::FULL_BODY)
+                if (topology == ControlTopology::UNKNOWN)
+                {
+                    RCLCPP_WARN(node_->get_logger(),
+                                "🔘 [case 3] 忽略左Y按钮：控制拓扑尚未确认");
+                    break;
+                }
+                if (isYbModeConversionPending())
+                {
+                    RCLCPP_WARN(node_->get_logger(),
+                                "🔘 [case 3] 忽略左Y：case 16 转换仍在 pending");
+                    break;
+                }
+                if (topology == ControlTopology::FULL_BODY &&
+                    !isFullBodyYbPauseMode())
                 {
                     const auto target = mirror_mode_.load()
                         ? WbcToggleTarget::RIGHT_ARM
@@ -2701,13 +2920,7 @@ namespace arms_ros2_control::command
                     requestWbcToggle(3, "左Y按钮", target);
                     break;
                 }
-                if (topology == ControlTopology::UNKNOWN)
-                {
-                    RCLCPP_WARN(
-                        node_->get_logger(),
-                        "🔘 [case 3] 忽略左Y按钮：控制拓扑尚未确认");
-                    break;
-                }
+                // SPLIT_BODY，或 FULL_BODY 暂停语义：沿用下方现有暂停/恢复
 
                 // 只在UPDATE模式下启用（右手摇杆按钮按下后进入UPDATE模式）
                 if (!is_update_mode_.load())
@@ -2846,22 +3059,38 @@ namespace arms_ros2_control::command
                     left_thumbstick_yaw_offset_ = 0.0;
                     right_thumbstick_yaw_offset_ = 0.0;
 
-                    // 重置暂停状态，确保切换到 UPDATE 模式时恢复更新
-                    bool left_was_paused = left_arm_paused_.load();
-                    bool right_was_paused = right_arm_paused_.load();
-                    if (left_was_paused)
+                    if (!full_body_yb_pause_mode_.load())
                     {
-                        left_arm_paused_.store(false);
-                        // 清除暂停时刻的VR位姿记录
-                        paused_left_position_ = Eigen::Vector3d::Zero();
-                        paused_left_orientation_ = Eigen::Quaterniond::Identity();
+                        // 重置暂停状态，确保切换到 UPDATE 模式时恢复更新
+                        bool left_was_paused = left_arm_paused_.load();
+                        bool right_was_paused = right_arm_paused_.load();
+                        if (left_was_paused)
+                        {
+                            left_arm_paused_.store(false);
+                            // 清除暂停时刻的VR位姿记录
+                            paused_left_position_ = Eigen::Vector3d::Zero();
+                            paused_left_orientation_ = Eigen::Quaterniond::Identity();
+                        }
+                        if (right_was_paused)
+                        {
+                            right_arm_paused_.store(false);
+                            // 清除暂停时刻的VR位姿记录
+                            paused_right_position_ = Eigen::Vector3d::Zero();
+                            paused_right_orientation_ = Eigen::Quaterniond::Identity();
+                        }
                     }
-                    if (right_was_paused)
+                    else
                     {
-                        right_arm_paused_.store(false);
-                        // 清除暂停时刻的VR位姿记录
-                        paused_right_position_ = Eigen::Vector3d::Zero();
-                        paused_right_orientation_ = Eigen::Quaterniond::Identity();
+                        // 暂停语义下保留暂停。vr_base 已写成当前手柄，
+                        // 必须把仍暂停臂的冻结位姿对齐，否则差分非零会跳变。
+                        if (left_arm_paused_.load())
+                        {
+                            applyPauseAfterRebase(WbcToggleTarget::LEFT_ARM);
+                        }
+                        if (right_arm_paused_.load())
+                        {
+                            applyPauseAfterRebase(WbcToggleTarget::RIGHT_ARM);
+                        }
                     }
 
                     is_update_mode_.store(true);
@@ -2924,7 +3153,20 @@ namespace arms_ros2_control::command
             case 6:  // 右B按钮
             {
                 const auto topology = controlTopology();
-                if (topology == ControlTopology::FULL_BODY)
+                if (topology == ControlTopology::UNKNOWN)
+                {
+                    RCLCPP_WARN(node_->get_logger(),
+                                "🔘 [case 6] 忽略右B按钮：控制拓扑尚未确认");
+                    break;
+                }
+                if (isYbModeConversionPending())
+                {
+                    RCLCPP_WARN(node_->get_logger(),
+                                "🔘 [case 6] 忽略右B：case 16 转换仍在 pending");
+                    break;
+                }
+                if (topology == ControlTopology::FULL_BODY &&
+                    !isFullBodyYbPauseMode())
                 {
                     const auto target = mirror_mode_.load()
                         ? WbcToggleTarget::LEFT_ARM
@@ -2932,13 +3174,7 @@ namespace arms_ros2_control::command
                     requestWbcToggle(6, "右B按钮", target);
                     break;
                 }
-                if (topology == ControlTopology::UNKNOWN)
-                {
-                    RCLCPP_WARN(
-                        node_->get_logger(),
-                        "🔘 [case 6] 忽略右B按钮：控制拓扑尚未确认");
-                    break;
-                }
+                // SPLIT_BODY，或 FULL_BODY 暂停语义：沿用下方现有暂停/恢复
 
                 // 只在UPDATE模式下启用（右手摇杆按钮按下后进入UPDATE模式）
                 if (!is_update_mode_.load())
@@ -3173,6 +3409,9 @@ namespace arms_ros2_control::command
                 runScaleCalibration(true);
                 break;
             }
+            case 16: // 左右握把+左Y+右B：切换 FULL_BODY 下 Y/B 禁用↔暂停
+                handleCase16YbModeToggle();
+                break;
             case 20: // 左摇杆 + 右摇杆同时按下（切换底盘/末端控制模式）
             {
                 // 仅在 VR 控制已启用时才允许切换
@@ -3213,13 +3452,9 @@ namespace arms_ros2_control::command
                 requestWbcToggle(
                     26, "右握把+右摇杆向下", WbcToggleTarget::BASE);
                 break;
-            case 27: // 右握把 + 右摇杆向左：启用左臂
-                requestWbcToggle(
-                    27, "右握把+右摇杆向左", WbcToggleTarget::LEFT_ARM);
+            case 27: // 右握把 + 右摇杆向左：预留，暂不处理
                 break;
-            case 28: // 右握把 + 右摇杆向右：启用右臂
-                requestWbcToggle(
-                    28, "右握把+右摇杆向右", WbcToggleTarget::RIGHT_ARM);
+            case 28: // 右握把 + 右摇杆向右：预留，暂不处理
                 break;
             case 0:  // 无事件
             default:
@@ -3274,6 +3509,10 @@ namespace arms_ros2_control::command
                     if (previous != next)
                     {
                         clearLastPublishedTargets();
+                        if (next != ControlTopology::FULL_BODY)
+                        {
+                            resetYbModeLatchAndConversions();
+                        }
                         const char* name =
                             next == ControlTopology::FULL_BODY ? "FULL_BODY" :
                             next == ControlTopology::SPLIT_BODY ? "SPLIT_BODY" :
