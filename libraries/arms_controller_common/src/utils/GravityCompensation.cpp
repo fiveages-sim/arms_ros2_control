@@ -38,50 +38,69 @@ namespace arms_controller_common
                    model_.nq);
     }
 
+    Eigen::VectorXd GravityCompensation::computeStaticTorques(
+        const Eigen::VectorXd& joint_positions) const
+    {
+        const auto nq = static_cast<Eigen::Index>(model_.nq);
+        const auto n_ctrl = joint_positions.size();
+
+        if (n_ctrl <= 0 || nq <= 0)
+        {
+            return Eigen::VectorXd::Zero(std::max<Eigen::Index>(n_ctrl, 0));
+        }
+
+        // Exact match: fixed-base / URDF-only models.
+        if (n_ctrl == nq)
+        {
+            return pinocchio::rnea(
+                model_, data_, joint_positions,
+                Eigen::VectorXd::Zero(model_.nv),
+                Eigen::VectorXd::Zero(model_.nv));
+        }
+
+        // OCS2 WheelBasedMobileManipulator (and similar): virtual base DOFs are a
+        // prefix of Pinocchio q; HW / controller joints are the suffix (armDim).
+        // Pad base q with zeros (identity pose at origin) and return arm τ only.
+        if (n_ctrl < nq)
+        {
+            if (!logged_base_pad_)
+            {
+                logged_base_pad_ = true;
+                RCLCPP_INFO(rclcpp::get_logger("GravityCompensation"),
+                            "Controlled joints (%ld) < Pinocchio nq (%ld): treating first %ld DOF as "
+                            "virtual base (pad q=0), returning gravity τ for the last %ld joints",
+                            static_cast<long>(n_ctrl), static_cast<long>(nq),
+                            static_cast<long>(nq - n_ctrl), static_cast<long>(n_ctrl));
+            }
+
+            Eigen::VectorXd q = Eigen::VectorXd::Zero(nq);
+            q.tail(n_ctrl) = joint_positions;
+
+            const Eigen::VectorXd tau = pinocchio::rnea(
+                model_, data_, q,
+                Eigen::VectorXd::Zero(model_.nv),
+                Eigen::VectorXd::Zero(model_.nv));
+            return tau.tail(n_ctrl);
+        }
+
+        RCLCPP_WARN(rclcpp::get_logger("GravityCompensation"),
+                    "Joint positions size (%ld) is larger than model nq (%ld); returning zeros",
+                    static_cast<long>(n_ctrl), static_cast<long>(nq));
+        return Eigen::VectorXd::Zero(n_ctrl);
+    }
+
     std::vector<double> GravityCompensation::calculateStaticTorques(
         const std::vector<double>& joint_positions) const
     {
-        if (joint_positions.size() != static_cast<size_t>(model_.nq))
-        {
-            RCLCPP_WARN(rclcpp::get_logger("GravityCompensation"),
-                       "Joint positions size (%zu) doesn't match model size (%zu)",
-                       joint_positions.size(), static_cast<size_t>(model_.nq));
-            return std::vector<double>(model_.nq, 0.0);
-        }
-
-        // Convert to Eigen vector
-        Eigen::VectorXd q = Eigen::Map<const Eigen::VectorXd>(
-            joint_positions.data(), joint_positions.size());
-
-        // Calculate static torques using RNEA with zero velocity and acceleration
-        Eigen::VectorXd tau = pinocchio::rnea(
-            model_, data_, q,
-            Eigen::VectorXd::Zero(model_.nv),  // Zero velocity
-            Eigen::VectorXd::Zero(model_.nv)  // Zero acceleration
-        );
-
-        // Convert back to std::vector
-        std::vector<double> result(tau.data(), tau.data() + tau.size());
-        return result;
+        const Eigen::VectorXd q = Eigen::Map<const Eigen::VectorXd>(
+            joint_positions.data(), static_cast<Eigen::Index>(joint_positions.size()));
+        const Eigen::VectorXd tau = computeStaticTorques(q);
+        return std::vector<double>(tau.data(), tau.data() + tau.size());
     }
 
     Eigen::VectorXd GravityCompensation::calculateStaticTorquesEigen(
         const Eigen::VectorXd& joint_positions) const
     {
-        if (joint_positions.size() != model_.nq)
-        {
-            RCLCPP_WARN(rclcpp::get_logger("GravityCompensation"),
-                       "Joint positions size (%zu) doesn't match model size (%zu)",
-                       joint_positions.size(), static_cast<size_t>(model_.nq));
-            return Eigen::VectorXd::Zero(model_.nq);
-        }
-
-        // Calculate static torques using RNEA with zero velocity and acceleration
-        return pinocchio::rnea(
-            model_, data_, joint_positions,
-            Eigen::VectorXd::Zero(model_.nv),  // Zero velocity
-            Eigen::VectorXd::Zero(model_.nv)  // Zero acceleration
-        );
+        return computeStaticTorques(joint_positions);
     }
 } // namespace arms_controller_common
-
