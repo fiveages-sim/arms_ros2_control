@@ -11,6 +11,7 @@
 #include <QGroupBox>
 #include <QGridLayout>
 #include <QComboBox>
+#include <QFrame>
 #include <QMetaObject>
 
 #include <rviz_common/panel.hpp>
@@ -57,6 +58,7 @@ private Q_SLOTS:
   void onLeftArmToggled();
   void onRightArmToggled();
   void onBodyModeChanged(int index);
+  void onHomePoseTrackingToggled();
 
 private:
   // FSM related methods
@@ -111,6 +113,7 @@ private:
     bool has_custom_joint_lock = false;
     bool has_bimanual_coupling = false;
     bool body_tracking_ee_enabled = false;
+    bool has_home_joint_reference = false;
   };
 
   struct CurrentWbcState
@@ -120,6 +123,7 @@ private:
     uint8_t bimanual_state = 0;
     uint8_t left_arm_state = 0;
     uint8_t right_arm_state = 0;
+    bool home_joint_reference_enabled = false;
   };
 
   // ROS2
@@ -153,11 +157,13 @@ private:
   std::unique_ptr<QLabel> bimanual_label_;
   std::unique_ptr<QLabel> left_arm_label_;
   std::unique_ptr<QLabel> right_arm_label_;
+  std::unique_ptr<QLabel> home_pose_label_;
 
   std::unique_ptr<SwitchButton> base_switch_;
   std::unique_ptr<SwitchButton> bimanual_switch_;
   std::unique_ptr<SwitchButton> left_arm_switch_;
   std::unique_ptr<SwitchButton> right_arm_switch_;
+  std::unique_ptr<SwitchButton> home_pose_switch_;
 
   std::unique_ptr<QLabel> body_label_;
   std::unique_ptr<QComboBox> body_combo_box_;
