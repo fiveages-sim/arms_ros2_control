@@ -38,6 +38,7 @@ from robot_common_launch import (
     planning_robot_for_arm_family,
     write_spawner_controller_param_file,
 )
+from robot_common_launch.common.launch_arg_utils import robot_xacro_declares_arg
 
 
 @dataclass
@@ -83,10 +84,11 @@ def build_ocs2_control_context(context) -> Ocs2ControlContext:
         print(f"[INFO] Using robot xacro default arms '{robot_arms}'")
     robot_variant = resolve_robot_variant(configs, profile, robot_name=robot_name)
 
-    # Keep the arm controller's task/config package aligned with the dual-arm kit.
+    # Keep the arm controller's task/config package aligned with the dual-arm kit,
+    # unless this humanoid generates its own dual-arm tree (topology:=dual).
     arm_family = robot_arms or robot_variant
     variant_arm_robot = planning_robot_for_arm_family(arm_family)
-    if variant_arm_robot:
+    if variant_arm_robot and not robot_xacro_declares_arg(robot_name, "topology"):
         control_patch = copy.deepcopy(control_patch)
         arm_params = control_patch.setdefault(
             "ocs2_arm_controller", {}
@@ -148,10 +150,11 @@ def resolve_planning_robot_name_from_config(
     except KeyError:
         pass
 
-    # Arms-only planning uses a standalone kit description package.  The
-    # humanoid ``arms`` slot (or standalone manipulator ``variant``) selects it.
-    # Do not retarget full-body WBC, whose yaml ``robot_name`` is the humanoid.
-    if controller_key == "ocs2_arm_controller":
+    # Arms-only planning uses a standalone kit description unless the launch
+    # robot xacro declares topology:=dual (WCE3 / W1 / cobot_magic).
+    if controller_key == "ocs2_arm_controller" and not robot_xacro_declares_arg(
+        robot_name, "topology"
+    ):
         family_key = str(robot_arms or robot_variant or "").strip()
         variant_robot_name = planning_robot_for_arm_family(family_key)
         if variant_robot_name and variant_robot_name != planning_robot_name:
