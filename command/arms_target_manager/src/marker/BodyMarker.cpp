@@ -202,7 +202,11 @@ geometry_msgs::msg::Pose BodyMarker::transformPose(
         geometry_msgs::msg::PoseStamped result_stamped;
         tf2::doTransform(pose_stamped, result_stamped, transform);
         return result_stamped.pose;
-    } catch (const tf2::TransformException&) {
+    } catch (const tf2::TransformException& ex) {
+        RCLCPP_WARN_THROTTLE(
+            node_->get_logger(), *node_->get_clock(), 2000,
+            "Failed to transform pose from '%s' to '%s': %s (using untransformed pose)",
+            source_frame_id.c_str(), target_frame_id.c_str(), ex.what());
         return pose;
     }
 }

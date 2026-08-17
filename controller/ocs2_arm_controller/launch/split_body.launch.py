@@ -7,6 +7,7 @@ from launch_ros.actions import Node
 
 from robot_common_launch import (
     create_launch_mode_arguments,
+    create_platform_launch_arguments,
     create_robot_profile_launch_arguments,
     extract_info_file_name_from_config,
     get_robot_package_path,
@@ -23,7 +24,11 @@ def launch_setup(context, *args, **kwargs):
     ctx = ocs2_common.build_ocs2_control_context(context)
 
     planning_robot_name = ocs2_common.resolve_planning_robot_name_from_config(
-        ctx.config, "ocs2_arm_controller", ctx.robot_name, ctx.robot_variant
+        ctx.config,
+        "ocs2_arm_controller",
+        ctx.robot_name,
+        ctx.robot_variant,
+        ctx.robot_arms,
     )
 
     planning_urdf_params = ocs2_common.validate_planning_urdf(
@@ -101,9 +106,20 @@ def launch_setup(context, *args, **kwargs):
             parameters=arms_params + [{"use_sim_time": ctx.use_sim_time}],
         )
 
+    rviz_config_path = ocs2_common.resolve_rviz_config(ctx.robot_name, "splitbody.rviz")
+    marker_fixed_frame = ocs2_common.resolve_marker_fixed_frame(
+        task_file_path, config_file_path
+    )
+    if marker_fixed_frame:
+        rviz_config_path = ocs2_common.patch_rviz_fixed_frame(
+            rviz_config_path,
+            marker_fixed_frame,
+            tag=f"split_body_{ctx.robot_name}",
+        )
+
     rviz_node = ocs2_common.build_rviz_node(
         ctx,
-        ocs2_common.resolve_rviz_config(ctx.robot_name, "splitbody.rviz"),
+        rviz_config_path,
         hand_names,
         joint_controller_names,
         extra_rviz_parameters=[{"wbc_available": False}],
@@ -136,6 +152,7 @@ def generate_launch_description():
             ),
             *create_launch_mode_arguments(),
         ]
+        + create_platform_launch_arguments()
         + create_robot_profile_launch_arguments()
         + [OpaqueFunction(function=launch_setup)]
     )

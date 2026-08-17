@@ -9,6 +9,7 @@
 #include <Eigen/Geometry>
 #include <tf2_geometry_msgs/tf2_geometry_msgs.hpp>
 #include <tf2/exceptions.hpp>
+#include <std_msgs/msg/header.hpp>
 #include <cmath>
 #include <algorithm>
 #include <utility>
@@ -118,7 +119,7 @@ namespace arms_ros2_control::command
         right_arm_marker_->setPose(new_right_pose);
         if (server_ && isStateDisabled(current_controller_state_))
         {
-            server_->setPose(right_arm_marker_->getMarkerName(), new_right_pose);
+            setServerPose(right_arm_marker_->getMarkerName(), new_right_pose);
             markPendingChanges();
         }
     }
@@ -138,7 +139,7 @@ namespace arms_ros2_control::command
         left_arm_marker_->setPose(new_left_pose);
         if (server_ && isStateDisabled(current_controller_state_))
         {
-            server_->setPose(left_arm_marker_->getMarkerName(), new_left_pose);
+            setServerPose(left_arm_marker_->getMarkerName(), new_left_pose);
             markPendingChanges();
         }
     }
@@ -296,7 +297,7 @@ namespace arms_ros2_control::command
                     return;
                 }
 
-                server_->setPose(marker_name, pose);
+                setServerPose(marker_name, pose);
                 markPendingChanges();
             });
 
@@ -331,7 +332,7 @@ namespace arms_ros2_control::command
                         return;
                     }
 
-                    server_->setPose(marker_name, pose);
+                    setServerPose(marker_name, pose);
                     markPendingChanges();
                 });
 
@@ -370,7 +371,7 @@ namespace arms_ros2_control::command
                     return;
                 }
 
-                server_->setPose(marker_name, pose);
+                setServerPose(marker_name, pose);
                 markPendingChanges();
             });
 
@@ -594,7 +595,7 @@ namespace arms_ros2_control::command
 
                 if (was_clamped && server_ && isStateDisabled(current_controller_state_))
                 {
-                    server_->setPose(marker_name, clamped_pose);
+                    setServerPose(marker_name, clamped_pose);
                     markPendingChanges();
                 }
 
@@ -1114,7 +1115,7 @@ namespace arms_ros2_control::command
         {
             if (left_arm_marker_->refreshFromLatestCurrentPose())
             {
-                server_->setPose(left_arm_marker_->getMarkerName(), left_arm_marker_->getPose());
+                setServerPose(left_arm_marker_->getMarkerName(), left_arm_marker_->getPose());
                 refreshed_any = true;
             }
         }
@@ -1123,7 +1124,7 @@ namespace arms_ros2_control::command
         {
             if (right_arm_marker_->refreshFromLatestCurrentPose())
             {
-                server_->setPose(right_arm_marker_->getMarkerName(), right_arm_marker_->getPose());
+                setServerPose(right_arm_marker_->getMarkerName(), right_arm_marker_->getPose());
                 refreshed_any = true;
             }
         }
@@ -1147,7 +1148,7 @@ namespace arms_ros2_control::command
         {
             if (left_arm_marker_->refreshFromLatestCurrentTarget())
             {
-                server_->setPose(left_arm_marker_->getMarkerName(), left_arm_marker_->getPose());
+                setServerPose(left_arm_marker_->getMarkerName(), left_arm_marker_->getPose());
                 refreshed_any = true;
             }
         }
@@ -1156,7 +1157,7 @@ namespace arms_ros2_control::command
         {
             if (right_arm_marker_->refreshFromLatestCurrentTarget())
             {
-                server_->setPose(right_arm_marker_->getMarkerName(), right_arm_marker_->getPose());
+                setServerPose(right_arm_marker_->getMarkerName(), right_arm_marker_->getPose());
                 refreshed_any = true;
             }
         }
@@ -1230,7 +1231,7 @@ namespace arms_ros2_control::command
         geometry_msgs::msg::Pose updated_pose = head_marker_->updateFromJointState(
             joint_msg, isStateDisabled(current_controller_state_));
 
-        server_->setPose("head_target", updated_pose);
+        setServerPose("head_target", updated_pose);
         markPendingChanges();
     }
 
@@ -1309,8 +1310,28 @@ namespace arms_ros2_control::command
         }
         catch (const tf2::TransformException& ex)
         {
+            RCLCPP_WARN_THROTTLE(
+                node_->get_logger(), *node_->get_clock(), 2000,
+                "Failed to transform pose from '%s' to '%s': %s (using untransformed pose)",
+                sourceFrameId.c_str(), targetFrameId.c_str(), ex.what());
             return pose;
         }
+    }
+
+    void ArmsTargetManager::setServerPose(
+        const std::string& name,
+        const geometry_msgs::msg::Pose& pose)
+    {
+        if (!server_)
+        {
+            return;
+        }
+
+        std_msgs::msg::Header header;
+        header.frame_id = marker_fixed_frame_;
+        header.stamp.sec = 0;
+        header.stamp.nanosec = 0;
+        server_->setPose(name, pose, header);
     }
 
     void ArmsTargetManager::setMarkerPose(
@@ -1358,7 +1379,7 @@ namespace arms_ros2_control::command
 
         if (server_ && isStateDisabled(current_controller_state_))
         {
-            server_->setPose(arm_marker->getMarkerName(), new_pose);
+            setServerPose(arm_marker->getMarkerName(), new_pose);
             markPendingChanges();
         }
 
@@ -1456,7 +1477,7 @@ namespace arms_ros2_control::command
 
         if (server_)
         {
-            server_->setPose(arm_marker->getMarkerName(), current_pose);
+            setServerPose(arm_marker->getMarkerName(), current_pose);
             markPendingChanges();
         }
 
@@ -1518,7 +1539,7 @@ namespace arms_ros2_control::command
 
         if (server_)
         {
-            server_->setPose(body_marker_->getMarkerName(), current_pose);
+            setServerPose(body_marker_->getMarkerName(), current_pose);
             markPendingChanges();
         }
 

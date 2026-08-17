@@ -4,6 +4,7 @@
 //
 
 #include "arms_target_manager/MarkerFactory.h"
+#include <builtin_interfaces/msg/time.hpp>
 #include <rclcpp/rclcpp.hpp>
 #include <algorithm>
 #include <cmath>
@@ -31,7 +32,10 @@ namespace arms_ros2_control::command
     {
         visualization_msgs::msg::InteractiveMarker interactiveMarker;
         interactiveMarker.header.frame_id = frame_id_;
-        interactiveMarker.header.stamp = node_->now();
+        // stamp=0: retransform into header.frame_id every frame. A non-zero stamp
+        // freezes the pose into RViz's Fixed Frame, so dragging one marker with
+        // MOVE_ROTATE_3D jumps the other by T(marker_frame → Fixed Frame).
+        interactiveMarker.header.stamp = builtin_interfaces::msg::Time();
         interactiveMarker.name = name;
         interactiveMarker.scale = enable_interaction ? 0.2 : 0.001;
         interactiveMarker.description = description;
@@ -90,7 +94,7 @@ namespace arms_ros2_control::command
     {
         visualization_msgs::msg::InteractiveMarker interactiveMarker;
         interactiveMarker.header.frame_id = frame_id_;
-        interactiveMarker.header.stamp = node_->now();
+        interactiveMarker.header.stamp = builtin_interfaces::msg::Time();
         interactiveMarker.name = name;
         interactiveMarker.scale = enable_interaction ? 0.25 : 0.001;
         interactiveMarker.description = "Head Target";
