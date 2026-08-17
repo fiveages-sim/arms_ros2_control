@@ -170,6 +170,8 @@ namespace arms_ros2_control::command
             const std::string& sourceFrameId,
             const std::string& targetFrameId) const;
 
+        void setServerPose(const std::string& name, const geometry_msgs::msg::Pose& pose);
+
         rclcpp::Node::SharedPtr node_;
         std::shared_ptr<interactive_markers::InteractiveMarkerServer> server_;
 

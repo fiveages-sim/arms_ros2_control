@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import os
 import copy
+import re
+import tempfile
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional, Tuple
 
@@ -26,11 +28,14 @@ from robot_common_launch import (
     load_robot_config,
     load_robot_profile,
     parse_launch_mode,
+    parse_task_info,
     prepare_ros2_controllers_override_path,
     resolve_control_patch,
     resolve_control_sides,
     resolve_profile_path,
+    resolve_robot_arms,
     resolve_robot_variant,
+    planning_robot_for_arm_family,
     write_spawner_controller_param_file,
 )
 
@@ -47,6 +52,7 @@ class Ocs2ControlContext:
     control_right: str
     control_patch: dict
     robot_variant: str
+    robot_arms: str
     config: dict
     meta: RobotConfigMeta
     launch_mode: str
@@ -66,20 +72,22 @@ def build_ocs2_control_context(context) -> Ocs2ControlContext:
 
     launch_mode, rviz_only, use_rviz = parse_launch_mode(context)
 
+    configs = dict(configs)
     profile_path = resolve_profile_path(configs)
     profile = load_robot_profile(profile_path) if profile_path else {}
     control_left, control_right = resolve_control_sides(configs, profile)
     control_patch = resolve_control_patch(profile)
-    robot_variant = resolve_robot_variant(configs, profile)
+    robot_arms = resolve_robot_arms(configs, profile, robot_name=robot_name)
+    if robot_arms and not str(configs.get("arms") or "").strip():
+        configs["arms"] = robot_arms
+        print(f"[INFO] Using robot xacro default arms '{robot_arms}'")
+    robot_variant = resolve_robot_variant(configs, profile, robot_name=robot_name)
 
-    # Keep the arm controller's task/config package aligned with the unified
-    # mechanical variant.  Full-body common.yaml historically names ar5_ccs;
-    # without this override an SRS planning URDF would still load CCS task.info.
-    variant_arm_robot = {
-        "base_ar5_ccs": "ar5_ccs",
-        "base_ar5_ccs_v2": "ar5_ccs",
-        "base_ar5_srs": "ar5_srs",
-    }.get(robot_variant)
+    # Keep the arm controller's task/config package aligned with the dual-arm kit.
+    # Full-body common.yaml historically names ar5_ccs; without this override an
+    # SRS planning URDF would still load CCS task.info.
+    arm_family = robot_arms or robot_variant
+    variant_arm_robot = planning_robot_for_arm_family(arm_family)
     if variant_arm_robot:
         control_patch = copy.deepcopy(control_patch)
         arm_params = control_patch.setdefault(
@@ -109,6 +117,7 @@ def build_ocs2_control_context(context) -> Ocs2ControlContext:
         control_right=control_right,
         control_patch=control_patch,
         robot_variant=robot_variant,
+        robot_arms=robot_arms,
         config=config or {},
         meta=meta,
         launch_mode=launch_mode,
@@ -123,6 +132,7 @@ def resolve_planning_robot_name_from_config(
     controller_key: str,
     robot_name: str,
     robot_variant: str = "",
+    robot_arms: str = "",
 ) -> str:
     planning_robot_name = robot_name
     if not config:
@@ -141,18 +151,13 @@ def resolve_planning_robot_name_from_config(
         pass
 
     # Arms-only planning uses a standalone arm description package.  The
-    # unified variant is authoritative when selecting the CCS or SRS family;
-    # a static robot_name in common.yaml must not override it.
+    # humanoid ``arms`` slot (or standalone CCS ``variant``) selects CCS vs SRS.
     if planning_robot_name in ("ar5_ccs", "ar5_srs"):
-        variant_key = str(robot_variant or "").strip()
-        variant_robot_name = {
-            "base_ar5_ccs": "ar5_ccs",
-            "base_ar5_ccs_v2": "ar5_ccs",
-            "base_ar5_srs": "ar5_srs",
-        }.get(variant_key)
+        family_key = str(robot_arms or robot_variant or "").strip()
+        variant_robot_name = planning_robot_for_arm_family(family_key)
         if variant_robot_name and variant_robot_name != planning_robot_name:
             print(
-                f"[INFO] Unified variant '{variant_key}' selects planning robot "
+                f"[INFO] Arm family '{family_key}' selects planning robot "
                 f"'{variant_robot_name}' (config requested: {planning_robot_name})"
             )
             planning_robot_name = variant_robot_name
@@ -344,6 +349,65 @@ def resolve_rviz_config(
     rviz_config_path = os.path.join(rviz_base, fallback_filename)
     print(f"[INFO] Using default rviz config: {rviz_config_path}")
     return rviz_config_path
+
+
+def resolve_marker_fixed_frame(
+    task_file_path: str,
+    config_file_path: Optional[str] = None,
+) -> Optional[str]:
+    """Prefer task.info auto-detect, then target_manager.yaml."""
+    _dual_arm, _control_base, auto_frame = parse_task_info(task_file_path)
+    if auto_frame:
+        return auto_frame
+    if not config_file_path or not os.path.exists(config_file_path):
+        return None
+    try:
+        with open(config_file_path, "r", encoding="utf-8") as handle:
+            data = yaml.safe_load(handle) or {}
+        params = data.get("/**", {}).get("ros__parameters", {})
+        if not params:
+            for value in data.values():
+                if isinstance(value, dict) and "ros__parameters" in value:
+                    params = value["ros__parameters"]
+                    break
+        frame = params.get("marker_fixed_frame")
+        return str(frame) if frame else None
+    except Exception as exc:
+        print(f"[WARN] Failed to read marker_fixed_frame from {config_file_path}: {exc}")
+        return None
+
+
+def patch_rviz_fixed_frame(
+    rviz_config_path: str,
+    fixed_frame: str,
+    tag: str = "",
+) -> str:
+    """Rewrite RViz Global Options Fixed Frame so it matches marker_fixed_frame."""
+    if not rviz_config_path or not fixed_frame:
+        return rviz_config_path
+    try:
+        with open(rviz_config_path, "r", encoding="utf-8") as handle:
+            rviz_content = handle.read()
+        patched_content, count = re.subn(
+            r"(Fixed Frame:\s*)\S+",
+            rf"\g<1>{fixed_frame}",
+            rviz_content,
+            count=1,
+        )
+        if count == 0:
+            print(f"[WARN] No 'Fixed Frame' entry to patch in {rviz_config_path}")
+            return rviz_config_path
+        tmp_name = (
+            f"ocs2_{tag}_{fixed_frame}.rviz" if tag else f"ocs2_fixedframe_{fixed_frame}.rviz"
+        )
+        tmp_path = os.path.join(tempfile.gettempdir(), tmp_name)
+        with open(tmp_path, "w", encoding="utf-8") as handle:
+            handle.write(patched_content)
+        print(f"[INFO] RViz Fixed Frame patched to {fixed_frame}: {tmp_path}")
+        return tmp_path
+    except Exception as exc:
+        print(f"[WARN] Failed to patch RViz Fixed Frame: {exc}")
+        return rviz_config_path
 
 
 def build_rviz_node(

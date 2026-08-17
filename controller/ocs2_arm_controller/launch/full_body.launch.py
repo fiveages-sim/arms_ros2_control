@@ -8,6 +8,7 @@ from launch_ros.actions import Node
 
 from robot_common_launch import (
     create_launch_mode_arguments,
+    create_platform_launch_arguments,
     create_robot_profile_launch_arguments,
     extract_info_file_name_from_config,
     get_robot_package_path,
@@ -25,7 +26,11 @@ def launch_setup(context, *args, **kwargs):
     ctx = ocs2_common.build_ocs2_control_context(context)
 
     planning_robot_name = ocs2_common.resolve_planning_robot_name_from_config(
-        ctx.config, "ocs2_wbc_controller", ctx.robot_name, ctx.robot_variant
+        ctx.config,
+        "ocs2_wbc_controller",
+        ctx.robot_name,
+        ctx.robot_variant,
+        ctx.robot_arms,
     )
 
     wbc_available = False
@@ -181,6 +186,7 @@ def generate_launch_description():
             ),
             *create_launch_mode_arguments(),
         ]
+        + create_platform_launch_arguments()
         + create_robot_profile_launch_arguments()
         + [OpaqueFunction(function=launch_setup)]
     )
