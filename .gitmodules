@@ -30,6 +30,10 @@
 	path = libraries/ocs2_humanoid
 	url = git@github.com:fiveages-sim/ocs2-humanoid.git
 	branch = main
+[submodule "libraries/teleop_joint_mapper"]
+	path = libraries/teleop_joint_mapper
+	url = git@github.com:fiveages-sim/teleop-joint-mapper.git
+	branch = main
 [submodule "hardwares/arx_ros2_control"]
 	path = hardwares/arx_ros2_control
 	url = git@github.com:fiveages-sim/arx-ros2-control.git
@@ -45,6 +49,10 @@
 [submodule "hardwares/can_ros2_control"]
 	path = hardwares/can_ros2_control
 	url = git@github.com:fiveages-sim/can-ros2-control.git
+	branch = main
+[submodule "hardwares/dexcap_ros2_control"]
+	path = hardwares/dexcap_ros2_control
+	url = git@github.com:fiveages-sim/dexcap-ros2-control.git
 	branch = main
 [submodule "hardwares/ht_ros2_control"]
 	path = hardwares/ht_ros2_control
