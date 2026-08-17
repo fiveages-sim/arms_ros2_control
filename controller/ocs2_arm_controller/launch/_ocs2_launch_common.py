@@ -84,8 +84,6 @@ def build_ocs2_control_context(context) -> Ocs2ControlContext:
     robot_variant = resolve_robot_variant(configs, profile, robot_name=robot_name)
 
     # Keep the arm controller's task/config package aligned with the dual-arm kit.
-    # Full-body common.yaml historically names ar5_ccs; without this override an
-    # SRS planning URDF would still load CCS task.info.
     arm_family = robot_arms or robot_variant
     variant_arm_robot = planning_robot_for_arm_family(arm_family)
     if variant_arm_robot:
@@ -150,9 +148,10 @@ def resolve_planning_robot_name_from_config(
     except KeyError:
         pass
 
-    # Arms-only planning uses a standalone arm description package.  The
-    # humanoid ``arms`` slot (or standalone CCS ``variant``) selects CCS vs SRS.
-    if planning_robot_name in ("ar5_ccs", "ar5_srs"):
+    # Arms-only planning uses a standalone kit description package.  The
+    # humanoid ``arms`` slot (or standalone manipulator ``variant``) selects it.
+    # Do not retarget full-body WBC, whose yaml ``robot_name`` is the humanoid.
+    if controller_key == "ocs2_arm_controller":
         family_key = str(robot_arms or robot_variant or "").strip()
         variant_robot_name = planning_robot_for_arm_family(family_key)
         if variant_robot_name and variant_robot_name != planning_robot_name:
