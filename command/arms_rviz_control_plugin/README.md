@@ -1,6 +1,6 @@
 # Arms RViz Control Plugin
 
-面向 OCS2 / WBC 机械臂控制的 RViz2 面板集合：FSM 切换、关节与末端目标、夹爪、以及 WBC 能力与状态。
+面向 OCS2 / WBC 机械臂控制的 RViz2 面板集合：FSM 切换、关节与末端目标、夹爪、以及 WBC 能力。
 
 在 RViz 中通过 `Panels` → `Add New Panel` 添加，类名前缀均为 `arms_rviz_control_plugin/`。
 
@@ -10,7 +10,6 @@
 | `JointControlPanel` | MOVEJ 关节目标 / OCS2 末端绝对·相对目标；腰部点动 |
 | `GripperControlPanel` | 夹爪开关与位置百分比 |
 | `WbcCapabilityPanel` | 只读：WBC 能力标志 |
-| `WbcCurrentStatePanel` | WBC 当前状态显示与模式切换 |
 
 ## 目录
 
@@ -29,9 +28,8 @@
   - [3.6 主要话题](#36-主要话题)
 - [4. GripperControlPanel](#4-grippercontrolpanel)
 - [5. WbcCapabilityPanel](#5-wbccapabilitypanel)
-- [6. WbcCurrentStatePanel](#6-wbccurrentstatepanel)
-- [7. 使用步骤](#7-使用步骤)
-- [8. 说明](#8-说明)
+- [6. 使用步骤](#6-使用步骤)
+- [7. 说明](#7-说明)
 
 ---
 
@@ -68,7 +66,7 @@ source install/setup.bash
 
 ### 2.3 WBC（可选）
 
-当节点参数 `wbc_available:=true`（检测到 `ocs2_wbc_controller`）时，在 OCS2 状态下显示 WBC 控件：底盘、双臂耦合、左右臂使能、身体模式等，经 `mode_command` 下发。
+当节点参数 `wbc_available:=true`（检测到 `ocs2_wbc_controller`）时，在 OCS2 状态下显示 WBC 控件：底盘、双臂耦合、左右臂使能、HOME 关节参考、身体模式等，经 `mode_command` 下发。
 
 ### 2.4 话题
 
@@ -186,21 +184,7 @@ source install/setup.bash
 
 ---
 
-## 6. WbcCurrentStatePanel
-
-显示并切换 WBC 当前模式（底盘、双臂、左右臂、身体模式等）。
-
-| 方向 | 话题 | 类型 |
-|---|---|---|
-| 发布 | `mode_command` | `String` |
-| 订阅 | `/ocs2_wbc_controller/wbc_capabilities` | `WbcCapability` |
-| 订阅 | `/ocs2_wbc_controller/current_state` | `WbcCurrentState` |
-
-> `OCS2FSMPanel` 在 WBC 可用时也内嵌了同类控件；本面板可单独放置以便观察/操作。
-
----
-
-## 7. 使用步骤
+## 6. 使用步骤
 
 1. 启动带 OCS2/WBC 的机器人 bringup 与 RViz2。
 2. 添加需要的 Panel（至少 `OCS2FSMPanel`；末端/关节调试再加 `JointControlPanel`）。
@@ -211,7 +195,7 @@ source install/setup.bash
 
 ---
 
-## 8. 说明
+## 7. 说明
 
 - Joint 面板的绝对目标在 **厘米/角度** 下使用 ZYX 欧拉角（ABB `OrientZYX` / `EulerZYX`）；**米/弧度** 下保持原生四元数输入。
 - 相对增量的角速度分量约定为 RPY（与控制器 `PoseBasedReferenceManager` 一致：`dq = Rz·Ry·Rx`）。

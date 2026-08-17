@@ -159,6 +159,11 @@ namespace arms_ros2_control::command
         return true;
     }
 
+    void ArmMarker::clearCommandCooldown()
+    {
+        last_marker_command_time_ = rclcpp::Time(0, 0, node_->get_clock()->get_clock_type());
+    }
+
     visualization_msgs::msg::InteractiveMarker ArmMarker::createMarker(
         const std::string& name,
         MarkerState mode,

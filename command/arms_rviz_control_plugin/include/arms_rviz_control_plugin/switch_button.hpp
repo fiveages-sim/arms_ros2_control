@@ -25,6 +25,7 @@ namespace arms_rviz_control_plugin
 
         void setClickable(bool clickable);
         bool isClickable() const { return clickable_; }
+        void setButtonSize(int width, int height);
 
         QSize sizeHint() const override;
         QSize minimumSizeHint() const override;
@@ -42,6 +43,8 @@ namespace arms_rviz_control_plugin
 
         VisualState state_ = VisualState::InvalidOffGray;
         bool clickable_ = true;
+        int custom_width_ = 0;
+        int custom_height_ = 0;
     };
 
 }  // namespace arms_rviz_control_plugin

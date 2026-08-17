@@ -157,6 +157,11 @@ namespace arms_ros2_control::command
         bool refreshFromLatestCurrentPose();
 
         /**
+         * @brief 清除 marker 自身发令冷却，允许 current_target 立即回写可视化
+         */
+        void clearCommandCooldown();
+
+        /**
          * @brief 获取当前 pose
          * @return 当前 pose（在 marker_fixed_frame_ 坐标系下）
          */

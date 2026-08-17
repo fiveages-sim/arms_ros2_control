@@ -106,13 +106,17 @@ twist.angular.{x,y,z} = Inputs.{roll,pitch,yaw} * angular_scale  # 单位：rad/
 
 | 控制拓扑 | 非镜像：左 Y | 非镜像：右 B | 镜像：左 Y | 镜像：右 B |
 |---|---|---|---|---|
-| FULL_BODY | 左臂 ENABLE/DISABLE | 右臂 ENABLE/DISABLE | 右臂 ENABLE/DISABLE | 左臂 ENABLE/DISABLE |
+| FULL_BODY（默认） | 左臂 ENABLE/DISABLE | 右臂 ENABLE/DISABLE | 右臂 ENABLE/DISABLE | 左臂 ENABLE/DISABLE |
+| FULL_BODY（事件 16 后） | 左臂 VR 暂停/恢复 | 右臂 VR 暂停/恢复 | 右臂 VR 暂停/恢复 | 左臂 VR 暂停/恢复 |
 | SPLIT_BODY | 左臂 VR 暂停/恢复 | 右臂 VR 暂停/恢复 | 右臂 VR 暂停/恢复 | 左臂 VR 暂停/恢复 |
 | UNKNOWN | 忽略 | 忽略 | 忽略 | 忽略 |
 
-- FULL_BODY 的 Y/B 不依赖 VR UPDATE/STORAGE，但要求 VR enabled、FSM=OCS2。
+- FULL_BODY 默认 Y/B 为 ENABLE/DISABLE，不依赖 VR UPDATE/STORAGE，但要求 VR enabled、FSM=OCS2。
 - 双臂耦合时禁止通过 Y/B 单独切换任一臂。
-- Y/B 与 case 25–28 复用现有 WBC pending、2 秒超时和右摇杆回中安全门。
+- 事件 16（左右握把 + 左 Y + 右 B）在全身下锁存切换为暂停语义（需 UPDATE）；再按 16 切回禁用。SPLIT_BODY 忽略 16。
+- 切换时：已禁用臂 → ENABLE 后暂停；已暂停臂 → DISABLE 后清暂停；未动过的臂不变。双臂耦合时不能把暂停语义切回禁用。
+- 暂停语义下右摇杆进 UPDATE 不再清暂停。
+- 禁用语义下 Y/B 与 case 25–26、28 复用现有 WBC pending、2 秒超时和右摇杆回中安全门；case 27 预留，当前不处理。
 
 ### FULL_BODY 单臂禁用后的 VR 恢复
 

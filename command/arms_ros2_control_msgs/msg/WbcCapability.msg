@@ -8,3 +8,4 @@ bool has_head_coupling
 bool has_custom_joint_lock
 bool has_bimanual_coupling
 bool body_tracking_ee_enabled
+bool has_home_joint_reference

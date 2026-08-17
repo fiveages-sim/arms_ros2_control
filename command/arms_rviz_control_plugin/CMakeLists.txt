@@ -35,7 +35,6 @@ cmake_language(CALL qt${QT_VERSION_MAJOR}_wrap_cpp MOC_FILES
         include/arms_rviz_control_plugin/gripper_control_panel.hpp
         include/arms_rviz_control_plugin/joint_control_panel.hpp
         include/arms_rviz_control_plugin/wbc_capability_panel.hpp
-        include/arms_rviz_control_plugin/wbc_current_state_panel.hpp
         include/arms_rviz_control_plugin/switch_button.hpp
 )
 
@@ -45,7 +44,6 @@ set(SRC_FILES
         src/gripper_control_panel.cpp
         src/joint_control_panel.cpp
         src/wbc_capability_panel.cpp
-        src/wbc_current_state_panel.cpp
         src/switch_button.cpp
 )
 
