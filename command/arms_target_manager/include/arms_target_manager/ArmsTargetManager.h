@@ -94,6 +94,7 @@ namespace arms_ros2_control::command
         int getCurrentBimanualState() const;
         int getCurrentLeftArmState() const;
         int getCurrentRightArmState() const;
+        const std::string& getCurrentFsmState() const { return current_fsm_state_; }
 
         void markPendingChanges();
 
@@ -147,6 +148,18 @@ namespace arms_ros2_control::command
         void refreshArmMarkersFromLatestCurrentTargets();
         void refreshArmMarkersFromLatestCurrentPoses();
 
+        [[nodiscard]] bool isBimanualCoupled() const;
+
+        void followCoupledRightMarker(
+            const geometry_msgs::msg::Pose& old_left_pose,
+            const geometry_msgs::msg::Pose& old_right_pose,
+            const geometry_msgs::msg::Pose& new_left_pose);
+
+        void followCoupledLeftMarker(
+            const geometry_msgs::msg::Pose& old_right_pose,
+            const geometry_msgs::msg::Pose& old_left_pose,
+            const geometry_msgs::msg::Pose& new_right_pose);
+
         static bool bodyJointTargetsChanged(
             const std::vector<double>& previous,
             const std::vector<double>& current,
@@ -156,6 +169,8 @@ namespace arms_ros2_control::command
             const geometry_msgs::msg::Pose& pose,
             const std::string& sourceFrameId,
             const std::string& targetFrameId) const;
+
+        void setServerPose(const std::string& name, const geometry_msgs::msg::Pose& pose);
 
         rclcpp::Node::SharedPtr node_;
         std::shared_ptr<interactive_markers::InteractiveMarkerServer> server_;

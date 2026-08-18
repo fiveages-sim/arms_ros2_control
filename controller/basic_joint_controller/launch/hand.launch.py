@@ -17,6 +17,8 @@ def launch_setup(context, *args, **kwargs):
     direction = context.launch_configurations.get('direction', '1')
     hardware = context.launch_configurations.get('hardware', 'mock_components')
     world = context.launch_configurations.get('world', 'dart')
+    can_interface = context.launch_configurations.get('can_interface', 'can0')
+    read_tactile = context.launch_configurations.get('read_tactile', 'false')
     # 基本参数
     use_sim_time = hardware in ['gz', 'isaac']
 
@@ -51,6 +53,8 @@ def launch_setup(context, *args, **kwargs):
     # 构建 xacro mappings
     mappings = {
         'ros2_control_hardware_type': hardware,
+        'can_interface': can_interface,
+        'read_tactile': read_tactile,
     }
     if hand_type and hand_type.strip():
         mappings["type"] = hand_type
@@ -234,6 +238,18 @@ def generate_launch_description():
         description='Whether to launch RViz visualization'
     )
 
+    can_interface_arg = DeclareLaunchArgument(
+        'can_interface',
+        default_value='can0',
+        description='SocketCAN interface used by CAN-based hand hardware'
+    )
+
+    read_tactile_arg = DeclareLaunchArgument(
+        'read_tactile',
+        default_value='false',
+        description='Enable tactile feedback for supported hand hardware'
+    )
+
     return LaunchDescription([
         hand_arg,
         type_arg,
@@ -241,5 +257,7 @@ def generate_launch_description():
         hardware_arg,
         world_arg,
         use_rviz_arg,
+        can_interface_arg,
+        read_tactile_arg,
         OpaqueFunction(function=launch_setup),
     ])

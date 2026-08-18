@@ -41,7 +41,18 @@ SwitchButton::SwitchButton(QWidget* parent)
 
 QSize SwitchButton::sizeHint() const
 {
+    if (custom_width_ > 0 && custom_height_ > 0)
+    {
+        return QSize(custom_width_, custom_height_);
+    }
     return QSize(scaled(72), scaled(32));
+}
+
+void SwitchButton::setButtonSize(int width, int height)
+{
+    custom_width_ = std::max(1, width);
+    custom_height_ = std::max(1, height);
+    updateFixedSize();
 }
 
 QSize SwitchButton::minimumSizeHint() const

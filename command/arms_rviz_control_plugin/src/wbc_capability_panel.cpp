@@ -24,6 +24,7 @@ WbcCapabilityPanel::WbcCapabilityPanel(QWidget* parent)
     custom_joint_lock_label_ = std::make_unique<QLabel>("Has Custom Joint Lock: Unknown", capability_group_.get());
     bimanual_label_ = std::make_unique<QLabel>("Has Bimanual Coupling: Unknown", capability_group_.get());
     body_tracking_label_ = std::make_unique<QLabel>("Body Tracking EE Enabled: Unknown", capability_group_.get());
+    home_pose_tracking_label_ = std::make_unique<QLabel>("Has Home Joint Reference: Unknown", capability_group_.get());
 
     group_layout->addWidget(mobile_base_label_.get());
     group_layout->addWidget(body_relative_label_.get());
@@ -31,6 +32,7 @@ WbcCapabilityPanel::WbcCapabilityPanel(QWidget* parent)
     group_layout->addWidget(custom_joint_lock_label_.get());
     group_layout->addWidget(bimanual_label_.get());
     group_layout->addWidget(body_tracking_label_.get());
+    group_layout->addWidget(home_pose_tracking_label_.get());
 
     main_layout_->addWidget(capability_group_.get());
 }
@@ -68,6 +70,7 @@ void WbcCapabilityPanel::onCapabilityReceived(
     updateCapabilityLabel(custom_joint_lock_label_.get(), "Has Custom Joint Lock", msg->has_custom_joint_lock);
     updateCapabilityLabel(bimanual_label_.get(), "Has Bimanual Coupling", msg->has_bimanual_coupling);
     updateCapabilityLabel(body_tracking_label_.get(), "Body Tracking EE Enabled", msg->body_tracking_ee_enabled);
+    updateCapabilityLabel(home_pose_tracking_label_.get(), "Has Home Joint Reference", msg->has_home_joint_reference);
 }
 
 void WbcCapabilityPanel::updateCapabilityLabel(QLabel* label, const QString& name, bool enabled)

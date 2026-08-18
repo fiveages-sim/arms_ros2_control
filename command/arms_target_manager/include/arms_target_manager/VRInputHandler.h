@@ -26,6 +26,7 @@
 #include <optional>
 #include "arms_target_manager/ArmsTargetManager.h"
 #include "arms_controller_common/utils/FSMCommandPublisher.h"
+#include <arms_ros2_control_msgs/msg/wbc_capability.hpp>
 
 namespace arms_ros2_control::command
 {
@@ -154,8 +155,12 @@ namespace arms_ros2_control::command
             BASE,
             BIMANUAL,
             LEFT_ARM,
-            RIGHT_ARM
+            RIGHT_ARM,
+            HOME_JOINT
         };
+
+        void wbcCapabilityCallback(
+            arms_ros2_control_msgs::msg::WbcCapability::ConstSharedPtr msg);
 
         /**
          * VR左臂pose回调函数
@@ -240,6 +245,16 @@ namespace arms_ros2_control::command
             int armState);
         bool isArmVrInputSuppressed(WbcToggleTarget arm) const;
         bool prepareArmVrInput(WbcToggleTarget arm);
+        bool isFullBodyYbPauseMode() const noexcept
+        {
+            return full_body_yb_pause_mode_.load();
+        }
+        bool isYbModeConversionPending() const;
+        void resetYbModeLatchAndConversions();
+        void updateYbModeConversionState();
+        void applyPauseAfterRebase(WbcToggleTarget arm);
+        void clearArmPause(WbcToggleTarget arm);
+        bool handleCase16YbModeToggle();
         bool rebaseArmVrControlFromCurrentPose(WbcToggleTarget arm);
         bool setRobotBaseFromCurrentPose(const std::string& armType);
         void clearLastPublishedTarget(const std::string& armType);
@@ -275,6 +290,10 @@ namespace arms_ros2_control::command
          * @param msg Int32消息，包含按钮事件数字 (0=无事件, 1-6=按钮按下, 7=镜像模式切换, 9=左扳机, 10=右扳机)
          */
         void processButtonEvent(const std_msgs::msg::Int32::SharedPtr msg);
+
+        void handleGripActiveEdge(bool isLeft, bool pressed);
+        void applyGripShortPress(bool isLeft);
+        void markGripComboConsumed(bool left, bool right);
 
         /**
          * 从hand_controllers参数中提取左右控制器名称
@@ -356,12 +375,19 @@ namespace arms_ros2_control::command
         void sendFsmCommand(int32_t command);
 
         /**
+         * 解析当前 FSM 状态码。优先用 ArmsTargetManager 的校验后状态，
+         * 避免 VR 本地缓存漏掉 MOVEJ(4) 等命令后与 ATM 脱节。
+         * @return 1=HOME, 2=HOLD, 3=OCS2, 4=MOVEJ
+         */
+        int32_t resolvedFsmState() const;
+
+        /**
          * 将计算坐标系下的目标转换到控制发布 frame，再做变化检测并发布到 left_target/right_target。
          * FULL_BODY 下 position/orientation 为 vr_follow_frame_ Pose；非 FULL_BODY 保持旧语义。
          * @param armType 手臂类型 ("left" 或 "right")
          * @param position 计算坐标系下的位置
          * @param orientation 计算坐标系下的方向
-         * @return true 表示本次请求真正发布；false 表示被耦合拦截、首次解耦重建、TF 失败、未变化或发布器不可用
+         * @return true 表示本次请求真正发布；false 表示首次解耦重建、TF 失败、未变化或发布器不可用
          */
         bool publishTargetPoseDirect(const std::string& armType,
                                      const Eigen::Vector3d& position,
@@ -517,6 +543,8 @@ namespace arms_ros2_control::command
 
         // WBC 模式切换命令发布器（case 21–24 请求身体模式）
         rclcpp::Publisher<std_msgs::msg::String>::SharedPtr pub_mode_command_;
+        rclcpp::Subscription<arms_ros2_control_msgs::msg::WbcCapability>::SharedPtr
+            sub_wbc_capability_;
 
         // VR pose参数
         Eigen::Matrix4d left_ee_pose_ = Eigen::Matrix4d::Identity();
@@ -557,13 +585,23 @@ namespace arms_ros2_control::command
         std::atomic<bool> left_grip_mode_; // 左摇杆控制模式：false=XY平移, true=Z轴+Yaw
         std::atomic<bool> right_grip_mode_; // 右摇杆控制模式：false=XY平移, true=Z轴+Yaw
         std::atomic<bool> chassis_mode_; // true = 底盘控制模式, false = 末端控制模式（case 20 切换）
-        std::atomic<bool> left_grip_active_{false};  // 左握把实时状态（预留，当前 chassis 逻辑未使用）
+        std::atomic<bool> left_grip_active_{false};  // 左握把实时状态
         std::atomic<bool> right_grip_active_{false}; // 右握把实时状态（chassis 模式下用作腰部控制修饰符）
+        std::atomic<bool> left_grip_press_armed_{false};
+        std::atomic<bool> right_grip_press_armed_{false};
+        std::atomic<bool> left_grip_combo_consumed_{false};
+        std::atomic<bool> right_grip_combo_consumed_{false};
+        std::chrono::steady_clock::time_point left_grip_press_start_{};
+        std::chrono::steady_clock::time_point right_grip_press_start_{};
+        static constexpr auto grip_short_press_max_ = std::chrono::milliseconds(400);
         // FULL_BODY 下左握把方向组合的安全锁存：
         // 松开握把后仍保持抑制，直到左摇杆 X/Y 都回到 0.3 内。
         std::atomic<bool> left_grip_direction_suppressed_{false};
         // FULL_BODY 下右握把方向组合的安全锁存，语义与左侧对称。
         std::atomic<bool> right_grip_direction_suppressed_{false};
+
+        std::atomic<bool> has_home_joint_reference_{false};
+        std::atomic<bool> home_joint_reference_enabled_{false};
 
         std::atomic<bool> right_wbc_toggle_request_pending_{false};
         std::atomic<WbcToggleTarget> requested_wbc_toggle_target_{
@@ -583,15 +621,27 @@ namespace arms_ros2_control::command
         std::atomic<bool> left_wbc_rebase_pending_{false};
         std::atomic<bool> right_wbc_rebase_pending_{false};
 
+        // FULL_BODY 下 case 16 锁存：false=Y/B 为 WBC 单臂禁用，true=Y/B 为 VR 暂停
+        std::atomic<bool> full_body_yb_pause_mode_{false};
+        std::atomic<bool> left_pause_after_enable_{false};
+        std::atomic<bool> right_pause_after_enable_{false};
+        std::atomic<bool> left_clear_pause_after_disable_{false};
+        std::atomic<bool> right_clear_pause_after_disable_{false};
+        std::chrono::steady_clock::time_point left_yb_conversion_time_{};
+        std::chrono::steady_clock::time_point right_yb_conversion_time_{};
+        static constexpr auto yb_conversion_timeout_ =
+            std::chrono::seconds(2);
+
         std::atomic<bool> has_robot_current_left_pose_{false};
         std::atomic<bool> has_robot_current_right_pose_{false};
         std::atomic<bool> has_vr_left_pose_{false};
         std::atomic<bool> has_vr_right_pose_{false};
 
-        // 双臂耦合期间右臂 VR 目标被抑制后，解耦后的下一次右臂发布前需重建控制基准。
+        // 双臂耦合期间仍发布 right_target（由控制器投影到耦合流形）；
+        // 解耦后的下一次右臂发布前需重建控制基准，避免冲向耦合期 VR 映射位姿。
         bool right_vr_target_suppressed_by_bimanual_{false};
 
-        std::atomic<int32_t> current_fsm_state_; // 当前FSM状态：1=HOME, 2=HOLD, 3=OCS2, 100=REST
+        std::atomic<int32_t> current_fsm_state_; // 当前FSM状态：1=HOME, 2=HOLD, 3=OCS2, 4=MOVEJ
 
         // 腰部摇杆控制平面：false=XY平移, true=Z轴+Yaw（与左右臂的 *_grip_mode_ 相互独立）
         std::atomic<bool> body_thumbstick_z_yaw_mode_{false};

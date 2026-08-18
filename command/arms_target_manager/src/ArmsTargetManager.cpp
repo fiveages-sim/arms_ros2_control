@@ -9,6 +9,7 @@
 #include <Eigen/Geometry>
 #include <tf2_geometry_msgs/tf2_geometry_msgs.hpp>
 #include <tf2/exceptions.hpp>
+#include <std_msgs/msg/header.hpp>
 #include <cmath>
 #include <algorithm>
 #include <utility>
@@ -91,6 +92,56 @@ namespace arms_ros2_control::command
     bool ArmsTargetManager::shouldShowRightArmMarker() const
     {
         return right_arm_state_ != 0;
+    }
+
+    bool ArmsTargetManager::isBimanualCoupled() const
+    {
+        return dual_arm_mode_ &&
+               left_arm_marker_ &&
+               right_arm_marker_ &&
+               shouldShowLeftArmMarker() &&
+               shouldShowRightArmMarker() &&
+               bimanual_state_ == arms_ros2_control_msgs::msg::WbcCurrentState::BIMANUAL_COUPLED;
+    }
+
+    void ArmsTargetManager::followCoupledRightMarker(
+        const geometry_msgs::msg::Pose& old_left_pose,
+        const geometry_msgs::msg::Pose& old_right_pose,
+        const geometry_msgs::msg::Pose& new_left_pose)
+    {
+        if (!right_arm_marker_)
+        {
+            return;
+        }
+
+        const geometry_msgs::msg::Pose new_right_pose =
+            applyRelativePose(old_left_pose, old_right_pose, new_left_pose);
+        right_arm_marker_->setPose(new_right_pose);
+        if (server_ && isStateDisabled(current_controller_state_))
+        {
+            setServerPose(right_arm_marker_->getMarkerName(), new_right_pose);
+            markPendingChanges();
+        }
+    }
+
+    void ArmsTargetManager::followCoupledLeftMarker(
+        const geometry_msgs::msg::Pose& old_right_pose,
+        const geometry_msgs::msg::Pose& old_left_pose,
+        const geometry_msgs::msg::Pose& new_right_pose)
+    {
+        if (!left_arm_marker_)
+        {
+            return;
+        }
+
+        const geometry_msgs::msg::Pose new_left_pose =
+            applyRelativePose(old_right_pose, old_left_pose, new_right_pose);
+        left_arm_marker_->setPose(new_left_pose);
+        if (server_ && isStateDisabled(current_controller_state_))
+        {
+            setServerPose(left_arm_marker_->getMarkerName(), new_left_pose);
+            markPendingChanges();
+        }
     }
 
     bool ArmsTargetManager::shouldShowBodyMarker() const
@@ -184,7 +235,17 @@ namespace arms_ros2_control::command
 
         if (bimanual_state_changed)
         {
-            refreshArmMarkersFromLatestCurrentTargets();
+            if (left_arm_marker_)
+            {
+                left_arm_marker_->clearCommandCooldown();
+            }
+            if (right_arm_marker_)
+            {
+                right_arm_marker_->clearCommandCooldown();
+            }
+            // Prefer measured EE: during coupling the right arm tracks the constraint,
+            // not a possibly stale right_current_target / marker pose.
+            refreshArmMarkersFromLatestCurrentPoses();
         }
 
         if (prev_left_arm_state != left_arm_state_ ||
@@ -236,7 +297,7 @@ namespace arms_ros2_control::command
                     return;
                 }
 
-                server_->setPose(marker_name, pose);
+                setServerPose(marker_name, pose);
                 markPendingChanges();
             });
 
@@ -271,7 +332,7 @@ namespace arms_ros2_control::command
                         return;
                     }
 
-                    server_->setPose(marker_name, pose);
+                    setServerPose(marker_name, pose);
                     markPendingChanges();
                 });
 
@@ -310,7 +371,7 @@ namespace arms_ros2_control::command
                     return;
                 }
 
-                server_->setPose(marker_name, pose);
+                setServerPose(marker_name, pose);
                 markPendingChanges();
             });
 
@@ -447,6 +508,13 @@ namespace arms_ros2_control::command
     void ArmsTargetManager::handleMarkerFeedback(
         const visualization_msgs::msg::InteractiveMarkerFeedback::ConstSharedPtr& feedback)
     {
+        if (feedback->event_type == visualization_msgs::msg::InteractiveMarkerFeedback::KEEP_ALIVE ||
+            feedback->event_type == visualization_msgs::msg::InteractiveMarkerFeedback::MENU_SELECT ||
+            feedback->event_type == visualization_msgs::msg::InteractiveMarkerFeedback::BUTTON_CLICK)
+        {
+            return;
+        }
+
         std::string source_frame_id = feedback->header.frame_id;
         std::string marker_name = feedback->marker_name;
 
@@ -462,11 +530,7 @@ namespace arms_ros2_control::command
 
             const geometry_msgs::msg::Pose old_left_pose = left_arm_marker_->getPose();
             geometry_msgs::msg::Pose old_right_pose;
-            const bool can_follow_right =
-                (dual_arm_mode_ &&
-                 right_arm_marker_ &&
-                 shouldShowRightArmMarker() &&
-                 bimanual_state_ == arms_ros2_control_msgs::msg::WbcCurrentState::BIMANUAL_COUPLED);
+            const bool can_follow_right = isBimanualCoupled();
             if (can_follow_right)
             {
                 old_right_pose = right_arm_marker_->getPose();
@@ -475,17 +539,9 @@ namespace arms_ros2_control::command
             geometry_msgs::msg::Pose new_pose = left_arm_marker_->handleFeedback(feedback, source_frame_id);
             left_arm_marker_->setPose(new_pose);
 
-            // 单次发布 + 双臂耦合：仅做本地marker联动，不自动下发控制命令
-            if (current_mode_ == MarkerState::SINGLE_SHOT && can_follow_right)
+            if (can_follow_right)
             {
-                const geometry_msgs::msg::Pose new_right_pose =
-                    applyRelativePose(old_left_pose, old_right_pose, new_pose);
-                right_arm_marker_->setPose(new_right_pose);
-                if (server_ && isStateDisabled(current_controller_state_))
-                {
-                    server_->setPose(right_arm_marker_->getMarkerName(), new_right_pose);
-                    markPendingChanges();
-                }
+                followCoupledRightMarker(old_left_pose, old_right_pose, new_pose);
             }
 
             if (current_mode_ == MarkerState::CONTINUOUS)
@@ -506,10 +562,7 @@ namespace arms_ros2_control::command
 
             const geometry_msgs::msg::Pose old_right_pose = right_arm_marker_->getPose();
             geometry_msgs::msg::Pose old_left_pose;
-            const bool can_follow_left =
-                (left_arm_marker_ &&
-                 shouldShowLeftArmMarker() &&
-                 bimanual_state_ == arms_ros2_control_msgs::msg::WbcCurrentState::BIMANUAL_COUPLED);
+            const bool can_follow_left = isBimanualCoupled();
             if (can_follow_left)
             {
                 old_left_pose = left_arm_marker_->getPose();
@@ -518,17 +571,9 @@ namespace arms_ros2_control::command
             geometry_msgs::msg::Pose new_pose = right_arm_marker_->handleFeedback(feedback, source_frame_id);
             right_arm_marker_->setPose(new_pose);
 
-            // 单次发布 + 双臂耦合：仅做本地marker联动，不自动下发控制命令
-            if (current_mode_ == MarkerState::SINGLE_SHOT && can_follow_left)
+            if (can_follow_left)
             {
-                const geometry_msgs::msg::Pose new_left_pose =
-                    applyRelativePose(old_right_pose, old_left_pose, new_pose);
-                left_arm_marker_->setPose(new_left_pose);
-                if (server_ && isStateDisabled(current_controller_state_))
-                {
-                    server_->setPose(left_arm_marker_->getMarkerName(), new_left_pose);
-                    markPendingChanges();
-                }
+                followCoupledLeftMarker(old_right_pose, old_left_pose, new_pose);
             }
 
             if (current_mode_ == MarkerState::CONTINUOUS)
@@ -550,7 +595,7 @@ namespace arms_ros2_control::command
 
                 if (was_clamped && server_ && isStateDisabled(current_controller_state_))
                 {
-                    server_->setPose(marker_name, clamped_pose);
+                    setServerPose(marker_name, clamped_pose);
                     markPendingChanges();
                 }
 
@@ -1070,7 +1115,7 @@ namespace arms_ros2_control::command
         {
             if (left_arm_marker_->refreshFromLatestCurrentPose())
             {
-                server_->setPose(left_arm_marker_->getMarkerName(), left_arm_marker_->getPose());
+                setServerPose(left_arm_marker_->getMarkerName(), left_arm_marker_->getPose());
                 refreshed_any = true;
             }
         }
@@ -1079,7 +1124,7 @@ namespace arms_ros2_control::command
         {
             if (right_arm_marker_->refreshFromLatestCurrentPose())
             {
-                server_->setPose(right_arm_marker_->getMarkerName(), right_arm_marker_->getPose());
+                setServerPose(right_arm_marker_->getMarkerName(), right_arm_marker_->getPose());
                 refreshed_any = true;
             }
         }
@@ -1103,7 +1148,7 @@ namespace arms_ros2_control::command
         {
             if (left_arm_marker_->refreshFromLatestCurrentTarget())
             {
-                server_->setPose(left_arm_marker_->getMarkerName(), left_arm_marker_->getPose());
+                setServerPose(left_arm_marker_->getMarkerName(), left_arm_marker_->getPose());
                 refreshed_any = true;
             }
         }
@@ -1112,7 +1157,7 @@ namespace arms_ros2_control::command
         {
             if (right_arm_marker_->refreshFromLatestCurrentTarget())
             {
-                server_->setPose(right_arm_marker_->getMarkerName(), right_arm_marker_->getPose());
+                setServerPose(right_arm_marker_->getMarkerName(), right_arm_marker_->getPose());
                 refreshed_any = true;
             }
         }
@@ -1186,7 +1231,7 @@ namespace arms_ros2_control::command
         geometry_msgs::msg::Pose updated_pose = head_marker_->updateFromJointState(
             joint_msg, isStateDisabled(current_controller_state_));
 
-        server_->setPose("head_target", updated_pose);
+        setServerPose("head_target", updated_pose);
         markPendingChanges();
     }
 
@@ -1265,8 +1310,28 @@ namespace arms_ros2_control::command
         }
         catch (const tf2::TransformException& ex)
         {
+            RCLCPP_WARN_THROTTLE(
+                node_->get_logger(), *node_->get_clock(), 2000,
+                "Failed to transform pose from '%s' to '%s': %s (using untransformed pose)",
+                sourceFrameId.c_str(), targetFrameId.c_str(), ex.what());
             return pose;
         }
+    }
+
+    void ArmsTargetManager::setServerPose(
+        const std::string& name,
+        const geometry_msgs::msg::Pose& pose)
+    {
+        if (!server_)
+        {
+            return;
+        }
+
+        std_msgs::msg::Header header;
+        header.frame_id = marker_fixed_frame_;
+        header.stamp.sec = 0;
+        header.stamp.nanosec = 0;
+        server_->setPose(name, pose, header);
     }
 
     void ArmsTargetManager::setMarkerPose(
@@ -1297,6 +1362,16 @@ namespace arms_ros2_control::command
             return;
         }
 
+        const geometry_msgs::msg::Pose old_pose = arm_marker->getPose();
+        geometry_msgs::msg::Pose old_opposite_pose;
+        const bool coupled = isBimanualCoupled();
+        if (coupled)
+        {
+            old_opposite_pose = (armType == "left")
+                ? right_arm_marker_->getPose()
+                : left_arm_marker_->getPose();
+        }
+
         geometry_msgs::msg::Pose new_pose;
         new_pose.position = position;
         new_pose.orientation = orientation;
@@ -1304,8 +1379,17 @@ namespace arms_ros2_control::command
 
         if (server_ && isStateDisabled(current_controller_state_))
         {
-            server_->setPose(arm_marker->getMarkerName(), new_pose);
+            setServerPose(arm_marker->getMarkerName(), new_pose);
             markPendingChanges();
+        }
+
+        if (coupled && armType == "left")
+        {
+            followCoupledRightMarker(old_pose, old_opposite_pose, new_pose);
+        }
+        else if (coupled && armType == "right")
+        {
+            followCoupledLeftMarker(old_pose, old_opposite_pose, new_pose);
         }
 
         if (current_mode_ == MarkerState::CONTINUOUS)
@@ -1350,7 +1434,16 @@ namespace arms_ros2_control::command
             return;
         }
 
-        geometry_msgs::msg::Pose current_pose = arm_marker->getPose();
+        const geometry_msgs::msg::Pose old_pose = arm_marker->getPose();
+        geometry_msgs::msg::Pose old_opposite_pose;
+        const bool coupled = isBimanualCoupled();
+        if (coupled)
+        {
+            old_opposite_pose = (armType == "left")
+                ? right_arm_marker_->getPose()
+                : left_arm_marker_->getPose();
+        }
+        geometry_msgs::msg::Pose current_pose = old_pose;
 
         current_pose.position.x += positionDelta[0];
         current_pose.position.y += positionDelta[1];
@@ -1384,8 +1477,17 @@ namespace arms_ros2_control::command
 
         if (server_)
         {
-            server_->setPose(arm_marker->getMarkerName(), current_pose);
+            setServerPose(arm_marker->getMarkerName(), current_pose);
             markPendingChanges();
+        }
+
+        if (coupled && armType == "left")
+        {
+            followCoupledRightMarker(old_pose, old_opposite_pose, current_pose);
+        }
+        else if (coupled && armType == "right")
+        {
+            followCoupledLeftMarker(old_pose, old_opposite_pose, current_pose);
         }
 
         if (publish && current_mode_ == MarkerState::CONTINUOUS)
@@ -1437,7 +1539,7 @@ namespace arms_ros2_control::command
 
         if (server_)
         {
-            server_->setPose(body_marker_->getMarkerName(), current_pose);
+            setServerPose(body_marker_->getMarkerName(), current_pose);
             markPendingChanges();
         }
 

@@ -159,6 +159,11 @@ namespace arms_ros2_control::command
         return true;
     }
 
+    void ArmMarker::clearCommandCooldown()
+    {
+        last_marker_command_time_ = rclcpp::Time(0, 0, node_->get_clock()->get_clock_type());
+    }
+
     visualization_msgs::msg::InteractiveMarker ArmMarker::createMarker(
         const std::string& name,
         MarkerState mode,
@@ -342,7 +347,10 @@ namespace arms_ros2_control::command
         }
         catch (const tf2::TransformException& ex)
         {
-            // 转换失败时直接使用原始pose，不输出警告
+            RCLCPP_WARN_THROTTLE(
+                node_->get_logger(), *node_->get_clock(), 2000,
+                "Failed to transform pose from '%s' to '%s': %s (using untransformed pose)",
+                source_frame_id.c_str(), target_frame_id.c_str(), ex.what());
             return pose;
         }
     }
