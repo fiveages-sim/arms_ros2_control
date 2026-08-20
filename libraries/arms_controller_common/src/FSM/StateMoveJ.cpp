@@ -715,6 +715,29 @@ namespace arms_controller_common
             has_target_ = false;
             interpolation_active_ = false;
             trajectory_manager_.reset();
+
+            // In force control mode, calculate static torques (same as interpolation path)
+            if (ctrl_interfaces_.control_mode_ == ControlMode::MIX && gravity_compensation_)
+            {
+                // Get commanded joint positions
+                std::vector<double> commanded_positions;
+                for (auto i : ctrl_interfaces_.joint_position_command_interface_)
+                {
+                    auto value = i.get().get_optional();
+                    commanded_positions.push_back(value.value_or(0.0));
+                }
+
+                // Calculate static torques
+                std::vector<double> static_torques =
+                    gravity_compensation_->calculateStaticTorques(commanded_positions);
+
+                // Set effort commands
+                for (size_t i = 0; i < ctrl_interfaces_.joint_force_command_interface_.size() &&
+                     i < static_torques.size(); ++i)
+                {
+                    std::ignore = ctrl_interfaces_.joint_force_command_interface_[i].get().set_value(static_torques[i]);
+                }
+            }
             return;
         }
         else if (!interpolation_active_)
