@@ -23,7 +23,7 @@ The project is organized as follows:
 ```
 arms_ros2_control/
 ├── controller/                    # Controller implementations
-│   ├── ocs2_arm_controller/      # OCS2-based arm MPC controller
+│   ├── ocs2_arm_controller/      # OCS2-based arm controller
 │   ├── ocs2_wbc_controller/      # OCS2 wheel-humanoid whole-body controller
 │   └── adaptive_gripper_controller/ # Adaptive gripper controller
 ├── libraries/
@@ -201,11 +201,8 @@ The `ocs2_wbc_controller` provides whole-body MPC for wheel-based dual-arm platf
 
 **Features:**
 
-- Dual-arm EE tracking with optional torso constraints and mode switching (`HumanoidMode`)
-- Diff-drive (`manipulatorModelType = 1`) and omni / holonomic base (`= 4`, body-frame `vx, vy, omega`)
-- Publishes `/cmd_vel` when external world→base TF is available and the base is unlocked
-
-See [`controller/ocs2_wbc_controller/README.md`](controller/ocs2_wbc_controller/README.md) and [`libraries/ocs2_humanoid/ocs2_wheel_humanoid/README.md`](libraries/ocs2_humanoid/ocs2_wheel_humanoid/README.md).
+- Dual-arm EE tracking with torso constraints and runtime `HumanoidMode` switching
+- Diff-drive and omni / holonomic mobile base (`manipulatorModelType` 1 / 4)
 
 #### Adaptive Gripper Controller
 
