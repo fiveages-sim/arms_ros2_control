@@ -24,7 +24,10 @@ The project is organized as follows:
 arms_ros2_control/
 ├── controller/                    # Controller implementations
 │   ├── ocs2_arm_controller/      # OCS2-based arm controller
+│   ├── ocs2_wbc_controller/      # OCS2 wheel-humanoid whole-body controller
 │   └── adaptive_gripper_controller/ # Adaptive gripper controller
+├── libraries/
+│   └── ocs2_humanoid/            # ocs2_wheel_humanoid (+ ROS wrappers)
 ├── hardwares/                    # Hardware interface implementations
 │   ├── topic_based_ros2_control/ # Topic-based hardware interface
 │   └── unitree_ros2_control/    # Unitree robot hardware interface
@@ -191,6 +194,15 @@ The `ocs2_arm_controller` provides MPC-based control for robotic arms using the 
 - Model Predictive Control (MPC) for trajectory tracking
 - Real-time optimization
 - Support for various robot configurations
+
+#### OCS2 WBC Controller
+
+The `ocs2_wbc_controller` provides whole-body MPC for wheel-based dual-arm platforms via `ocs2_wheel_humanoid`.
+
+**Features:**
+
+- Dual-arm EE tracking with torso constraints and runtime `HumanoidMode` switching
+- Diff-drive and omni / holonomic mobile base (`manipulatorModelType` 1 / 4)
 
 #### Adaptive Gripper Controller
 
