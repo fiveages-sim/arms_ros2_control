@@ -47,9 +47,17 @@ target_link_libraries(keyboard_teleop PUBLIC
         ${rcutils_TARGETS}
 )
 
+add_executable(foot_pedal_teleop src/foot_pedal_teleop.cpp)
+target_link_libraries(foot_pedal_teleop PUBLIC
+        ${rclcpp_TARGETS}
+        ${std_msgs_TARGETS}
+        ${arms_ros2_control_msgs_TARGETS}
+)
+
 install(TARGETS
         joystick_teleop
         keyboard_teleop
+        foot_pedal_teleop
         DESTINATION lib/${PROJECT_NAME})
 
 install(
@@ -69,4 +77,4 @@ if (BUILD_TESTING)
     ament_lint_auto_find_test_dependencies()
 endif ()
 
-ament_package() 
+ament_package()
