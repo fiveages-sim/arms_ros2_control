@@ -93,6 +93,85 @@ source ~/ros2_ws/install/setup.bash
 ros2 run arms_teleop keyboard_teleop --ros-args -p discrete_key_stale_ms:=350
 ```
 
+### USB foot-pedal FSM control
+
+`foot_pedal_teleop` reads one Linux evdev keyboard device directly, subscribes to `/fsm_state`,
+and publishes `/fsm_command`. Default mapping: F13=HOLD, F14=HOME / HOME pose switch,
+F15=OCS2, F16=MOVEJ.
+
+With exactly one supported pedal connected, device discovery is automatic:
+
+```bash
+source ~/ros2_ws/install/setup.bash
+ros2 run arms_teleop foot_pedal_teleop
+```
+
+If multiple CM6K pedals are connected, the node lists their serial numbers and exits instead of
+silently choosing the wrong device. Select the intended unit by serial:
+
+```bash
+ros2 run arms_teleop foot_pedal_teleop --ros-args \
+  -p device_serial:=03CDAB4B081EBD3671FFFFFFFF0300
+```
+
+An explicit stable `device` path remains available for diagnostics and overrides auto-discovery.
+
+By default the node exclusively grabs that device (`grab_device:=true`), so pedal events do not
+reach the desktop or other applications. F13 always requests HOLD immediately. F14-F16 use clicks
+for teleoperation events and long presses for FSM commands:
+
+- F14 single-click: publish `/xr/controller_state=50` (start).
+- F14 double-click: publish `/xr/controller_state=51` (end).
+- F14 long-press: request HOME; while already HOME, request HOME pose switch (`command=100`).
+- F15 long-press: request OCS2.
+- F15 single/double-click while in OCS2: toggle left/right-arm control.
+- F16 single-click: publish `/xr/controller_state=52` (manual intervention).
+- F16 double-click: publish `/xr/controller_state=53` (delete).
+- F16 long-press: request MOVEJ.
+
+The node reads the actual arm states from `/ocs2_wbc_controller/current_state` and publishes the
+toggle to `mode_command`. Per-arm toggles are rejected while bimanual coupling is enabled, matching
+the WBC RViz panel behavior. Like `xr_target_node.py`, the node publishes `std_msgs/Int32` on
+`/xr/controller_state` continuously at 30 Hz: an XR event occupies one frame and subsequent frames
+contain `0`. Events are available in HOME, HOLD, OCS2, and MOVEJ. Single-click actions are emitted
+after the double-click window expires. HOME, OCS2, and MOVEJ long-press commands are
+accepted only from HOLD, except the HOME pose switch. F13 cancels pending click actions. Linux
+key-repeat events are ignored.
+
+Parameters:
+
+- `device` (default `auto`): automatically find the CM6K interface-00 keyboard, or use an explicit
+  stable evdev path.
+- `device_serial` (default empty): disambiguate multiple connected CM6K pedals in auto mode.
+- `grab_device` (default `true`): exclusively consume this input device.
+- `hold_on_disconnect` (default `true`): publish HOLD if the device read fails or disconnects.
+- `gesture.double_click_ms` (default `300`): shared F14-F16 double-click window, valid range
+  150-1000 ms.
+- `gesture.long_press_ms` (default `700`): F14-F16 FSM long-press threshold, valid range
+  400-2000 ms.
+- `xr.publish_rate_hz` (default `30.0`): `/xr/controller_state` state-stream frequency.
+- `mode_command_topic` (default `mode_command`): WBC humanoid-mode command topic.
+- `keys.hold/home/ocs2/movej`: Linux input key codes, default F13-F16 (`183`-`186`).
+
+If opening the device fails with `Permission denied`, configure an input-device udev rule or run
+the node as a user with permission to read that evdev device. Do not use the ordinary keyboard's
+device path with exclusive grabbing enabled.
+
+For the SayoDevice CM6K pedal (VID `8089`, PID `000c`, interface `00`), install the packaged udev
+rule once:
+
+```bash
+sudo install -m 0644 \
+  src/arms_ros2_control/command/arms_teleop/config/udev/70-sayo-cm6k-foot-pedal.rules \
+  /etc/udev/rules.d/70-sayo-cm6k-foot-pedal.rules
+sudo udevadm control --reload-rules
+```
+
+Unplug and reconnect the pedal after reloading. `TAG+="uaccess"` grants the active local login
+session read access whenever the matching event device is created, so per-plug `setfacl` commands
+are no longer needed. The rule deliberately matches only USB interface `00`, not the auxiliary
+`if01` input interface.
+
 ### Keyboard parameters
 
 | Parameter | Default | Description |
