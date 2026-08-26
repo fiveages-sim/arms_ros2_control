@@ -130,7 +130,11 @@ def launch_setup(context, *args, **kwargs):
             executable="arms_target_manager_node",
             name="arms_target_manager",
             output="screen",
-            parameters=arms_params + [{"use_sim_time": ctx.use_sim_time}],
+            parameters=arms_params + [
+                {"use_sim_time": ctx.use_sim_time},
+                # WBC MOVEJ has no IK MoveL; keep arm markers hidden (follow actual pose).
+                {"enable_movej_cartesian_markers": not wbc_available},
+            ],
         )
 
     rviz_config_path = ocs2_common.resolve_rviz_config(ctx.robot_name, "fullbody.rviz")

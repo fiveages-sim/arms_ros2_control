@@ -2,10 +2,19 @@
 #include "arms_controller_common/utils/TrajectoryRecorder.h"
 #include <Eigen/Geometry>
 #include <arms_ros2_control_msgs/msg/linear_message.hpp>
+#include <cmath>
 #include <iostream>
 #include <sstream>
 
 #include "../../include/arms_controller_common/utils/Kinematics.h"
+
+namespace
+{
+    // 500 Hz update cannot run AUTO/BFGS. DLS + a 1 mm-scale residual is enough to
+    // keep tracking after a workspace-limit abort (strict 1e-4 often stalls at ~1.4e-4).
+    constexpr int kRealtimeIkMaxIterations = 50;
+    constexpr double kRealtimeIkAcceptTol = 1.0e-3;
+}
 
 namespace arms_controller_common
 {
@@ -544,6 +553,46 @@ namespace arms_controller_common
         return true;
     }
 
+    bool CartesianTrajectoryManager::solveRealtimeTrackingIK(
+        const std::string& arm_name,
+        const EndEffectorPose& pose,
+        Eigen::VectorXd& current_joint_pos,
+        std::vector<double>& result,
+        const char* motion_name)
+    {
+        const auto saved_solver = arm_kinematics_->getSolverType();
+        arm_kinematics_->setSolverType(ArmKinematics::SolverType::DLS);
+
+        Eigen::VectorXd solution;
+        ArmKinematics::SolutionInfo info;
+        const bool strict_ok = arm_kinematics_->solveSingleArmIKWithInfo(
+            pose, current_joint_pos, solution, info, arm_name,
+            kRealtimeIkMaxIterations, kRealtimeIkAcceptTol);
+
+        arm_kinematics_->setSolverType(saved_solver);
+
+        const bool size_ok = solution.size() == current_joint_pos.size();
+        const bool residual_ok =
+            size_ok && std::isfinite(info.poseErrorNorm) &&
+            info.poseErrorNorm <= kRealtimeIkAcceptTol;
+
+        if (!strict_ok && !residual_ok)
+        {
+            std::ostringstream oss;
+            oss << "IK failed while calculating " << motion_name << " joint position for " << arm_name
+                << " arm: solver=" << ArmKinematics::solverTypeName(info.usedSolver)
+                << ", status=" << info.status
+                << ", final_error=" << info.poseErrorNorm;
+            last_error_ = oss.str();
+            RCLCPP_ERROR(logger_, "%s", last_error_.c_str());
+            return false;
+        }
+
+        current_joint_pos = solution;
+        result.assign(solution.data(), solution.data() + solution.size());
+        return true;
+    }
+
     bool CartesianTrajectoryManager::stepLineArm(
         const std::string& arm_name,
         std::unique_ptr<planning::moveL>& planner,
@@ -581,23 +630,10 @@ namespace arms_controller_common
             rec.appendCal(arm_name, cs);
         }
 
-        Eigen::VectorXd solution;
-        ArmKinematics::SolutionInfo info;
-        if (!arm_kinematics_->solveSingleArmIKWithInfo(
-            pose, current_joint_pos, solution, info, arm_name, 50))
+        if (!solveRealtimeTrackingIK(arm_name, pose, current_joint_pos, result, "MoveL"))
         {
-            std::ostringstream oss;
-            oss << "IK failed while calculating MoveL joint position for " << arm_name
-                << " arm: solver=" << ArmKinematics::solverTypeName(info.usedSolver)
-                << ", status=" << info.status
-                << ", final_error=" << info.poseErrorNorm;
-            last_error_ = oss.str();
-            RCLCPP_ERROR(logger_, "%s", last_error_.c_str());
             return false;
         }
-
-        current_joint_pos = solution;
-        result.assign(solution.data(), solution.data() + solution.size());
         if (planner->isMotionOver())
         {
             completed_ = !dual_arm_mode_;
@@ -642,23 +678,10 @@ namespace arms_controller_common
             rec.appendCal(arm_name, cs);
         }
 
-        Eigen::VectorXd solution;
-        ArmKinematics::SolutionInfo info;
-        if (!arm_kinematics_->solveSingleArmIKWithInfo(
-            pose, current_joint_pos, solution, info, arm_name, 50, 1e-4))
+        if (!solveRealtimeTrackingIK(arm_name, pose, current_joint_pos, result, "MoveC"))
         {
-            std::ostringstream oss;
-            oss << "IK failed while calculating MoveC joint position for " << arm_name
-                << " arm: solver=" << ArmKinematics::solverTypeName(info.usedSolver)
-                << ", status=" << info.status
-                << ", final_error=" << info.poseErrorNorm;
-            last_error_ = oss.str();
-            RCLCPP_ERROR(logger_, "%s", last_error_.c_str());
             return false;
         }
-
-        current_joint_pos = solution;
-        result.assign(solution.data(), solution.data() + solution.size());
         if (planner->isMotionOver())
         {
             completed_ = !dual_arm_mode_;

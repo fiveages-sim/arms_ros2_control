@@ -47,6 +47,19 @@ ros2 launch ocs2_arm_controller demo.launch.py robot:=cr5
 | `body_target/relative` | `geometry_msgs/TwistStamped` | **一次相对位移** + moveL；`frame_id`=base/`body_frame` | **RViz 相对基座/身体** |
 | `body_current_target` | `PoseStamped` | 身体当前指令目标反馈 | RViz / marker |
 
+**MOVEJ 下同一 stamped 话题**：`PoseBasedReferenceManager` 是 `left/right/dual_target/stamped` 与 TF buffer 的唯一持有者。FSM 为 OCS2 时写入参考缓冲；非 OCS2 时转给 `StateMoveJ` 走 `startLinearTrajectory`（lina MoveL + 逐点 IK），语义同 `execute_linear`。vel/acc/jerk 留空则用控制器 `cartesian_defaults`（默认 `max_linear_velocity=0.25`，`ik_type=AUTO`，`time_mode=false`）。无 `lina_planning` 时 MOVEJ 侧为 no-op。
+
+### MOVEJ 手臂 Marker（需 `lina_planning`）
+
+有 `lina_planning` 且 **MOVEJ 接了 IK MoveL**（`ocs2_arm_controller`）时，默认 `disable_auto_update_states = {3, 4}`。切到 MOVEJ（`/fsm_command=4`）后：
+
+1. 左右臂 marker 可拖，只改可视化。
+2. 菜单「发送目标」发一次 `*/stamped` → StateMoveJ IK MoveL。「发送双臂」走 `dual_target/stamped`（3 个 pose 时忽略 body）。
+3. 菜单不显示「切换到连续发布」；进入 MOVEJ 时若已是连续模式，按单次处理。
+4. Python `send_target_stamped` 发同一 stamped 话题；须保持 FSM=MOVEJ（关闭位姿类自动切 OCS2），才会走 IK MoveL。RViz Joint 面板 MOVEJ 仍只发关节数组，不走 stamped。
+
+`ocs2_wbc_controller` 的 MOVEJ **没有** IK MoveL（只走关节）。全身 launch 会设 `enable_movej_cartesian_markers:=false`，MOVEJ 下手臂 marker 不显示、跟实际位姿，与改前相同。无 `lina_planning` 时默认同样不显示。
+
 要点：
 
 - `relative` 用 **TwistStamped**：`twist` 为位移增量；`header.frame_id` 为表达该增量的坐标系（base / EE link / 其它 TF）。非 base 时控制器将 `linear`/`angular` TF 旋到 base 再合成。
@@ -76,6 +89,7 @@ RViz Joint Panel：绝对 / 相对基座 / 相对末端（手臂）或相对身�
 ### 节点参数
 - `dual_arm_mode`、`control_base_frame`、`hand_controllers`：由 launch / task.info 自动配置
 - `marker_fixed_frame`：Marker 固定坐标系，默认 `base_link`
+- `enable_movej_cartesian_markers`：MOVEJ 下是否显示可拖手臂 marker（发 stamped → IK MoveL）。有 `lina_planning` 时默认 `true`；`full_body.launch.py` 在 `ocs2_wbc_controller` 下设为 `false`
 
 ### YAML 配置（`config/default.yaml` 或 task 旁 `target_manager.yaml`）
 
@@ -130,7 +144,8 @@ twist.angular.{x,y,z} = Inputs.{roll,pitch,yaw} * angular_scale  # 单位：rad/
 
 **发布**
 
-- Marker / VR：`left_target`、`right_target`（绝对 Pose）
+- Marker 单次「发送目标」：`left_target/stamped`、`right_target/stamped`（`PoseStamped`）；双臂耦合：`dual_target/stamped`
+- Marker 连续 / VR：`left_target`、`right_target`（绝对 Pose；MOVEJ 下不发）
 - 手柄适配：`left_target/twist`、`right_target/twist`
 
 **订阅**

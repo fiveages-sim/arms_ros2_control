@@ -97,11 +97,16 @@ namespace arms_ros2_control::command
     bool ArmsTargetManager::isBimanualCoupled() const
     {
         return dual_arm_mode_ &&
-               left_arm_marker_ &&
-               right_arm_marker_ &&
-               shouldShowLeftArmMarker() &&
-               shouldShowRightArmMarker() &&
-               bimanual_state_ == arms_ros2_control_msgs::msg::WbcCurrentState::BIMANUAL_COUPLED;
+            left_arm_marker_ &&
+            right_arm_marker_ &&
+            shouldShowLeftArmMarker() &&
+            shouldShowRightArmMarker() &&
+            (bimanual_state_ == arms_ros2_control_msgs::msg::WbcCurrentState::BIMANUAL_COUPLED);
+    }
+
+    bool ArmsTargetManager::shouldStreamPoseCommands() const
+    {
+        return current_mode_ == MarkerState::CONTINUOUS && current_controller_state_ != 4;
     }
 
     void ArmsTargetManager::followCoupledRightMarker(
@@ -544,7 +549,7 @@ namespace arms_ros2_control::command
                 followCoupledRightMarker(old_left_pose, old_right_pose, new_pose);
             }
 
-            if (current_mode_ == MarkerState::CONTINUOUS)
+            if (shouldStreamPoseCommands())
             {
                 left_arm_marker_->publishTargetPose();
                 if (body_marker_ && shouldShowBodyMarker())
@@ -576,7 +581,7 @@ namespace arms_ros2_control::command
                 followCoupledLeftMarker(old_right_pose, old_left_pose, new_pose);
             }
 
-            if (current_mode_ == MarkerState::CONTINUOUS)
+            if (shouldStreamPoseCommands())
             {
                 right_arm_marker_->publishTargetPose();
                 if (body_marker_ && shouldShowBodyMarker())
@@ -599,7 +604,7 @@ namespace arms_ros2_control::command
                     markPendingChanges();
                 }
 
-                if (current_mode_ == MarkerState::CONTINUOUS)
+                if (shouldStreamPoseCommands())
                 {
                     head_marker_->publishTargetJointAngles();
                 }
@@ -615,7 +620,7 @@ namespace arms_ros2_control::command
             geometry_msgs::msg::Pose new_pose = body_marker_->handleFeedback(feedback, source_frame_id);
             body_marker_->setPose(new_pose);
 
-            if (current_mode_ == MarkerState::CONTINUOUS)
+            if (shouldStreamPoseCommands())
             {
                 body_marker_->publishTargetPose();
             }
@@ -630,6 +635,13 @@ namespace arms_ros2_control::command
 
     void ArmsTargetManager::togglePublishMode()
     {
+        if (current_controller_state_ == 4)
+        {
+            RCLCPP_WARN(node_->get_logger(),
+                        "Continuous publish is not available in MOVEJ; use 发送目标 for a one-shot IK MoveL");
+            return;
+        }
+
         const MarkerState previous_mode = current_mode_;
 
         if (current_mode_ == MarkerState::SINGLE_SHOT)
@@ -993,6 +1005,24 @@ namespace arms_ros2_control::command
             }
         }
 
+        const bool show_continuous_toggle = current_controller_state_ != 4;
+        if (left_arm_marker_ && shouldShowLeftArmMarker())
+        {
+            left_menu_handler_->setVisible(left_toggle_handle_, show_continuous_toggle);
+        }
+        if (dual_arm_mode_ && right_arm_marker_ && shouldShowRightArmMarker())
+        {
+            right_menu_handler_->setVisible(right_toggle_handle_, show_continuous_toggle);
+        }
+        if (head_marker_ && head_marker_->isEnabled())
+        {
+            head_menu_handler_->setVisible(head_toggle_handle_, show_continuous_toggle);
+        }
+        if (body_marker_ && shouldShowBodyMarker())
+        {
+            body_menu_handler_->setVisible(body_toggle_handle_, show_continuous_toggle);
+        }
+
         if (left_arm_marker_ && shouldShowLeftArmMarker())
         {
             left_menu_handler_->reApply(*server_);
@@ -1185,6 +1215,11 @@ namespace arms_ros2_control::command
         {
             current_fsm_state_ = new_state;
             current_controller_state_ = command;
+
+            if (command == 4 && current_mode_ == MarkerState::CONTINUOUS)
+            {
+                current_mode_ = MarkerState::SINGLE_SHOT;
+            }
 
             updateMarkerShape();
             updateMenuVisibility();
@@ -1392,7 +1427,7 @@ namespace arms_ros2_control::command
             followCoupledLeftMarker(old_pose, old_opposite_pose, new_pose);
         }
 
-        if (current_mode_ == MarkerState::CONTINUOUS)
+        if (shouldStreamPoseCommands())
         {
             arm_marker->publishTargetPose();
         }
@@ -1490,7 +1525,7 @@ namespace arms_ros2_control::command
             followCoupledLeftMarker(old_pose, old_opposite_pose, current_pose);
         }
 
-        if (publish && current_mode_ == MarkerState::CONTINUOUS)
+        if (publish && shouldStreamPoseCommands())
         {
             arm_marker->publishTargetPose();
         }
@@ -1543,7 +1578,7 @@ namespace arms_ros2_control::command
             markPendingChanges();
         }
 
-        if (current_mode_ == MarkerState::CONTINUOUS)
+        if (shouldStreamPoseCommands())
         {
             body_marker_->publishTargetPose();
         }

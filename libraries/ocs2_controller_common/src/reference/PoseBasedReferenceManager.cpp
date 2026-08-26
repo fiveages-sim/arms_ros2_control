@@ -172,6 +172,31 @@ namespace ocs2::controller_common
 #endif
     }
 
+    void PoseBasedReferenceManager::setAcceptingTargets(bool accept)
+    {
+        accepting_targets_.store(accept, std::memory_order_release);
+        if (!accept)
+        {
+            left_twist_active_ = false;
+            right_twist_active_ = false;
+        }
+    }
+
+    void PoseBasedReferenceManager::setStampedTargetHandlers(
+        PoseStampedHandler left,
+        PoseStampedHandler right,
+        DualStampedHandler dual)
+    {
+        stamped_left_handler_ = std::move(left);
+        stamped_right_handler_ = std::move(right);
+        stamped_dual_handler_ = std::move(dual);
+    }
+
+    std::shared_ptr<tf2_ros::Buffer> PoseBasedReferenceManager::getTfBuffer() const
+    {
+        return tf_buffer_;
+    }
+
     void PoseBasedReferenceManager::subscribe(
         const rclcpp_lifecycle::LifecycleNode::SharedPtr& node)
     {
@@ -1029,6 +1054,10 @@ namespace ocs2::controller_common
     void PoseBasedReferenceManager::leftPoseCallback(
         const geometry_msgs::msg::Pose::SharedPtr msg)
     {
+        if (!shouldAcceptExternalTargets())
+        {
+            return;
+        }
         vector_t target_state = vector_t::Zero(7);
         target_state(0) = msg->position.x;
         target_state(1) = msg->position.y;
@@ -1043,6 +1072,10 @@ namespace ocs2::controller_common
     void PoseBasedReferenceManager::rightPoseCallback(
         const geometry_msgs::msg::Pose::SharedPtr msg)
     {
+        if (!shouldAcceptExternalTargets())
+        {
+            return;
+        }
         vector_t target_state = vector_t::Zero(7);
         target_state(0) = msg->position.x;
         target_state(1) = msg->position.y;
@@ -1057,6 +1090,10 @@ namespace ocs2::controller_common
     void PoseBasedReferenceManager::bodyPoseCallback(
         const geometry_msgs::msg::Pose::SharedPtr msg)
     {
+        if (!shouldAcceptExternalTargets())
+        {
+            return;
+        }
         vector_t target_state = vector_t::Zero(7);
         target_state(0) = msg->position.x;
         target_state(1) = msg->position.y;
@@ -1305,6 +1342,10 @@ namespace ocs2::controller_common
     void PoseBasedReferenceManager::leftTwistCallback(
         const geometry_msgs::msg::Twist::SharedPtr msg)
     {
+        if (!shouldAcceptExternalTargets())
+        {
+            return;
+        }
         left_latched_twist_ = *msg;
         left_twist_stamp_ = std::chrono::steady_clock::now();
         const bool is_zero =
@@ -1321,6 +1362,10 @@ namespace ocs2::controller_common
     void PoseBasedReferenceManager::rightTwistCallback(
         const geometry_msgs::msg::Twist::SharedPtr msg)
     {
+        if (!shouldAcceptExternalTargets())
+        {
+            return;
+        }
         right_latched_twist_ = *msg;
         right_twist_stamp_ = std::chrono::steady_clock::now();
         const bool is_zero =
@@ -1372,6 +1417,10 @@ namespace ocs2::controller_common
     void PoseBasedReferenceManager::leftRelativeCallback(
         const geometry_msgs::msg::TwistStamped::SharedPtr msg)
     {
+        if (!shouldAcceptExternalTargets())
+        {
+            return;
+        }
         geometry_msgs::msg::Twist twist_base;
         if (!twistStampedToBaseTwist(*msg, twist_base))
         {
@@ -1384,6 +1433,10 @@ namespace ocs2::controller_common
     void PoseBasedReferenceManager::rightRelativeCallback(
         const geometry_msgs::msg::TwistStamped::SharedPtr msg)
     {
+        if (!shouldAcceptExternalTargets())
+        {
+            return;
+        }
         geometry_msgs::msg::Twist twist_base;
         if (!twistStampedToBaseTwist(*msg, twist_base))
         {
@@ -1396,6 +1449,10 @@ namespace ocs2::controller_common
     void PoseBasedReferenceManager::bodyRelativeCallback(
         const geometry_msgs::msg::TwistStamped::SharedPtr msg)
     {
+        if (!shouldAcceptExternalTargets())
+        {
+            return;
+        }
         geometry_msgs::msg::Twist twist_base;
         if (!twistStampedToBaseTwist(*msg, twist_base))
         {
@@ -1531,24 +1588,44 @@ namespace ocs2::controller_common
     void PoseBasedReferenceManager::leftPoseStampedCallback(
         const geometry_msgs::msg::PoseStamped::SharedPtr msg)
     {
-        processPoseStamped(msg, [this](geometry_msgs::msg::Pose::SharedPtr pose_msg)
+        if (shouldAcceptExternalTargets())
         {
-            leftPoseStampedPoseCallback(pose_msg);
-        });
+            processPoseStamped(msg, [this](geometry_msgs::msg::Pose::SharedPtr pose_msg)
+            {
+                leftPoseStampedPoseCallback(pose_msg);
+            });
+            return;
+        }
+        if (stamped_left_handler_)
+        {
+            stamped_left_handler_(*msg);
+        }
     }
 
     void PoseBasedReferenceManager::rightPoseStampedCallback(
         const geometry_msgs::msg::PoseStamped::SharedPtr msg)
     {
-        processPoseStamped(msg, [this](geometry_msgs::msg::Pose::SharedPtr pose_msg)
+        if (shouldAcceptExternalTargets())
         {
-            rightPoseStampedPoseCallback(pose_msg);
-        });
+            processPoseStamped(msg, [this](geometry_msgs::msg::Pose::SharedPtr pose_msg)
+            {
+                rightPoseStampedPoseCallback(pose_msg);
+            });
+            return;
+        }
+        if (stamped_right_handler_)
+        {
+            stamped_right_handler_(*msg);
+        }
     }
 
     void PoseBasedReferenceManager::bodyPoseStampedCallback(
         const geometry_msgs::msg::PoseStamped::SharedPtr msg)
     {
+        if (!shouldAcceptExternalTargets())
+        {
+            return;
+        }
         processPoseStamped(msg, [this](geometry_msgs::msg::Pose::SharedPtr pose_msg)
         {
             bodyPoseStampedPoseCallback(pose_msg);
@@ -1558,6 +1635,14 @@ namespace ocs2::controller_common
     void PoseBasedReferenceManager::dualTargetStampedCallback(
         const nav_msgs::msg::Path::SharedPtr msg)
     {
+        if (!shouldAcceptExternalTargets())
+        {
+            if (stamped_dual_handler_)
+            {
+                stamped_dual_handler_(*msg);
+            }
+            return;
+        }
         updateParam();
 
         if (!dual_arm_mode_)
@@ -1695,6 +1780,10 @@ namespace ocs2::controller_common
     void PoseBasedReferenceManager::pathCallback(
         const nav_msgs::msg::Path::SharedPtr msg)
     {
+        if (!shouldAcceptExternalTargets())
+        {
+            return;
+        }
         updateParam();
 
         if (msg->poses.empty())

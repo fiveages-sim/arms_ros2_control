@@ -110,6 +110,8 @@ ROS 2 接口包：[`arms_ros2_control`](../..) 系统所使用的 **msg / srv / 
 | `ExecuteCircle` | srv | `CircleMessage` | `success`, `message`, `estimated_duration` |
 | `MovecUseIK` | srv / action | `CircleMessage` | srv 同圆；action 另含实际时长与进度反馈 |
 
+**共享话题（非 action）**：`left_target/stamped` / `right_target/stamped`（`geometry_msgs/PoseStamped`）以及 `dual_target/stamped`（`nav_msgs/Path`）由控制器内 **唯一** 的 `PoseBasedReferenceManager` 订阅（共用其 TF buffer）。**OCS2** 下做笛卡尔 MoveL；**MOVEJ** 仅在 `ocs2_arm_controller`（且编译了 `lina_planning`）时转给 `StateMoveJ`，内部转成 `LinearMessage` 再走与 `execute_linear` 相同的 `startLinearTrajectory`（lina MoveL + 逐点 IK）。`ocs2_wbc_controller` 的 MOVEJ 不消费 stamped，ATM 也不显示可拖手臂 marker。vel/acc/jerk 留空时用控制器 `cartesian_defaults`。无 `lina_planning` 时 MOVEJ 侧为 no-op。RViz Joint 面板 MOVEJ 不发 stamped，只发关节数组。
+
 ### 路径点序列
 
 按 `nav_msgs/Path` 下发笛卡尔路径（非单段直线/圆弧参数）。

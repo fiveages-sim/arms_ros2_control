@@ -737,8 +737,10 @@ namespace arms_controller_common
                     RCLCPP_ERROR(node_->get_logger(),
                                  "MoveL joint position size mismatch: expected %zu, got %zu",
                                  expected_size, next_joint_pos.size());
+                    refreshHoldPositions();
                     move_cartesian_active_ = false;
                     motion_mode_ = MotionMode::MOVEJ;
+                    cartesian_manager_.clearPlanner();
                     finishLinearAction(false, false, "MoveL joint position size mismatch");
                     finishCircleAction(false, false, "MoveC joint position size mismatch");
                 }
@@ -753,6 +755,7 @@ namespace arms_controller_common
                 refreshHoldPositions();
                 move_cartesian_active_ = false;
                 motion_mode_ = MotionMode::MOVEJ;
+                cartesian_manager_.clearPlanner();
                 RCLCPP_WARN(node_->get_logger(), "%s", error_msg.c_str());
                 finishLinearAction(false, false, error_msg);
                 finishCircleAction(false, false, error_msg);
@@ -3660,6 +3663,165 @@ namespace arms_controller_common
         RCLCPP_DEBUG(node_->get_logger(), "Created linear trajectory action at %s",
                      full_action_name.c_str());
     }
+
+    void StateMoveJ::setCartesianTfBuffer(std::shared_ptr<tf2_ros::Buffer> buffer)
+    {
+#ifdef HAS_LINA_PLANNING
+        cartesian_tf_buffer_ = std::move(buffer);
+#else
+        (void)buffer;
+#endif
+    }
+
+#ifdef HAS_LINA_PLANNING
+    bool StateMoveJ::transformCartesianPoseStamped(
+        const geometry_msgs::msg::PoseStamped& in,
+        geometry_msgs::msg::PoseStamped& out)
+    {
+        const std::string target_frame = cartesian_defaults_.frame_id;
+        if (in.header.frame_id.empty() || in.header.frame_id == target_frame)
+        {
+            out = in;
+            if (out.header.frame_id.empty())
+            {
+                out.header.frame_id = target_frame;
+            }
+            return true;
+        }
+
+        if (!cartesian_tf_buffer_)
+        {
+            RCLCPP_WARN(node_->get_logger(),
+                        "Cannot transform MOVEJ cartesian pose from %s: TF buffer unavailable",
+                        in.header.frame_id.c_str());
+            return false;
+        }
+
+        try
+        {
+            const geometry_msgs::msg::TransformStamped transform =
+                cartesian_tf_buffer_->lookupTransform(
+                    target_frame, in.header.frame_id, tf2::TimePointZero);
+            tf2::doTransform(in, out, transform);
+            out.header.frame_id = target_frame;
+            return true;
+        }
+        catch (const tf2::TransformException& ex)
+        {
+            RCLCPP_WARN(node_->get_logger(),
+                        "Cannot transform MOVEJ cartesian pose from %s to %s: %s",
+                        in.header.frame_id.c_str(), target_frame.c_str(), ex.what());
+            return false;
+        }
+    }
+
+    void StateMoveJ::handleCartesianStampedTarget(
+        const std::string& arm_name,
+        const geometry_msgs::msg::PoseStamped& pose_stamped)
+    {
+        if (!state_active_)
+        {
+            return;
+        }
+
+        geometry_msgs::msg::PoseStamped transformed;
+        if (!transformCartesianPoseStamped(pose_stamped, transformed))
+        {
+            return;
+        }
+
+        arms_ros2_control_msgs::msg::LinearMessage linear_params;
+        linear_params.arm_name = arm_name;
+        linear_params.endpoint = transformed.pose;
+        linear_params.frame_id = transformed.header.frame_id;
+        linear_params.time_mode = false;
+
+        std::lock_guard lock(target_mutex_);
+        std::string message;
+        double estimated_duration = 0.0;
+        if (!startLinearTrajectory(linear_params, message, estimated_duration))
+        {
+            RCLCPP_WARN(node_->get_logger(),
+                        "MOVEJ stamped MoveL rejected (%s): %s",
+                        arm_name.c_str(), message.c_str());
+            return;
+        }
+        RCLCPP_DEBUG(node_->get_logger(),
+                     "MOVEJ stamped MoveL accepted (%s), estimated_duration=%.3f",
+                     arm_name.c_str(), estimated_duration);
+    }
+
+    void StateMoveJ::handleDualCartesianStampedTarget(const nav_msgs::msg::Path& path)
+    {
+        if (!state_active_)
+        {
+            return;
+        }
+
+        if (path.poses.size() != 2 && path.poses.size() != 3)
+        {
+            RCLCPP_WARN(node_->get_logger(),
+                        "dual_target/stamped must contain 2 or 3 poses, got %zu",
+                        path.poses.size());
+            return;
+        }
+
+        if (path.poses.size() == 3)
+        {
+            RCLCPP_DEBUG(node_->get_logger(),
+                         "dual_target/stamped includes a body pose; MOVEJ IK MoveL uses left/right only");
+        }
+
+        geometry_msgs::msg::PoseStamped left_in = path.poses[0];
+        geometry_msgs::msg::PoseStamped right_in = path.poses[1];
+        if (left_in.header.frame_id.empty())
+        {
+            left_in.header.frame_id = path.header.frame_id;
+        }
+        if (right_in.header.frame_id.empty())
+        {
+            right_in.header.frame_id = path.header.frame_id;
+        }
+
+        geometry_msgs::msg::PoseStamped left_out;
+        geometry_msgs::msg::PoseStamped right_out;
+        if (!transformCartesianPoseStamped(left_in, left_out) ||
+            !transformCartesianPoseStamped(right_in, right_out))
+        {
+            return;
+        }
+
+        arms_ros2_control_msgs::msg::LinearMessage linear_params;
+        linear_params.arm_name = "both";
+        linear_params.endpoint = left_out.pose;
+        linear_params.right_endpoint = right_out.pose;
+        linear_params.frame_id = left_out.header.frame_id;
+        linear_params.time_mode = false;
+
+        std::lock_guard lock(target_mutex_);
+        std::string message;
+        double estimated_duration = 0.0;
+        if (!startLinearTrajectory(linear_params, message, estimated_duration))
+        {
+            RCLCPP_WARN(node_->get_logger(),
+                        "MOVEJ dual stamped MoveL rejected: %s", message.c_str());
+            return;
+        }
+        RCLCPP_DEBUG(node_->get_logger(),
+                     "MOVEJ dual stamped MoveL accepted, estimated_duration=%.3f",
+                     estimated_duration);
+    }
+#else
+    void StateMoveJ::handleCartesianStampedTarget(
+        const std::string& /*arm_name*/,
+        const geometry_msgs::msg::PoseStamped& /*pose_stamped*/)
+    {
+    }
+
+    void StateMoveJ::handleDualCartesianStampedTarget(const nav_msgs::msg::Path& /*path*/)
+    {
+    }
+#endif
 
     rclcpp_action::GoalResponse StateMoveJ::handleLinearGoal(
         const rclcpp_action::GoalUUID& uuid,

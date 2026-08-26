@@ -91,6 +91,7 @@ namespace ocs2::mobile_manipulator
                     current_state_ = next_state_;
                     current_state_->enter();
                     publishCurrentFsmState();
+                    syncPoseTargetAcceptance();
                     // Republish after FSM is OCS2 so ArmsTargetManager applies setPose (HOLD skips it).
                     if (current_state_->state_name == FSMStateName::OCS2)
                     {
@@ -111,6 +112,7 @@ namespace ocs2::mobile_manipulator
                 current_state_ = next_state_;
                 current_state_->enter();
                 publishCurrentFsmState();
+                syncPoseTargetAcceptance();
                 if (current_state_->state_name == FSMStateName::OCS2)
                 {
                     ctrl_comp_->publishCachedCurrentTargets();
@@ -193,7 +195,9 @@ namespace ocs2::mobile_manipulator
                 const auto& pinocchio_model = ctrl_comp_->interface_->getPinocchioInterface().getModel();
                 gravity_compensation = std::make_shared<arms_controller_common::GravityCompensation>(pinocchio_model);
                 kinematics_ = std::make_shared<arms_controller_common::ArmKinematics>(pinocchio_model);
-                kinematics_->initializeFromParameters(joint_names_, left_ee_name_, right_ee_name_);
+                kinematics_->initializeFromParameters(
+                    joint_names_, left_ee_name_, right_ee_name_,
+                    ctrl_comp_->interface_->dual_arm_);
                 const std::string robot_name = get_node()->get_parameter("robot_name").as_string();
                 RCLCPP_INFO(get_node()->get_logger(),
                             "Gravity compensation initialized from OCS2 Pinocchio model");
@@ -349,6 +353,25 @@ namespace ocs2::mobile_manipulator
             });
         state_list_.movej->setupJointTrajectoryAction("joint_trajectory_with_para");
         state_list_.movej->setupLinearTrajectoryAction("execute_linear");
+        if (ctrl_comp_ && ctrl_comp_->pose_reference_manager_ && state_list_.movej)
+        {
+            auto* const reference_manager = ctrl_comp_->pose_reference_manager_.get();
+            auto* const movej = state_list_.movej.get();
+            movej->setCartesianTfBuffer(reference_manager->getTfBuffer());
+            reference_manager->setStampedTargetHandlers(
+                [movej](const geometry_msgs::msg::PoseStamped& msg)
+                {
+                    movej->handleCartesianStampedTarget("left", msg);
+                },
+                [movej](const geometry_msgs::msg::PoseStamped& msg)
+                {
+                    movej->handleCartesianStampedTarget("right", msg);
+                },
+                [movej](const nav_msgs::msg::Path& msg)
+                {
+                    movej->handleDualCartesianStampedTarget(msg);
+                });
+        }
         state_list_.movej->setupCircleTrajectoryAction("execute_circle_use_ik");
 
         kinematics_service_ = get_node()->create_service<arms_ros2_control_msgs::srv::KinematicsService>(
@@ -497,6 +520,7 @@ namespace ocs2::mobile_manipulator
         next_state_name_ = current_state_->state_name;
         mode_ = FSMMode::NORMAL;
         publishCurrentFsmState();
+        syncPoseTargetAcceptance();
 
         return CallbackReturn::SUCCESS;
     }
@@ -546,6 +570,15 @@ namespace ocs2::mobile_manipulator
             return state_list_.movej;
         default:
             return state_list_.invalid;
+        }
+    }
+
+    void Ocs2ArmController::syncPoseTargetAcceptance() const
+    {
+        if (ctrl_comp_ && ctrl_comp_->pose_reference_manager_ && current_state_)
+        {
+            ctrl_comp_->pose_reference_manager_->setAcceptingTargets(
+                current_state_->state_name == FSMStateName::OCS2);
         }
     }
 

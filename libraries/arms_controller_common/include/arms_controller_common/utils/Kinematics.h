@@ -62,16 +62,29 @@ namespace arms_controller_common
         Eigen::VectorXd getAllJoints() const
         {
             Eigen::VectorXd all(leftArmJointCount + rightArmJointCount);
-            all.head(leftArmJointCount) = leftArmJoints;
-            all.tail(rightArmJointCount) = rightArmJoints;
+            if (leftArmJointCount > 0)
+            {
+                all.head(leftArmJointCount) = leftArmJoints;
+            }
+            if (rightArmJointCount > 0)
+            {
+                all.tail(rightArmJointCount) = rightArmJoints;
+            }
             return all;
         }
 
         void setAllJoints(const Eigen::VectorXd& joints)
         {
-            if (joints.size() == static_cast<Eigen::Index>(leftArmJointCount + rightArmJointCount))
+            if (joints.size() != static_cast<Eigen::Index>(leftArmJointCount + rightArmJointCount))
+            {
+                return;
+            }
+            if (leftArmJointCount > 0)
             {
                 leftArmJoints = joints.head(leftArmJointCount);
+            }
+            if (rightArmJointCount > 0)
+            {
                 rightArmJoints = joints.tail(rightArmJointCount);
             }
         }
@@ -274,7 +287,8 @@ namespace arms_controller_common
         void initializeFromParameters(
             const std::vector<std::string>& joint_names,
             const std::string& left_ee_name = "left_tcp",
-            const std::string& right_ee_name = "right_tcp");
+            const std::string& right_ee_name = "right_tcp",
+            bool dual_arm = false);
 
         void setEndEffectorNames(const std::string& left_name,
                                  const std::string& right_name)
@@ -294,7 +308,11 @@ namespace arms_controller_common
             }
         }
 
-        void setJointNames(const std::vector<std::string>& joint_names);
+        /**
+         * dual_arm from OCS2 dualArmMode: split joints in half (left then right);
+         * otherwise all joints are the logical left arm (single-arm still uses left_* topics).
+         */
+        void setJointNames(const std::vector<std::string>& joint_names, bool dual_arm = false);
 
         Eigen::MatrixXd getJacobian(std::string armType);
 

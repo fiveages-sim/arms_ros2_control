@@ -69,6 +69,7 @@ namespace ocs2::mobile_manipulator
     private:
         std::shared_ptr<FSMState> getNextState(FSMStateName stateName) const;
         void publishCurrentFsmState() const;
+        void syncPoseTargetAcceptance() const;
 
         // Hardware parameters
         std::string controller_name_;
