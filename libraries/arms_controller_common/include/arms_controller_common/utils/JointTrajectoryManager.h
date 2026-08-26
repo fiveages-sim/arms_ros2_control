@@ -1,6 +1,7 @@
 #pragma once
 
 #include "arms_controller_common/utils/Interpolation.h"
+#include "arms_controller_common/utils/OnlineThirdOrderInterpolator.h"
 #include <vector>
 #include <memory>
 #include <rclcpp/rclcpp.hpp>
@@ -96,6 +97,18 @@ namespace arms_controller_common
             double controller_frequency,
             double tanh_scale = 3.0
         );
+
+        bool initOnlineTracking(
+            const std::vector<double>& initial_position,
+            const std::vector<double>& initial_velocity,
+            const OnlineThirdOrderConfig& config,
+            double stamp_seconds);
+
+        OnlineThirdOrderInterpolator::TargetResult updateOnlineTarget(
+            const std::vector<double>& target,
+            double stamp_seconds);
+
+        bool isOnlineTracking() const;
 
         /**
          * @brief Get next trajectory point (unified interface)
@@ -193,7 +206,8 @@ namespace arms_controller_common
             NONE, // Not initialized
             SINGLE_NODE, // Single-node trajectory
             MULTI_NODE_BASIC, // Multi-node trajectory (basic segment-based interpolation)
-            MULTI_NODE_ADVANCED // Multi-node trajectory (advanced lina_planning)
+            MULTI_NODE_ADVANCED, // Multi-node trajectory (advanced lina_planning)
+            ONLINE_TRACKING // Persistent streaming position tracking
         };
 
         // Single-node trajectory computation
@@ -201,6 +215,7 @@ namespace arms_controller_common
 
         // Multi-node trajectory computation - basic mode (segment-based)
         std::vector<double> computeMultiNodeBasic(double step_seconds);
+        std::vector<double> computeOnlineTracking(double step_seconds);
 
 #ifdef HAS_LINA_PLANNING
         // Multi-node trajectory computation - advanced mode (lina_planning)
@@ -276,5 +291,8 @@ namespace arms_controller_common
         // Multi-node DOUBLES planner
         std::unique_ptr<planning::SmoothCurveOfMultiJointsUsingBlending> multi_node_planner_;
 #endif
+
+        std::unique_ptr<OnlineThirdOrderInterpolator> online3_interpolator_;
+        double online3_time_{0.0};
     };
 } // namespace arms_controller_common

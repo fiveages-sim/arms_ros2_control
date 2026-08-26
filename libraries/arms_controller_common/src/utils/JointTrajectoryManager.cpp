@@ -262,6 +262,15 @@ namespace arms_controller_common
         controller_frequency_ = controller_frequency;
         period_ = controller_frequency_ > 0.0 ? 1.0 / controller_frequency_ : 0.01;
 
+        if (interpolation_type_ == InterpolationType::ONLINE3)
+        {
+            RCLCPP_WARN(logger_,
+                        "ONLINE3 is only valid for streaming position targets; "
+                        "falling back to LINEAR for a multi-waypoint trajectory");
+            interpolation_type_ = InterpolationType::LINEAR;
+            type = InterpolationType::LINEAR;
+        }
+
         // Prepare segment durations
         size_t num_segments = waypoints.size() - 1;
         segment_durations_.clear();
@@ -408,6 +417,48 @@ namespace arms_controller_common
         return true;
     }
 
+    bool JointTrajectoryManager::initOnlineTracking(
+        const std::vector<double>& initial_position,
+        const std::vector<double>& initial_velocity,
+        const OnlineThirdOrderConfig& config,
+        double stamp_seconds)
+    {
+        try
+        {
+            reset();
+            online3_interpolator_ = std::make_unique<OnlineThirdOrderInterpolator>(config);
+            online3_interpolator_->reset(initial_position, initial_velocity, {}, stamp_seconds);
+            online3_time_ = stamp_seconds;
+            mode_ = TrajectoryMode::ONLINE_TRACKING;
+            interpolation_type_ = InterpolationType::ONLINE3;
+            initialized_ = true;
+            completed_ = false;
+            return true;
+        }
+        catch (const std::exception& error)
+        {
+            RCLCPP_ERROR(logger_, "Failed to initialize online3 interpolation: %s", error.what());
+            reset();
+            return false;
+        }
+    }
+
+    OnlineThirdOrderInterpolator::TargetResult JointTrajectoryManager::updateOnlineTarget(
+        const std::vector<double>& target, double stamp_seconds)
+    {
+        if (!isOnlineTracking() || !online3_interpolator_)
+        {
+            return OnlineThirdOrderInterpolator::TargetResult::INVALID;
+        }
+        return online3_interpolator_->pushTarget(target, stamp_seconds);
+    }
+
+    bool JointTrajectoryManager::isOnlineTracking() const
+    {
+        return initialized_ && mode_ == TrajectoryMode::ONLINE_TRACKING &&
+               static_cast<bool>(online3_interpolator_);
+    }
+
     std::vector<double> JointTrajectoryManager::getNextPoint(double step_seconds)
     {
         if (!initialized_)
@@ -450,6 +501,9 @@ namespace arms_controller_common
         case TrajectoryMode::MULTI_NODE_BASIC:
             result = computeMultiNodeBasic(step_seconds);
             break;
+        case TrajectoryMode::ONLINE_TRACKING:
+            result = computeOnlineTracking(step_seconds);
+            break;
 #ifdef HAS_LINA_PLANNING
         case TrajectoryMode::MULTI_NODE_ADVANCED:
             if (step_seconds > 0.0)
@@ -490,6 +544,8 @@ namespace arms_controller_common
         waypoints_.clear();
         segment_durations_.clear();
         segment_progress_.clear();
+        online3_interpolator_.reset();
+        online3_time_ = 0.0;
 
         // Reset progress tracking
         duration_ = 0.0;
@@ -545,6 +601,17 @@ namespace arms_controller_common
                         "Invalid controller frequency: %.3f, keeping current value %.3f",
                         controller_frequency, controller_frequency_);
         }
+    }
+
+    std::vector<double> JointTrajectoryManager::computeOnlineTracking(double step_seconds)
+    {
+        if (!online3_interpolator_)
+        {
+            return {};
+        }
+        const double step = step_seconds > 0.0 ? step_seconds : period_;
+        online3_time_ += step;
+        return online3_interpolator_->update(step, online3_time_);
     }
 
     void JointTrajectoryManager::setCommonJointBlendRatios(double blend_ratios)

@@ -133,6 +133,31 @@ namespace basic_joint_controller
             auto_declare<double>("movej_max_jerk", 20.0);
             auto_declare<bool>("movej_auto_extend_duration", true);
 
+            const std::size_t online3_dof = std::max<std::size_t>(joint_names_.size(), 1);
+            const auto repeated = [online3_dof](double value)
+            {
+                return std::vector<double>(online3_dof, value);
+            };
+            auto_declare<std::vector<double>>("movej_online3_tracking_frequency", repeated(4.0));
+            auto_declare<std::vector<double>>("movej_online3_max_velocity", repeated(0.5));
+            auto_declare<std::vector<double>>("movej_online3_min_velocity", repeated(-0.5));
+            auto_declare<std::vector<double>>("movej_online3_max_acceleration", repeated(1.0));
+            auto_declare<std::vector<double>>("movej_online3_min_acceleration", repeated(-1.0));
+            auto_declare<std::vector<double>>("movej_online3_max_jerk", repeated(5.0));
+            auto_declare<std::vector<double>>("movej_online3_min_jerk", repeated(-5.0));
+            auto_declare<std::vector<double>>("movej_online3_max_input_velocity", repeated(0.6));
+            auto_declare<std::vector<double>>("movej_online3_spike_margin", repeated(0.006));
+            auto_declare<std::vector<double>>("movej_online3_spike_cluster_tolerance", repeated(0.01));
+            auto_declare<std::vector<double>>("movej_online3_deadband", repeated(0.004));
+            auto_declare<double>("movej_online3_alpha", 0.65);
+            auto_declare<double>("movej_online3_beta", 0.08);
+            auto_declare<double>("movej_online3_input_timeout", 0.3);
+            auto_declare<double>("movej_online3_decision_timeout", 0.075);
+            auto_declare<double>("movej_online3_max_integrator_dt", 0.005);
+            auto_declare<std::vector<double>>("movej_online3_position_tolerance", repeated(0.0005));
+            auto_declare<std::vector<double>>("movej_online3_velocity_tolerance", repeated(0.002));
+            auto_declare<std::vector<double>>("movej_online3_acceleration_tolerance", repeated(0.01));
+
             state_list_.movej = std::make_shared<StateMoveJ>(
                 ctrl_interfaces_, get_node(), joint_names_);
 

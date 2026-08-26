@@ -14,6 +14,7 @@ namespace arms_controller_common
         TANH,
         LINEAR,
         DOUBLES,
+        ONLINE3,
         NONE
     };
 
@@ -32,6 +33,8 @@ namespace arms_controller_common
             return "linear";
         case InterpolationType::DOUBLES:
             return "doubles";
+        case InterpolationType::ONLINE3:
+            return "online3";
         case InterpolationType::NONE:
             return "none";
         case InterpolationType::TANH:
@@ -42,7 +45,7 @@ namespace arms_controller_common
 
     /**
      * @brief Parse interpolation type from string (case-insensitive).
-     * @param type "tanh", "linear", or "none"
+     * @param type "tanh", "linear", "doubles", "online3", or "none"
      * @param fallback Returned when type is unknown
      */
     inline InterpolationType parseInterpolationType(const std::string& type,
@@ -61,6 +64,10 @@ namespace arms_controller_common
         {
             return InterpolationType::DOUBLES;
         }
+        if (t == "online3" || t == "online")
+        {
+            return InterpolationType::ONLINE3;
+        }
         if (t == "none")
         {
             return InterpolationType::NONE;
@@ -68,5 +75,3 @@ namespace arms_controller_common
         return fallback;
     }
 } // namespace arms_controller_common
-
-

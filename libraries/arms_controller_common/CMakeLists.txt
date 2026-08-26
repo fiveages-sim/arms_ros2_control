@@ -41,6 +41,7 @@ set(ARMS_CONTROLLER_COMMON_SOURCES
         src/utils/GravityCompensation.cpp
         src/utils/JointLimitsManager.cpp
         src/utils/JointTrajectoryManager.cpp
+        src/utils/OnlineThirdOrderInterpolator.cpp
         src/utils/JointSpeedStopPlanner.cpp
         src/utils/WaistLiftingPlaner.cpp
         src/utils/TrajectoryRecorder.cpp
@@ -101,6 +102,14 @@ target_link_libraries(${PROJECT_NAME} PRIVATE
         pthread
         rt
 )
+
+if(BUILD_TESTING)
+    find_package(ament_cmake_gtest REQUIRED)
+    ament_add_gtest(test_online_third_order_interpolator
+            test/test_online_third_order_interpolator.cpp)
+    target_link_libraries(test_online_third_order_interpolator
+            ${PROJECT_NAME})
+endif()
 
 
 install(

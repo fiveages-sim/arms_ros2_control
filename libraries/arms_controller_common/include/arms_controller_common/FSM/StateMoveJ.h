@@ -272,6 +272,7 @@ namespace arms_controller_common
         bool initTargetJointPositionInterpolation(
             const std::vector<double>& start_pos,
             const std::vector<double>& target_pos);
+        void updateOnline3Config();
 
         bool isMotionBusy() const;
         bool isNonWaistMotionBusy() const;
@@ -402,6 +403,8 @@ namespace arms_controller_common
         // Interpolation configuration
         InterpolationType interpolation_type_{InterpolationType::TANH};
         double tanh_scale_{3.0};
+        OnlineThirdOrderConfig online3_config_;
+        double online3_target_stamp_{0.0};
 
         // Unified trajectory manager
         JointTrajectoryManager trajectory_manager_;

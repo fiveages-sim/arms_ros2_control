@@ -138,6 +138,10 @@ namespace arms_controller_common
         trajectory_manager_.setCommonJointBlendRatios(node_->get_parameter("movej_trajectory_blend_ratio").as_double());
         trajectory_manager_.setControllerFrequency(ctrl_interfaces_.frequency_);
         updateMoveJVelocityParameters();
+        if (interpolation_type_ == InterpolationType::ONLINE3)
+        {
+            updateOnline3Config();
+        }
         updateCartesianDefaults();
     }
 
@@ -241,6 +245,37 @@ namespace arms_controller_common
         return trajectory_manager_.initSingleNode(
             start_pos, target_pos, actual, interpolation_type_,
             ctrl_interfaces_.frequency_, tanh_scale_);
+    }
+
+    void StateMoveJ::updateOnline3Config()
+    {
+        const auto vector_parameter = [this](const char* name)
+        {
+            return node_->get_parameter(name).as_double_array();
+        };
+        online3_config_.tracking_frequency = vector_parameter("movej_online3_tracking_frequency");
+        online3_config_.max_velocity = vector_parameter("movej_online3_max_velocity");
+        online3_config_.min_velocity = vector_parameter("movej_online3_min_velocity");
+        online3_config_.max_acceleration = vector_parameter("movej_online3_max_acceleration");
+        online3_config_.min_acceleration = vector_parameter("movej_online3_min_acceleration");
+        online3_config_.max_jerk = vector_parameter("movej_online3_max_jerk");
+        online3_config_.min_jerk = vector_parameter("movej_online3_min_jerk");
+        online3_config_.max_input_velocity = vector_parameter("movej_online3_max_input_velocity");
+        online3_config_.spike_margin = vector_parameter("movej_online3_spike_margin");
+        online3_config_.spike_cluster_tolerance =
+            vector_parameter("movej_online3_spike_cluster_tolerance");
+        online3_config_.deadband = vector_parameter("movej_online3_deadband");
+        online3_config_.alpha = node_->get_parameter("movej_online3_alpha").as_double();
+        online3_config_.beta = node_->get_parameter("movej_online3_beta").as_double();
+        online3_config_.input_timeout = node_->get_parameter("movej_online3_input_timeout").as_double();
+        online3_config_.decision_timeout =
+            node_->get_parameter("movej_online3_decision_timeout").as_double();
+        online3_config_.max_integrator_dt =
+            node_->get_parameter("movej_online3_max_integrator_dt").as_double();
+        online3_config_.position_tolerance = vector_parameter("movej_online3_position_tolerance");
+        online3_config_.velocity_tolerance = vector_parameter("movej_online3_velocity_tolerance");
+        online3_config_.acceleration_tolerance =
+            vector_parameter("movej_online3_acceleration_tolerance");
     }
 
     void StateMoveJ::declareCartesianDefaultParameters()
@@ -399,19 +434,26 @@ namespace arms_controller_common
         std::lock_guard lock(target_mutex_);
         if (has_target_ && target_pos_.size() == start_pos_.size())
         {
-            if (initTargetJointPositionInterpolation(start_pos_, target_pos_))
+            if (interpolation_type_ == InterpolationType::ONLINE3)
             {
-                interpolation_active_ = true;
-                RCLCPP_INFO(node_->get_logger(),
-                            "Starting interpolation to target position over %.1f seconds (type=%s)",
-                            trajectory_manager_.getPlanningTime(),
-                            toString(interpolation_type_));
+                online3_target_stamp_ = node_->now().seconds();
             }
             else
             {
-                interpolation_active_ = false;
-                RCLCPP_WARN(node_->get_logger(),
-                            "Failed to initialize MOVEJ interpolation on enter; waiting for a new target");
+                if (initTargetJointPositionInterpolation(start_pos_, target_pos_))
+                {
+                    interpolation_active_ = true;
+                    RCLCPP_INFO(node_->get_logger(),
+                                "Starting interpolation to target position over %.1f seconds (type=%s)",
+                                trajectory_manager_.getPlanningTime(),
+                                toString(interpolation_type_));
+                }
+                else
+                {
+                    interpolation_active_ = false;
+                    RCLCPP_WARN(node_->get_logger(),
+                                "Failed to initialize MOVEJ interpolation on enter; waiting for a new target");
+                }
             }
         }
         else
@@ -780,6 +822,37 @@ namespace arms_controller_common
                 ctrl_interfaces_.setJointPositionCommand(i, hold_positions_[i]);
             }
             return;
+        }
+
+        if (interpolation_type_ == InterpolationType::ONLINE3 &&
+            !trajectory_manager_.isOnlineTracking())
+        {
+            if (!has_target_ ||
+                target_pos_.size() != ctrl_interfaces_.joint_position_command_interface_.size())
+            {
+                maintainCommandFromLastSent();
+                return;
+            }
+
+            std::vector<double> initial_position = ctrl_interfaces_.last_sent_joint_positions_;
+            if (initial_position.size() != target_pos_.size())
+            {
+                initial_position = current_joint_pos_;
+            }
+            std::vector<double> initial_velocity(target_pos_.size(), 0.0);
+
+            if (!trajectory_manager_.initOnlineTracking(
+                    initial_position, initial_velocity, online3_config_, online3_target_stamp_))
+            {
+                maintainCommandFromLastSent();
+                return;
+            }
+            trajectory_manager_.updateOnlineTarget(target_pos_, online3_target_stamp_);
+            start_pos_ = initial_position;
+            interpolation_active_ = true;
+            RCLCPP_INFO(node_->get_logger(),
+                        "Started persistent online3 position tracking for %zu joints",
+                        target_pos_.size());
         }
 
         if (trajectory_manager_.isInitialized())
@@ -1380,6 +1453,15 @@ namespace arms_controller_common
         }
 
         const std::vector<double> captured_target = target_pos;
+        if (interpolation_type_ == InterpolationType::ONLINE3 &&
+            trajectory_manager_.isOnlineTracking() &&
+            !stop_to_zero_active_ && motion_mode_ == MotionMode::MOVEJ)
+        {
+            // A streaming target update belongs to the active online3 motion;
+            // it is not a new motion that requires a stop-to-zero handover.
+            setTargetPositionImpl(captured_target);
+            return;
+        }
         requestMotionOrDefer([this, captured_target]() { setTargetPositionImpl(captured_target); });
     }
 
@@ -1407,7 +1489,8 @@ namespace arms_controller_common
             }
         }
 
-        if (is_same_target && interpolation_active_)
+        if (is_same_target && interpolation_active_ &&
+            interpolation_type_ != InterpolationType::ONLINE3)
         {
             RCLCPP_DEBUG(node_->get_logger(), "Received same target position, skipping re-interpolation");
             return;
@@ -1416,8 +1499,29 @@ namespace arms_controller_common
         target_pos_ = applyJointLimits(target_pos, "target position");
         has_target_ = true;
         publishCurrentTargetJoint(target_pos_);
-        interpolation_active_ = false;
-        trajectory_manager_.reset();
+        online3_target_stamp_ = node_->now().seconds();
+        if (interpolation_type_ == InterpolationType::ONLINE3)
+        {
+            if (trajectory_manager_.isOnlineTracking())
+            {
+                const auto result = trajectory_manager_.updateOnlineTarget(
+                    target_pos_, online3_target_stamp_);
+                if (result == OnlineThirdOrderInterpolator::TargetResult::INVALID)
+                {
+                    RCLCPP_WARN(node_->get_logger(), "online3 rejected an invalid target");
+                }
+            }
+            else
+            {
+                trajectory_manager_.reset();
+                interpolation_active_ = false;
+            }
+        }
+        else
+        {
+            interpolation_active_ = false;
+            trajectory_manager_.reset();
+        }
     }
 
     void StateMoveJ::setTargetPosition(const std::string& prefix, const std::vector<double>& target_pos)
@@ -1436,6 +1540,13 @@ namespace arms_controller_common
 
         const std::string captured_prefix = prefix;
         const std::vector<double> captured_target = target_pos;
+        if (interpolation_type_ == InterpolationType::ONLINE3 &&
+            trajectory_manager_.isOnlineTracking() &&
+            !stop_to_zero_active_ && motion_mode_ == MotionMode::MOVEJ)
+        {
+            setTargetPositionImpl(captured_prefix, captured_target);
+            return;
+        }
         requestMotionOrDefer([this, captured_prefix, captured_target]()
         {
             setTargetPositionImpl(captured_prefix, captured_target);
@@ -1497,8 +1608,18 @@ namespace arms_controller_common
         use_prefix_filter_ = true;
         active_prefix_ = prefix;
         refreshHoldPositions();
-        interpolation_active_ = false;
-        trajectory_manager_.reset();
+        online3_target_stamp_ = node_->now().seconds();
+        if (interpolation_type_ == InterpolationType::ONLINE3 &&
+            trajectory_manager_.isOnlineTracking())
+        {
+            trajectory_manager_.updateOnlineTarget(target_pos_, online3_target_stamp_);
+            interpolation_active_ = true;
+        }
+        else
+        {
+            interpolation_active_ = false;
+            trajectory_manager_.reset();
+        }
     }
 
     void StateMoveJ::setJointNames(const std::vector<std::string>& joint_names)

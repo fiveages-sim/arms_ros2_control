@@ -327,6 +327,36 @@ Home 和 MoveJ 状态均支持可配置插值方式：
 - **`linear`**：匀速插值。`target_joint_position` 同样把 duration 当下限并受最大速度约束。
 - **`doubles`**：lina_planning 的 S 曲线（速度/加速度/jerk）。`target_joint_position` 语义同上。
 - **`none`**：立刻跳到目标，不做插值，也不限速。
+- **`online3`**：面向连续位置流的在线跟踪。输入经过三帧回顾尖峰判断和死区，
+  再由 α-β 滤波器估计目标位置/速度，最后通过速度、
+  加速度和 jerk 受限的三阶参考治理器输出。新目标不会重置内部运动状态。
+
+`online3` 仅用于连续的 `target_joint_position` 位置流；`JointTrajectory`、MoveL、
+MoveC 和腰部专用规划接口仍使用各自的轨迹规划器。参数数组长度必须与控制器
+的 `joints` 数量一致。典型配置：
+
+```yaml
+movej_interpolation_type: online3
+movej_online3_tracking_frequency: [4.0, 4.0, 4.0]
+movej_online3_max_velocity: [0.35, 0.35, 0.35]
+movej_online3_min_velocity: [-0.35, -0.35, -0.35]
+movej_online3_max_acceleration: [0.8, 0.8, 0.8]
+movej_online3_min_acceleration: [-0.8, -0.8, -0.8]
+movej_online3_max_jerk: [3.0, 3.0, 3.0]
+movej_online3_min_jerk: [-3.0, -3.0, -3.0]
+movej_online3_max_input_velocity: [0.5, 0.5, 0.5]
+movej_online3_spike_margin: [0.006, 0.006, 0.006]
+movej_online3_spike_cluster_tolerance: [0.01, 0.01, 0.01]
+movej_online3_deadband: [0.004, 0.004, 0.004]
+movej_online3_alpha: 0.65
+movej_online3_beta: 0.08
+movej_online3_input_timeout: 0.3
+movej_online3_decision_timeout: 0.075
+movej_online3_max_integrator_dt: 0.002
+movej_online3_position_tolerance: [0.0005, 0.0005, 0.0005]
+movej_online3_velocity_tolerance: [0.002, 0.002, 0.002]
+movej_online3_acceleration_tolerance: [0.01, 0.01, 0.01]
+```
 
 ### 线程安全
 
