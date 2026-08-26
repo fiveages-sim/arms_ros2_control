@@ -243,6 +243,15 @@ namespace arms_controller_common
 
     private:
         void updateParam();
+        void declareMoveJVelocityParameters();
+        void updateMoveJVelocityParameters();
+        double resolveTargetJointDuration(
+            const std::vector<double>& start_pos,
+            const std::vector<double>& target_pos,
+            double requested) const;
+        bool initTargetJointPositionInterpolation(
+            const std::vector<double>& start_pos,
+            const std::vector<double>& target_pos);
 
         bool isMotionBusy() const;
         bool isNonWaistMotionBusy() const;
@@ -318,6 +327,10 @@ namespace arms_controller_common
         std::shared_ptr<GravityCompensation> gravity_compensation_;
 
         double duration_{3.0}; // Interpolation duration in seconds
+        double movej_max_velocity_{2.0};
+        double movej_max_acceleration_{4.0};
+        double movej_max_jerk_{20.0};
+        bool movej_auto_extend_duration_{true};
 
         std::vector<double> start_pos_; // Starting position when entering state or starting new movement
         std::vector<double> target_pos_; // Target position to move to

@@ -132,7 +132,7 @@ ROS 2 接口包：[`arms_ros2_control`](../..) 系统所使用的 **msg / srv / 
 | `position` | `float64[]` | 目标关节位置 |
 | `velocity` | `float64[]` | 关节速度 |
 | `blend_ratio_percent` | `float64` | 多点转接比例 `0~1` |
-| `max_velocity` / `max_acceleration` / `max_jerk` | `float64[]` | 规划上限 |
+| `max_velocity` / `max_acceleration` / `max_jerk` | `float64[]` | 规划上限；空或长度不匹配时，控制器用 `movej_max_velocity` / `movej_max_acceleration` / `movej_max_jerk`（默认 2.0 / 4.0 / 20.0，与 lina 关节默认一致） |
 | `time_mode` | `bool` | 是否时间模式 |
 | `total_time` | `float64` | 总时间 |
 

@@ -52,7 +52,11 @@ namespace arms_controller_common
         double duration,
         InterpolationType type,
         double controller_frequency,
-        double tanh_scale)
+        double tanh_scale,
+        bool auto_extend_duration,
+        double max_velocity,
+        double max_acceleration,
+        double max_jerk)
     {
         if (!validateSingleNodeParams(start_pos, target_pos, duration, type))
         {
@@ -85,6 +89,10 @@ namespace arms_controller_common
 
             if (!isDoublesAvailable())
             {
+                (void)auto_extend_duration;
+                (void)max_velocity;
+                (void)max_acceleration;
+                (void)max_jerk;
                 RCLCPP_WARN(logger_,
                             "DOUBLES interpolation requested but lina_planning is not available. "
                             "Falling back to LINEAR interpolation.");
@@ -94,33 +102,102 @@ namespace arms_controller_common
             else
             {
 #ifdef HAS_LINA_PLANNING
-                // Initialize moveJ planner for DOUBLES
+                const double vmax = std::max(max_velocity, 1e-6);
+                const double amax = std::max(max_acceleration, 1e-6);
+                const double jmax = std::max(max_jerk, 1e-6);
+
+                auto applyJointLimits = [vmax, amax, jmax](planning::TrajectoryParameter& param, size_t n)
+                {
+                    for (size_t i = 0; i < n; ++i)
+                    {
+                        param.joint_max_vel(i) = vmax;
+                        param.joint_max_acc(i) = amax;
+                        param.joint_max_jerk(i) = jmax;
+                    }
+                };
+
+                auto initDoublesPlanner = [&](double total_time, bool time_mode) -> bool
+                {
+                    try
+                    {
+                        movej_planner_ = std::make_unique<planning::moveJ>();
+
+                        const size_t nr_of_joints = start_pos_.size();
+                        planning::TrajectPoint start_joint_point(nr_of_joints);
+                        planning::TrajectPoint end_joint_point(nr_of_joints);
+                        planning::TrajectoryParameter traj_param = time_mode
+                            ? planning::TrajectoryParameter(total_time, nr_of_joints)
+                            : planning::TrajectoryParameter(nr_of_joints);
+
+                        for (size_t i = 0; i < nr_of_joints; ++i)
+                        {
+                            start_joint_point.joint_pos(i) = start_pos_[i];
+                            end_joint_point.joint_pos(i) = target_pos_[i];
+                        }
+                        if (auto_extend_duration)
+                        {
+                            applyJointLimits(traj_param, nr_of_joints);
+                        }
+
+                        planning::TrajectoryInitParameters movej_init_para(
+                            start_joint_point, end_joint_point, traj_param, period_);
+
+                        if (!movej_planner_->init(movej_init_para))
+                        {
+                            RCLCPP_ERROR(logger_, "Failed to initialize moveJ planner for DOUBLES interpolation");
+                            return false;
+                        }
+
+                        movej_planner_->setRealStartTime(0.0);
+                        return true;
+                    }
+                    catch (const std::exception& e)
+                    {
+                        RCLCPP_ERROR(logger_, "Exception while initializing moveJ planner: %s", e.what());
+                        return false;
+                    }
+                };
+
                 try
                 {
-                    movej_planner_ = std::make_unique<planning::moveJ>();
-
-                    size_t nr_of_joints = start_pos_.size();
-                    planning::TrajectPoint start_joint_point(nr_of_joints);
-                    planning::TrajectPoint end_joint_point(nr_of_joints);
-                    planning::TrajectoryParameter traj_param(duration_, nr_of_joints);
-
-                    for (size_t i = 0; i < nr_of_joints; i++)
+                    if (auto_extend_duration)
                     {
-                        start_joint_point.joint_pos(i) = start_pos_[i];
-                        end_joint_point.joint_pos(i) = target_pos_[i];
+                        if (!initDoublesPlanner(duration_, false))
+                        {
+                            reset();
+                            return false;
+                        }
+                        const double t_min = movej_planner_->getTotalTime();
+                        const double actual = std::max(duration_, t_min);
+                        if (actual > duration_ + 1e-6)
+                        {
+                            static rclcpp::Clock steady_clock(RCL_STEADY_TIME);
+                            RCLCPP_INFO_THROTTLE(
+                                logger_, steady_clock, 2000,
+                                "MoveJ duration extended from %.3fs to %.3fs to satisfy limits",
+                                duration_, actual);
+                        }
+                        // Constraint mode only yields t_min. Re-init in time mode so
+                        // the planner runs for `actual` (requested duration when it
+                        // is already long enough, otherwise the extended t_min).
+                        if (!initDoublesPlanner(actual, true))
+                        {
+                            reset();
+                            return false;
+                        }
+                        duration_ = actual;
+                        planningTime_ = actual;
                     }
-
-                    planning::TrajectoryInitParameters movej_init_para(
-                        start_joint_point, end_joint_point, traj_param, period_);
-
-                    if (!movej_planner_->init(movej_init_para))
+                    else if (!initDoublesPlanner(duration_, true))
                     {
-                        RCLCPP_ERROR(logger_, "Failed to initialize moveJ planner for DOUBLES interpolation");
                         reset();
                         return false;
                     }
+                    else
+                    {
+                        planningTime_ = duration_;
+                    }
 
-                    movej_planner_->setRealStartTime(0.0);
                     mode_ = TrajectoryMode::SINGLE_NODE;
                 }
                 catch (const std::exception& e)
@@ -129,12 +206,21 @@ namespace arms_controller_common
                     reset();
                     return false;
                 }
+#else
+                (void)auto_extend_duration;
+                (void)max_velocity;
+                (void)max_acceleration;
+                (void)max_jerk;
 #endif
             }
         }
         else
         {
             // Basic interpolation types (TANH, LINEAR, NONE)
+            (void)auto_extend_duration;
+            (void)max_velocity;
+            (void)max_acceleration;
+            (void)max_jerk;
             mode_ = TrajectoryMode::SINGLE_NODE;
         }
 
@@ -464,6 +550,14 @@ namespace arms_controller_common
     void JointTrajectoryManager::setCommonJointBlendRatios(double blend_ratios)
     {
         common_joint_blend_ratios = std::clamp(blend_ratios, 0.0, 1.0);
+    }
+
+    void JointTrajectoryManager::setDefaultJointMotionLimits(
+        double max_velocity, double max_acceleration, double max_jerk)
+    {
+        default_max_velocity_ = std::max(max_velocity, 1e-6);
+        default_max_acceleration_ = std::max(max_acceleration, 1e-6);
+        default_max_jerk_ = std::max(max_jerk, 1e-6);
     }
 
     std::vector<double> JointTrajectoryManager::computeSingleNodePoint(double step_seconds)
@@ -847,7 +941,11 @@ namespace arms_controller_common
 
         // 规划参数
         planning::TrajectoryParameter param;
-        getTrajectoryParameter(waypoint, param);
+        if (!getTrajectoryParameter(waypoint, param))
+        {
+            RCLCPP_ERROR(logger_, "Failed to resolve joint trajectory parameters for single target");
+            return false;
+        }
 
         // 3. 使用moveJ规划器
 
@@ -1016,42 +1114,53 @@ namespace arms_controller_common
     bool JointTrajectoryManager::getTrajectoryParameter(const arms_ros2_control_msgs::msg::JointWaypoint& waypoint,
                                                         planning::TrajectoryParameter& res)
     {
-        size_t num_joints = waypoint.position.size();
-        bool is_time_mode = waypoint.time_mode;
-        if (is_time_mode)
-        {
-            double total_time = waypoint.total_time > 0 ? waypoint.total_time : 3.0;
-            planning::TrajectoryParameter param(total_time, num_joints);
-            if (!waypoint.max_velocity.empty() && !waypoint.max_acceleration.empty() && !waypoint.max_jerk.empty() &&
-                waypoint.max_velocity.size() == num_joints && waypoint.max_acceleration.size() == num_joints && waypoint
-                .max_jerk.size() == num_joints)
+        const size_t num_joints = waypoint.position.size();
+        const auto fillFromMessageOrDefault =
+            [this, num_joints](const std::vector<double>& values, double default_value, planning::JointVector& out)
             {
-                //时间模式下也可以使用用户设置的参数，不用内部的默认参数，时间模式其实是一个相对比例关系
-                for (size_t i = 0; i < num_joints; i++)
+                const bool use_message = !values.empty() && values.size() == num_joints;
+                for (size_t i = 0; i < num_joints; ++i)
                 {
-                    param.joint_max_vel(i) = waypoint.max_velocity[i];
-                    param.joint_max_acc(i) = waypoint.max_acceleration[i];
-                    param.joint_max_jerk(i) = waypoint.max_jerk[i];
+                    out(i) = use_message ? values[i] : default_value;
                 }
+                return use_message;
+            };
+
+        if (waypoint.time_mode)
+        {
+            const double total_time = waypoint.total_time > 0 ? waypoint.total_time : 3.0;
+            planning::TrajectoryParameter param(total_time, num_joints);
+            const bool used_vel = fillFromMessageOrDefault(
+                waypoint.max_velocity, default_max_velocity_, param.joint_max_vel);
+            const bool used_acc = fillFromMessageOrDefault(
+                waypoint.max_acceleration, default_max_acceleration_, param.joint_max_acc);
+            const bool used_jerk = fillFromMessageOrDefault(
+                waypoint.max_jerk, default_max_jerk_, param.joint_max_jerk);
+            if (!used_vel || !used_acc || !used_jerk)
+            {
+                RCLCPP_INFO(logger_,
+                            "Joint trajectory time mode missing vel/acc/jerk arrays; "
+                            "using movej defaults (v=%.3f, a=%.3f, j=%.3f)",
+                            default_max_velocity_, default_max_acceleration_, default_max_jerk_);
             }
             res = param;
         }
         else
         {
-            if (waypoint.max_velocity.empty() || waypoint.max_acceleration.empty() || waypoint.max_jerk.empty() ||
-                waypoint.max_velocity.size() != num_joints || waypoint.max_acceleration.size() != num_joints || waypoint
-                .max_jerk.size() != num_joints)
-            {
-                RCLCPP_INFO(logger_, "In non-time mode, please enter the correct planned parameters");
-                return false;
-            }
             planning::TrajectoryParameter param(num_joints);
             param.time_mode = false;
-            for (size_t i = 0; i < num_joints; i++)
+            const bool used_vel = fillFromMessageOrDefault(
+                waypoint.max_velocity, default_max_velocity_, param.joint_max_vel);
+            const bool used_acc = fillFromMessageOrDefault(
+                waypoint.max_acceleration, default_max_acceleration_, param.joint_max_acc);
+            const bool used_jerk = fillFromMessageOrDefault(
+                waypoint.max_jerk, default_max_jerk_, param.joint_max_jerk);
+            if (!used_vel || !used_acc || !used_jerk)
             {
-                param.joint_max_vel(i) = waypoint.max_velocity[i];
-                param.joint_max_acc(i) = waypoint.max_acceleration[i];
-                param.joint_max_jerk(i) = waypoint.max_jerk[i];
+                RCLCPP_INFO(logger_,
+                            "Joint trajectory constraint mode missing vel/acc/jerk arrays; "
+                            "using movej defaults (v=%.3f, a=%.3f, j=%.3f)",
+                            default_max_velocity_, default_max_acceleration_, default_max_jerk_);
             }
             res = param;
         }
