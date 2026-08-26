@@ -96,6 +96,12 @@ namespace arms_controller_common
                            std::unique_ptr<planning::CircularCurver>& planner,
                            Eigen::VectorXd& current_joint_pos,
                            std::vector<double>& result);
+        bool solveRealtimeTrackingIK(
+            const std::string& arm_name,
+            const EndEffectorPose& pose,
+            Eigen::VectorXd& current_joint_pos,
+            std::vector<double>& result,
+            const char* motion_name);
         double min_val = 1.0e-6;
         rclcpp::Logger logger_;
     };

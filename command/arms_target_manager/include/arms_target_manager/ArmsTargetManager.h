@@ -44,7 +44,12 @@ namespace arms_ros2_control::command
             std::string frameId = "world",
             std::string markerFixedFrame = "base_footprint",
             double publishRate = 20.0,
-            const std::vector<int32_t>& disableAutoUpdateStates = {3},
+            const std::vector<int32_t>& disableAutoUpdateStates =
+#ifdef HAS_LINA_PLANNING
+                {3, 4},
+#else
+                {3},
+#endif
             double markerUpdateInterval = 0.05);
 
         ~ArmsTargetManager() = default;
@@ -149,6 +154,8 @@ namespace arms_ros2_control::command
         void refreshArmMarkersFromLatestCurrentPoses();
 
         [[nodiscard]] bool isBimanualCoupled() const;
+
+        [[nodiscard]] bool shouldStreamPoseCommands() const;
 
         void followCoupledRightMarker(
             const geometry_msgs::msg::Pose& old_left_pose,

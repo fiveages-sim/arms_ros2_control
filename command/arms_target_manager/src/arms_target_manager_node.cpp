@@ -43,6 +43,14 @@ int main(int argc, char** argv)
     }
 
     bool enable_vr = node->declare_parameter("enable_vr", true);
+    bool enable_movej_cartesian_markers = node->declare_parameter(
+        "enable_movej_cartesian_markers",
+#ifdef HAS_LINA_PLANNING
+        true
+#else
+        false
+#endif
+    );
 
     // 获取 hand_controllers 参数（用于自动检测和验证）
     std::vector<std::string> hand_controllers = node->declare_parameter("hand_controllers", std::vector<std::string>());
@@ -133,9 +141,34 @@ int main(int argc, char** argv)
                     "✅ Created unified target pose publishers (queue_size=1, dual_arm=%s)",
                     dual_arm_mode ? "true" : "false");
 
+        const bool movej_cartesian_markers =
+#ifdef HAS_LINA_PLANNING
+            enable_movej_cartesian_markers;
+#else
+            false;
+#endif
+        if (enable_movej_cartesian_markers && !movej_cartesian_markers)
+        {
+            RCLCPP_WARN(
+                node->get_logger(),
+                "enable_movej_cartesian_markers is true but lina_planning is not compiled in; MOVEJ markers stay hidden");
+        }
+
+        std::vector<int32_t> disable_auto_update_states{3};
+        if (movej_cartesian_markers)
+        {
+            disable_auto_update_states.push_back(4);
+        }
+        RCLCPP_INFO(
+            node->get_logger(),
+            "Interactive arm markers: OCS2%s",
+            movej_cartesian_markers ? "+MOVEJ (IK MoveL)" : " only");
+
         auto target_manager = std::make_unique<ArmsTargetManager>(
             node, dual_arm_mode, control_base_frame, marker_fixed_frame,
-            20.0, std::vector<int32_t>{3}, 0.05);
+            20.0,
+            disable_auto_update_states,
+            0.05);
 
         // 初始化（传入统一的发布器）
         target_manager->initialize(pub_left_target, pub_left_target_stamped,

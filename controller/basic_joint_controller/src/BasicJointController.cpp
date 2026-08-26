@@ -128,6 +128,10 @@ namespace basic_joint_controller
             auto_declare<double>("movej_tanh_scale", 3.0);
             auto_declare<double>("movej_trajectory_duration", 3.0);
             auto_declare<double>("movej_trajectory_blend_ratio", 0.0);
+            auto_declare<double>("movej_max_velocity", 2.0);
+            auto_declare<double>("movej_max_acceleration", 4.0);
+            auto_declare<double>("movej_max_jerk", 20.0);
+            auto_declare<bool>("movej_auto_extend_duration", true);
 
             state_list_.movej = std::make_shared<StateMoveJ>(
                 ctrl_interfaces_, get_node(), joint_names_);
@@ -483,9 +487,9 @@ namespace basic_joint_controller
                             {
                                 applyTargetCommandHoldOverrides(target_config);
                                 state_list_.movej->setTargetPosition(target_config);
-                                RCLCPP_INFO(get_node()->get_logger(),
-                                            "Target command received: %d, setting MOVEJ target to configuration %d",
-                                            msg->data, config_index);
+                                RCLCPP_DEBUG(get_node()->get_logger(),
+                                             "Target command received: %d, setting MOVEJ target to configuration %d",
+                                             msg->data, config_index);
                             }
                             else
                             {
@@ -563,9 +567,9 @@ namespace basic_joint_controller
 
                     applyTargetCommandHoldOverrides(target);
                     state_list_.movej->setTargetPosition(target);
-                    RCLCPP_INFO(get_node()->get_logger(),
-                                "target_percent %.1f%% -> MOVEJ target set (%zu joints)",
-                                percent * 100.0, target.size());
+                    RCLCPP_DEBUG(get_node()->get_logger(),
+                                 "target_percent %.1f%% -> MOVEJ target set (%zu joints)",
+                                 percent * 100.0, target.size());
                 });
 
             RCLCPP_DEBUG(get_node()->get_logger(),

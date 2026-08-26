@@ -6,6 +6,7 @@
 #include <arms_ros2_control_msgs/msg/circle_message.hpp>
 #include <arms_ros2_control_msgs/srv/execute_circle.hpp>
 #include <arms_ros2_control_msgs/srv/execute_path.hpp>
+#include <atomic>
 #include <chrono>
 #include <functional>
 #include <mutex>
@@ -37,7 +38,9 @@ namespace ocs2::controller_common {
  * Inbound (left; right symmetric when dual):
  * - left_target            Pose          immediate absolute (preempts this arm's moveL;
  *                                        other active left/right/body moveL preserved via rebuild)
- * - left_target/stamped    PoseStamped   absolute moveL; frame_id non-base → TF→base
+ * - left_target/stamped    PoseStamped   OCS2: absolute moveL (frame_id non-base → TF→base);
+ *                                        not-OCS2: forwarded to setStampedTargetHandlers (e.g. MOVEJ)
+ * dual_target/stamped with 3 poses plans left+right+body together (OCS2); MOVEJ uses left/right only.
  * - left_target/twist      Twist         velocity stream (m/s, rad/s), latch + dt integrate
  *                                        (same preempt / other-preserve semantics as Pose)
  * - left_target/relative   TwistStamped  one-shot SE(3) delta (m, rad) + moveL; frame_id selects base/EE/TF
@@ -55,6 +58,22 @@ public:
     ~PoseBasedReferenceManager() override = default;
 
     void subscribe(const rclcpp_lifecycle::LifecycleNode::SharedPtr& node);
+
+    /** When false, pose/twist/relative/path stay ignored; stamped is forwarded to setStampedTargetHandlers. */
+    void setAcceptingTargets(bool accept);
+
+    using PoseStampedHandler = std::function<void(const geometry_msgs::msg::PoseStamped&)>;
+    using DualStampedHandler = std::function<void(const nav_msgs::msg::Path&)>;
+
+    /**
+     * Called for left/right/dual_target/stamped when accepting_targets_ is false (e.g. MOVEJ).
+     * Subscriptions and TF stay in this manager; do not create a second subscriber or Buffer.
+     */
+    void setStampedTargetHandlers(PoseStampedHandler left,
+                                  PoseStampedHandler right = {},
+                                  DualStampedHandler dual = {});
+
+    [[nodiscard]] std::shared_ptr<tf2_ros::Buffer> getTfBuffer() const;
 
     void setCurrentObservation(const SystemObservation& observation);
 
@@ -322,6 +341,16 @@ private:
                          std::shared_ptr<planning::CircularCurver> circle_ptr);
     double min_val = 1.0e-6;
 #endif
+
+    [[nodiscard]] bool shouldAcceptExternalTargets() const
+    {
+        return accepting_targets_.load(std::memory_order_acquire);
+    }
+
+    std::atomic<bool> accepting_targets_{true};
+    PoseStampedHandler stamped_left_handler_;
+    PoseStampedHandler stamped_right_handler_;
+    DualStampedHandler stamped_dual_handler_;
 };
 
 } // namespace ocs2::controller_common

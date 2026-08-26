@@ -22,6 +22,8 @@
 #include <std_msgs/msg/int32.hpp>
 #include <trajectory_msgs/msg/joint_trajectory.hpp>
 #include <eigen3/Eigen/Dense>
+#include <geometry_msgs/msg/pose_stamped.hpp>
+#include <nav_msgs/msg/path.hpp>
 #include <tf2_ros/buffer.hpp>
 #include "arms_controller_common/utils/WaistLiftingPlaner.h"
 #include "arms_ros2_control_msgs/action/joint_trajectory.hpp"
@@ -216,6 +218,24 @@ namespace arms_controller_common
         void setupLinearTrajectoryAction(const std::string& action_name = "execute_linear");
 
         /**
+         * Share the controller TF buffer (from PoseBasedReferenceManager). Does not create a listener.
+         */
+        void setCartesianTfBuffer(std::shared_ptr<tf2_ros::Buffer> buffer);
+
+        /**
+         * Consume left/right_target/stamped (MOVEJ IK MoveL). Called from the shared OCS2 subscriber.
+         * No-op when MOVEJ is not active or lina_planning is unavailable.
+         */
+        void handleCartesianStampedTarget(
+            const std::string& arm_name,
+            const geometry_msgs::msg::PoseStamped& pose_stamped);
+
+        /**
+         * Consume dual_target/stamped. Called from the shared OCS2 subscriber.
+         */
+        void handleDualCartesianStampedTarget(const nav_msgs::msg::Path& path);
+
+        /**
         * @brief Setup linear trajectory service for MoveL planning
         * @param service_name Service name (default: "execute_linear")
         */
@@ -243,6 +263,15 @@ namespace arms_controller_common
 
     private:
         void updateParam();
+        void declareMoveJVelocityParameters();
+        void updateMoveJVelocityParameters();
+        double resolveTargetJointDuration(
+            const std::vector<double>& start_pos,
+            const std::vector<double>& target_pos,
+            double requested) const;
+        bool initTargetJointPositionInterpolation(
+            const std::vector<double>& start_pos,
+            const std::vector<double>& target_pos);
 
         bool isMotionBusy() const;
         bool isNonWaistMotionBusy() const;
@@ -318,6 +347,10 @@ namespace arms_controller_common
         std::shared_ptr<GravityCompensation> gravity_compensation_;
 
         double duration_{3.0}; // Interpolation duration in seconds
+        double movej_max_velocity_{2.0};
+        double movej_max_acceleration_{4.0};
+        double movej_max_jerk_{20.0};
+        bool movej_auto_extend_duration_{true};
 
         std::vector<double> start_pos_; // Starting position when entering state or starting new movement
         std::vector<double> target_pos_; // Target position to move to
@@ -344,6 +377,13 @@ namespace arms_controller_common
 
         // Trajectory message subscription
         rclcpp::Subscription<trajectory_msgs::msg::JointTrajectory>::SharedPtr trajectory_subscription_;
+
+#ifdef HAS_LINA_PLANNING
+        std::shared_ptr<tf2_ros::Buffer> cartesian_tf_buffer_;
+        bool transformCartesianPoseStamped(
+            const geometry_msgs::msg::PoseStamped& in,
+            geometry_msgs::msg::PoseStamped& out);
+#endif
 
         // Current target joint publisher (shared convention across controllers)
         rclcpp::Publisher<std_msgs::msg::Float64MultiArray>::SharedPtr current_target_joint_publisher_;

@@ -42,10 +42,18 @@ my_controller:
 
     # --- MoveJ ---
     movej_duration: 3.0
-    movej_interpolation_type: "tanh"  # "tanh" | "linear"
+    movej_interpolation_type: "tanh"  # "tanh" | "linear" | "doubles" | "none"
     movej_tanh_scale: 3.0
     movej_trajectory_duration: 3.0
     movej_trajectory_blend_ratio: 0.0
+    # target_joint_position (tanh / linear / doubles): duration is a lower bound.
+    # If the move would exceed these limits, duration is extended automatically.
+    # none is not affected. Set movej_auto_extend_duration: false to keep a fixed duration.
+    # joint_trajectory_with_para uses the same vel/acc/jerk when a waypoint omits those arrays.
+    movej_max_velocity: 2.0
+    movej_max_acceleration: 4.0    # doubles only
+    movej_max_jerk: 20.0           # doubles only
+    movej_auto_extend_duration: true
 
     # --- Dexterous hand / end-effector switch & percent control ---
     # Requires target_command_enabled: true
@@ -124,6 +132,8 @@ All topics below are namespaced to the controller name (e.g. `/left_hand_control
 **Topic:** `/{controller_name}/target_joint_position`  
 **Type:** `std_msgs/Float64MultiArray`  
 **Active state:** MOVEJ
+
+For `tanh` / `linear` / `doubles`, `movej_duration` is a **lower bound**. Peak joint speed is limited by `movej_max_velocity` (default 2.0 rad/s); if that needs more time, duration is extended. `none` jumps to the target immediately and ignores this limit.
 
 ```bash
 ros2 topic pub --once /my_controller/target_joint_position \
@@ -265,7 +275,7 @@ Assuming controller name `my_controller`, joint name `j1`:
 | Topic | Type | Requires state | Notes |
 |---|---|---|---|
 | `/fsm_command` | `Int32` | any | FSM state/config switching |
-| `/my_controller/target_joint_position` | `Float64MultiArray` | MOVEJ | Direct joint targets |
+| `/my_controller/target_joint_position` | `Float64MultiArray` | MOVEJ | Direct joint targets; tanh/linear/doubles cap speed and may extend duration |
 | `/my_controller/target_joint_trajectory` | `JointTrajectory` | MOVEJ | Multi-waypoint trajectory |
 | `/my_controller/target_command` | `Int32` (0/1) | MOVEJ | Hand open/close switch |
 | `/my_controller/target_percent` | `Float64` (0~1) | MOVEJ | Hand proportional control |
@@ -315,7 +325,10 @@ Both Home and MoveJ states support configurable interpolation:
   phase = tanh(t/T × scale)
   pos   = start + phase × (target − start)
   ```
-- **`linear`**: constant velocity
+  For `target_joint_position`, T is at least `movej_duration` and is extended so the initial peak speed stays within `movej_max_velocity`.
+- **`linear`**: constant velocity. Same duration floor / velocity cap as tanh for `target_joint_position`.
+- **`doubles`**: S-curve via lina_planning (vel/acc/jerk). `target_joint_position` uses the same duration-floor semantics.
+- **`none`**: jump to the target with no interpolation and no velocity cap.
 
 ### Thread Safety
 

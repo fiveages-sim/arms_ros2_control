@@ -107,6 +107,7 @@ namespace arms_controller_common
         if (node_)
         {
             declareCartesianDefaultParameters();
+            declareMoveJVelocityParameters();
             current_target_joint_publisher_ =
                 arms_controller_common::utils::getOrCreateCurrentTargetJointPublisher(node_);
             fsm_command_publisher_ = node_->create_publisher<std_msgs::msg::Int32>(
@@ -136,7 +137,110 @@ namespace arms_controller_common
         trajectory_manager_.setTrajectoryDuration(node_->get_parameter("movej_trajectory_duration").as_double());
         trajectory_manager_.setCommonJointBlendRatios(node_->get_parameter("movej_trajectory_blend_ratio").as_double());
         trajectory_manager_.setControllerFrequency(ctrl_interfaces_.frequency_);
+        updateMoveJVelocityParameters();
         updateCartesianDefaults();
+    }
+
+    void StateMoveJ::declareMoveJVelocityParameters()
+    {
+        auto declare_double = [this](const std::string& name, double default_value)
+        {
+            if (!node_->has_parameter(name))
+            {
+                node_->declare_parameter<double>(name, default_value);
+            }
+        };
+        auto declare_bool = [this](const std::string& name, bool default_value)
+        {
+            if (!node_->has_parameter(name))
+            {
+                node_->declare_parameter<bool>(name, default_value);
+            }
+        };
+
+        declare_double("movej_max_velocity", movej_max_velocity_);
+        declare_double("movej_max_acceleration", movej_max_acceleration_);
+        declare_double("movej_max_jerk", movej_max_jerk_);
+        declare_bool("movej_auto_extend_duration", movej_auto_extend_duration_);
+    }
+
+    void StateMoveJ::updateMoveJVelocityParameters()
+    {
+        movej_max_velocity_ = std::max(1e-6, node_->get_parameter("movej_max_velocity").as_double());
+        movej_max_acceleration_ = std::max(1e-6, node_->get_parameter("movej_max_acceleration").as_double());
+        movej_max_jerk_ = std::max(1e-6, node_->get_parameter("movej_max_jerk").as_double());
+        movej_auto_extend_duration_ = node_->get_parameter("movej_auto_extend_duration").as_bool();
+        trajectory_manager_.setDefaultJointMotionLimits(
+            movej_max_velocity_, movej_max_acceleration_, movej_max_jerk_);
+    }
+
+    double StateMoveJ::resolveTargetJointDuration(
+        const std::vector<double>& start_pos,
+        const std::vector<double>& target_pos,
+        double requested) const
+    {
+        if (!movej_auto_extend_duration_ || interpolation_type_ == InterpolationType::NONE)
+        {
+            return requested;
+        }
+
+        constexpr double kEps = 1e-9;
+        const double vmax = std::max(movej_max_velocity_, kEps);
+        double max_delta = 0.0;
+        const size_t n = std::min(start_pos.size(), target_pos.size());
+        for (size_t i = 0; i < n; ++i)
+        {
+            max_delta = std::max(max_delta, std::abs(target_pos[i] - start_pos[i]));
+        }
+
+        double t_min = 0.0;
+        if (interpolation_type_ == InterpolationType::TANH)
+        {
+            const double scale = tanh_scale_ > 0.0 ? tanh_scale_ : 3.0;
+            t_min = scale * max_delta / vmax;
+        }
+        else
+        {
+            // LINEAR, and DOUBLES falling back to LINEAR without lina_planning
+            t_min = max_delta / vmax;
+        }
+
+        const double actual = std::max(requested, t_min);
+        if (actual > requested + 1e-6)
+        {
+            RCLCPP_INFO_THROTTLE(
+                node_->get_logger(), *node_->get_clock(), 2000,
+                "MoveJ duration extended from %.3fs to %.3fs to satisfy limits",
+                requested, actual);
+        }
+        return actual;
+    }
+
+    bool StateMoveJ::initTargetJointPositionInterpolation(
+        const std::vector<double>& start_pos,
+        const std::vector<double>& target_pos)
+    {
+        if (interpolation_type_ == InterpolationType::NONE)
+        {
+            return trajectory_manager_.initSingleNode(
+                start_pos, target_pos, duration_, interpolation_type_,
+                ctrl_interfaces_.frequency_, tanh_scale_);
+        }
+
+        if (interpolation_type_ == InterpolationType::DOUBLES &&
+            JointTrajectoryManager::isDoublesAvailable())
+        {
+            return trajectory_manager_.initSingleNode(
+                start_pos, target_pos, duration_, interpolation_type_,
+                ctrl_interfaces_.frequency_, tanh_scale_,
+                movej_auto_extend_duration_,
+                movej_max_velocity_, movej_max_acceleration_, movej_max_jerk_);
+        }
+
+        const double actual = resolveTargetJointDuration(start_pos, target_pos, duration_);
+        return trajectory_manager_.initSingleNode(
+            start_pos, target_pos, actual, interpolation_type_,
+            ctrl_interfaces_.frequency_, tanh_scale_);
     }
 
     void StateMoveJ::declareCartesianDefaultParameters()
@@ -265,6 +369,8 @@ namespace arms_controller_common
 
     void StateMoveJ::enter()
     {
+        updateParam();
+
         // Mark state as active
         {
             std::lock_guard lock(target_mutex_);
@@ -293,20 +399,20 @@ namespace arms_controller_common
         std::lock_guard lock(target_mutex_);
         if (has_target_ && target_pos_.size() == start_pos_.size())
         {
-            // Initialize trajectory manager
-            trajectory_manager_.initSingleNode(
-                start_pos_,
-                target_pos_,
-                duration_,
-                interpolation_type_,
-                ctrl_interfaces_.frequency_,
-                tanh_scale_
-            );
-            interpolation_active_ = true;
-            RCLCPP_INFO(node_->get_logger(),
-                        "Starting interpolation to target position over %.1f seconds (type=%s)",
-                        duration_,
-                        toString(interpolation_type_));
+            if (initTargetJointPositionInterpolation(start_pos_, target_pos_))
+            {
+                interpolation_active_ = true;
+                RCLCPP_INFO(node_->get_logger(),
+                            "Starting interpolation to target position over %.1f seconds (type=%s)",
+                            trajectory_manager_.getPlanningTime(),
+                            toString(interpolation_type_));
+            }
+            else
+            {
+                interpolation_active_ = false;
+                RCLCPP_WARN(node_->get_logger(),
+                            "Failed to initialize MOVEJ interpolation on enter; waiting for a new target");
+            }
         }
         else
         {
@@ -631,8 +737,10 @@ namespace arms_controller_common
                     RCLCPP_ERROR(node_->get_logger(),
                                  "MoveL joint position size mismatch: expected %zu, got %zu",
                                  expected_size, next_joint_pos.size());
+                    refreshHoldPositions();
                     move_cartesian_active_ = false;
                     motion_mode_ = MotionMode::MOVEJ;
+                    cartesian_manager_.clearPlanner();
                     finishLinearAction(false, false, "MoveL joint position size mismatch");
                     finishCircleAction(false, false, "MoveC joint position size mismatch");
                 }
@@ -647,6 +755,7 @@ namespace arms_controller_common
                 refreshHoldPositions();
                 move_cartesian_active_ = false;
                 motion_mode_ = MotionMode::MOVEJ;
+                cartesian_manager_.clearPlanner();
                 RCLCPP_WARN(node_->get_logger(), "%s", error_msg.c_str());
                 finishLinearAction(false, false, error_msg);
                 finishCircleAction(false, false, error_msg);
@@ -759,13 +868,7 @@ namespace arms_controller_common
                 return;
             }
 
-            if (!trajectory_manager_.initSingleNode(
-                    start_pos_,
-                    target_pos_,
-                    duration_,
-                    interpolation_type_,
-                    ctrl_interfaces_.frequency_,
-                    tanh_scale_))
+            if (!initTargetJointPositionInterpolation(start_pos_, target_pos_))
             {
                 RCLCPP_WARN(node_->get_logger(),
                             "Failed to initialize MOVEJ interpolation for target joint position; holding last sent joint position. joint_count=%zu, interpolation_type=%s",
@@ -777,8 +880,10 @@ namespace arms_controller_common
             }
 
             interpolation_active_ = true;
-            RCLCPP_INFO(node_->get_logger(),
-                        "Target position received, starting interpolation from last sent position");
+            RCLCPP_DEBUG(node_->get_logger(),
+                         "Target position received, starting interpolation from last sent position over %.3f seconds (type=%s)",
+                         trajectory_manager_.getPlanningTime(),
+                         toString(interpolation_type_));
         }
 
         // Get next trajectory point from unified manager (works for both single and multi-node)
@@ -1179,7 +1284,7 @@ namespace arms_controller_common
         }
         else
         {
-            RCLCPP_INFO(node_->get_logger(), "Updated pending motion while stop-to-zero is active");
+            RCLCPP_DEBUG(node_->get_logger(), "Updated pending motion while stop-to-zero is active");
         }
     }
 
@@ -3558,6 +3663,167 @@ namespace arms_controller_common
         RCLCPP_DEBUG(node_->get_logger(), "Created linear trajectory action at %s",
                      full_action_name.c_str());
     }
+
+    void StateMoveJ::setCartesianTfBuffer(std::shared_ptr<tf2_ros::Buffer> buffer)
+    {
+#ifdef HAS_LINA_PLANNING
+        cartesian_tf_buffer_ = std::move(buffer);
+#else
+        (void)buffer;
+#endif
+    }
+
+#ifdef HAS_LINA_PLANNING
+    bool StateMoveJ::transformCartesianPoseStamped(
+        const geometry_msgs::msg::PoseStamped& in,
+        geometry_msgs::msg::PoseStamped& out)
+    {
+        const std::string target_frame = cartesian_defaults_.frame_id;
+        if (in.header.frame_id.empty() || in.header.frame_id == target_frame)
+        {
+            out = in;
+            if (out.header.frame_id.empty())
+            {
+                out.header.frame_id = target_frame;
+            }
+            return true;
+        }
+
+        if (!cartesian_tf_buffer_)
+        {
+            RCLCPP_WARN(node_->get_logger(),
+                        "Cannot transform MOVEJ cartesian pose from %s: TF buffer unavailable",
+                        in.header.frame_id.c_str());
+            return false;
+        }
+
+        try
+        {
+            const geometry_msgs::msg::TransformStamped transform =
+                cartesian_tf_buffer_->lookupTransform(
+                    target_frame, in.header.frame_id, tf2::TimePointZero);
+            tf2::doTransform(in, out, transform);
+            out.header.frame_id = target_frame;
+            return true;
+        }
+        catch (const tf2::TransformException& ex)
+        {
+            RCLCPP_WARN(node_->get_logger(),
+                        "Cannot transform MOVEJ cartesian pose from %s to %s: %s",
+                        in.header.frame_id.c_str(), target_frame.c_str(), ex.what());
+            return false;
+        }
+    }
+
+    void StateMoveJ::handleCartesianStampedTarget(
+        const std::string& arm_name,
+        const geometry_msgs::msg::PoseStamped& pose_stamped)
+    {
+        if (!state_active_)
+        {
+            return;
+        }
+
+        geometry_msgs::msg::PoseStamped transformed;
+        if (!transformCartesianPoseStamped(pose_stamped, transformed))
+        {
+            return;
+        }
+
+        arms_ros2_control_msgs::msg::LinearMessage linear_params;
+        linear_params.arm_name = arm_name;
+        linear_params.endpoint = transformed.pose;
+        linear_params.frame_id = transformed.header.frame_id;
+        linear_params.time_mode = false;
+        linear_params.ik_type = "DLS";
+
+        std::lock_guard lock(target_mutex_);
+        std::string message;
+        double estimated_duration = 0.0;
+        if (!startLinearTrajectory(linear_params, message, estimated_duration))
+        {
+            RCLCPP_WARN(node_->get_logger(),
+                        "MOVEJ stamped MoveL rejected (%s): %s",
+                        arm_name.c_str(), message.c_str());
+            return;
+        }
+        RCLCPP_DEBUG(node_->get_logger(),
+                     "MOVEJ stamped MoveL accepted (%s), estimated_duration=%.3f",
+                     arm_name.c_str(), estimated_duration);
+    }
+
+    void StateMoveJ::handleDualCartesianStampedTarget(const nav_msgs::msg::Path& path)
+    {
+        if (!state_active_)
+        {
+            return;
+        }
+
+        if (path.poses.size() != 2 && path.poses.size() != 3)
+        {
+            RCLCPP_WARN(node_->get_logger(),
+                        "dual_target/stamped must contain 2 or 3 poses, got %zu",
+                        path.poses.size());
+            return;
+        }
+
+        if (path.poses.size() == 3)
+        {
+            RCLCPP_DEBUG(node_->get_logger(),
+                         "dual_target/stamped includes a body pose; MOVEJ IK MoveL uses left/right only");
+        }
+
+        geometry_msgs::msg::PoseStamped left_in = path.poses[0];
+        geometry_msgs::msg::PoseStamped right_in = path.poses[1];
+        if (left_in.header.frame_id.empty())
+        {
+            left_in.header.frame_id = path.header.frame_id;
+        }
+        if (right_in.header.frame_id.empty())
+        {
+            right_in.header.frame_id = path.header.frame_id;
+        }
+
+        geometry_msgs::msg::PoseStamped left_out;
+        geometry_msgs::msg::PoseStamped right_out;
+        if (!transformCartesianPoseStamped(left_in, left_out) ||
+            !transformCartesianPoseStamped(right_in, right_out))
+        {
+            return;
+        }
+
+        arms_ros2_control_msgs::msg::LinearMessage linear_params;
+        linear_params.arm_name = "both";
+        linear_params.endpoint = left_out.pose;
+        linear_params.right_endpoint = right_out.pose;
+        linear_params.frame_id = left_out.header.frame_id;
+        linear_params.time_mode = false;
+        linear_params.ik_type = "DLS";
+
+        std::lock_guard lock(target_mutex_);
+        std::string message;
+        double estimated_duration = 0.0;
+        if (!startLinearTrajectory(linear_params, message, estimated_duration))
+        {
+            RCLCPP_WARN(node_->get_logger(),
+                        "MOVEJ dual stamped MoveL rejected: %s", message.c_str());
+            return;
+        }
+        RCLCPP_DEBUG(node_->get_logger(),
+                     "MOVEJ dual stamped MoveL accepted, estimated_duration=%.3f",
+                     estimated_duration);
+    }
+#else
+    void StateMoveJ::handleCartesianStampedTarget(
+        const std::string& /*arm_name*/,
+        const geometry_msgs::msg::PoseStamped& /*pose_stamped*/)
+    {
+    }
+
+    void StateMoveJ::handleDualCartesianStampedTarget(const nav_msgs::msg::Path& /*path*/)
+    {
+    }
+#endif
 
     rclcpp_action::GoalResponse StateMoveJ::handleLinearGoal(
         const rclcpp_action::GoalUUID& uuid,

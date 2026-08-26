@@ -49,6 +49,11 @@ namespace arms_controller_common
          * @param type Interpolation type (TANH, LINEAR, NONE, or DOUBLES if available)
          * @param controller_frequency Controller update frequency in Hz
          * @param tanh_scale Scale factor for TANH interpolation (default: 3.0)
+         * @param auto_extend_duration If true and type is DOUBLES, treat duration as a
+         *        lower bound and extend it when vel/acc/jerk constraints need more time
+         * @param max_velocity Joint velocity limit used when auto_extend_duration is true
+         * @param max_acceleration Joint acceleration limit used when auto_extend_duration is true
+         * @param max_jerk Joint jerk limit used when auto_extend_duration is true
          * @return True if initialization successful, false otherwise
          */
         bool initSingleNode(
@@ -57,7 +62,11 @@ namespace arms_controller_common
             double duration,
             InterpolationType type,
             double controller_frequency,
-            double tanh_scale = 3.0
+            double tanh_scale = 3.0,
+            bool auto_extend_duration = false,
+            double max_velocity = 2.0,
+            double max_acceleration = 4.0,
+            double max_jerk = 20.0
         );
 
         /**
@@ -147,6 +156,11 @@ namespace arms_controller_common
          * @param blend_ratios Set a common blend ratio for multiple points
          */
         void setCommonJointBlendRatios(double blend_ratios);
+
+        /**
+         * @brief Default vel/acc/jerk used when a JointWaypoint omits those arrays
+         */
+        void setDefaultJointMotionLimits(double max_velocity, double max_acceleration, double max_jerk);
 
         /**
              * @brief Plan single target motion using lina_planning
@@ -239,6 +253,9 @@ namespace arms_controller_common
         // Multi-node trajectory duration (for automatic time calculation in lina planning)
         double trajectory_duration_ = 3.0; // Default 3 seconds
         double common_joint_blend_ratios = 0.0;
+        double default_max_velocity_{2.0};
+        double default_max_acceleration_{4.0};
+        double default_max_jerk_{20.0};
 
         // 辅助函数
         /**

@@ -20,6 +20,8 @@ set(dependencies
         tf2
         geometry_msgs
         trajectory_msgs
+        nav_msgs
+        tf2_ros
         arms_ros2_control_msgs
 )
 
@@ -77,8 +79,10 @@ target_link_libraries(${PROJECT_NAME} PUBLIC
         ament_index_cpp::ament_index_cpp
         ${tf2_geometry_msgs_TARGETS}
         ${tf2_TARGETS}
+        ${tf2_ros_TARGETS}
         ${geometry_msgs_TARGETS}
         ${trajectory_msgs_TARGETS}
+        ${nav_msgs_TARGETS}
         ${arms_ros2_control_msgs_TARGETS}
         Eigen3::Eigen
 )

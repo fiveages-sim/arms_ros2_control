@@ -36,17 +36,27 @@ namespace arms_controller_common
 
     void ArmKinematics::initializeFromParameters(
         const std::vector<std::string>& joint_names,
-        const std::string& left_ee_name, const std::string& right_ee_name)
+        const std::string& left_ee_name, const std::string& right_ee_name,
+        bool dual_arm)
     {
-        setJointNames(joint_names);
+        setJointNames(joint_names, dual_arm);
         setEndEffectorNames(left_ee_name, right_ee_name);
     }
 
-    void ArmKinematics::setJointNames(const std::vector<std::string>& joint_names)
+    void ArmKinematics::setJointNames(const std::vector<std::string>& joint_names, bool dual_arm)
     {
-        size_t half = joint_names.size() / 2;
-        leftArmJointNames_.assign(joint_names.begin(), joint_names.begin() + half);
-        rightArmJointNames_.assign(joint_names.begin() + half, joint_names.end());
+        if (dual_arm)
+        {
+            const size_t half = joint_names.size() / 2;
+            leftArmJointNames_.assign(joint_names.begin(), joint_names.begin() + half);
+            rightArmJointNames_.assign(joint_names.begin() + half, joint_names.end());
+        }
+        else
+        {
+            // Single-arm command topics stay left_* even when joints have no left prefix.
+            leftArmJointNames_ = joint_names;
+            rightArmJointNames_.clear();
+        }
 
         leftArmJointCount_ = leftArmJointNames_.size();
         rightArmJointCount_ = rightArmJointNames_.size();
@@ -554,8 +564,14 @@ namespace arms_controller_common
         }
 
         Eigen::VectorXd joints(leftArmJointCount_ + rightArmJointCount_);
-        joints.head(leftArmJointCount_) = state.leftArmJoints;
-        joints.tail(rightArmJointCount_) = state.rightArmJoints;
+        if (leftArmJointCount_ > 0)
+        {
+            joints.head(leftArmJointCount_) = state.leftArmJoints;
+        }
+        if (rightArmJointCount_ > 0)
+        {
+            joints.tail(rightArmJointCount_) = state.rightArmJoints;
+        }
         return joints;
     }
 

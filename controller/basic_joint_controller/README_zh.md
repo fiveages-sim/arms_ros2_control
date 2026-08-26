@@ -42,10 +42,18 @@ my_controller:
 
     # --- MoveJ ---
     movej_duration: 3.0
-    movej_interpolation_type: "tanh"  # "tanh" | "linear"
+    movej_interpolation_type: "tanh"  # "tanh" | "linear" | "doubles" | "none"
     movej_tanh_scale: 3.0
     movej_trajectory_duration: 3.0
     movej_trajectory_blend_ratio: 0.0
+    # target_joint_position（tanh / linear / doubles）：duration 是下限。
+    # 若按该时长会超过速度约束，则自动拉长。none 不受影响。
+    # 设 movej_auto_extend_duration: false 可退回固定时长。
+    # joint_trajectory_with_para 路点未填 vel/acc/jerk 时，也用这组默认值。
+    movej_max_velocity: 2.0
+    movej_max_acceleration: 4.0    # 仅 doubles
+    movej_max_jerk: 20.0           # 仅 doubles
+    movej_auto_extend_duration: true
 
     # --- 灵巧手 / 末端执行器开关与比例控制 ---
     # 需要 target_command_enabled: true
@@ -124,6 +132,8 @@ ros2 topic pub --once /fsm_command std_msgs/msg/Int32 "data: 4"   # → MOVEJ
 **话题：** `/{controller_name}/target_joint_position`  
 **消息类型：** `std_msgs/Float64MultiArray`  
 **生效状态：** MOVEJ
+
+`tanh` / `linear` / `doubles` 下，`movej_duration` 是**下限**。峰值关节速度受 `movej_max_velocity`（默认 2.0 rad/s）约束；不够就自动拉长。`none` 立刻跳到目标，不受此约束。
 
 ```bash
 ros2 topic pub --once /my_controller/target_joint_position \
@@ -263,7 +273,7 @@ ros2 topic pub /body_controller/waist_turning_command std_msgs/msg/Float64 "data
 | 话题 | 消息类型 | 生效状态 | 说明 |
 |---|---|---|---|
 | `/fsm_command` | `Int32` | 任意 | FSM 状态/构型切换 |
-| `/my_controller/target_joint_position` | `Float64MultiArray` | MOVEJ | 直接关节目标 |
+| `/my_controller/target_joint_position` | `Float64MultiArray` | MOVEJ | 直接关节目标；tanh/linear/doubles 限速，必要时拉长 duration |
 | `/my_controller/target_joint_trajectory` | `JointTrajectory` | MOVEJ | 多路点轨迹 |
 | `/my_controller/target_command` | `Int32` (0/1) | MOVEJ | 灵巧手开关控制 |
 | `/my_controller/target_percent` | `Float64` (0~1) | MOVEJ | 灵巧手比例控制 |
@@ -313,7 +323,10 @@ Home 和 MoveJ 状态均支持可配置插值方式：
   phase = tanh(t/T × scale)
   pos   = start + phase × (target − start)
   ```
-- **`linear`**：匀速插值
+  对 `target_joint_position`，T 至少为 `movej_duration`，并会拉长以使起点峰值速度不超过 `movej_max_velocity`。
+- **`linear`**：匀速插值。`target_joint_position` 同样把 duration 当下限并受最大速度约束。
+- **`doubles`**：lina_planning 的 S 曲线（速度/加速度/jerk）。`target_joint_position` 语义同上。
+- **`none`**：立刻跳到目标，不做插值，也不限速。
 
 ### 线程安全
 
