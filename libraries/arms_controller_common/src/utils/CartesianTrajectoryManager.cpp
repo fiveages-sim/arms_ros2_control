@@ -10,8 +10,8 @@
 
 namespace
 {
-    // 500 Hz update cannot run AUTO/BFGS. DLS + a 1 mm-scale residual is enough to
-    // keep tracking after a workspace-limit abort (strict 1e-4 often stalls at ~1.4e-4).
+    // Marker / DLS tracking must stay cheap at control rate. AUTO/BFGS keep the
+    // full IK budget so execute_linear still honors ik_type.
     constexpr int kRealtimeIkMaxIterations = 50;
     constexpr double kRealtimeIkAcceptTol = 1.0e-3;
 }
@@ -560,20 +560,19 @@ namespace arms_controller_common
         std::vector<double>& result,
         const char* motion_name)
     {
-        const auto saved_solver = arm_kinematics_->getSolverType();
-        arm_kinematics_->setSolverType(ArmKinematics::SolverType::DLS);
+        const auto solver = arm_kinematics_->getSolverType();
+        const bool dls_rt = (solver == ArmKinematics::SolverType::DLS);
+        const int max_iters = dls_rt ? kRealtimeIkMaxIterations : 1500;
+        const double tol = dls_rt ? kRealtimeIkAcceptTol : 1.0e-4;
 
         Eigen::VectorXd solution;
         ArmKinematics::SolutionInfo info;
         const bool strict_ok = arm_kinematics_->solveSingleArmIKWithInfo(
-            pose, current_joint_pos, solution, info, arm_name,
-            kRealtimeIkMaxIterations, kRealtimeIkAcceptTol);
-
-        arm_kinematics_->setSolverType(saved_solver);
+            pose, current_joint_pos, solution, info, arm_name, max_iters, tol);
 
         const bool size_ok = solution.size() == current_joint_pos.size();
         const bool residual_ok =
-            size_ok && std::isfinite(info.poseErrorNorm) &&
+            dls_rt && size_ok && std::isfinite(info.poseErrorNorm) &&
             info.poseErrorNorm <= kRealtimeIkAcceptTol;
 
         if (!strict_ok && !residual_ok)

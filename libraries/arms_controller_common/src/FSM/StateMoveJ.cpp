@@ -3735,6 +3735,7 @@ namespace arms_controller_common
         linear_params.endpoint = transformed.pose;
         linear_params.frame_id = transformed.header.frame_id;
         linear_params.time_mode = false;
+        linear_params.ik_type = "DLS";
 
         std::lock_guard lock(target_mutex_);
         std::string message;
@@ -3797,6 +3798,7 @@ namespace arms_controller_common
         linear_params.right_endpoint = right_out.pose;
         linear_params.frame_id = left_out.header.frame_id;
         linear_params.time_mode = false;
+        linear_params.ik_type = "DLS";
 
         std::lock_guard lock(target_mutex_);
         std::string message;
