@@ -881,6 +881,13 @@ jobs:
             exit 1
           fi
           echo "No package */src/* sources or .git metadata in deb (rosidl-generated .c/.cpp allowed)."
+          mapfile -t platform_bins < <(find "$check_root" -type f -name 'MarvinPlatform*' 2>/dev/null || true)
+          if [[ ${#platform_bins[@]} -gt 0 ]]; then
+            echo "MarvinPlatform desktop binary must not be packaged in ${DEB_PATH}:" >&2
+            printf '  %s\n' "${platform_bins[@]}" >&2
+            exit 1
+          fi
+          echo "No MarvinPlatform binaries in deb."
 
       - name: Upload workflow artifact
         uses: actions/upload-artifact@v6

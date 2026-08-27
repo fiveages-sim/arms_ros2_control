@@ -83,7 +83,7 @@ sudo dpkg -i ros-jazzy-arms-ros2-control_2.0.0_amd64.deb
 - Workflow 只 **按需** `git submodule update` 上述路径；不克隆 dobot / eyou / unitree 等未打包子模块
 - **`topic_based_ros2_control`** 为 monorepo 内 vendored 源码（非子模块），standard / full 两种 deb 均包含
 - CI 容器无 `ssh`：子模块 URL 改为 **仅** `https://x-access-token:<PAT>@github.com/...`（不要同时设 `http.extraHeader: Authorization`，否则会 `Duplicate header` / 400）
-- **`full` bundle**：构建前删除误提交的 `libKine.so` / `libMarvinSDK.so`，按 runner 架构从源码重编 Marvin SDK
+- **`full` bundle**：构建前删除误提交的 `libKine.so` / `libMarvinSDK.so`，按 runner 架构从源码重编 Marvin SDK。`marvin_ros2_control` 的 CMake 排除上游 `SDK_PYTHON/MarvinPlatform_*`（桌面端 ELF，约 27MB）；打 deb 后校验不得包含该文件
 - **`arx_ros2_control`**：vendored 预编译库按架构选择 `external/arx5-sdk/lib/{x86_64,aarch64}`；`libarx_lift_src.so` 与独立 `libsoem.so` 目前仅 x86_64 入库，aarch64 上 CMake 会跳过 Lift2S / 跳过 SOEM（不阻塞 arm64 CI）
 - 产物仅含 colcon **install**（二进制 + 公共头文件 + 配置）；CI 拒绝误打包的 `*/src/*` 源码树（**允许** rosidl 生成的 `*_s.c` / `__type_support.cpp` 等）
 
