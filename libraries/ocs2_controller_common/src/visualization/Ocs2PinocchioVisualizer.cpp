@@ -6,6 +6,7 @@
 #include <fstream>
 #include <limits>
 #include <string>
+#include <algorithm>
 #include <ocs2_ros_interfaces/common/RosMsgHelpers.h>
 #include <pinocchio/algorithm/frames.hpp>
 #include <pinocchio/algorithm/kinematics.hpp>
@@ -22,8 +23,23 @@ namespace ocs2::controller_common
           base_frame_(config_.base_frame),
           urdf_file_(config_.urdf_file),
           left_arm_color_({0.0, 0.4470, 0.7410}),
-          right_arm_color_({0.6350, 0.0780, 0.1840})
+          right_arm_color_({0.6350, 0.0780, 0.1840}),
+          rt_data_(pinocchio_interface_.getModel()),
+          viz_data_(pinocchio_interface_.getModel())
     {
+        const auto& model = pinocchio_interface_.getModel();
+        left_ee_frame_id_ = model.getFrameId(config_.left_ee_frame);
+        left_ee_frame_valid_ = left_ee_frame_id_ < static_cast<pinocchio::FrameIndex>(model.nframes);
+        if (dual_arm_mode_)
+        {
+            right_ee_frame_id_ = model.getFrameId(config_.right_ee_frame);
+            right_ee_frame_valid_ = right_ee_frame_id_ < static_cast<pinocchio::FrameIndex>(model.nframes);
+        }
+        if (!config_.body_frame.empty())
+        {
+            body_frame_id_ = model.getFrameId(config_.body_frame);
+            body_frame_valid_ = body_frame_id_ < static_cast<pinocchio::FrameIndex>(model.nframes);
+        }
     }
 
     void Ocs2PinocchioVisualizer::initialize()
@@ -122,8 +138,12 @@ namespace ocs2::controller_common
 
             for (const auto& state : stateTrajectory)
             {
-                left_trajectory.push_back(computeEndEffectorPose(state));
-                right_trajectory.push_back(computeRightEndEffectorPose(state));
+                forwardKinematicsInto(viz_data_, state);
+                left_trajectory.push_back(extractFramePose7(viz_data_, left_ee_frame_id_));
+                if (right_ee_frame_valid_)
+                {
+                    right_trajectory.push_back(extractFramePose7(viz_data_, right_ee_frame_id_));
+                }
             }
 
             left_arm_trajectory_history_ = std::move(left_trajectory);
@@ -136,7 +156,8 @@ namespace ocs2::controller_common
 
             for (const auto& state : stateTrajectory)
             {
-                trajectory.push_back(computeEndEffectorPose(state));
+                forwardKinematicsInto(viz_data_, state);
+                trajectory.push_back(extractFramePose7(viz_data_, left_ee_frame_id_));
             }
 
             left_arm_trajectory_history_ = std::move(trajectory);
@@ -266,118 +287,25 @@ namespace ocs2::controller_common
         return geometry_visualization_->getLastMinDistance();
     }
 
-    void Ocs2PinocchioVisualizer::publishEndEffectorPose(
-        const rclcpp::Time& time,
-        const vector_t& state) const
+    void Ocs2PinocchioVisualizer::forwardKinematicsInto(pinocchio::Data& data, const vector_t& state) const
     {
-        // 先发布双臂（原有逻辑）
-        if (dual_arm_mode_) {
-            publishLeftEndEffectorPose(time, state);
-            publishRightEndEffectorPose(time, state);
-        } else {
-            publishLeftEndEffectorPose(time, state);
-        }
-
-        // 新增：发布 body current pose
-        const auto body_pose = computeBodyFramePose(state);
-
-        geometry_msgs::msg::PoseStamped body_msg;
-        body_msg.header.stamp = time;
-        body_msg.header.frame_id = base_frame_;
-
-        body_msg.pose.position.x = body_pose(0);
-        body_msg.pose.position.y = body_pose(1);
-        body_msg.pose.position.z = body_pose(2);
-
-        body_msg.pose.orientation.x = body_pose(3);
-        body_msg.pose.orientation.y = body_pose(4);
-        body_msg.pose.orientation.z = body_pose(5);
-        body_msg.pose.orientation.w = body_pose(6);
-
-        body_frame_pose_publisher_->publish(body_msg);
-    }
-
-    vector_t Ocs2PinocchioVisualizer::computeEndEffectorPose(const vector_t& state) const
-    {
-        vector_t ee_state = vector_t::Zero(7);
         const auto& model = pinocchio_interface_.getModel();
-        // getFrameId does not throw; missing name returns model.nframes.
-        const auto ee_frame_id = model.getFrameId(config_.left_ee_frame);
-        if (ee_frame_id >= static_cast<pinocchio::FrameIndex>(model.nframes))
-        {
-            RCLCPP_WARN_THROTTLE(node_->get_logger(), *node_->get_clock(), 5000,
-                                 "Left EE frame '%s' not in model (nframes=%d)",
-                                 config_.left_ee_frame.c_str(), model.nframes);
-            return ee_state;
-        }
-
-        auto data = pinocchio_interface_.getData();
         pinocchio::forwardKinematics(model, data, state);
         pinocchio::updateFramePlacements(model, data);
-
-        const auto& frame_placement = data.oMf[ee_frame_id];
-        ee_state.head<3>() = frame_placement.translation();
-        Eigen::Quaterniond quat(frame_placement.rotation());
-        ee_state(3) = quat.x();
-        ee_state(4) = quat.y();
-        ee_state(5) = quat.z();
-        ee_state(6) = quat.w();
-        return ee_state;
     }
 
-    vector_t Ocs2PinocchioVisualizer::computeRightEndEffectorPose(const vector_t& state) const
-    {
-        vector_t ee_state = vector_t::Zero(7);
-        const auto& model = pinocchio_interface_.getModel();
-        const auto ee_frame_id = model.getFrameId(config_.right_ee_frame);
-        if (ee_frame_id >= static_cast<pinocchio::FrameIndex>(model.nframes))
-        {
-            RCLCPP_WARN_THROTTLE(node_->get_logger(), *node_->get_clock(), 5000,
-                                 "Right EE frame '%s' not in model (nframes=%d)",
-                                 config_.right_ee_frame.c_str(), model.nframes);
-            return ee_state;
-        }
-
-        auto data = pinocchio_interface_.getData();
-        pinocchio::forwardKinematics(model, data, state);
-        pinocchio::updateFramePlacements(model, data);
-
-        const auto& frame_placement = data.oMf[ee_frame_id];
-        ee_state.head<3>() = frame_placement.translation();
-        Eigen::Quaterniond quat(frame_placement.rotation());
-        ee_state(3) = quat.x();
-        ee_state(4) = quat.y();
-        ee_state(5) = quat.z();
-        ee_state(6) = quat.w();
-        return ee_state;
-    }
-
-    vector_t Ocs2PinocchioVisualizer::computeBodyFramePose(const vector_t& state) const
+    vector_t Ocs2PinocchioVisualizer::extractFramePose7(const pinocchio::Data& data,
+                                                        const pinocchio::FrameIndex frame_id) const
     {
         vector_t pose = vector_t::Zero(7);
-        pose(6) = 1.0; // identity quaternion (x,y,z,w)
-        if (config_.body_frame.empty())
+        pose(6) = 1.0;
+        if (frame_id >= static_cast<pinocchio::FrameIndex>(data.oMf.size()))
         {
             return pose;
         }
-
-        const auto& model = pinocchio_interface_.getModel();
-        const auto frame_id = model.getFrameId(config_.body_frame);
-        if (frame_id >= static_cast<pinocchio::FrameIndex>(model.nframes))
-        {
-            RCLCPP_WARN_THROTTLE(node_->get_logger(), *node_->get_clock(), 5000,
-                                 "Body frame '%s' not in model (nframes=%d)",
-                                 config_.body_frame.c_str(), model.nframes);
-            return pose;
-        }
-
-        auto data = pinocchio_interface_.getData();
-        pinocchio::forwardKinematics(model, data, state);
-        pinocchio::updateFramePlacements(model, data);
-
         const auto& frame_placement = data.oMf[frame_id];
         pose.head<3>() = frame_placement.translation();
-        Eigen::Quaterniond quat(frame_placement.rotation());
+        const Eigen::Quaterniond quat(frame_placement.rotation());
         pose(3) = quat.x();
         pose(4) = quat.y();
         pose(5) = quat.z();
@@ -385,44 +313,127 @@ namespace ocs2::controller_common
         return pose;
     }
 
-    void Ocs2PinocchioVisualizer::publishLeftEndEffectorPose(const rclcpp::Time& time, const vector_t& state) const
+    void Ocs2PinocchioVisualizer::fillPoseStamped(geometry_msgs::msg::PoseStamped& msg, const rclcpp::Time& time,
+                                                  const std::string& frame_id, const vector_t& pose7)
     {
-        // Calculate left arm end effector pose (left arm uses default eeFrame)
-        const auto ee_pose = computeEndEffectorPose(state);
-
-        // Publish left arm pose information
-        geometry_msgs::msg::PoseStamped ee_pose_msg;
-        ee_pose_msg.header.stamp = time;
-        ee_pose_msg.header.frame_id = base_frame_;
-        ee_pose_msg.pose.position.x = ee_pose(0);
-        ee_pose_msg.pose.position.y = ee_pose(1);
-        ee_pose_msg.pose.position.z = ee_pose(2);
-        ee_pose_msg.pose.orientation.w = ee_pose(6);
-        ee_pose_msg.pose.orientation.x = ee_pose(3);
-        ee_pose_msg.pose.orientation.y = ee_pose(4);
-        ee_pose_msg.pose.orientation.z = ee_pose(5);
-
-        left_end_effector_pose_publisher_->publish(ee_pose_msg);
+        msg.header.stamp = time;
+        msg.header.frame_id = frame_id;
+        msg.pose.position.x = pose7(0);
+        msg.pose.position.y = pose7(1);
+        msg.pose.position.z = pose7(2);
+        msg.pose.orientation.x = pose7(3);
+        msg.pose.orientation.y = pose7(4);
+        msg.pose.orientation.z = pose7(5);
+        msg.pose.orientation.w = pose7(6);
     }
 
-    void Ocs2PinocchioVisualizer::publishRightEndEffectorPose(const rclcpp::Time& time, const vector_t& state) const
+    void Ocs2PinocchioVisualizer::publishPose(
+        const rclcpp::Publisher<geometry_msgs::msg::PoseStamped>::SharedPtr& pub,
+        const rclcpp::Time& time, const vector_t& pose7) const
     {
-        // Calculate right arm end effector pose
-        const auto ee_pose = computeRightEndEffectorPose(state);
-        
-        // Publish right arm pose information
-        geometry_msgs::msg::PoseStamped ee_pose_msg;
-        ee_pose_msg.header.stamp = time;
-        ee_pose_msg.header.frame_id = base_frame_;
-        ee_pose_msg.pose.position.x = ee_pose(0);
-        ee_pose_msg.pose.position.y = ee_pose(1);
-        ee_pose_msg.pose.position.z = ee_pose(2);
-        ee_pose_msg.pose.orientation.w = ee_pose(6);
-        ee_pose_msg.pose.orientation.x = ee_pose(3);
-        ee_pose_msg.pose.orientation.y = ee_pose(4);
-        ee_pose_msg.pose.orientation.z = ee_pose(5);
-        
-        right_end_effector_pose_publisher_->publish(ee_pose_msg);
+        if (!pub)
+        {
+            return;
+        }
+        geometry_msgs::msg::PoseStamped msg;
+        fillPoseStamped(msg, time, base_frame_, pose7);
+        pub->publish(msg);
+    }
+
+    void Ocs2PinocchioVisualizer::setPosePublishPeriod(const double period_sec)
+    {
+        pose_publish_period_sec_ = std::max(0.0, period_sec);
+    }
+
+    Ocs2PinocchioVisualizer::EndEffectorPoses
+    Ocs2PinocchioVisualizer::computeEndEffectorPoses(const vector_t& state) const
+    {
+        EndEffectorPoses poses;
+        poses.left(6) = 1.0;
+        poses.right(6) = 1.0;
+        poses.body(6) = 1.0;
+
+        const bool need_fk = left_ee_frame_valid_ ||
+                             (dual_arm_mode_ && right_ee_frame_valid_) ||
+                             body_frame_valid_;
+        if (need_fk)
+        {
+            forwardKinematicsInto(rt_data_, state);
+        }
+
+        if (left_ee_frame_valid_)
+        {
+            poses.left = extractFramePose7(rt_data_, left_ee_frame_id_);
+        }
+        else
+        {
+            RCLCPP_WARN_THROTTLE(node_->get_logger(), *node_->get_clock(), 5000,
+                                 "Left EE frame '%s' not in model (nframes=%d)",
+                                 config_.left_ee_frame.c_str(), pinocchio_interface_.getModel().nframes);
+        }
+
+        if (dual_arm_mode_)
+        {
+            if (right_ee_frame_valid_)
+            {
+                poses.right = extractFramePose7(rt_data_, right_ee_frame_id_);
+            }
+            else
+            {
+                RCLCPP_WARN_THROTTLE(node_->get_logger(), *node_->get_clock(), 5000,
+                                     "Right EE frame '%s' not in model (nframes=%d)",
+                                     config_.right_ee_frame.c_str(), pinocchio_interface_.getModel().nframes);
+            }
+        }
+
+        if (body_frame_valid_)
+        {
+            poses.body = extractFramePose7(rt_data_, body_frame_id_);
+        }
+        else if (!config_.body_frame.empty())
+        {
+            RCLCPP_WARN_THROTTLE(node_->get_logger(), *node_->get_clock(), 5000,
+                                 "Body frame '%s' not in model (nframes=%d)",
+                                 config_.body_frame.c_str(), pinocchio_interface_.getModel().nframes);
+        }
+        return poses;
+    }
+
+    void Ocs2PinocchioVisualizer::publishEndEffectorPoses(const rclcpp::Time& time,
+                                                          const EndEffectorPoses& poses) const
+    {
+        if (pose_publish_period_sec_ > 0.0 && last_pose_publish_time_.nanoseconds() != 0 &&
+            (time - last_pose_publish_time_).seconds() < pose_publish_period_sec_)
+        {
+            return;
+        }
+        last_pose_publish_time_ = time;
+        publishPose(left_end_effector_pose_publisher_, time, poses.left);
+        if (dual_arm_mode_)
+        {
+            publishPose(right_end_effector_pose_publisher_, time, poses.right);
+        }
+        publishPose(body_frame_pose_publisher_, time, poses.body);
+    }
+
+    void Ocs2PinocchioVisualizer::publishEndEffectorPose(const rclcpp::Time& time, const vector_t& state) const
+    {
+        publishEndEffectorPoses(time, computeEndEffectorPoses(state));
+    }
+
+    vector_t Ocs2PinocchioVisualizer::computeEndEffectorPose(const vector_t& state) const
+    {
+        return computeEndEffectorPoses(state).left;
+    }
+
+    vector_t Ocs2PinocchioVisualizer::computeRightEndEffectorPose(const vector_t& state) const
+    {
+        return computeEndEffectorPoses(state).right;
+    }
+
+    vector_t Ocs2PinocchioVisualizer::computeBodyFramePose(const vector_t& state) const
+    {
+        return computeEndEffectorPoses(state).body;
     }
 
     visualization_msgs::msg::Marker Ocs2PinocchioVisualizer::createTrajectoryLineMarker(

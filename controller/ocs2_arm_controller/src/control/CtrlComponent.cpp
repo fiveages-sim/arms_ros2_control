@@ -4,8 +4,11 @@
 
 #include "ocs2_arm_controller/control/CtrlComponent.h"
 #include "ocs2_arm_controller/Ocs2ArmController.h"
+#include <ocs2_controller_common/rt/ThreadScheduling.h>
+#include <ocs2_core/thread_support/ThreadPool.h>
 #include <ament_index_cpp/get_package_share_directory.hpp>
 #include <arms_controller_common/utils/TrajectoryRecorder.h>
+#include <ocs2_core/misc/LinearInterpolation.h>
 #include <ocs2_core/misc/LoadData.h>
 #include <ocs2_mpc/MPC_MRT_Interface.h>
 #include <ocs2_ros_interfaces/common/RosMsgConversions.h>
@@ -16,6 +19,7 @@
 #include <boost/property_tree/info_parser.hpp>
 #include <boost/property_tree/ptree.hpp>
 #include <exception>
+#include <algorithm>
 #include <filesystem>
 #include <chrono>
 #include <optional>
@@ -55,6 +59,14 @@ namespace ocs2::mobile_manipulator
             else if (param.get_name() == "traj_record_enabled")
             {
                 traj_record_enabled_update = param.as_bool();
+            }
+            else if (param.get_name() == "rt_timing_enabled")
+            {
+                rt_timing_.enabled.store(param.as_bool(), std::memory_order_relaxed);
+                RCLCPP_INFO(node_->get_logger(),
+                            "rt_timing_enabled=%s. Remote-desktop: HOLD 20s / OCS2 idle 20s / "
+                            "drag markers 20s / HOLD. Collect [rt_timing] and Overrun detected.",
+                            param.as_bool() ? "true" : "false");
             }
         }
         if (traj_record_enabled_update.has_value())
@@ -114,26 +126,33 @@ namespace ocs2::mobile_manipulator
             pose_reference_manager_->setCurrentObservation(observation_);
         }
 
-        // RT: lightweight EE pose only. Self-collision FCL + markers + traj: viz thread.
         if (visualizer_)
         {
-            visualizer_->publishEndEffectorPose(time, observation_.state);
+            ocs2::controller_common::Ocs2PinocchioVisualizer::EndEffectorPoses poses;
+            {
+                auto fk_scope = rt_timing_.scope(&rt_timing_.ee_fk_us);
+                poses = visualizer_->computeEndEffectorPoses(observation_.state);
+            }
+            auto pub_scope = rt_timing_.scope(&rt_timing_.ee_pub_us);
+            visualizer_->publishEndEffectorPoses(time, poses);
         }
     }
 
     void CtrlComponent::evaluatePolicy(const rclcpp::Time& time)
     {
+        auto eval_scope = rt_timing_.scope(&rt_timing_.eval_us);
         if (!mpc_mrt_interface_)
         {
             RCLCPP_WARN(node_->get_logger(), "MPC MRT interface not available");
             return;
         }
-        // updatePolicy true = swapped new buffer into active; false may still leave a prior active valid.
-        if (mpc_mrt_interface_->updatePolicy())
         {
-            policy_active_ = true;
+            auto upd_scope = rt_timing_.scope(&rt_timing_.eval_upd_us);
+            if (mpc_mrt_interface_->updatePolicy())
+            {
+                policy_active_ = true;
+            }
         }
-        // use cached action as current state if the hardware has some latency to predict next action
         bool trigger_cached_state = (time - last_execute_time_).seconds() < hardware_latency_;
         if (trigger_cached_state && cached_ob_state_)
         {
@@ -141,9 +160,13 @@ namespace ocs2::mobile_manipulator
         }
 
         mpc_mrt_interface_->setCurrentObservation(observation_);
-
-        const auto observation_msg = ros_msg_conversions::createObservationMsg(observation_);
-        mpc_observation_publisher_->publish(observation_msg);
+        {
+            auto pub_scope = rt_timing_.scope(&rt_timing_.eval_obs_pub_us);
+            if (shouldPublishDds(time))
+            {
+                mpc_observation_publisher_->publish(ros_msg_conversions::createObservationMsg(observation_));
+            }
+        }
 
         if (!policy_active_)
         {
@@ -154,31 +177,24 @@ namespace ocs2::mobile_manipulator
         }
 
         size_t planned_mode = 0;
-        mpc_mrt_interface_->evaluatePolicy(time.seconds(), observation_.state, optimized_state_, optimized_input_,
-                                           planned_mode);
-        const auto& policy = mpc_mrt_interface_->getPolicy();
+        vector_t future_state;
+        vector_t future_input;
+        {
+            auto mrt_scope = rt_timing_.scope(&rt_timing_.eval_mrt_us);
+            mpc_mrt_interface_->evaluatePolicy(time.seconds(), observation_.state, optimized_state_, optimized_input_,
+                                               planned_mode);
+            const auto& policy = mpc_mrt_interface_->getPolicy();
+            const double future_time = observation_.time + future_time_offset_ / ctrl_interfaces_.frequency_;
+            future_state = LinearInterpolation::interpolate(
+                future_time, policy.timeTrajectory_, policy.stateTrajectory_);
+            future_input = LinearInterpolation::interpolate(
+                future_time, policy.timeTrajectory_, policy.inputTrajectory_);
+            pending_viz_has_pred_ = true;
+            pending_viz_pred_time_ = future_time;
+            pending_viz_pred_state_ = future_state;
+        }
 
-        double future_time = observation_.time + future_time_offset_ / ctrl_interfaces_.frequency_;
-        vector_t future_state = LinearInterpolation::interpolate(
-            future_time,
-            policy.timeTrajectory_,
-            policy.stateTrajectory_
-        );
-        vector_t future_input = LinearInterpolation::interpolate(
-            future_time,
-            policy.timeTrajectory_,
-            policy.inputTrajectory_
-        );
-
-        // RT-only staging; folded into atomic snapshot in requestVisualizationUpdate().
-        pending_viz_has_pred_ = true;
-        pending_viz_pred_time_ = future_time;
-        pending_viz_pred_state_ = future_state;
-
-        // EE traj markers: copy stateTrajectory for viz thread (no RT FK/publish).
-        pending_viz_has_policy_traj_ = !policy.stateTrajectory_.empty();
-        pending_viz_state_trajectory_ = policy.stateTrajectory_;
-
+        auto cmd_scope = rt_timing_.scope(&rt_timing_.eval_cmd_us);
         if (ctrl_interfaces_.control_mode_ == ControlMode::POSITION)
         {
             for (size_t i = 0; i < joint_names_.size() && i < static_cast<size_t>(future_state.size()); ++i)
@@ -191,17 +207,14 @@ namespace ocs2::mobile_manipulator
         else if (ctrl_interfaces_.control_mode_ == ControlMode::MIX)
         {
             vector_t static_torques = calculateStaticTorques();
-
             for (size_t i = 0; i < joint_names_.size() && i < static_cast<size_t>(static_torques.size()); ++i)
             {
                 std::ignore = ctrl_interfaces_.joint_force_command_interface_[i].get().set_value(static_torques(i));
             }
-
             for (size_t i = 0; i < joint_names_.size() && i < static_cast<size_t>(future_state.size()); ++i)
             {
                 ctrl_interfaces_.setJointPositionCommand(i, future_state(i));
             }
-
             for (size_t i = 0; i < joint_names_.size() && i < static_cast<size_t>(future_input.size()); ++i)
             {
                 std::ignore = ctrl_interfaces_.joint_velocity_command_interface_[i].get().
@@ -229,8 +242,9 @@ namespace ocs2::mobile_manipulator
 
         if (dual_arm_mode_)
         {
-            vector_t left_initial_ee_state = visualizer_->computeEndEffectorPose(observation_.state);
-            vector_t right_initial_ee_state = visualizer_->computeRightEndEffectorPose(observation_.state);
+            const auto poses = visualizer_->computeEndEffectorPoses(observation_.state);
+            vector_t left_initial_ee_state = poses.left;
+            vector_t right_initial_ee_state = poses.right;
 
             // Output initial target trajectory information
             RCLCPP_INFO(node_->get_logger(),
@@ -330,9 +344,30 @@ namespace ocs2::mobile_manipulator
         }
     }
 
+    void CtrlComponent::setMpcPeriodSec(double period_sec)
+    {
+        if (period_sec <= 0.0)
+        {
+            return;
+        }
+        mpc_period_us_.store(static_cast<int64_t>(period_sec * 1e6 + 0.5), std::memory_order_relaxed);
+    }
+
     void CtrlComponent::advanceMpc()
     {
+        const auto t0 = std::chrono::steady_clock::now();
         mpc_mrt_interface_->advanceMpc();
+        const auto us = std::chrono::duration_cast<std::chrono::microseconds>(
+                            std::chrono::steady_clock::now() - t0)
+                            .count();
+        const auto period_us = mpc_period_us_.load(std::memory_order_relaxed);
+        if (period_us > 0 && us > period_us)
+        {
+            RCLCPP_WARN_THROTTLE(node_->get_logger(), *node_->get_clock(), 1000,
+                                 "MPC solve %ld us exceeds period %ld us (%.1f Hz); tracking will lag",
+                                 static_cast<long>(us), static_cast<long>(period_us),
+                                 1e6 / static_cast<double>(period_us));
+        }
     }
 
     void CtrlComponent::startVisualizationThread(int thread_sleep_ms, double visualization_period_sec)
@@ -343,6 +378,10 @@ namespace ocs2::mobile_manipulator
         }
         visualization_thread_sleep_ms_ = std::max(1, thread_sleep_ms);
         visualization_period_sec_ = std::max(0.001, visualization_period_sec);
+        if (visualizer_)
+        {
+            visualizer_->setPosePublishPeriod(visualization_period_sec_);
+        }
         visualization_running_ = true;
         // Do not set visualization_update_requested_ here — caller must call
         // requestVisualizationUpdate() after observation_ is ready (e.g. post-resetMpc),
@@ -373,9 +412,14 @@ namespace ocs2::mobile_manipulator
         snap->pred_state = std::move(pending_viz_pred_state_);
         pending_viz_has_pred_ = false;
         pending_viz_pred_time_ = 0.0;
-        snap->has_policy_traj = pending_viz_has_policy_traj_;
-        snap->stateTrajectory = std::move(pending_viz_state_trajectory_);
-        pending_viz_has_policy_traj_ = false;
+        {
+            auto traj_scope = rt_timing_.scope(&rt_timing_.eval_traj_us);
+            if (policy_active_ && mpc_mrt_interface_)
+            {
+                snap->stateTrajectory = mpc_mrt_interface_->getVisualizationStateTrajectory();
+                snap->has_policy_traj = snap->stateTrajectory && !snap->stateTrajectory->empty();
+            }
+        }
         std::atomic_store_explicit(&visualization_snapshot_, std::move(snap), std::memory_order_release);
         visualization_update_requested_ = true;
     }
@@ -397,6 +441,7 @@ namespace ocs2::mobile_manipulator
 
     void CtrlComponent::visualizationThreadLoop()
     {
+        applyWorkerThreadScheduling("viz");
         RCLCPP_DEBUG(node_->get_logger(),
                      "Visualization thread started (sleep=%d ms, MPC-rate)",
                      visualization_thread_sleep_ms_);
@@ -435,9 +480,9 @@ namespace ocs2::mobile_manipulator
         }
         collision_active_.store(active, std::memory_order_release);
 
-        if (snap.has_policy_traj && !snap.stateTrajectory.empty())
+        if (snap.has_policy_traj && snap.stateTrajectory && !snap.stateTrajectory->empty())
         {
-            visualizer_->updateEndEffectorTrajectoryFromStates(snap.stateTrajectory);
+            visualizer_->updateEndEffectorTrajectoryFromStates(*snap.stateTrajectory);
             visualizer_->publishEndEffectorTrajectory(node_->now());
         }
 
@@ -509,15 +554,78 @@ namespace ocs2::mobile_manipulator
 
     vector_t CtrlComponent::calculateStaticTorques() const
     {
-        // Get the Pinocchio model and data from the interface
         const auto& pinocchio_model = interface_->getPinocchioInterface().getModel();
-        auto pinocchio_data = interface_->getPinocchioInterface().getData();
-
-
+        if (!rnea_data_)
+        {
+            rnea_data_.emplace(pinocchio_model);
+        }
         Eigen::VectorXd q = observation_.state;
-        return pinocchio::rnea(pinocchio_model, pinocchio_data, q,
+        return pinocchio::rnea(pinocchio_model, *rnea_data_, q,
                                Eigen::VectorXd::Zero(pinocchio_model.nv),
                                Eigen::VectorXd::Zero(pinocchio_model.nv));
+    }
+
+    bool CtrlComponent::shouldPublishDds(const rclcpp::Time& time)
+    {
+        if (dds_publish_period_sec_ <= 0.0)
+        {
+            return true;
+        }
+        if (last_dds_publish_time_.nanoseconds() != 0 &&
+            (time - last_dds_publish_time_).seconds() < dds_publish_period_sec_)
+        {
+            return false;
+        }
+        last_dds_publish_time_ = time;
+        return true;
+    }
+
+    void CtrlComponent::applyWorkerThreadScheduling(const char* thread_name) const
+    {
+        const bool is_mpc = thread_name != nullptr && std::string(thread_name) == "MPC";
+        if (is_mpc)
+        {
+            const std::vector<int>& cpus = mpc_thread_cpus_.empty() ? cpu_affinity_ : mpc_thread_cpus_;
+            ocs2::controller_common::applyThisThreadSchedulingLogged(
+                thread_priority_, cpus, node_->get_logger(), thread_name);
+            return;
+        }
+        // viz: CFS on the MPC core. FIFO 85 on DDP cores would preempt DDP workers (priority 50).
+        const std::vector<int>& cpus = mpc_thread_cpus_.empty() ? cpu_affinity_ : mpc_thread_cpus_;
+        ocs2::controller_common::applyThisThreadSchedulingLogged(0, cpus, node_->get_logger(), thread_name);
+    }
+
+    void CtrlComponent::applyRtLoopSchedulingOnce()
+    {
+        if (rt_loop_scheduling_applied_)
+        {
+            return;
+        }
+        rt_loop_scheduling_applied_ = true;
+        if (rt_loop_cpus_.empty())
+        {
+            return;
+        }
+        ocs2::controller_common::applyThisThreadCpuAffinity(rt_loop_cpus_);
+        RCLCPP_INFO(node_->get_logger(), "Pinned RT control loop to CPU [%s]",
+                    ocs2::controller_common::formatCpuList(rt_loop_cpus_).c_str());
+    }
+
+    void CtrlComponent::prepareThreadIsolation()
+    {
+        const auto plan = ocs2::controller_common::planIsolatedCpus(cpu_affinity_);
+        mpc_thread_cpus_ = plan.mpc;
+        rt_loop_cpus_ = plan.rt;
+        worker_thread_cpus_ = plan.workers;
+        if (plan.isolated)
+        {
+            ocs2::ThreadPool::setLaunchWorkerCpuAffinity(plan.workers);
+            RCLCPP_INFO(node_->get_logger(),
+                        "CPU isolation: RT=[%s] MPC=[%s] DDP=[%s] (viz shares MPC core at CFS)",
+                        ocs2::controller_common::formatCpuList(plan.rt).c_str(),
+                        ocs2::controller_common::formatCpuList(plan.mpc).c_str(),
+                        ocs2::controller_common::formatCpuList(plan.workers).c_str());
+        }
     }
 
     vector_t CtrlComponent::buildCollisionState() const

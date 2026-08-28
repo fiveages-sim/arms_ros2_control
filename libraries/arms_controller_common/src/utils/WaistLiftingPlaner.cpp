@@ -75,7 +75,9 @@ namespace arms_controller_common
         const double start_pos, const double requested_end, double& feasible_end)
     {
         (void)start_pos;
-        const auto [min_height, max_height] = getSingleJointHeightRange();
+        double min_height = 0.0;
+        double max_height = 0.0;
+        getSingleJointHeightRange(min_height, max_height);
         feasible_end = std::clamp(requested_end, min_height, max_height);
         return true;
     }
@@ -83,7 +85,9 @@ namespace arms_controller_common
     bool WaistLiftingPlaner::resolveFeasibleSingleJointPhi(
         const double requested_phi, double& feasible_phi)
     {
-        const auto [min_phi, max_phi] = getSingleJointPhiRange();
+        double min_phi = 0.0;
+        double max_phi = 0.0;
+        getSingleJointPhiRange(min_phi, max_phi);
         feasible_phi = std::clamp(requested_phi, min_phi, max_phi);
         return true;
     }
@@ -705,22 +709,25 @@ namespace arms_controller_common
         return !isSingleJointPitchOverLimits(pitch_joint_position);
     }
 
-    std::pair<double, double> WaistLiftingPlaner::getSingleJointHeightRange() const
+    void WaistLiftingPlaner::getSingleJointHeightRange(double& min_height,
+                                                      double& max_height) const
     {
         double h_lower = 0.0;
         double h_upper = 0.0;
         calculateSingleJointHeight(single_joint_limit_lower_, h_lower);
         calculateSingleJointHeight(single_joint_limit_upper_, h_upper);
-        return {std::min(h_lower, h_upper), std::max(h_lower, h_upper)};
+        min_height = std::min(h_lower, h_upper);
+        max_height = std::max(h_lower, h_upper);
     }
 
-    std::pair<double, double> WaistLiftingPlaner::getSingleJointPhiRange() const
+    void WaistLiftingPlaner::getSingleJointPhiRange(double& min_phi, double& max_phi) const
     {
         double phi_lower = 0.0;
         double phi_upper = 0.0;
         calculateSingleJointPhi(single_joint_pitch_limit_lower_, phi_lower);
         calculateSingleJointPhi(single_joint_pitch_limit_upper_, phi_upper);
-        return {std::min(phi_lower, phi_upper), std::max(phi_lower, phi_upper)};
+        min_phi = std::min(phi_lower, phi_upper);
+        max_phi = std::max(phi_lower, phi_upper);
     }
 
     bool WaistLiftingPlaner::isSingleJointPitchOverLimits(const double joint_angle) const
