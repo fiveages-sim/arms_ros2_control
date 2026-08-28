@@ -344,6 +344,15 @@ namespace ocs2::mobile_manipulator
         }
     }
 
+    void CtrlComponent::setMpcPeriodSec(double period_sec)
+    {
+        if (period_sec <= 0.0)
+        {
+            return;
+        }
+        mpc_period_us_.store(static_cast<int64_t>(period_sec * 1e6 + 0.5), std::memory_order_relaxed);
+    }
+
     void CtrlComponent::advanceMpc()
     {
         const auto t0 = std::chrono::steady_clock::now();
@@ -351,11 +360,13 @@ namespace ocs2::mobile_manipulator
         const auto us = std::chrono::duration_cast<std::chrono::microseconds>(
                             std::chrono::steady_clock::now() - t0)
                             .count();
-        if (us > 12000)
+        const auto period_us = mpc_period_us_.load(std::memory_order_relaxed);
+        if (period_us > 0 && us > period_us)
         {
             RCLCPP_WARN_THROTTLE(node_->get_logger(), *node_->get_clock(), 1000,
-                                 "MPC solve %ld us (>12 ms); marker tracking will lag until solves catch up",
-                                 static_cast<long>(us));
+                                 "MPC solve %ld us exceeds period %ld us (%.1f Hz); tracking will lag",
+                                 static_cast<long>(us), static_cast<long>(period_us),
+                                 1e6 / static_cast<double>(period_us));
         }
     }
 

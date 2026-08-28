@@ -22,6 +22,7 @@ namespace ocs2::mobile_manipulator
             controller_frequency, node_->get_parameter("mpc_frequency").as_int(), node_->get_logger());
         mpc_period_ = mpc_params.mpc_period_sec;
         thread_sleep_duration_ms_ = mpc_params.thread_sleep_ms;
+        ctrl_comp_->setMpcPeriodSec(mpc_period_);
 
         const bool selfCollisionEnabled = ctrl_comp_->interface_->isSelfCollisionEnabled();
         if (selfCollisionEnabled)

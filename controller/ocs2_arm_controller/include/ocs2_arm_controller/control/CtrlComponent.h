@@ -197,6 +197,8 @@ namespace ocs2::mobile_manipulator
         /** True once the first MPC policy after resetMpc() is available. */
         [[nodiscard]] bool initialPolicyReceived() const;
         void advanceMpc();
+        /** MPC request period; used to warn only when a solve overruns that period. */
+        void setMpcPeriodSec(double period_sec);
         /** Hold joints at last commanded positions (used while waiting for initial policy). */
         void holdLastSentPositions() const;
         /** Publish left/right(/body) current_target from cache (call on OCS2 enter for marker sync). */
@@ -344,6 +346,7 @@ namespace ocs2::mobile_manipulator
         std::vector<int> mpc_thread_cpus_;
         std::vector<int> worker_thread_cpus_;
         bool rt_loop_scheduling_applied_{false};
+        std::atomic<int64_t> mpc_period_us_{10000};
         double dds_publish_hz_{50.0};
         double dds_publish_period_sec_{0.02};
         rclcpp::Time last_dds_publish_time_{0, 0, RCL_ROS_TIME};
