@@ -248,7 +248,7 @@ namespace ocs2::mobile_manipulator
             auto_declare<std::string>("movej_interpolation_type", "linear");
             auto_declare<double>("movej_tanh_scale", 3.0);
             auto_declare<double>("movej_trajectory_duration", 3.0);
-            auto_declare<double>("movej_trajectory_blend_ratio", 0.0);
+            auto_declare<double>("movej_trajectory_blend_ratio", 0.2);
             auto_declare<double>("movej_max_velocity", 2.0);
             auto_declare<double>("movej_max_acceleration", 4.0);
             auto_declare<double>("movej_max_jerk", 20.0);
