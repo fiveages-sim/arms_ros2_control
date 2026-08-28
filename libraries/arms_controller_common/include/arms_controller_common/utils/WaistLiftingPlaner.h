@@ -2,7 +2,6 @@
 #include <array>
 #include <eigen3/Eigen/Dense>
 #include <memory>
-#include <utility>
 #include <vector>
 
 // Optional dependency: lina_planning
@@ -203,8 +202,8 @@ namespace arms_controller_common
         bool isSingleJointsOverLimts(double joint_angle) const;
         // 检查单关节 raw pitch joint 是否超出限位；phi 通过 IK 转 raw 后统一使用该检查
         bool isSingleJointPitchOverLimits(double joint_angle) const;
-        std::pair<double, double> getSingleJointHeightRange() const;
-        std::pair<double, double> getSingleJointPhiRange() const;
+        void getSingleJointHeightRange(double& min_height, double& max_height) const;
+        void getSingleJointPhiRange(double& min_phi, double& max_phi) const;
         bool resolveFeasibleSingleJointPhi(double requested_phi, double& feasible_phi);
 
         /*由于只升降腰部，就使用简单的movej单关节*/
