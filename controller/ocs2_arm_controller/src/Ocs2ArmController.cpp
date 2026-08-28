@@ -58,10 +58,13 @@ namespace ocs2::mobile_manipulator
     controller_interface::return_type Ocs2ArmController::update(const rclcpp::Time& time,
                                                                 const rclcpp::Duration& period)
     {
-        // Publish end effector pose (regardless of current state)
-        ctrl_comp_->updateObservation(time);
-        // Self-collision / traj record: throttled snapshot for viz thread (all FSM states).
-        ctrl_comp_->maybeRequestVisualizationUpdate(time);
+        const std::string fsm = current_state_ ? current_state_->state_name_string : "none";
+        ctrl_comp_->beginRtCycle();
+        ctrl_comp_->applyRtLoopSchedulingOnce();
+        {
+            auto obs_scope = ctrl_comp_->rtScopeObs();
+            ctrl_comp_->updateObservation(time);
+        }
 
         if (mode_ == FSMMode::NORMAL)
         {
@@ -77,7 +80,6 @@ namespace ocs2::mobile_manipulator
         }
         else if (mode_ == FSMMode::CHANGE)
         {
-            // OCS2 joins MPC/viz threads — must not block a single RT update cycle.
             if (current_state_->needsAsyncExit())
             {
                 if (!async_exit_started_)
@@ -92,7 +94,6 @@ namespace ocs2::mobile_manipulator
                     current_state_->enter();
                     publishCurrentFsmState();
                     syncPoseTargetAcceptance();
-                    // Republish after FSM is OCS2 so ArmsTargetManager applies setPose (HOLD skips it).
                     if (current_state_->state_name == FSMStateName::OCS2)
                     {
                         ctrl_comp_->publishCachedCurrentTargets();
@@ -122,6 +123,11 @@ namespace ocs2::mobile_manipulator
             }
         }
 
+        {
+            auto viz_scope = ctrl_comp_->rtScopeViz();
+            ctrl_comp_->maybeRequestVisualizationUpdate(time);
+        }
+        ctrl_comp_->endRtCycle(current_state_ ? current_state_->state_name_string : fsm);
         return controller_interface::return_type::OK;
     }
 

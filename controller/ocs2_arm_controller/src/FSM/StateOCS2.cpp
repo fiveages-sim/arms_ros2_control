@@ -159,24 +159,24 @@ namespace ocs2::mobile_manipulator
 
     void StateOCS2::mpcUpdateThread()
     {
+        ctrl_comp_->applyWorkerThreadScheduling("MPC");
         RCLCPP_DEBUG(node_->get_logger(), "MPC update thread started");
 
         while (mpc_running_.load())
         {
-            if (mpc_update_requested_.load())
+            if (mpc_update_requested_.exchange(false))
             {
                 try
                 {
                     // Only advanceMpc here. Never call getPolicy()/updatePolicy() on this
                     // thread — MRT active policy is not thread-safe (see MRT_BASE.h).
                     ctrl_comp_->advanceMpc();
-                    mpc_update_requested_ = false;
                 }
                 catch (const std::exception& e)
                 {
                     RCLCPP_ERROR(node_->get_logger(), "Error in MPC update: %s", e.what());
-                    mpc_update_requested_ = false;
                 }
+                continue;  // RT may have requested again during the solve; do not sleep first.
             }
 
             std::this_thread::sleep_for(std::chrono::milliseconds(thread_sleep_duration_ms_));

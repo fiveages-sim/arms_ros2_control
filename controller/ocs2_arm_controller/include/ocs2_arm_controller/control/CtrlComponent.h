@@ -4,19 +4,23 @@
 #pragma once
 
 
+#include <cstdint>
 #include <cstdlib>
 
 #include <atomic>
 #include <functional>
 #include <memory>
+#include <optional>
 #include <string>
 #include <thread>
 #include <vector>
 
 #include <ament_index_cpp/get_package_share_directory.hpp>
 #include <ocs2_controller_common/reference/PoseBasedReferenceManager.h>
+#include <ocs2_controller_common/rt/RtCycleTiming.h>
 #include <ocs2_controller_common/visualization/Ocs2PinocchioVisualizer.h>
 #include <ocs2_core/Types.h>
+#include <ocs2_core/thread_support/ThreadPool.h>
 #include <ocs2_ddp/GaussNewtonDDP_MPC.h>
 #include <ocs2_mobile_manipulator/MobileManipulatorInterface.h>
 #include <ocs2_mpc/MPC_BASE.h>
@@ -29,6 +33,7 @@
 
 #include <arms_controller_common/CtrlInterfaces.h>
 #include <arms_controller_common/utils/TrajectoryRecorder.h>
+#include <pinocchio/multibody/data.hpp>
 
 namespace ocs2::mobile_manipulator
 {
@@ -67,9 +72,22 @@ namespace ocs2::mobile_manipulator
             // Declare dir before enabled so both can be applied together from yaml/callback.
             traj_record_dir_ = auto_declare("traj_record_dir", std::string("/tmp/traj_record"));
             const bool traj_record_enabled = auto_declare("traj_record_enabled", false);
-            // Sync initial yaml/launch value (parameter callbacks do not fire on declare).
             arms_controller_common::TrajectoryRecorder::instance()
                 .setEnabled(traj_record_enabled, traj_record_dir_);
+
+            rt_timing_.enabled.store(auto_declare("rt_timing_enabled", false), std::memory_order_relaxed);
+            thread_priority_ = auto_declare("thread_priority", 0);
+            {
+                const auto affinity_i64 = auto_declare("cpu_affinity", std::vector<int64_t>{});
+                cpu_affinity_.clear();
+                cpu_affinity_.reserve(affinity_i64.size());
+                for (const auto cpu : affinity_i64)
+                {
+                    cpu_affinity_.push_back(static_cast<int>(cpu));
+                }
+            }
+            dds_publish_hz_ = auto_declare("dds_publish_hz", 50.0);
+            dds_publish_period_sec_ = dds_publish_hz_ > 0.0 ? 1.0 / dds_publish_hz_ : 0.0;
 
             parameter_callback_handle_ = node_->add_on_set_parameters_callback(
                 [this](const std::vector<rclcpp::Parameter>& parameters) {
@@ -126,6 +144,7 @@ namespace ocs2::mobile_manipulator
                     node_, interface_->getPinocchioInterface(), std::move(viz_cfg));
             }
             visualizer_->initialize();
+            visualizer_->setPosePublishPeriod(dds_publish_period_sec_);
             RCLCPP_INFO(node_->get_logger(), "Future time offset: %.2f seconds", future_time_offset_);
 
             auto_declare("movel_trajectory_duration", 2.0);
@@ -147,12 +166,14 @@ namespace ocs2::mobile_manipulator
                 robot_name_, interface_->getReferenceManagerPtr(), ref_ctx);
             pose_reference_manager_->subscribe(node_);
 
+            prepareThreadIsolation();
             mpc_ = std::make_unique<GaussNewtonDDP_MPC>(
                 interface_->mpcSettings(),
                 interface_->ddpSettings(),
                 interface_->getRollout(),
                 interface_->getOptimalControlProblem(),
                 interface_->getInitializer());
+            ocs2::ThreadPool::setLaunchWorkerCpuAffinity({});
 
             mpc_mrt_interface_ = std::make_unique<MPC_MRT_Interface>(*mpc_);
 
@@ -193,6 +214,14 @@ namespace ocs2::mobile_manipulator
         void requestVisualizationUpdate();
         /** Throttle requestVisualizationUpdate to visualization_period_sec (MPC rate). */
         void maybeRequestVisualizationUpdate(const rclcpp::Time& time);
+
+        void beginRtCycle() { rt_timing_.beginCycle(); }
+        void endRtCycle(const std::string& fsm) { rt_timing_.endCycle(fsm, node_->get_logger()); }
+        controller_common::RtCycleTiming::Scope rtScopeObs() { return rt_timing_.scope(&rt_timing_.obs_us); }
+        controller_common::RtCycleTiming::Scope rtScopeViz() { return rt_timing_.scope(&rt_timing_.viz_us); }
+        void applyWorkerThreadScheduling(const char* thread_name) const;
+        /** Pin the 500 Hz controller_manager thread away from the MPC core (once). */
+        void applyRtLoopSchedulingOnce();
 
         // Visualization management
         void clearTrajectoryVisualization();
@@ -242,6 +271,8 @@ namespace ocs2::mobile_manipulator
 
         /** Requires launch-injected xacro planning URDF (planning_urdf_path). */
         std::string resolvePlanningUrdfPath() const;
+        /** Split isolcpus: RT / MPC / DDP+viz, and pin DDP ThreadPool before GaussNewtonDDP_MPC construction. */
+        void prepareThreadIsolation();
 
         std::shared_ptr<rclcpp_lifecycle::LifecycleNode> node_;
         CtrlInterfaces& ctrl_interfaces_;
@@ -262,13 +293,13 @@ namespace ocs2::mobile_manipulator
             double pred_time{0.0};
             vector_t pred_state;
             bool has_policy_traj{false};
-            vector_array_t stateTrajectory;
+            std::shared_ptr<const vector_array_t> stateTrajectory;
         };
 
         void visualizationThreadLoop();
         void runVisualizationOnce(const VisualizationSnapshot& snap);
-        /** Observation + last_sent_joint_positions_ overlay (same as former checkSelfCollisionOnCommand). */
         vector_t buildCollisionState() const;
+        [[nodiscard]] bool shouldPublishDds(const rclcpp::Time& time);
 
         std::thread visualization_thread_;
         std::atomic_bool visualization_running_{false};
@@ -284,9 +315,6 @@ namespace ocs2::mobile_manipulator
         bool pending_viz_has_pred_{false};
         double pending_viz_pred_time_{0.0};
         vector_t pending_viz_pred_state_;
-        /** RT-only staging for EE trajectory markers (copy of policy.stateTrajectory_). */
-        bool pending_viz_has_policy_traj_{false};
-        vector_array_t pending_viz_state_trajectory_;
 
         // Configuration
         std::string robot_name_;
@@ -308,5 +336,17 @@ namespace ocs2::mobile_manipulator
 
         std::string urdf_file_;
         std::string task_file_;
+
+        controller_common::RtCycleTiming rt_timing_;
+        int thread_priority_{0};
+        std::vector<int> cpu_affinity_;
+        std::vector<int> rt_loop_cpus_;
+        std::vector<int> mpc_thread_cpus_;
+        std::vector<int> worker_thread_cpus_;
+        bool rt_loop_scheduling_applied_{false};
+        double dds_publish_hz_{50.0};
+        double dds_publish_period_sec_{0.02};
+        rclcpp::Time last_dds_publish_time_{0, 0, RCL_ROS_TIME};
+        mutable std::optional<pinocchio::Data> rnea_data_;
     };
 }
