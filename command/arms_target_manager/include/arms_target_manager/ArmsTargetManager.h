@@ -94,6 +94,8 @@ namespace arms_ros2_control::command
         bool shouldShowLeftArmMarker() const;
         bool shouldShowRightArmMarker() const;
         bool shouldShowBodyMarker() const;
+        bool shouldShowWbcHeadMarker() const;
+        bool shouldShowHeadMarker() const;
         int getCurrentBodyState() const;
         int getCurrentBaseState() const;
         int getCurrentBimanualState() const;
@@ -150,6 +152,7 @@ namespace arms_ros2_control::command
             const sensor_msgs::msg::JointState::ConstSharedPtr& joint_msg);
 
         void updateBodyMarkerVisibility();
+        void updateHeadMarkerVisibility();
         void refreshArmMarkersFromLatestCurrentTargets();
         void refreshArmMarkersFromLatestCurrentPoses();
 
@@ -235,6 +238,7 @@ namespace arms_ros2_control::command
         int body_state_{0};
         int base_state_{
             arms_ros2_control_msgs::msg::WbcCurrentState::BASE_LOCKED};
+        bool wbc_head_marker_visible_{false};
 
         rclcpp::Time last_marker_update_time_;
         double marker_update_interval_;

@@ -53,6 +53,7 @@ ROS 2 接口包：[`arms_ros2_control`](../..) 系统所使用的 **msg / srv / 
 | `has_custom_joint_lock` | `bool` | 自定义关节锁定 |
 | `has_bimanual_coupling` | `bool` | 双臂耦合 |
 | `body_tracking_ee_enabled` | `bool` | 身体跟踪末端是否启用 |
+| `head_tracking_ee_enabled` | `bool` | Head 6D 跟踪是否启用 |
 | `has_home_joint_reference` | `bool` | HOME 关节参考约束 |
 
 ### `WbcCurrentState`（msg）
@@ -62,7 +63,7 @@ ROS 2 接口包：[`arms_ros2_control`](../..) 系统所使用的 **msg / srv / 
 | 字段 | 类型 | 取值 |
 |------|------|------|
 | `base_state` | `uint8` | `BASE_LOCKED=0` / `BASE_UNLOCKED=1` |
-| `body_state` | `uint8` | `BODY_FREE=0` / `VERTICAL=1` / `TRACKING=2` / `LOCKED=3` / `HEAD_COUPLED=4` / `CUSTOM_LOCKED=5` |
+| `body_state` | `uint8` | `BODY_FREE=0` / `VERTICAL=1` / `TRACKING=2` / `LOCKED=3` / `HEAD_COUPLED=4` / `CUSTOM_LOCKED=5` / `HEAD_TRACKING=6` |
 | `bimanual_state` | `uint8` | `BIMANUAL_INDEPENDENT=0` / `BIMANUAL_COUPLED=1` |
 | `left_arm_state` / `right_arm_state` | `uint8` | `ARM_DISABLED=0` / `ARM_ENABLED=1` |
 | `home_joint_reference_enabled` | `bool` | HOME 关节参考约束是否打开 |

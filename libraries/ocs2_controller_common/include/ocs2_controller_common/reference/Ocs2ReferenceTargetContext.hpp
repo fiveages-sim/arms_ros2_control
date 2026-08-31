@@ -14,18 +14,32 @@ struct Ocs2ReferenceTargetContext {
     std::string base_frame;
     int input_dim{0};
 
-    /// 0 = auto: 7 (single arm) or 14 (dual arm). Use kWheelHumanoidTargetStateDim for wheel-humanoid switched layout.
+    /// Optional legacy override for non-wheel-humanoid users. Wheel-humanoid layout is derived from capabilities below.
     int reference_target_state_dim{0};
 
-    /// When reference_target_state_dim == kWheelHumanoidTargetStateDim: fill body block [14:21] from setBodyPoseReference()
-    /// each cycle (typically FK). If false, body block uses zero translation + identity quaternion ("empty" body target).
+    /// When the body capability is enabled, fill its block from setBodyPoseReference() each cycle
+    /// (typically FK). If false, the block uses zero translation + identity quaternion.
     bool body_pose_from_current_state{true};
 
     /// Enables publication of the cached Cartesian body target.
     /// Set by controllers that explicitly support body tracking EE.
     bool body_target_enabled{false};
 
-    static constexpr int kWheelHumanoidTargetStateDim = 21;
+    /// Enables the optional 7D head pose block and Head target ROS interfaces.
+    bool head_target_enabled{false};
+
+    static constexpr int kPoseTargetDim = 7;
+    static constexpr int kDualArmTargetDim = 14;
+
+    [[nodiscard]] int bodyTargetOffset() const { return dual_arm ? kDualArmTargetDim : 7; }
+    [[nodiscard]] int headTargetOffset() const {
+        return bodyTargetOffset() + (body_target_enabled ? kPoseTargetDim : 0);
+    }
+    [[nodiscard]] int wheelHumanoidTargetStateDim() const {
+        return bodyTargetOffset() +
+               (body_target_enabled ? kPoseTargetDim : 0) +
+               (head_target_enabled ? kPoseTargetDim : 0);
+    }
 };
 
 } // namespace ocs2::controller_common

@@ -46,6 +46,9 @@ ros2 launch ocs2_arm_controller demo.launch.py robot:=cr5
 | `body_target/stamped` | `geometry_msgs/PoseStamped` | 绝对 **moveL** | RViz 身体绝对（TRACKING） |
 | `body_target/relative` | `geometry_msgs/TwistStamped` | **一次相对位移** + moveL；`frame_id`=base/`body_frame` | **RViz 相对基座/身体** |
 | `body_current_target` | `PoseStamped` | 身体当前指令目标反馈 | RViz / marker |
+| `head_target` | `geometry_msgs/Pose` | WBC Head 6D 最终目标连续更新 | full-body Head marker |
+| `head_target/stamped` | `geometry_msgs/PoseStamped` | WBC Head 6D 插值目标 | full-body Head marker 单次发送 |
+| `head_current_target` | `geometry_msgs/PoseStamped` | WBC Head 最终目标回写；本节点只订阅 | Head marker |
 
 **MOVEJ 下同一 stamped 话题**：`PoseBasedReferenceManager` 是 `left/right/dual_target/stamped` 与 TF buffer 的唯一持有者。FSM 为 OCS2 时写入参考缓冲；非 OCS2 时转给 `StateMoveJ` 走 `startLinearTrajectory`（lina MoveL + 逐点 IK），语义同 `execute_linear`。vel/acc/jerk 留空则用控制器 `cartesian_defaults`（默认 `max_linear_velocity=0.25`，`ik_type=AUTO`，`time_mode=false`）。无 `lina_planning` 时 MOVEJ 侧为 no-op。
 
@@ -84,12 +87,26 @@ ros2 launch ocs2_arm_controller demo.launch.py robot:=cr5
 
 RViz Joint Panel：绝对 / 相对基座 / 相对末端（手臂）或相对身体（Body TRACKING）；相对基座填 `current_target`/`base_frame`；相对末端填 `left/right_ee_frame`；相对身体填 `body_frame`。
 
+### Full-body WBC Head 6D Marker
+
+旧关节 Marker 与 WBC 6D Marker 使用独立开关：
+
+| 参数 | 用途 | 默认 |
+|---|---|---|
+| `enable_head_control` | 旧头部 RPY-to-joint Marker，发布 `/head_joint_controller/target_joint_position` | `false` |
+| `enable_wbc_head_tracking_marker` | WBC Head XYZ+RPY 六轴 Marker | `false` |
+
+共享 YAML 中两个开关均保持关闭；`full_body.launch.py` 只在实际选择 `ocs2_wbc_controller` 时覆盖第二个开关，`split_body` 不覆盖。WBC Marker 还受运行态门控：只有 FSM=OCS2 且 `WbcCurrentState.body_state=BODY_HEAD_TRACKING` 时插入，离开模式立即移除并停止发布。
+
+每次进入该模式，Marker 先从 `marker_fixed_frame -> head_link_name` TF 同步当前完整位姿；模式内 Marker 表示最终目标，不持续跟随实际 Head 或 MPC 中间轨迹。自身发布后的短暂回显冷却避免 `head_target -> head_current_target -> Marker` 抖动，其他最终目标随后可通过 `head_current_target` 回写 Marker。旧 `/head_joint_controller/current_target_joint` 是关节数组，不接入 WBC 6D 回写链路。
+
 ## 参数说明
 
 ### 节点参数
 - `dual_arm_mode`、`control_base_frame`、`hand_controllers`：由 launch / task.info 自动配置
 - `marker_fixed_frame`：Marker 固定坐标系，默认 `base_link`
 - `enable_movej_cartesian_markers`：MOVEJ 下是否显示可拖手臂 marker（发 stamped → IK MoveL）。有 `lina_planning` 时默认 `true`；`full_body.launch.py` 在 `ocs2_wbc_controller` 下设为 `false`
+- `enable_wbc_head_tracking_marker`：是否具备 full-body WBC Head 6D Marker 启动能力；仍需 OCS2 + `BODY_HEAD_TRACKING`，默认 `false`
 
 ### YAML 配置（`config/default.yaml` 或 task 旁 `target_manager.yaml`）
 
@@ -146,12 +163,14 @@ twist.angular.{x,y,z} = Inputs.{roll,pitch,yaw} * angular_scale  # 单位：rad/
 
 - Marker 单次「发送目标」：`left_target/stamped`、`right_target/stamped`（`PoseStamped`）；双臂耦合：`dual_target/stamped`
 - Marker 连续 / VR：`left_target`、`right_target`（绝对 Pose；MOVEJ 下不发）
+- WBC Head Marker：`head_target`（连续）或 `head_target/stamped`（单次）
 - 手柄适配：`left_target/twist`、`right_target/twist`
 
 **订阅**
 
 - `control_input`（`arms_ros2_control_msgs/Inputs`）
 - `left_current_pose` / `right_current_pose`（更新 marker；frame_id=base）
+- `head_current_target`（仅 WBC Head 6D 最终目标回写）
 - VR 相关话题（启用时）
 
 ## 依赖

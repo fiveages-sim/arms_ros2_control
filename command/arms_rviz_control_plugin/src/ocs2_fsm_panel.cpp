@@ -651,6 +651,7 @@ namespace arms_rviz_control_plugin
         capability_state_.has_custom_joint_lock = msg->has_custom_joint_lock;
         capability_state_.has_bimanual_coupling = msg->has_bimanual_coupling;
         capability_state_.body_tracking_ee_enabled = msg->body_tracking_ee_enabled;
+        capability_state_.head_tracking_ee_enabled = msg->head_tracking_ee_enabled;
         capability_state_.has_home_joint_reference = msg->has_home_joint_reference;
 
         QMetaObject::invokeMethod(this, [this]() { refreshWbcUi(); }, Qt::QueuedConnection);
@@ -720,6 +721,11 @@ namespace arms_rviz_control_plugin
         return current_wbc_state_.body_state == 5; // BODY_CUSTOM_LOCKED
     }
 
+    bool OCS2FSMPanel::isBodyHeadTracking() const
+    {
+        return current_wbc_state_.body_state == 6; // BODY_HEAD_TRACKING
+    }
+
     int OCS2FSMPanel::getCurrentBodyModeIndex() const
     {
         if (isBodyFree()) return BODY_MODE_FREE;
@@ -728,6 +734,7 @@ namespace arms_rviz_control_plugin
         if (isBodyLocked()) return BODY_MODE_LOCKED;
         if (isBodyHeadCoupled()) return BODY_MODE_HEAD_COUPLED;
         if (isBodyCustomLocked()) return BODY_MODE_CUSTOM_LOCKED;
+        if (isBodyHeadTracking()) return BODY_MODE_HEAD_TRACKING;
         return BODY_MODE_LOCKED;
     }
 
@@ -747,6 +754,8 @@ namespace arms_rviz_control_plugin
                 return "BODY_HEAD_COUPLED";
             case BODY_MODE_CUSTOM_LOCKED:
                 return "BODY_CUSTOM_LOCK";
+            case BODY_MODE_HEAD_TRACKING:
+                return "BODY_HEAD_TRACKING";
             default:
                 return "";
         }
@@ -769,6 +778,11 @@ namespace arms_rviz_control_plugin
         if (capability_state_.body_tracking_ee_enabled)
         {
             body_combo_box_->addItem("跟随", BODY_MODE_TRACKING);
+        }
+
+        if (capability_state_.head_tracking_ee_enabled)
+        {
+            body_combo_box_->addItem("头部跟踪", BODY_MODE_HEAD_TRACKING);
         }
 
         if (capability_state_.has_waist_lock)

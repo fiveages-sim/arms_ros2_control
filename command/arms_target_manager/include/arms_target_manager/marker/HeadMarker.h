@@ -10,8 +10,11 @@
 #include <map>
 #include <set>
 #include <array>
+#include <functional>
+#include <utility>
 #include <rclcpp/rclcpp.hpp>
 #include <geometry_msgs/msg/pose.hpp>
+#include <geometry_msgs/msg/pose_stamped.hpp>
 #include <geometry_msgs/msg/quaternion.hpp>
 #include <visualization_msgs/msg/interactive_marker.hpp>
 #include <sensor_msgs/msg/joint_state.hpp>
@@ -40,6 +43,9 @@ namespace arms_ros2_control::command
     class HeadMarker
     {
     public:
+        using UpdateCallback =
+            std::function<void(const std::string&, const geometry_msgs::msg::Pose&)>;
+        using StateCheckCallback = std::function<bool()>;
         /**
          * @brief 构造函数
          * @param node ROS 节点指针
@@ -54,8 +60,10 @@ namespace arms_ros2_control::command
             std::shared_ptr<MarkerFactory> marker_factory,
             std::shared_ptr<tf2_ros::Buffer> tf_buffer,
             const std::string& frame_id,
+            const std::string& control_base_frame,
             double publish_rate = 20.0,
-            const std::string& target_topic = "/head_joint_controller/target_joint_position");
+            const std::string& target_topic = "/head_joint_controller/target_joint_position",
+            UpdateCallback update_callback = nullptr);
 
         /**
          * @brief 初始化头部配置
@@ -67,7 +75,9 @@ namespace arms_ros2_control::command
          * @brief 检查是否启用头部控制
          * @return 如果启用头部控制返回 true
          */
-        bool isEnabled() const { return enable_head_control_; }
+        bool isEnabled() const { return enable_head_control_ || enable_wbc_head_tracking_marker_; }
+        bool isLegacyEnabled() const { return enable_head_control_; }
+        bool isWbcEnabled() const { return enable_wbc_head_tracking_marker_; }
 
         /**
          * @brief 创建头部 marker
@@ -79,7 +89,8 @@ namespace arms_ros2_control::command
         visualization_msgs::msg::InteractiveMarker createMarker(
             const std::string& name,
             const geometry_msgs::msg::Pose& pose,
-            bool enable_interaction) const;
+            bool enable_interaction,
+            bool full_6d = false) const;
 
         /**
          * @brief 从四元数提取头部关节角度
@@ -124,6 +135,15 @@ namespace arms_ros2_control::command
          * @return 是否成功发布
          */
         bool publishTargetJointAngles(bool force = false) const;
+        bool publishTargetPose(bool force = false, bool use_stamped = false);
+
+        /** Initialize the full marker pose from marker_fixed_frame -> head link TF. */
+        bool syncPoseFromTf();
+        void setWbcTargetStateCheckCallback(StateCheckCallback callback)
+        {
+            wbc_target_state_check_callback_ = std::move(callback);
+        }
+        void clearCommandCooldown();
 
         /**
          * @brief 获取头部 link 名称
@@ -164,15 +184,23 @@ namespace arms_ros2_control::command
          * @return 如果应该执行返回 true
          */
         bool shouldThrottle(double interval) const;
+        bool transformPose(const geometry_msgs::msg::Pose& pose,
+                           const std::string& source_frame,
+                           const std::string& target_frame,
+                           geometry_msgs::msg::Pose& result) const;
+        void updateWbcTargetFromTopic(
+            const geometry_msgs::msg::PoseStamped::ConstSharedPtr& msg);
 
         // ROS 节点和工具
         rclcpp::Node::SharedPtr node_;
         std::shared_ptr<MarkerFactory> marker_factory_;
         std::shared_ptr<tf2_ros::Buffer> tf_buffer_;
         std::string frame_id_;
+        std::string control_base_frame_;
 
         // 配置
         bool enable_head_control_ = false;
+        bool enable_wbc_head_tracking_marker_ = false;
         std::string head_link_name_;
         std::array<double, 3> head_marker_position_ = {1.0, 0.0, 1.5};
 
@@ -192,14 +220,21 @@ namespace arms_ros2_control::command
         // 发布配置
         double publish_rate_;  // 发布频率（Hz）
         rclcpp::Publisher<std_msgs::msg::Float64MultiArray>::SharedPtr joint_publisher_;
+        rclcpp::Publisher<geometry_msgs::msg::Pose>::SharedPtr pose_publisher_;
+        rclcpp::Publisher<geometry_msgs::msg::PoseStamped>::SharedPtr pose_stamped_publisher_;
+        rclcpp::Subscription<geometry_msgs::msg::PoseStamped>::SharedPtr current_target_subscription_;
+        geometry_msgs::msg::PoseStamped latest_current_target_;
+        bool has_latest_current_target_{false};
+        UpdateCallback update_callback_;
+        StateCheckCallback wbc_target_state_check_callback_;
 
         // 节流管理（每个 marker 独立管理）
         mutable rclcpp::Time last_publish_time_;
         mutable rclcpp::Time last_subscription_update_time_;  // 订阅更新的节流时间戳（限制为30Hz）
+        mutable rclcpp::Time last_marker_command_time_;
 
         // 上一次的 RPY 角度（用于避免角度跳变）
         mutable std::array<double, 3> last_head_rpy_ = {0.0, 0.0, 0.0};
         mutable bool last_head_rpy_initialized_ = false;
     };
 } // namespace arms_ros2_control::command
-

@@ -46,6 +46,7 @@ public:
     std::unique_ptr<QLabel> custom_joint_lock_label_;
     std::unique_ptr<QLabel> bimanual_label_;
     std::unique_ptr<QLabel> body_tracking_label_;
+    std::unique_ptr<QLabel> head_tracking_label_;
     std::unique_ptr<QLabel> home_pose_tracking_label_;
   };
 

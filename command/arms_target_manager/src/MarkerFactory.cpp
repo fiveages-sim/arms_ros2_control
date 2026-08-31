@@ -90,7 +90,8 @@ namespace arms_ros2_control::command
         const std::string& name,
         const geometry_msgs::msg::Pose& pose,
         bool enable_interaction,
-        const std::set<std::string>& available_joints) const
+        const std::set<std::string>& available_joints,
+        bool full_6d) const
     {
         visualization_msgs::msg::InteractiveMarker interactiveMarker;
         interactiveMarker.header.frame_id = frame_id_;
@@ -121,6 +122,11 @@ namespace arms_ros2_control::command
         // 根据是否启用交互功能和可用的关节添加旋转控制
         if (enable_interaction)
         {
+            if (full_6d)
+            {
+                addMovementControls(interactiveMarker);
+                return interactiveMarker;
+            }
             visualization_msgs::msg::InteractiveMarkerControl control;
 
             // 根据可用的关节添加对应的旋转控制
@@ -277,4 +283,3 @@ namespace arms_ros2_control::command
     }
 
 } // namespace arms_ros2_control::command
-

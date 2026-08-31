@@ -155,6 +155,8 @@ namespace ocs2::controller_common
         right_target_state_ = vector_t::Zero(7);
         body_pose_7_xyzw_ = vector_t::Zero(7);
         body_pose_7_xyzw_(6) = 1.0; // identity quaternion (geometry_msgs order)
+        head_pose_7_xyzw_ = vector_t::Zero(7);
+        head_pose_7_xyzw_(6) = 1.0;
 
         // 初始化圆弧指针
 #ifdef HAS_LINA_PLANNING
@@ -276,24 +278,24 @@ namespace ocs2::controller_common
                 "right_target/relative", 1,
                 [this](const geometry_msgs::msg::TwistStamped::SharedPtr msg) { rightRelativeCallback(msg); });
         }
-        // body Pose订阅者：收到后立即更新（不插值）
-        auto bodyCallback = [this](const geometry_msgs::msg::Pose::SharedPtr msg)
+        if (target_context_.body_target_enabled)
         {
-            this->bodyPoseCallback(msg);
-        };
-        body_pose_subscriber_ = node->create_subscription<geometry_msgs::msg::Pose>(
-            "body_target", 1, bodyCallback);
-
-        // body PoseStamped订阅者
-        auto bodyStampedCallback =
-            [this](const geometry_msgs::msg::PoseStamped::SharedPtr msg)
-            {
-                this->bodyPoseStampedCallback(msg);
-            };
-
-        body_pose_stamped_subscriber_ =
-            node->create_subscription<geometry_msgs::msg::PoseStamped>(
-                "body_target/stamped", 1, bodyStampedCallback);
+            body_pose_subscriber_ = node->create_subscription<geometry_msgs::msg::Pose>(
+                "body_target", 1,
+                [this](const geometry_msgs::msg::Pose::SharedPtr msg) { bodyPoseCallback(msg); });
+            body_pose_stamped_subscriber_ = node->create_subscription<geometry_msgs::msg::PoseStamped>(
+                "body_target/stamped", 1,
+                [this](const geometry_msgs::msg::PoseStamped::SharedPtr msg) { bodyPoseStampedCallback(msg); });
+        }
+        if (target_context_.head_target_enabled)
+        {
+            head_pose_subscriber_ = node->create_subscription<geometry_msgs::msg::Pose>(
+                "head_target", 1,
+                [this](const geometry_msgs::msg::Pose::SharedPtr msg) { headPoseCallback(msg); });
+            head_pose_stamped_subscriber_ = node->create_subscription<geometry_msgs::msg::PoseStamped>(
+                "head_target/stamped", 1,
+                [this](const geometry_msgs::msg::PoseStamped::SharedPtr msg) { headPoseStampedCallback(msg); });
+        }
         // 删除圆弧订阅者，添加Service
 #ifdef HAS_LINA_PLANNING
         // 左臂圆弧Service
@@ -391,10 +393,19 @@ namespace ocs2::controller_common
                     bodyRelativeCallback(msg);
                 });
         }
+        if (target_context_.head_target_enabled)
+        {
+            head_target_publisher_ = node->create_publisher<geometry_msgs::msg::PoseStamped>(
+                "head_current_target", 1);
+        }
     }
 
     int PoseBasedReferenceManager::effectiveTargetStateDim() const
     {
+        if (isWheelHumanoidTargetLayout())
+        {
+            return target_context_.wheelHumanoidTargetStateDim();
+        }
         if (target_context_.reference_target_state_dim > 0)
         {
             return target_context_.reference_target_state_dim;
@@ -412,18 +423,26 @@ namespace ocs2::controller_common
     vector_t PoseBasedReferenceManager::bodySegmentForAssembly() const
     {
         if (!target_context_.body_pose_from_current_state &&
-            effectiveTargetStateDim() == Ocs2ReferenceTargetContext::kWheelHumanoidTargetStateDim)
+            target_context_.body_target_enabled)
         {
             return identityBodyPose7();
         }
         return body_pose_7_xyzw_;
     }
 
+    bool PoseBasedReferenceManager::isWheelHumanoidTargetLayout() const
+    {
+        return dual_arm_mode_ &&
+            (target_context_.body_target_enabled || target_context_.head_target_enabled);
+    }
+
     vector_t PoseBasedReferenceManager::assembleDualArmReferenceState(const vector_t& left7, const vector_t& right7) const
     {
-        if (effectiveTargetStateDim() == Ocs2ReferenceTargetContext::kWheelHumanoidTargetStateDim)
+        if (isWheelHumanoidTargetLayout())
         {
-            return assembleWheelHumanoidTargetState(left7, right7, bodySegmentForAssembly());
+            return assembleWheelHumanoidTargetState(
+                left7, right7, bodySegmentForAssembly(), head_pose_7_xyzw_,
+                target_context_.body_target_enabled, target_context_.head_target_enabled);
         }
         vector_t s = vector_t::Zero(14);
         s.segment(0, 7) = left7;
@@ -433,12 +452,25 @@ namespace ocs2::controller_common
 
     vector_t PoseBasedReferenceManager::assembleWheelHumanoidTargetState(const vector_t& left_pose7_xyzw,
                                                                          const vector_t& right_pose7_xyzw,
-                                                                         const vector_t& body_pose7_xyzw)
+                                                                         const vector_t& body_pose7_xyzw,
+                                                                         const vector_t& head_pose7_xyzw,
+                                                                         bool body_target_enabled,
+                                                                         bool head_target_enabled)
     {
-        vector_t s = vector_t::Zero(Ocs2ReferenceTargetContext::kWheelHumanoidTargetStateDim);
+        const int dim = Ocs2ReferenceTargetContext::kDualArmTargetDim +
+            (body_target_enabled ? Ocs2ReferenceTargetContext::kPoseTargetDim : 0) +
+            (head_target_enabled ? Ocs2ReferenceTargetContext::kPoseTargetDim : 0);
+        vector_t s = vector_t::Zero(dim);
         s.segment(0, 7) = left_pose7_xyzw.head<7>();
         s.segment(7, 7) = right_pose7_xyzw.head<7>();
-        s.segment(14, 7) = body_pose7_xyzw.head<7>();
+        int offset = Ocs2ReferenceTargetContext::kDualArmTargetDim;
+        if (body_target_enabled) {
+            s.segment(offset, 7) = body_pose7_xyzw.head<7>();
+            offset += Ocs2ReferenceTargetContext::kPoseTargetDim;
+        }
+        if (head_target_enabled) {
+            s.segment(offset, 7) = head_pose7_xyzw.head<7>();
+        }
         return s;
     }
 
@@ -662,8 +694,13 @@ namespace ocs2::controller_common
         {
             return true;
         }
-        if (effectiveTargetStateDim() == Ocs2ReferenceTargetContext::kWheelHumanoidTargetStateDim &&
+        if (target_context_.body_target_enabled &&
             isArmReferenceBufferActive(body_reference_buffer_, time))
+        {
+            return true;
+        }
+        if (target_context_.head_target_enabled &&
+            isArmReferenceBufferActive(head_reference_buffer_, time))
         {
             return true;
         }
@@ -687,9 +724,13 @@ namespace ocs2::controller_common
         {
             extend_end_time(right_arm_reference_buffer_);
         }
-        if (effectiveTargetStateDim() == Ocs2ReferenceTargetContext::kWheelHumanoidTargetStateDim)
+        if (target_context_.body_target_enabled)
         {
             extend_end_time(body_reference_buffer_);
+        }
+        if (target_context_.head_target_enabled)
+        {
+            extend_end_time(head_reference_buffer_);
         }
         rebuildTargetTrajectoriesFromArmReferenceBuffers(start_time, end_time);
     }
@@ -709,8 +750,7 @@ namespace ocs2::controller_common
         time_trajectory.reserve(num_samples);
         state_trajectory.reserve(num_samples);
 
-        const bool wheel_humanoid =
-            effectiveTargetStateDim() == Ocs2ReferenceTargetContext::kWheelHumanoidTargetStateDim;
+        const bool wheel_humanoid = isWheelHumanoidTargetLayout();
 
         for (size_t i = 0; i < num_samples; ++i)
         {
@@ -725,7 +765,11 @@ namespace ocs2::controller_common
             {
                 const vector_t body_pose =
                     sampleArmReferenceBuffer(body_reference_buffer_, bodySegmentForAssembly(), t);
-                state = assembleWheelHumanoidTargetState(left_pose, right_pose, body_pose);
+                const vector_t head_pose =
+                    sampleArmReferenceBuffer(head_reference_buffer_, head_pose_7_xyzw_, t);
+                state = assembleWheelHumanoidTargetState(
+                    left_pose, right_pose, body_pose, head_pose,
+                    target_context_.body_target_enabled, target_context_.head_target_enabled);
             }
             else if (dual_arm_mode_)
             {
@@ -767,6 +811,37 @@ namespace ocs2::controller_common
         if (update_target_trajectory)
         {
             updateBodyTrajectory(previous_body_target_state);
+        }
+    }
+
+    void PoseBasedReferenceManager::setHeadPoseReference(const vector_t& head_pose_xyzw_7)
+    {
+        if (head_pose_xyzw_7.size() >= 7)
+        {
+            head_pose_7_xyzw_ = head_pose_xyzw_7.head<7>();
+        }
+    }
+
+    void PoseBasedReferenceManager::setHeadPoseTargetOnly(const vector_t& head_pose_xyzw_7,
+                                                           bool update_target_trajectory)
+    {
+        if (head_pose_xyzw_7.size() < 7 || !target_context_.head_target_enabled)
+        {
+            return;
+        }
+        head_pose_7_xyzw_ = head_pose_xyzw_7.head<7>();
+        const double t = current_observation_.time;
+        resetArmReferenceBuffer(head_reference_buffer_, head_pose_7_xyzw_, t);
+        if (update_target_trajectory)
+        {
+            if (anyReferenceBufferActive(t))
+            {
+                rebuildTargetTrajectoriesFromActiveArmReferenceBuffers(t, 0.0);
+            }
+            else
+            {
+                updateTargetTrajectory();
+            }
         }
     }
 
@@ -896,8 +971,7 @@ namespace ocs2::controller_common
         const vector_t& previous_right_target_state,
         const vector_t& previous_body_target_state)
     {
-        // 仅在轮式人形 21 维目标布局下执行“左/右/腰”统一插值；其余布局退化为双臂插值
-        if (effectiveTargetStateDim() != Ocs2ReferenceTargetContext::kWheelHumanoidTargetStateDim)
+        if (!target_context_.body_target_enabled)
         {
             updateTrajectory(previous_left_target_state, previous_right_target_state);
             return;
@@ -926,8 +1000,7 @@ namespace ocs2::controller_common
 
     void PoseBasedReferenceManager::updateBodyTrajectory(const vector_t& previous_body_target_state)
     {
-        // 仅在轮式人形 21 维目标布局下对 body 做插值；其余布局保持单点更新行为
-        if (effectiveTargetStateDim() != Ocs2ReferenceTargetContext::kWheelHumanoidTargetStateDim)
+        if (!target_context_.body_target_enabled)
         {
             updateTargetTrajectory();
             return;
@@ -938,6 +1011,20 @@ namespace ocs2::controller_common
             body_reference_buffer_, previous_body_target_state, {body_pose_7_xyzw_},
             start_time, moveL_duration_);
         // Preserve any active left/right moveL by rebuilding from all buffers.
+        rebuildTargetTrajectoriesFromActiveArmReferenceBuffers(start_time, moveL_duration_);
+    }
+
+    void PoseBasedReferenceManager::updateHeadTrajectory(const vector_t& previous_head_target_state)
+    {
+        if (!target_context_.head_target_enabled)
+        {
+            updateTargetTrajectory();
+            return;
+        }
+        const double start_time = current_observation_.time;
+        setArmReferenceBufferFromWaypoints(
+            head_reference_buffer_, previous_head_target_state, {head_pose_7_xyzw_},
+            start_time, moveL_duration_);
         rebuildTargetTrajectoriesFromActiveArmReferenceBuffers(start_time, moveL_duration_);
     }
 
@@ -962,8 +1049,7 @@ namespace ocs2::controller_common
         (void)left_target_was_updated;
         return false;
 #else
-        if (!dual_arm_mode_ ||
-            effectiveTargetStateDim() != Ocs2ReferenceTargetContext::kWheelHumanoidTargetStateDim) {
+        if (!isWheelHumanoidTargetLayout()) {
             return false;
         }
         auto* sw = dynamic_cast<::ocs2::wheel_humanoid::SwitchedHumanoidReferenceManager*>(referenceManagerPtr_.get());
@@ -1020,8 +1106,7 @@ namespace ocs2::controller_common
 #ifndef HAS_OCS2_WHEEL_HUMANOID
         return false;
 #else
-        if (!dual_arm_mode_ ||
-            effectiveTargetStateDim() != Ocs2ReferenceTargetContext::kWheelHumanoidTargetStateDim)
+        if (!isWheelHumanoidTargetLayout())
         {
             return false;
         }
@@ -1103,6 +1188,19 @@ namespace ocs2::controller_common
         target_state(5) = msg->orientation.z;
         target_state(6) = msg->orientation.w;
         applyBodyAbsoluteTarget(target_state, false);
+    }
+
+    void PoseBasedReferenceManager::headPoseCallback(
+        const geometry_msgs::msg::Pose::SharedPtr msg)
+    {
+        if (!shouldAcceptExternalTargets())
+        {
+            return;
+        }
+        vector_t target_state(7);
+        target_state << msg->position.x, msg->position.y, msg->position.z,
+            msg->orientation.x, msg->orientation.y, msg->orientation.z, msg->orientation.w;
+        applyHeadAbsoluteTarget(target_state, false);
     }
 
     void PoseBasedReferenceManager::applyLeftAbsoluteTarget(const vector_t& goal7, bool interpolate)
@@ -1234,6 +1332,36 @@ namespace ocs2::controller_common
         body_pose_7_xyzw_ = goal7.head<7>();
         updateBodyTrajectory(previous_body_target_state);
         publishCurrentTargets("body");
+    }
+
+    void PoseBasedReferenceManager::applyHeadAbsoluteTarget(const vector_t& goal7, bool interpolate)
+    {
+        if (goal7.size() < 7 || !target_context_.head_target_enabled)
+        {
+            return;
+        }
+        if (!interpolate)
+        {
+            head_pose_7_xyzw_ = goal7.head<7>();
+            const double t = current_observation_.time;
+            resetArmReferenceBuffer(head_reference_buffer_, head_pose_7_xyzw_, t);
+            if (anyReferenceBufferActive(t))
+            {
+                rebuildTargetTrajectoriesFromActiveArmReferenceBuffers(t, 0.0);
+            }
+            else
+            {
+                updateTargetTrajectory();
+            }
+            publishCurrentTargets("head");
+            return;
+        }
+
+        updateParam();
+        const vector_t previous = head_pose_7_xyzw_;
+        head_pose_7_xyzw_ = goal7.head<7>();
+        updateHeadTrajectory(previous);
+        publishCurrentTargets("head");
     }
 
     vector_t PoseBasedReferenceManager::composeTwistDelta(
@@ -1504,6 +1632,15 @@ namespace ocs2::controller_common
         applyBodyAbsoluteTarget(target_state, true);
     }
 
+    void PoseBasedReferenceManager::headPoseStampedPoseCallback(
+        const geometry_msgs::msg::Pose::SharedPtr msg)
+    {
+        vector_t target_state(7);
+        target_state << msg->position.x, msg->position.y, msg->position.z,
+            msg->orientation.x, msg->orientation.y, msg->orientation.z, msg->orientation.w;
+        applyHeadAbsoluteTarget(target_state, true);
+    }
+
     void PoseBasedReferenceManager::processPoseStamped(
         const geometry_msgs::msg::PoseStamped::SharedPtr& msg,
         std::function<void(geometry_msgs::msg::Pose::SharedPtr)> callback)
@@ -1632,6 +1769,19 @@ namespace ocs2::controller_common
         });
     }
 
+    void PoseBasedReferenceManager::headPoseStampedCallback(
+        const geometry_msgs::msg::PoseStamped::SharedPtr msg)
+    {
+        if (!shouldAcceptExternalTargets())
+        {
+            return;
+        }
+        processPoseStamped(msg, [this](geometry_msgs::msg::Pose::SharedPtr pose_msg)
+        {
+            headPoseStampedPoseCallback(pose_msg);
+        });
+    }
+
     void PoseBasedReferenceManager::dualTargetStampedCallback(
         const nav_msgs::msg::Path::SharedPtr msg)
     {
@@ -1656,7 +1806,8 @@ namespace ocs2::controller_common
         // 支持两种格式：
         //   2 poses: [left, right]
         //   3 poses: [left, right, body]  -> 三条轨迹统一插值规划
-        if (msg->poses.size() != 2 && msg->poses.size() != 3)
+        if (msg->poses.size() != 2 &&
+            !(target_context_.body_target_enabled && msg->poses.size() == 3))
         {
             RCLCPP_WARN(logger_, "Dual target path must contain 2 or 3 poses ([left,right] or [left,right,body]), got %zu",
                         msg->poses.size());
@@ -1686,7 +1837,7 @@ namespace ocs2::controller_common
 #ifdef HAS_OCS2_WHEEL_HUMANOID
         // 在双臂耦合下，单次发布若左右臂目标与已捕获耦合关系冲突，
         // 将右臂目标匹配（投影）到由左臂目标定义的耦合流形上。
-        if (effectiveTargetStateDim() == Ocs2ReferenceTargetContext::kWheelHumanoidTargetStateDim)
+        if (isWheelHumanoidTargetLayout())
         {
             auto* sw = dynamic_cast<::ocs2::wheel_humanoid::SwitchedHumanoidReferenceManager*>(referenceManagerPtr_.get());
             if (sw != nullptr)
@@ -1980,9 +2131,13 @@ namespace ocs2::controller_common
         {
             extendEndTimeFromActiveBuffer(right_arm_reference_buffer_);
         }
-        if (effectiveTargetStateDim() == Ocs2ReferenceTargetContext::kWheelHumanoidTargetStateDim)
+        if (target_context_.body_target_enabled)
         {
             extendEndTimeFromActiveBuffer(body_reference_buffer_);
+        }
+        if (target_context_.head_target_enabled)
+        {
+            extendEndTimeFromActiveBuffer(head_reference_buffer_);
         }
 
         if (!dual_arm_mode_ && left_arm_waypoints.empty())
@@ -2007,9 +2162,12 @@ namespace ocs2::controller_common
         right_target_state_ = vector_t::Zero(7);
         body_pose_7_xyzw_ = vector_t::Zero(7);
         body_pose_7_xyzw_(6) = 1.0;
+        head_pose_7_xyzw_ = vector_t::Zero(7);
+        head_pose_7_xyzw_(6) = 1.0;
         left_arm_reference_buffer_ = ArmReferenceBuffer{};
         right_arm_reference_buffer_ = ArmReferenceBuffer{};
         body_reference_buffer_ = ArmReferenceBuffer{};
+        head_reference_buffer_ = ArmReferenceBuffer{};
 
         RCLCPP_INFO(logger_,
                     "Target state cache reset - cleared all cached target states");
@@ -2035,9 +2193,9 @@ namespace ocs2::controller_common
             {
                 right_target_state_ = right_ee_pose;
             }
-            // 仅轮式人形 21 维布局需要在此处把缓存推入 ReferenceManager；固定臂控仍保持 7/14 维原行为
+            // Optional wheel-humanoid pose blocks require rebuilding the full explicit layout.
             if (update_target_trajectory &&
-                effectiveTargetStateDim() == Ocs2ReferenceTargetContext::kWheelHumanoidTargetStateDim &&
+                isWheelHumanoidTargetLayout() &&
                 !anyReferenceBufferActive(t))
             {
                 updateTargetTrajectory();
@@ -2059,7 +2217,7 @@ namespace ocs2::controller_common
         left_target_state_ = pose;
         resetArmReferenceBuffer(left_arm_reference_buffer_, pose, current_observation_.time);
         if (update_target_trajectory &&
-            effectiveTargetStateDim() == Ocs2ReferenceTargetContext::kWheelHumanoidTargetStateDim)
+            isWheelHumanoidTargetLayout())
         {
             updateTargetTrajectory();
         }
@@ -2077,7 +2235,7 @@ namespace ocs2::controller_common
         right_target_state_ = pose;
         resetArmReferenceBuffer(right_arm_reference_buffer_, pose, current_observation_.time);
         if (update_target_trajectory &&
-            effectiveTargetStateDim() == Ocs2ReferenceTargetContext::kWheelHumanoidTargetStateDim)
+            isWheelHumanoidTargetLayout())
         {
             updateTargetTrajectory();
         }
@@ -2093,6 +2251,8 @@ namespace ocs2::controller_common
             (target_type.empty() || target_type == "both" || target_type == "right");
         const bool publish_body =
             (target_type.empty() || target_type == "both" || target_type == "body");
+        const bool publish_head =
+            (target_type.empty() || target_type == "both" || target_type == "head");
 
         // 发布左臂当前目标
         if (publish_left)
@@ -2139,6 +2299,21 @@ namespace ocs2::controller_common
             body_target_msg.pose.orientation.z = body_pose_7_xyzw_(5);
             body_target_msg.pose.orientation.w = body_pose_7_xyzw_(6);
             body_target_publisher_->publish(body_target_msg);
+        }
+
+        if (target_context_.head_target_enabled && publish_head && head_target_publisher_)
+        {
+            geometry_msgs::msg::PoseStamped msg;
+            msg.header.stamp = clock_->now();
+            msg.header.frame_id = base_frame_;
+            msg.pose.position.x = head_pose_7_xyzw_(0);
+            msg.pose.position.y = head_pose_7_xyzw_(1);
+            msg.pose.position.z = head_pose_7_xyzw_(2);
+            msg.pose.orientation.x = head_pose_7_xyzw_(3);
+            msg.pose.orientation.y = head_pose_7_xyzw_(4);
+            msg.pose.orientation.z = head_pose_7_xyzw_(5);
+            msg.pose.orientation.w = head_pose_7_xyzw_(6);
+            head_target_publisher_->publish(msg);
         }
     }
 

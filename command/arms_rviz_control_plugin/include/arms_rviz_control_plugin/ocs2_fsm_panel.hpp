@@ -89,6 +89,7 @@ private:
   bool isBodyLocked() const;
   bool isBodyHeadCoupled() const;
   bool isBodyCustomLocked() const;
+  bool isBodyHeadTracking() const;
 
   int getCurrentBodyModeIndex() const;
   QString getBodyModeCommand(int modeIndex) const;
@@ -101,7 +102,8 @@ private:
     BODY_MODE_TRACKING = 2,
     BODY_MODE_LOCKED = 3,
     BODY_MODE_HEAD_COUPLED = 4,
-    BODY_MODE_CUSTOM_LOCKED = 5
+    BODY_MODE_CUSTOM_LOCKED = 5,
+    BODY_MODE_HEAD_TRACKING = 6
   };
 
   struct CapabilityState
@@ -113,6 +115,7 @@ private:
     bool has_custom_joint_lock = false;
     bool has_bimanual_coupling = false;
     bool body_tracking_ee_enabled = false;
+    bool head_tracking_ee_enabled = false;
     bool has_home_joint_reference = false;
   };
 
