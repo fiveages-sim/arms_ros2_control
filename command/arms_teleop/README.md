@@ -117,24 +117,38 @@ ros2 run arms_teleop foot_pedal_teleop --ros-args \
 An explicit stable `device` path remains available for diagnostics and overrides auto-discovery.
 
 By default the node exclusively grabs that device (`grab_device:=true`), so pedal events do not
-reach the desktop or other applications. F13 always requests HOLD immediately. F14-F16 use clicks
-for teleoperation events and long presses for FSM commands:
+reach the desktop or other applications. The default `click_profile:=dexcap` maps short clicks to
+the direct Cartesian teleoperation services while preserving all long-press FSM commands:
 
-- F14 single-click: publish `/xr/controller_state=50` (start).
-- F14 double-click: publish `/xr/controller_state=51` (end).
+- F13 press: request Cartesian teleoperation disable and immediately request HOLD.
+- F14 single- or double-click: call `/dexcap_cartesian_teleop/calibrate`.
 - F14 long-press: request HOME; while already HOME, request HOME pose switch (`command=100`).
 - F15 long-press: request OCS2.
 - F15 single/double-click while in OCS2: toggle left/right-arm control.
-- F16 single-click: publish `/xr/controller_state=52` (manual intervention).
-- F16 double-click: publish `/xr/controller_state=53` (delete).
+- F16 single-click: call `/dexcap_cartesian_teleop/enable` with `data=false`.
+- F16 double-click: call `/dexcap_cartesian_teleop/enable` with `data=true`.
 - F16 long-press: request MOVEJ.
+
+The intended direct Cartesian workflow is F13 HOLD, F14 calibrate, long F15 to OCS2, and then
+double-click F16 to enable. Single-click F16 stops Cartesian command output. Enable is deliberately
+a double-click to reduce accidental activation. If the input device disconnects, the node requests
+both Cartesian disable and HOLD when `hold_on_disconnect:=true`.
+
+The previous XR click behavior remains available with `click_profile:=xr`:
+
+- F14 single/double-click: publish `/xr/controller_state=50/51` (start/end).
+- F16 single/double-click: publish `/xr/controller_state=52/53` (manual intervention/delete).
+
+```bash
+ros2 run arms_teleop foot_pedal_teleop --ros-args -p click_profile:=xr
+```
 
 The node reads the actual arm states from `/ocs2_wbc_controller/current_state` and publishes the
 toggle to `mode_command`. Per-arm toggles are rejected while bimanual coupling is enabled, matching
-the WBC RViz panel behavior. Like `xr_target_node.py`, the node publishes `std_msgs/Int32` on
+the WBC RViz panel behavior. In the optional XR profile, the node publishes `std_msgs/Int32` on
 `/xr/controller_state` continuously at 30 Hz: an XR event occupies one frame and subsequent frames
-contain `0`. Events are available in HOME, HOLD, OCS2, and MOVEJ. Single-click actions are emitted
-after the double-click window expires. HOME, OCS2, and MOVEJ long-press commands are
+contain `0`. Single-click actions are emitted after the double-click window expires in both
+profiles. HOME, OCS2, and MOVEJ long-press commands are
 accepted only from HOLD, except the HOME pose switch. F13 cancels pending click actions. Linux
 key-repeat events are ignored.
 
@@ -151,6 +165,12 @@ Parameters:
   400-2000 ms.
 - `xr.publish_rate_hz` (default `30.0`): `/xr/controller_state` state-stream frequency.
 - `mode_command_topic` (default `mode_command`): WBC humanoid-mode command topic.
+- `click_profile` (default `dexcap`): `dexcap` uses Cartesian calibration/enable services;
+  `xr` restores the previous XR event clicks.
+- `cartesian_teleop.calibrate_service` (default `/dexcap_cartesian_teleop/calibrate`): Cartesian
+  calibration service name.
+- `cartesian_teleop.enable_service` (default `/dexcap_cartesian_teleop/enable`): Cartesian
+  output enable/disable service name.
 - `keys.hold/home/ocs2/movej`: Linux input key codes, default F13-F16 (`183`-`186`).
 
 If opening the device fails with `Permission denied`, configure an input-device udev rule or run
