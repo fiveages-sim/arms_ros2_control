@@ -24,6 +24,8 @@
 #include <arms_ros2_control_msgs/msg/wbc_current_state.hpp>
 #include <std_msgs/msg/int32.hpp>
 #include <std_msgs/msg/string.hpp>
+#include <std_srvs/srv/set_bool.hpp>
+#include <std_srvs/srv/trigger.hpp>
 
 namespace {
 
@@ -72,6 +74,11 @@ public:
             declare_parameter<std::int64_t>("gesture.long_press_ms", 700));
         xr_publish_rate_hz_ = declare_parameter<double>("xr.publish_rate_hz", 30.0);
         mode_command_topic_ = declare_parameter<std::string>("mode_command_topic", "mode_command");
+        click_profile_ = declare_parameter<std::string>("click_profile", "dexcap");
+        cartesian_calibrate_service_ = declare_parameter<std::string>(
+            "cartesian_teleop.calibrate_service", "/dexcap_cartesian_teleop/calibrate");
+        cartesian_enable_service_ = declare_parameter<std::string>(
+            "cartesian_teleop.enable_service", "/dexcap_cartesian_teleop/enable");
         key_hold_ = static_cast<int>(declare_parameter<std::int64_t>("keys.hold", KEY_F13));
         key_home_ = static_cast<int>(declare_parameter<std::int64_t>("keys.home", KEY_F14));
         key_ocs2_ = static_cast<int>(declare_parameter<std::int64_t>("keys.ocs2", KEY_F15));
@@ -86,6 +93,10 @@ public:
             create_publisher<std_msgs::msg::String>(mode_command_topic_, rclcpp::QoS(10).reliable());
         xr_controller_state_publisher_ = create_publisher<std_msgs::msg::Int32>(
             "/xr/controller_state", rclcpp::QoS(10).reliable());
+        cartesian_calibrate_client_ = create_client<std_srvs::srv::Trigger>(
+            cartesian_calibrate_service_);
+        cartesian_enable_client_ = create_client<std_srvs::srv::SetBool>(
+            cartesian_enable_service_);
 
         rclcpp::QoS state_qos(1);
         state_qos.reliable().transient_local();
@@ -108,11 +119,19 @@ public:
 
         RCLCPP_INFO(get_logger(),
                     "FSM mapping: F13=immediate HOLD; long F14/F15/F16=HOME/OCS2/MOVEJ");
-        RCLCPP_INFO(
-            get_logger(),
-            "Gestures: F14 single/double=XR 50/51, F16 single/double=XR 52/53; "
-            "long press F14/F15/F16=HOME/OCS2/MOVEJ (%d/%d ms)",
-            double_click_ms_, long_press_ms_);
+        if (click_profile_ == "dexcap") {
+            RCLCPP_INFO(
+                get_logger(),
+                "DexCap gestures: F14 single/double=calibrate; F16 single=disable, "
+                "double=enable; long F14/F15/F16=HOME/OCS2/MOVEJ (%d/%d ms)",
+                double_click_ms_, long_press_ms_);
+        } else {
+            RCLCPP_INFO(
+                get_logger(),
+                "XR gestures: F14 single/double=XR 50/51, F16 single/double=XR 52/53; "
+                "long F14/F15/F16=HOME/OCS2/MOVEJ (%d/%d ms)",
+                double_click_ms_, long_press_ms_);
+        }
         RCLCPP_INFO(get_logger(),
                     "In OCS2 only: F15 single/double toggles left/right arm");
         RCLCPP_INFO(get_logger(), "Waiting for /fsm_state; HOLD remains available at all times");
@@ -165,6 +184,12 @@ private:
         }
         if (mode_command_topic_.empty()) {
             throw std::runtime_error("mode_command_topic must not be empty");
+        }
+        if (click_profile_ != "dexcap" && click_profile_ != "xr") {
+            throw std::runtime_error("click_profile must be 'dexcap' or 'xr'");
+        }
+        if (cartesian_calibrate_service_.empty() || cartesian_enable_service_.empty()) {
+            throw std::runtime_error("cartesian teleop service names must not be empty");
         }
     }
 
@@ -359,6 +384,9 @@ private:
             active_key_ = event.code;
             active_fsm_command_ = true;
             active_gesture_key_ = -1;
+            if (click_profile_ == "dexcap") {
+                requestCartesianEnable(false, "F13 HOLD");
+            }
             publishCommand(command);
             RCLCPP_WARN(get_logger(), "Pedal F13 requested HOLD");
             return;
@@ -489,6 +517,23 @@ private:
 
     void executeClickGesture(const int key, const bool double_click)
     {
+        if (click_profile_ == "dexcap") {
+            if (key == key_home_) {
+                requestCartesianCalibration(double_click ? "F14 double-click" : "F14 click");
+            } else if (key == key_ocs2_) {
+                if (fsm_state_received_ && current_fsm_state_ == kFsmOcs2) {
+                    toggleArm(!double_click);
+                } else {
+                    RCLCPP_WARN(get_logger(),
+                                "Ignoring F15 click: arm toggle is available only in OCS2");
+                }
+            } else if (key == key_movej_) {
+                requestCartesianEnable(double_click,
+                                       double_click ? "F16 double-click" : "F16 click");
+            }
+            return;
+        }
+
         if (key == key_home_) {
             publishXrEvent(double_click ? kXrEnd : kXrStart);
         } else if (key == key_ocs2_) {
@@ -501,6 +546,59 @@ private:
         } else if (key == key_movej_) {
             publishXrEvent(double_click ? kXrDelete : kXrManualIntervention);
         }
+    }
+
+    void requestCartesianCalibration(const char * gesture)
+    {
+        if (!cartesian_calibrate_client_->service_is_ready()) {
+            RCLCPP_WARN(get_logger(),
+                        "%s ignored: Cartesian calibration service is unavailable: %s",
+                        gesture, cartesian_calibrate_service_.c_str());
+            return;
+        }
+
+        auto request = std::make_shared<std_srvs::srv::Trigger::Request>();
+        cartesian_calibrate_client_->async_send_request(
+            request,
+            [this, gesture](rclcpp::Client<std_srvs::srv::Trigger>::SharedFuture future) {
+                const auto response = future.get();
+                if (response->success) {
+                    RCLCPP_INFO(get_logger(), "%s calibration succeeded: %s", gesture,
+                                response->message.c_str());
+                } else {
+                    RCLCPP_ERROR(get_logger(), "%s calibration failed: %s", gesture,
+                                 response->message.c_str());
+                }
+            });
+        RCLCPP_INFO(get_logger(), "%s requested Cartesian calibration", gesture);
+    }
+
+    void requestCartesianEnable(const bool enable, const char * gesture)
+    {
+        if (!cartesian_enable_client_->service_is_ready()) {
+            RCLCPP_WARN(get_logger(), "%s: Cartesian %s service is unavailable: %s",
+                        gesture, enable ? "enable" : "disable",
+                        cartesian_enable_service_.c_str());
+            return;
+        }
+
+        auto request = std::make_shared<std_srvs::srv::SetBool::Request>();
+        request->data = enable;
+        cartesian_enable_client_->async_send_request(
+            request,
+            [this, enable, gesture](
+                rclcpp::Client<std_srvs::srv::SetBool>::SharedFuture future) {
+                const auto response = future.get();
+                if (response->success) {
+                    RCLCPP_INFO(get_logger(), "%s Cartesian teleop %s: %s", gesture,
+                                enable ? "enabled" : "disabled", response->message.c_str());
+                } else {
+                    RCLCPP_ERROR(get_logger(), "%s failed to %s Cartesian teleop: %s", gesture,
+                                 enable ? "enable" : "disable", response->message.c_str());
+                }
+            });
+        RCLCPP_INFO(get_logger(), "%s requested Cartesian teleop %s", gesture,
+                    enable ? "enable" : "disable");
     }
 
     void executeLongPressFsm(const int key)
@@ -622,6 +720,9 @@ private:
                      device_path_.c_str());
 
         if (hold_on_disconnect_) {
+            if (click_profile_ == "dexcap") {
+                requestCartesianEnable(false, "pedal disconnect");
+            }
             publishCommand(kFsmHold);
             RCLCPP_ERROR(get_logger(), "Fail-safe published fsm_command=2 (HOLD)");
         }
@@ -658,6 +759,9 @@ private:
     int long_press_ms_{700};
     double xr_publish_rate_hz_{30.0};
     std::string mode_command_topic_{"mode_command"};
+    std::string click_profile_{"dexcap"};
+    std::string cartesian_calibrate_service_;
+    std::string cartesian_enable_service_;
     int key_hold_{KEY_F13};
     int key_home_{KEY_F14};
     int key_ocs2_{KEY_F15};
@@ -681,6 +785,8 @@ private:
     rclcpp::Publisher<std_msgs::msg::Int32>::SharedPtr fsm_command_publisher_;
     rclcpp::Publisher<std_msgs::msg::String>::SharedPtr mode_command_publisher_;
     rclcpp::Publisher<std_msgs::msg::Int32>::SharedPtr xr_controller_state_publisher_;
+    rclcpp::Client<std_srvs::srv::Trigger>::SharedPtr cartesian_calibrate_client_;
+    rclcpp::Client<std_srvs::srv::SetBool>::SharedPtr cartesian_enable_client_;
     rclcpp::Subscription<std_msgs::msg::Int32>::SharedPtr fsm_state_subscription_;
     rclcpp::Subscription<arms_ros2_control_msgs::msg::WbcCurrentState>::SharedPtr
         wbc_state_subscription_;

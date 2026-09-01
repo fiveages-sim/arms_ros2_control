@@ -12,6 +12,7 @@ find_package(ament_cmake REQUIRED)
 find_package(rclcpp REQUIRED)
 find_package(sensor_msgs REQUIRED)
 find_package(std_msgs REQUIRED)
+find_package(std_srvs REQUIRED)
 find_package(geometry_msgs REQUIRED)
 find_package(arms_ros2_control_msgs REQUIRED)
 find_package(control_msgs REQUIRED)
@@ -51,6 +52,7 @@ add_executable(foot_pedal_teleop src/foot_pedal_teleop.cpp)
 target_link_libraries(foot_pedal_teleop PUBLIC
         ${rclcpp_TARGETS}
         ${std_msgs_TARGETS}
+        ${std_srvs_TARGETS}
         ${arms_ros2_control_msgs_TARGETS}
 )
 
