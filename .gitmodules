@@ -58,3 +58,7 @@
 	path = hardwares/ht_ros2_control
 	url = git@github.com:fiveages-sim/ht-ros2-control.git
 	branch = main
+[submodule "hardwares/inex_ros2_control"]
+	path = hardwares/inex_ros2_control
+	url = git@github.com:fiveages-sim/inex-ros2-control.git
+	branch = main
