@@ -62,3 +62,7 @@
 	path = hardwares/inex_ros2_control
 	url = git@github.com:fiveages-sim/inex-ros2-control.git
 	branch = main
+[submodule "hardwares/eyou_canfd_ros2_control"]
+	path = hardwares/eyou_canfd_ros2_control
+	url = git@github.com:fiveages-sim/eyou_canfd_ros2_control.git
+	branch = main
