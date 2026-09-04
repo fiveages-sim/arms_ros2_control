@@ -393,6 +393,25 @@ namespace arms_ros2_control::command
                                      const Eigen::Vector3d& position,
                                      const Eigen::Quaterniond& orientation);
 
+        /**
+         * 冻结追赶斜坡：上游 XR 位姿在链路数据未更新时会逐位重发上一帧，恢复后
+         * 一帧补上整段位移（实测最大 124.7mm / 11.5°）。这里检测冻结，并把追赶量
+         * 按冻结帧数等额摊到随后若干帧，使正常运动逐位不受影响。
+         * 仅在真正发布 target 的路径上调用，因此 STORAGE 模式下不生效。
+         * @param isLeft true=左臂状态，false=右臂状态
+         * @param position 计算坐标系下的位置，原地改写为摊平后的值
+         * @param orientation 计算坐标系下的方向，原地改写为摊平后的值
+         */
+        void applyStaleCatchUpRamp(bool isLeft,
+                                   Eigen::Vector3d& position,
+                                   Eigen::Quaterniond& orientation);
+
+        /** 清空冻结追赶斜坡状态；下一帧重新起基准，不会摊平。 */
+        void resetStaleCatchUpRamp(bool isLeft);
+
+        /** 左右臂一起清空。 */
+        void resetStaleCatchUpRamp();
+
         /** 读取 ArmsTargetManager 中 WBC 已确认的双臂耦合状态。 */
         bool isBimanualCoupled() const;
 
@@ -576,6 +595,25 @@ namespace arms_ros2_control::command
         Eigen::Vector3d last_published_right_position_ = Eigen::Vector3d::Zero();
         Eigen::Quaterniond last_published_right_orientation_ = Eigen::Quaterniond::Identity();
 
+        // 冻结追赶斜坡状态（每臂一份），语义见 applyStaleCatchUpRamp()。
+        struct StaleCatchUpRamp
+        {
+            bool has_previous_input = false;
+            // 上一帧进入斜坡的原始目标，用于逐位比较判定"上游冻结"
+            Eigen::Vector3d previous_input_position = Eigen::Vector3d::Zero();
+            Eigen::Quaterniond previous_input_orientation = Eigen::Quaterniond::Identity();
+            int frozen_frames = 0;
+            // 上一帧实际发出的目标，解冻帧据此测量缺口
+            Eigen::Vector3d output_position = Eigen::Vector3d::Zero();
+            Eigen::Quaterniond output_orientation = Eigen::Quaterniond::Identity();
+            // 尚未交付的追赶量；remaining_frames 归零时必然为零
+            Eigen::Vector3d residual_position = Eigen::Vector3d::Zero();
+            Eigen::Quaterniond residual_orientation = Eigen::Quaterniond::Identity();
+            int remaining_frames = 0;
+        };
+        StaleCatchUpRamp left_stale_ramp_;
+        StaleCatchUpRamp right_stale_ramp_;
+
         // 状态管理
         std::atomic<bool> enabled_;
         std::atomic<bool> is_update_mode_; // true = 更新模式, false = 存储模式
@@ -756,5 +794,8 @@ namespace arms_ros2_control::command
         static const std::string XR_NODE_NAME;
         static const double POSITION_THRESHOLD;
         static const double ORIENTATION_THRESHOLD;
+        // 连续多少帧原始目标逐位相同才判定为上游冻结。实测冻结长度呈双峰分布
+        // （1 帧 / ≥5 帧），2..5 取任意值结果相同，取下界即可。
+        static const int STALE_MIN_FROZEN_FRAMES;
     };
 } // namespace arms_ros2_control::command
