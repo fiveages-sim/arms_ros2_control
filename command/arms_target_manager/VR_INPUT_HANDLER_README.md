@@ -11,7 +11,7 @@ VRInputHandler是基于VRMarkerWrapper功能开发的VR输入处理器，专门�
 ### 核心功能
 - **VR Pose订阅**: 订阅VR左右臂的末端执行器pose
 - **状态切换机制**: 通过右摇杆点击在存储模式和更新模式之间切换
-- **频闪优化**: 基于阈值检测pose变化，避免不必要的marker更新
+- **连续目标**: 每个有效VR pose回调均发布目标；变化阈值代码暂时保留但不生效
 - **差值计算**: 基于存储的base pose计算相对变化并应用到机器人
 - **控制拓扑检测**: 启动时查询 `/controller_manager/list_controllers`，区分 FULL_BODY / SPLIT_BODY
 - **全身模式命令**: FULL_BODY 下通过 `/mode_command` 请求 WBC 身体/底盘/双臂/单臂状态
@@ -229,9 +229,9 @@ ros2 launch ocs2_arm_controller full_body.launch.py \
 
 ## 技术细节
 
-### 变化检测阈值
-- `POSITION_THRESHOLD`: 位置变化阈值，默认1cm
-- `ORIENTATION_THRESHOLD`: 方向变化阈值，默认0.005弧度
+### 变化检测阈值（暂时禁用）
+- `POSITION_THRESHOLD`: 原位置变化阈值1cm，代码保留用于A/B回退，当前不参与发布判断
+- `ORIENTATION_THRESHOLD`: 原方向变化阈值0.005弧度，代码保留用于A/B回退，当前不参与发布判断
 
 ### 差值计算算法
 ```cpp
@@ -283,7 +283,6 @@ VRInputHandler会输出详细的调试信息：
 
 2. **Marker不更新**
    - 确认已点按右摇杆切换到更新模式
-   - 检查pose变化是否超过阈值
    - 确认ArmsTargetManager正常工作
    - FULL_BODY 下确认该臂未被 WBC 禁用，且不在身体模式 pending 中
 
