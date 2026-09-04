@@ -467,13 +467,12 @@ namespace arms_ros2_control::command
                     vr_right_position_raw_.x(), vr_right_position_raw_.y(), vr_right_position_raw_.z(),
                     head_ctrl_dist);
 
-        // 计算系：与 publishTargetPoseDirect 保持一致——FULL_BODY 下目标相对底盘保持
-        // （vr_follow_frame_），其余情况计算系就是发布系。
-        // 手柄-头显偏移量来自 VR 世界系（已在 xr 侧转成前x/左y/上z，与底盘轴系同向），
-        // 必须在底盘系里做加法。直接加在 ee_frame_id_ 上时，轮式底盘的 ee_frame_id_
-        // 是 world，底盘一转向偏移方向就整体转错。
-        const std::string& calc_frame =
-            isFullBodyMode() ? vr_follow_frame_ : ee_frame_id_;
+        // 计算系：与 publishTargetPoseDirect 保持一致，所有控制拓扑都在
+        // vr_follow_frame_ 中计算，发布前再转回 ee_frame_id_。
+        // 手柄-头显偏移量来自 VR 世界系（已在 xr 侧转成前x/左y/上z），其分量按
+        // vr_follow_frame_ 的轴系解释。直接加在 ee_frame_id_ 上时，轮式底盘的
+        // ee_frame_id_ 是 world，底盘一转向偏移方向就整体转错。
+        const std::string& calc_frame = vr_follow_frame_;
 
         double ee_dist_from_ref = std::numeric_limits<double>::quiet_NaN();
         Eigen::Vector3d p_C_ref = Eigen::Vector3d::Zero();
@@ -1311,14 +1310,6 @@ namespace arms_ros2_control::command
             return true;
         }
 
-        if (!isFullBodyMode())
-        {
-            basePosition = currentPosition;
-            baseOrientation = currentOrientation.normalized();
-            valid = true;
-            return true;
-        }
-
         Eigen::Vector3d transformedPosition;
         Eigen::Quaterniond transformedOrientation;
         if (!ee_frame_id_initialized_ ||
@@ -1465,22 +1456,19 @@ namespace arms_ros2_control::command
             return false;
         }
 
-        Eigen::Vector3d publishPosition = position;
-        Eigen::Quaterniond publishOrientation = orientation;
-        if (isFullBodyMode())
+        Eigen::Vector3d publishPosition;
+        Eigen::Quaterniond publishOrientation;
+        if (!ee_frame_id_initialized_ ||
+            !transformPoseBetweenFrames(
+                armType,
+                position,
+                orientation,
+                vr_follow_frame_,
+                ee_frame_id_,
+                publishPosition,
+                publishOrientation))
         {
-            if (!ee_frame_id_initialized_ ||
-                !transformPoseBetweenFrames(
-                    armType,
-                    position,
-                    orientation,
-                    vr_follow_frame_,
-                    ee_frame_id_,
-                    publishPosition,
-                    publishOrientation))
-            {
-                return false;
-            }
+            return false;
         }
 
         Eigen::Vector3d& previousPosition = isLeft
@@ -3165,7 +3153,7 @@ namespace arms_ros2_control::command
                         "🕹️ UPDATE bases: left=%s, right=%s, calculation_frame=%s",
                         leftBaseReady ? "ready" : "pending_tf",
                         rightBaseReady ? "ready" : "pending_tf",
-                        isFullBodyMode() ? vr_follow_frame_.c_str() : ee_frame_id_.c_str());
+                        vr_follow_frame_.c_str());
 
                     // 重置摇杆累积偏移
                     left_thumbstick_offset_ = Eigen::Vector3d::Zero();
