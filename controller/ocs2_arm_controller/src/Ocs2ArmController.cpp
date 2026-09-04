@@ -67,6 +67,15 @@ namespace ocs2::mobile_manipulator
             ctrl_comp_->updateObservation(time);
         }
 
+        // StateCompliance::run() publishes this telemetry itself. Keep the same
+        // FT pipeline alive in every other FSM state without creating a second
+        // publisher or changing the active motion controller.
+        if (state_list_.compliance &&
+            (!current_state_ || current_state_->state_name != FSMStateName::COMPLIANCE))
+        {
+            state_list_.compliance->publishWrenchTelemetry(time);
+        }
+
         if (mode_ == FSMMode::NORMAL)
         {
             current_state_->run(time, period);
@@ -179,6 +188,7 @@ namespace ocs2::mobile_manipulator
             // 从 CtrlComponent 的 OCS2 接口读取末端执行器名称
             std::string left_ee_name_ = "left_tcp";  // 默认值
             std::string right_ee_name_ = "right_tcp"; // 默认值
+            std::string control_base_frame = "base_link";
 
             if (ctrl_comp_->interface_)
             {
@@ -186,6 +196,10 @@ namespace ocs2::mobile_manipulator
                 const auto& model_info = ctrl_comp_->interface_->getManipulatorModelInfo();
                 left_ee_name_ = model_info.eeFrame;    // 从 .info 文件读取（如 "left_eef"）
                 right_ee_name_ = model_info.eeFrame1;  // 从 .info 文件读取（如 "right_eef"）
+                if (!model_info.baseFrame.empty())
+                {
+                    control_base_frame = model_info.baseFrame;
+                }
 
                 RCLCPP_INFO(get_node()->get_logger(),
                             "Using end effector names from OCS2 config: left='%s', right='%s'",
@@ -272,23 +286,34 @@ namespace ocs2::mobile_manipulator
                                               {20.0, 20.0, 20.0, 10.0, 10.0, 10.0});
             auto_declare<std::vector<double>>("compliance_hybrid_pos_damping",
                                               {0.0, 0.0, 0.0, 0.0, 0.0, 0.0});
+            auto_declare<double>("compliance_hybrid_pos_vel_damping", 0.0);
+            auto_declare<double>("compliance_hybrid_pos_accel_ramp", 0.0);
+            auto_declare<double>("compliance_hybrid_pos_jerk_tau", 0.0);
             auto_declare<double>("compliance_hybrid_pos_ki", 0.0);
             auto_declare<double>("compliance_hybrid_pos_ki_max", 0.02);
             auto_declare<std::vector<double>>("compliance_hybrid_force_damping",
                                               {5000.0, 5000.0, 5000.0, 250.0, 250.0, 250.0});
             auto_declare<double>("compliance_hybrid_force_ki", 2.0);
             auto_declare<double>("compliance_hybrid_force_ki_max", 10.0);
+            auto_declare<double>("compliance_hybrid_force_ki_leak", 0.5);
             auto_declare<double>("compliance_hybrid_force_deadband", 0.5);
             auto_declare<std::vector<double>>("compliance_force_setpoint",
                                               {0.0, 0.0, 0.0, 0.0, 0.0, 0.0});
             auto_declare<double>("compliance_force_feedback_sign", -1.0);
+            auto_declare<double>("compliance_force_vel_lpf_alpha", 0.3);
             auto_declare<std::vector<double>>("compliance_hybrid_cart_vmax",
                                               {0.15, 0.15, 0.15, 0.6, 0.6, 0.6});
             auto_declare<double>("compliance_hybrid_force_xmax_lin", 0.2);
             auto_declare<double>("compliance_hybrid_force_xmax_ang", 0.3);
+            auto_declare<double>("compliance_hybrid_force_xmax_margin_ratio", 0.2);
             auto_declare<double>("compliance_hybrid_joint_vmax", 0.8);
             auto_declare<double>("compliance_hybrid_joint_limit_margin", 0.02);
+            auto_declare<double>("compliance_hybrid_joint_limit_avoidance_gain", 0.0);
+            auto_declare<double>("compliance_wrist_coupling_max", 0.0);
             auto_declare<double>("compliance_hybrid_dls_lambda", 0.05);
+            auto_declare<double>("compliance_hybrid_qp_lambda", 1.0);
+            auto_declare<double>("compliance_hybrid_lin_task_weight", 1.0);
+            auto_declare<std::string>("compliance_hybrid_inverse_method", "DLS");
             auto_declare<double>("compliance_wrench_lpf_alpha", 0.15);
             auto_declare<double>("compliance_zero_cal_duration", 10.0);
             auto_declare<double>("compliance_zero_cal_settle", 0.2);
@@ -296,7 +321,9 @@ namespace ocs2::mobile_manipulator
             auto_declare<double>("compliance_gravity_accel", 9.81);
             auto_declare<double>("compliance_ft_timeout_sec", 0.2);
             auto_declare<bool>("compliance_teleop_enable", true);
-            auto_declare<std::string>("compliance_teleop_base_frame", "base_link");
+            // Keep COMPLIANCE targets in the same frame used by StateOCS2.
+            // A YAML override is still honored by auto_declare().
+            auto_declare<std::string>("compliance_teleop_base_frame", control_base_frame);
             auto_declare<std::string>("compliance_gravity_frame", "world");
             auto_declare<std::vector<double>>("left_dyn_param", {});
             auto_declare<std::vector<double>>("right_dyn_param", {});
