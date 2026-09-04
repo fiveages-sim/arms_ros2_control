@@ -567,37 +567,48 @@ namespace arms_rviz_control_plugin
         compliance_preset_ = preset;
         updateCompliancePresetButtonStyles();
 
-        // Soft: more compliant. Medium: controller defaults. Hard: stiffer tracking.
-        // Force damping D: v = F_err/D → larger D = harder against external force.
-        std::vector<double> k_pos;
+        // 依据关节位置环实测频响（sine sweep）：
+        //   等效纯延迟 τ≈34ms（相位随频率线性增长），>3Hz 起增益>1 谐振峰。
+        // 位置轴 v=K·Δx 经 J⁺ 积分闭环于真实关节，环路带宽 ωc=K：
+        //   K=30(4.8Hz) 落入谐振区 → 目标周围来回振荡（实测复现）。
+        //   K=15(2.4Hz) 相位滞后≈-32°，PM≈50°，远离谐振峰 → 各档固定以保证位置精度。
+        const std::vector<double> k_pos = {15.0, 15.0, 15.0, 10.0, 10.0, 10.0};
         std::vector<double> d_force;
         std::vector<double> cart_vmax;
         double joint_vmax = 0.8;
+        double vel_lpf_alpha = 0.3;
+        double ki_leak = 0.5;
         const char* name = "中";
 
         switch (preset)
         {
             case ComplianceStiffnessPreset::Soft:
                 name = "软";
-                k_pos = {8.0, 8.0, 8.0, 4.0, 4.0, 4.0};
-                d_force = {1500.0, 1500.0, 1500.0, 80.0, 80.0, 80.0};
+                // 低 D（易让位）环路增益高，只适用于软接触面；刚性接触会振荡
+                d_force = {3000.0, 3000.0, 3000.0, 150.0, 150.0, 150.0};
                 cart_vmax = {0.10, 0.10, 0.10, 0.45, 0.45, 0.45};
                 joint_vmax = 0.5;
+                vel_lpf_alpha = 0.12;   // 更强虚拟惯性，补偿低 D 的高环路增益
+                ki_leak = 1.5;
                 break;
             case ComplianceStiffnessPreset::Hard:
                 name = "硬";
-                k_pos = {45.0, 45.0, 45.0, 22.0, 22.0, 22.0};
-                d_force = {12000.0, 12000.0, 12000.0, 600.0, 600.0, 600.0};
-                cart_vmax = {0.20, 0.20, 0.20, 0.80, 0.80, 0.80};
-                joint_vmax = 1.0;
+                // 高 D（对力最硬）→ 环路增益最低，刚性接触下最稳
+                d_force = {15000.0, 15000.0, 15000.0, 750.0, 750.0, 750.0};
+                cart_vmax = {0.15, 0.15, 0.15, 0.60, 0.60, 0.60};
+                joint_vmax = 0.6;
+                vel_lpf_alpha = 0.40;   // D 已足够大，无需过强低通
+                ki_leak = 0.5;
                 break;
             case ComplianceStiffnessPreset::Medium:
             default:
                 name = "中";
-                k_pos = {20.0, 20.0, 20.0, 10.0, 10.0, 10.0};
-                d_force = {5000.0, 5000.0, 5000.0, 250.0, 250.0, 250.0};
+                // = compliance.yaml 抗拖拽振荡调优值（D=8000, vel_lpf=0.15, ki_leak=1.0）
+                d_force = {8000.0, 8000.0, 8000.0, 400.0, 400.0, 400.0};
                 cart_vmax = {0.15, 0.15, 0.15, 0.60, 0.60, 0.60};
                 joint_vmax = 0.8;
+                vel_lpf_alpha = 0.15;
+                ki_leak = 1.0;
                 break;
         }
 
@@ -621,13 +632,16 @@ namespace arms_rviz_control_plugin
             rclcpp::Parameter("compliance_hybrid_force_damping", d_force),
             rclcpp::Parameter("compliance_hybrid_cart_vmax", cart_vmax),
             rclcpp::Parameter("compliance_hybrid_joint_vmax", joint_vmax),
+            rclcpp::Parameter("compliance_force_vel_lpf_alpha", vel_lpf_alpha),
+            rclcpp::Parameter("compliance_hybrid_force_ki_leak", ki_leak),
         };
 
         auto future = ocs2_param_client_->set_parameters(params);
         RCLCPP_INFO(node_->get_logger(),
                     "COMPLIANCE stiffness preset → %s "
-                    "(K_lin=%.0f D_lin=%.0f vmax=%.2f j_vmax=%.2f)",
-                    name, k_pos[0], d_force[0], cart_vmax[0], joint_vmax);
+                    "(K_lin=%.0f D_lin=%.0f vmax=%.2f j_vmax=%.2f vel_lpf=%.2f ki_leak=%.2f)",
+                    name, k_pos[0], d_force[0], cart_vmax[0], joint_vmax,
+                    vel_lpf_alpha, ki_leak);
         (void)future;
     }
 

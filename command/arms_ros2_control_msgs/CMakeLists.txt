@@ -6,6 +6,7 @@ find_package(rosidl_default_generators REQUIRED)
 find_package(builtin_interfaces REQUIRED)
 find_package(geometry_msgs REQUIRED)
 find_package(nav_msgs REQUIRED)
+find_package(std_msgs REQUIRED)
 rosidl_generate_interfaces(${PROJECT_NAME}
         "msg/Inputs.msg"
         "msg/CircleMessage.msg"
@@ -24,6 +25,7 @@ rosidl_generate_interfaces(${PROJECT_NAME}
         "msg/WbcCapability.msg"
         "msg/WbcCurrentState.msg"
         "msg/TeleopMode.msg"
+        "msg/ComplianceForceStatus.msg"
         DEPENDENCIES builtin_interfaces std_msgs geometry_msgs nav_msgs
 )
 # 添加export依赖

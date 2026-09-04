@@ -297,6 +297,16 @@ namespace arms_controller_common
             rightEndEffectorName_ = right_name;
         }
 
+        const std::string& getLeftEndEffectorName() const
+        {
+            return leftEndEffectorName_;
+        }
+
+        const std::string& getRightEndEffectorName() const
+        {
+            return rightEndEffectorName_;
+        }
+
 
         static std::string solverTypeName(SolverType t)
         {

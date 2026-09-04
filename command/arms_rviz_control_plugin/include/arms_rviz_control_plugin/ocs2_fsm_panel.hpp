@@ -168,6 +168,7 @@ private:
   std::unique_ptr<QLabel> current_state_label_;
 
   ComplianceStiffnessPreset compliance_preset_ = ComplianceStiffnessPreset::Medium;
+  bool compliance_preset_applied_ = false;
   rclcpp::AsyncParametersClient::SharedPtr ocs2_param_client_;
 
   // WBC UI Elements
