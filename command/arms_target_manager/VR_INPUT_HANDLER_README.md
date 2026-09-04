@@ -53,9 +53,9 @@ VRInputHandler是基于VRMarkerWrapper功能开发的VR输入处理器，专门�
 ### 启动参数
 - `enable_vr`: 是否启用VR控制，默认true
 - `vr_update_rate`: VR更新频率，默认500.0Hz
-- `vr_follow_frame`: FULL_BODY 下 VR 末端目标计算坐标系，默认 `base_footprint`
+- `vr_follow_frame`: VR 末端目标计算坐标系，FULL_BODY / SPLIT_BODY 均生效，默认 `base_footprint`
 
-### FULL_BODY 目标坐标系
+### VR 目标坐标系
 
 `vr_follow_frame` 默认是 `base_footprint`。进入 UPDATE/rebase 时，
 `VRInputHandler` 将 current pose 从其 `header.frame_id` 转换到
@@ -65,6 +65,8 @@ VRInputHandler是基于VRMarkerWrapper功能开发的VR输入处理器，专门�
 - mobile-base：通常为 `world -> base_footprint` 锁存，
   `base_footprint -> world` 发布；
 - fixed-base：通常两个 frame 都是 `base_footprint`，直接复制；
+- split-body：可设为 `arm_base`，将 VR 增量表达在机械臂基座轴系，
+  发布前再从 `arm_base` 转到 current-pose frame；
 - TF 不可用：跳过本周期，不更新缓存，下一条 VR 输入自动重试。
 - `robot.local.yaml` 只选择 `info_file_name`，不配置本参数。
 
@@ -264,7 +266,7 @@ VRInputHandler会输出详细的调试信息：
 
 ## 注意事项
 
-1. **坐标系一致性**: FULL_BODY 下计算在 `vr_follow_frame`，发布前转换到 `ee_frame_id_`；非全身控制保持旧语义
+1. **坐标系一致性**: 所有控制拓扑都在 `vr_follow_frame` 下计算，发布前转换到 `ee_frame_id_`
 2. **频率匹配**: VR更新频率应与系统处理能力匹配
 3. **阈值调整**: 根据实际需求调整变化检测阈值
 4. **线程安全**: 所有状态变量都使用原子操作确保线程安全
