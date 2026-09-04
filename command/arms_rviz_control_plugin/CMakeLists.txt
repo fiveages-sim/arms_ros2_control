@@ -16,6 +16,7 @@ find_package(rviz_rendering REQUIRED)
 find_package(arms_controller_common REQUIRED)
 find_package(sensor_msgs REQUIRED)
 find_package(std_msgs REQUIRED)
+find_package(std_srvs REQUIRED)
 find_package(geometry_msgs REQUIRED)
 find_package(tf2 REQUIRED)
 find_package(arms_ros2_control_msgs REQUIRED)
@@ -66,6 +67,7 @@ target_link_libraries(${PROJECT_NAME} PUBLIC
   arms_controller_common::arms_controller_common
   ${sensor_msgs_TARGETS}
   ${std_msgs_TARGETS}
+  ${std_srvs_TARGETS}
   ${geometry_msgs_TARGETS}
   tf2::tf2
   ${arms_ros2_control_msgs_TARGETS}
