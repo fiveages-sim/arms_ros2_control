@@ -272,6 +272,7 @@ namespace ocs2::mobile_manipulator
                 auto_declare<double>("waist_lifting_duration", 3.0);
                 auto_declare<std::vector<double>>("waist_lifting_default_parameter", {0.25, 1.0, 5.0});
                 auto_declare<std::vector<double>>("waist_turning_default_parameter", {0.25, 1.0, 5.0});
+                auto_declare<double>("waist_turning_direction", 1.0);
                 std::string waist_lifting_type = auto_declare<std::string>("waist_lifting_type", "three_joint");
                 if (waist_lifting_type == "three_joint")
                 {

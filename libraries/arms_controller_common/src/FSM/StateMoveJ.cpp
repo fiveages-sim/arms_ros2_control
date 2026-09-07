@@ -2646,7 +2646,7 @@ namespace arms_controller_common
 
         double clamped_factor = std::clamp(factor, -1.0, 1.0);
         double speedj_time = 100000000.0;
-        double target_speed = clamped_factor * default_waist_turning_para_(0);
+        double target_speed = clamped_factor * waist_turning_direction_ * default_waist_turning_para_(0);
         if (std::fabs(clamped_factor) < waist_factor_epsilon_)
         {
             speedj_time = 0.0;
@@ -2692,6 +2692,7 @@ namespace arms_controller_common
                 node_->get_parameter("waist_turning_default_parameter").as_double_array();
             default_waist_lifting_para_ << waist_lifting_para[0], waist_lifting_para[1], waist_lifting_para[2];
             default_waist_turning_para_ << waist_turning_para[0], waist_turning_para[1], waist_turning_para[2];
+            waist_turning_direction_ = node_->get_parameter("waist_turning_direction").as_double();
             RCLCPP_INFO(node_->get_logger(), "Waist lifting type: %s", waist_lifting_type_.c_str());
             if (waist_lifting_type_ == "three_joint")
             {
