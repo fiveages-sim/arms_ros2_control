@@ -40,6 +40,16 @@ namespace ocs2::controller_common
             body_frame_id_ = model.getFrameId(config_.body_frame);
             body_frame_valid_ = body_frame_id_ < static_cast<pinocchio::FrameIndex>(model.nframes);
         }
+        if (!config_.head_frame.empty())
+        {
+            head_frame_id_ = model.getFrameId(config_.head_frame);
+            head_frame_valid_ = head_frame_id_ < static_cast<pinocchio::FrameIndex>(model.nframes);
+            if (!head_frame_valid_)
+            {
+                RCLCPP_WARN(node_->get_logger(), "Head frame '%s' not in model; head_current_pose disabled",
+                            config_.head_frame.c_str());
+            }
+        }
     }
 
     void Ocs2PinocchioVisualizer::initialize()
@@ -62,6 +72,12 @@ namespace ocs2::controller_common
         body_frame_pose_publisher_ = node_->create_publisher<geometry_msgs::msg::PoseStamped>(
         "body_current_pose", 1);
         
+        if (head_frame_valid_)
+        {
+            head_frame_pose_publisher_ = node_->create_publisher<geometry_msgs::msg::PoseStamped>(
+                "head_current_pose", 1);
+        }
+
         // Create robot description publisher and publish URDF
         if (!urdf_file_.empty())
         {
@@ -352,10 +368,11 @@ namespace ocs2::controller_common
         poses.left(6) = 1.0;
         poses.right(6) = 1.0;
         poses.body(6) = 1.0;
+        poses.head(6) = 1.0;
 
         const bool need_fk = left_ee_frame_valid_ ||
                              (dual_arm_mode_ && right_ee_frame_valid_) ||
-                             body_frame_valid_;
+                             body_frame_valid_ || head_frame_valid_;
         if (need_fk)
         {
             forwardKinematicsInto(rt_data_, state);
@@ -396,6 +413,10 @@ namespace ocs2::controller_common
                                  "Body frame '%s' not in model (nframes=%d)",
                                  config_.body_frame.c_str(), pinocchio_interface_.getModel().nframes);
         }
+        if (head_frame_valid_)
+        {
+            poses.head = extractFramePose7(rt_data_, head_frame_id_);
+        }
         return poses;
     }
 
@@ -414,6 +435,7 @@ namespace ocs2::controller_common
             publishPose(right_end_effector_pose_publisher_, time, poses.right);
         }
         publishPose(body_frame_pose_publisher_, time, poses.body);
+        publishPose(head_frame_pose_publisher_, time, poses.head);
     }
 
     void Ocs2PinocchioVisualizer::publishEndEffectorPose(const rclcpp::Time& time, const vector_t& state) const
