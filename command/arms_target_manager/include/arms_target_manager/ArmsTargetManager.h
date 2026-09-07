@@ -98,6 +98,7 @@ namespace arms_ros2_control::command
         bool shouldShowHeadMarker() const;
         void setHeadVrActive(bool active);
         int getCurrentBodyState() const;
+        int getCurrentHeadState() const { return head_state_; }
         int getCurrentBaseState() const;
         int getCurrentBimanualState() const;
         int getCurrentLeftArmState() const;
@@ -237,6 +238,7 @@ namespace arms_ros2_control::command
         int right_arm_state_{1};
         int bimanual_state_{0};
         int body_state_{0};
+        int head_state_{0};
         int base_state_{
             arms_ros2_control_msgs::msg::WbcCurrentState::BASE_LOCKED};
         bool wbc_head_marker_visible_{false};

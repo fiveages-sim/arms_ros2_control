@@ -85,7 +85,7 @@ namespace arms_rviz_control_plugin
         const int pair_content_width = pair_label_width + inner_spacing + switch_width;
         const int pair_cell_width = pair_content_width + scaled(12);
         const int wbc_row_width = 2 * pair_cell_width + grid_h_spacing;
-        const int compact_cell_width = (wbc_row_width - 2 * grid_h_spacing) / 3;
+        const int compact_cell_width = (wbc_row_width - grid_h_spacing) / 2;
         const int panel_width = wbc_row_width;
         const int combo_padding_left = scaled(4);
         const int combo_padding_right = scaled(12);
@@ -224,8 +224,6 @@ namespace arms_rviz_control_plugin
 
         base_label_ = std::make_unique<QLabel>("底盘", this);
         base_switch_ = std::make_unique<SwitchButton>(this);
-        compact_row_layout->addWidget(makeStackedSwitchCell(base_label_.get(), base_switch_.get()));
-        compact_row_layout->addWidget(makeDividerCol(compact_stack_height));
 
         left_arm_label_ = std::make_unique<QLabel>("左臂", this);
         left_arm_switch_ = std::make_unique<SwitchButton>(this);
@@ -237,6 +235,13 @@ namespace arms_rviz_control_plugin
         compact_row_layout->addWidget(makeStackedSwitchCell(right_arm_label_.get(), right_arm_switch_.get()));
 
         upper_button_layout_->addWidget(compact_row, 0, 0);
+        auto [head_row, head_row_layout] = makeRow(compact_stack_height);
+        head_row_layout->addWidget(makeStackedSwitchCell(base_label_.get(), base_switch_.get()));
+        head_row_layout->addWidget(makeDividerCol(compact_stack_height));
+        head_label_ = std::make_unique<QLabel>("头部", this);
+        head_switch_ = std::make_unique<SwitchButton>(this);
+        head_row_layout->addWidget(makeStackedSwitchCell(head_label_.get(), head_switch_.get()));
+        upper_button_layout_->addWidget(head_row, 1, 0);
 
         const int pair_block_height = 2 * switch_cell_height + grid_v_spacing;
         auto* pair_block = new QWidget(this);
@@ -323,7 +328,7 @@ namespace arms_rviz_control_plugin
         ocs2_to_hold_wbc_btn->setFixedSize(pair_content_width, hold_button_height);
         pair_grid->addWidget(ocs2_to_hold_wbc_btn, 1, 5, 1, 3, Qt::AlignVCenter | Qt::AlignLeft);
 
-        upper_button_layout_->addWidget(pair_block, 1, 0);
+        upper_button_layout_->addWidget(pair_block, 2, 0);
 
         wbc_layout_->addLayout(upper_button_layout_.get());
         wbc_container_->setFixedSize(panel_width, wbc_container_->sizeHint().height());
@@ -341,6 +346,7 @@ namespace arms_rviz_control_plugin
         connect(switch_pose_btn_.get(), &QPushButton::clicked, this, &OCS2FSMPanel::onSwitchPose);
 
         // Connect WBC signals
+        connect(head_switch_.get(), &SwitchButton::clicked, this, &OCS2FSMPanel::onHeadToggled);
         connect(base_switch_.get(), &SwitchButton::clicked, this, &OCS2FSMPanel::onBaseToggled);
         connect(bimanual_switch_.get(), &SwitchButton::clicked, this, &OCS2FSMPanel::onBimanualToggled);
         connect(left_arm_switch_.get(), &SwitchButton::clicked, this, &OCS2FSMPanel::onLeftArmToggled);
@@ -664,6 +670,7 @@ namespace arms_rviz_control_plugin
         current_wbc_state_.base_state = msg->base_state;
         current_wbc_state_.body_state = msg->body_state;
         current_wbc_state_.bimanual_state = msg->bimanual_state;
+        current_wbc_state_.head_state = msg->head_state;
         current_wbc_state_.left_arm_state = msg->left_arm_state;
         current_wbc_state_.right_arm_state = msg->right_arm_state;
         current_wbc_state_.home_joint_reference_enabled = msg->home_joint_reference_enabled;
@@ -721,9 +728,9 @@ namespace arms_rviz_control_plugin
         return current_wbc_state_.body_state == 5; // BODY_CUSTOM_LOCKED
     }
 
-    bool OCS2FSMPanel::isBodyHeadTracking() const
+    bool OCS2FSMPanel::isHeadEnabled() const
     {
-        return current_wbc_state_.body_state == 6; // BODY_HEAD_TRACKING
+        return current_wbc_state_.head_state == arms_ros2_control_msgs::msg::WbcCurrentState::HEAD_ENABLED;
     }
 
     int OCS2FSMPanel::getCurrentBodyModeIndex() const
@@ -734,7 +741,6 @@ namespace arms_rviz_control_plugin
         if (isBodyLocked()) return BODY_MODE_LOCKED;
         if (isBodyHeadCoupled()) return BODY_MODE_HEAD_COUPLED;
         if (isBodyCustomLocked()) return BODY_MODE_CUSTOM_LOCKED;
-        if (isBodyHeadTracking()) return BODY_MODE_HEAD_TRACKING;
         return BODY_MODE_LOCKED;
     }
 
@@ -754,8 +760,6 @@ namespace arms_rviz_control_plugin
                 return "BODY_HEAD_COUPLED";
             case BODY_MODE_CUSTOM_LOCKED:
                 return "BODY_CUSTOM_LOCK";
-            case BODY_MODE_HEAD_TRACKING:
-                return "BODY_HEAD_TRACKING";
             default:
                 return "";
         }
@@ -780,10 +784,6 @@ namespace arms_rviz_control_plugin
             body_combo_box_->addItem("跟随", BODY_MODE_TRACKING);
         }
 
-        if (capability_state_.head_tracking_ee_enabled)
-        {
-            body_combo_box_->addItem("头部跟踪", BODY_MODE_HEAD_TRACKING);
-        }
 
         if (capability_state_.has_waist_lock)
         {
@@ -872,6 +872,13 @@ namespace arms_rviz_control_plugin
             updateSwitchVisualState(right_arm_switch_.get(), true, right_enabled);
         }
 
+        const bool head_coupled = current_wbc_state_.body_state ==
+            arms_ros2_control_msgs::msg::WbcCurrentState::BODY_HEAD_COUPLED;
+        updateSwitchVisualState(head_switch_.get(),
+                                capability_state_.head_tracking_ee_enabled && !head_coupled,
+                                isHeadEnabled());
+        head_switch_->setToolTip(head_coupled ? "头腰耦合模式下不可启用独立头部跟踪" : "独立头部位姿跟踪");
+
         updateSwitchVisualState(home_pose_switch_.get(),
                                 capability_state_.has_home_joint_reference,
                                 current_wbc_state_.home_joint_reference_enabled);
@@ -887,6 +894,13 @@ namespace arms_rviz_control_plugin
         msg.data = cmd;
         mode_command_pub_->publish(msg);
         RCLCPP_INFO(node_->get_logger(), "Published mode command: %s", cmd.c_str());
+    }
+
+    void OCS2FSMPanel::onHeadToggled()
+    {
+        if (!capability_state_.head_tracking_ee_enabled || current_wbc_state_.body_state ==
+            arms_ros2_control_msgs::msg::WbcCurrentState::BODY_HEAD_COUPLED) return;
+        publishModeCommand(isHeadEnabled() ? "HEAD_DISABLE" : "HEAD_ENABLE");
     }
 
     void OCS2FSMPanel::onBaseToggled()

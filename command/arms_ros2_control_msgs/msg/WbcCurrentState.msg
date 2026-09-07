@@ -9,7 +9,6 @@ uint8 BODY_TRACKING=2
 uint8 BODY_LOCKED=3
 uint8 BODY_HEAD_COUPLED=4
 uint8 BODY_CUSTOM_LOCKED=5
-uint8 BODY_HEAD_TRACKING=6
 
 # bimanual
 uint8 BIMANUAL_INDEPENDENT=0
@@ -25,3 +24,8 @@ uint8 bimanual_state
 uint8 left_arm_state
 uint8 right_arm_state
 bool home_joint_reference_enabled
+
+# Independent head tracking
+uint8 HEAD_DISABLED=0
+uint8 HEAD_ENABLED=1
+uint8 head_state

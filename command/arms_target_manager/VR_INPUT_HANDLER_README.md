@@ -317,7 +317,7 @@ VRInputHandler会输出详细的调试信息：
 
 ### 头显驱动 WBC Head 6D 目标
 
-启用现有 `enable_vr` 后，头部跟踪直接使用现有状态：控制拓扑为 FULL_BODY、VR enabled、UPDATE、FSM=OCS2、Body=BODY_HEAD_TRACKING。没有新增头部使能或缩放配置。
+启用现有 `enable_vr` 后，头部跟踪直接使用现有状态：控制拓扑为 FULL_BODY、VR enabled、UPDATE、FSM=OCS2、head_state=HEAD_ENABLED。没有新增头部使能或缩放配置。
 
 - 输入 `/xr/head_pose`（Pose）和 `head_current_pose`（PoseStamped），输出相对话题 `head_target`（Pose）。头部实际位姿订阅独立于左右手缓存。
 - 头显上游 TeleVuer/XRoboToolkit wrapper 已完成 OpenXR → 机器人轴转换。头显增量按机器人轴与 `vr_follow_frame` 对齐的约定计算，平移为 **1:1**，不受双手校准比例和镜像模式影响。
@@ -329,3 +329,5 @@ VRInputHandler会输出详细的调试信息：
 恢复时沿用 VR 自己的历史目标：即使 WBC 模式切换初始化了目标，或释放期间 marker 设置了其他目标，VR 恢复仍会回到自身最后目标。本接口不检测设备断流或上游重发的旧位姿。
 
 运行验证应在仿真中进行：首次接管检查目标等于实际位姿；三轴移动 0.1 m 检查目标对应变化 0.1 m；改变手臂缩放及镜像确认头部不受影响；制造实际位姿偏差后重复 STORAGE/UPDATE，确认目标无累计漂移；暂停头显消息再恢复，确认不因消息间隔重设基准；暂停机器人实际位姿消息，确认仍按已有缓存处理；检查非单位 TF、四元数正负等价、无效位姿、模式切换以及 marker 菜单/拖动互斥。
+
+头部开关独立于身体模式，使用 WBC 的 `head_state` 反馈。头腰耦合模式禁止独立头部跟踪，进入耦合后 VR 释放头部接管但保留最后目标；退出耦合不自动启用头部。RViz 面板按“左臂/右臂、底盘/头部、双臂耦合/参考关节、身体模式/HOLD”排列，头部按钮由实际反馈驱动。

@@ -158,7 +158,7 @@ namespace arms_ros2_control::command
     {
         return head_marker_ && head_marker_->isWbcEnabled() &&
             current_controller_state_ == 3 &&
-            body_state_ == arms_ros2_control_msgs::msg::WbcCurrentState::BODY_HEAD_TRACKING;
+            head_state_ == arms_ros2_control_msgs::msg::WbcCurrentState::HEAD_ENABLED;
     }
 
     bool ArmsTargetManager::shouldShowHeadMarker() const
@@ -296,11 +296,13 @@ namespace arms_ros2_control::command
         const int prev_right_arm_state = right_arm_state_;
         const int prev_bimanual_state = bimanual_state_;
         const int prev_body_state = body_state_;
+        const int prev_head_state = head_state_;
 
         left_arm_state_ = msg->left_arm_state;
         right_arm_state_ = msg->right_arm_state;
         bimanual_state_ = msg->bimanual_state;
         body_state_ = msg->body_state;
+        head_state_ = msg->head_state;
         base_state_ = msg->base_state;
 
         if (wbc_state_callback_)
@@ -327,7 +329,7 @@ namespace arms_ros2_control::command
 
         if (prev_left_arm_state != left_arm_state_ ||
             prev_right_arm_state != right_arm_state_ ||
-            prev_body_state != body_state_)
+            prev_body_state != body_state_ || prev_head_state != head_state_)
         {
             updateMarkerShape();
             updateMenuVisibility();

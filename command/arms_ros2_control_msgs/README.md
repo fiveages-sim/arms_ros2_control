@@ -181,3 +181,7 @@ ROS 2 接口包：[`arms_ros2_control`](../..) 系统所使用的 **msg / srv / 
 - `std_msgs`
 - `geometry_msgs`
 - `nav_msgs`
+
+### 独立头部状态
+
+`WbcCurrentState.head_state` 使用 `HEAD_DISABLED=0` / `HEAD_ENABLED=1`，独立于 `body_state`。`BODY_HEAD_TRACKING=6` 仅保留为旧协议常量，新发布端不再输出。消息结构升级后必须重编译并统一重启所有发布端和订阅端。

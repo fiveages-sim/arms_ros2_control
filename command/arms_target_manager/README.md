@@ -96,7 +96,7 @@ RViz Joint Panel：绝对 / 相对基座 / 相对末端（手臂）或相对身�
 | `enable_head_control` | 旧头部 RPY-to-joint Marker，发布 `/head_joint_controller/target_joint_position` | `false` |
 | `enable_wbc_head_tracking_marker` | WBC Head XYZ+RPY 六轴 Marker | `false` |
 
-共享 YAML 中两个开关均保持关闭；`full_body.launch.py` 只在实际选择 `ocs2_wbc_controller` 时覆盖第二个开关，`split_body` 不覆盖。WBC Marker 还受运行态门控：只有 FSM=OCS2 且 `WbcCurrentState.body_state=BODY_HEAD_TRACKING` 时插入，离开模式立即移除并停止发布。
+共享 YAML 中两个开关均保持关闭；`full_body.launch.py` 只在实际选择 `ocs2_wbc_controller` 时覆盖第二个开关，`split_body` 不覆盖。WBC Marker 还受运行态门控：只有 FSM=OCS2 且 `WbcCurrentState.head_state=HEAD_ENABLED` 时插入，离开模式立即移除并停止发布。
 
 每次进入该模式，Marker 先从 `marker_fixed_frame -> head_link_name` TF 同步当前完整位姿；模式内 Marker 表示最终目标，不持续跟随实际 Head 或 MPC 中间轨迹。自身发布后的短暂回显冷却避免 `head_target -> head_current_target -> Marker` 抖动，其他最终目标随后可通过 `head_current_target` 回写 Marker。旧 `/head_joint_controller/current_target_joint` 是关节数组，不接入 WBC 6D 回写链路。
 
@@ -106,7 +106,7 @@ RViz Joint Panel：绝对 / 相对基座 / 相对末端（手臂）或相对身�
 - `dual_arm_mode`、`control_base_frame`、`hand_controllers`：由 launch / task.info 自动配置
 - `marker_fixed_frame`：Marker 固定坐标系，默认 `base_link`
 - `enable_movej_cartesian_markers`：MOVEJ 下是否显示可拖手臂 marker（发 stamped → IK MoveL）。有 `lina_planning` 时默认 `true`；`full_body.launch.py` 在 `ocs2_wbc_controller` 下设为 `false`
-- `enable_wbc_head_tracking_marker`：是否具备 full-body WBC Head 6D Marker 启动能力；仍需 OCS2 + `BODY_HEAD_TRACKING`，默认 `false`
+- `enable_wbc_head_tracking_marker`：是否具备 full-body WBC Head 6D Marker 启动能力；仍需 OCS2 + `HEAD_ENABLED`，默认 `false`
 
 ### YAML 配置（`config/default.yaml` 或 task 旁 `target_manager.yaml`）
 
