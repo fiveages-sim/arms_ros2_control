@@ -56,7 +56,7 @@ namespace arms_ros2_control::command
          * @param vr_thumbstick_angular_scale VR摇杆角度缩放因子（单位 rad/step）
          * @param vr_pose_scale 手柄位姿位置缩放因子（左右共用；事件 15 左Y+右B 固定按左侧 Z 距校准）
          * @param reference_link 参考link名称（例如 head_link2），用于VR/头显关联
-         * @param vr_follow_frame FULL_BODY 下 VR 末端目标计算坐标系（默认 base_footprint）
+         * @param vr_follow_frame VR 末端目标计算坐标系（默认 base_footprint）
          */
         VRInputHandler(
             rclcpp::Node::SharedPtr node,
@@ -383,7 +383,7 @@ namespace arms_ros2_control::command
 
         /**
          * 将计算坐标系下的目标转换到控制发布 frame，再做变化检测并发布到 left_target/right_target。
-         * FULL_BODY 下 position/orientation 为 vr_follow_frame_ Pose；非 FULL_BODY 保持旧语义。
+         * position/orientation 为 vr_follow_frame_ Pose。
          * @param armType 手臂类型 ("left" 或 "right")
          * @param position 计算坐标系下的位置
          * @param orientation 计算坐标系下的方向
@@ -426,7 +426,7 @@ namespace arms_ros2_control::command
 
         /**
          * 记录最后一次实际发布出去的目标位姿，用作暂停恢复/进入 UPDATE 的 command 连续性基准。
-         * FULL_BODY 下保存的是 vr_follow_frame_ Pose。
+         * 保存的是 vr_follow_frame_ Pose。
          * @param armType 手臂类型 ("left" 或 "right")
          * @param position 计算坐标系下的位置
          * @param orientation 计算坐标系下的方向
@@ -442,7 +442,7 @@ namespace arms_ros2_control::command
 
         /**
          * 将对应手臂的 robot base 设置为最后 command target；若还没有发布历史，则回退到 current pose。
-         * FULL_BODY 下 current pose 会从 ee_frame_id_ 转到 vr_follow_frame_；失败时不覆盖基准。
+         * current pose 会从 ee_frame_id_ 转到 vr_follow_frame_；失败时不覆盖基准。
          * @param armType 手臂类型 ("left" 或 "right")
          * @return true 表示基准已在正确计算 frame 中建立
          */
@@ -561,14 +561,13 @@ namespace arms_ros2_control::command
         Eigen::Vector3d vr_head_position_ = Eigen::Vector3d::Zero();
         Eigen::Quaterniond vr_head_orientation_ = Eigen::Quaterniond::Identity();
 
-        // 最后实际发布 frame（FULL_BODY 下为 ee_frame_id_）的 Pose，仅用于变化检测
+        // 最后实际发布 frame（ee_frame_id_）的 Pose，仅用于变化检测
         Eigen::Vector3d prev_calculated_left_position_ = Eigen::Vector3d::Zero();
         Eigen::Quaterniond prev_calculated_left_orientation_ = Eigen::Quaterniond::Identity();
         Eigen::Vector3d prev_calculated_right_position_ = Eigen::Vector3d::Zero();
         Eigen::Quaterniond prev_calculated_right_orientation_ = Eigen::Quaterniond::Identity();
 
-        // 最后一次实际发布对应的计算-frame command target：
-        // FULL_BODY 下为 vr_follow_frame_ Pose；非 FULL_BODY 保持旧语义。
+        // 最后一次实际发布对应的计算-frame command target（vr_follow_frame_ Pose）。
         bool has_last_published_left_target_ = false;
         Eigen::Vector3d last_published_left_position_ = Eigen::Vector3d::Zero();
         Eigen::Quaterniond last_published_left_orientation_ = Eigen::Quaterniond::Identity();
@@ -657,7 +656,7 @@ namespace arms_ros2_control::command
         Eigen::Vector3d vr_base_right_position_ = Eigen::Vector3d::Zero();
         Eigen::Quaterniond vr_base_right_orientation_ = Eigen::Quaterniond::Identity();
 
-        // 机器人末端基准：FULL_BODY 下为 vr_follow_frame_ 中锁存的 Pose；非全身控制保持旧语义
+        // 机器人末端基准：vr_follow_frame_ 中锁存的 Pose
         Eigen::Vector3d robot_base_left_position_ = Eigen::Vector3d::Zero();
         Eigen::Quaterniond robot_base_left_orientation_ = Eigen::Quaterniond::Identity();
         Eigen::Vector3d robot_base_right_position_ = Eigen::Vector3d::Zero();
@@ -740,7 +739,7 @@ namespace arms_ros2_control::command
         // 参考link名称（用于将VR头显/手柄关联到机器人某个link），从target_manager.yaml读取，默认"base_link"
         std::string reference_link_;
 
-        // FULL_BODY VR 目标的计算坐标系；由 vr_follow_frame 参数配置
+        // VR 目标的计算坐标系；由 vr_follow_frame 参数配置
         std::string vr_follow_frame_;
 
         // 来自 left_current_pose/right_current_pose.header.frame_id；

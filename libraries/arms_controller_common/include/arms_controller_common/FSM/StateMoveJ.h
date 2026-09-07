@@ -472,6 +472,7 @@ namespace arms_controller_common
         double waist_lifting_duration_{3.0};
         Eigen::Vector3d default_waist_lifting_para_;
         Eigen::Vector3d default_waist_turning_para_;
+        double waist_turning_direction_{1.0};
         void updateWaistParam();
 
         double last_waist_factor_{0.0};
