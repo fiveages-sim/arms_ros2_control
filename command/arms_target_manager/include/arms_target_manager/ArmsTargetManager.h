@@ -96,6 +96,7 @@ namespace arms_ros2_control::command
         bool shouldShowBodyMarker() const;
         bool shouldShowWbcHeadMarker() const;
         bool shouldShowHeadMarker() const;
+        void setHeadVrActive(bool active);
         int getCurrentBodyState() const;
         int getCurrentBaseState() const;
         int getCurrentBimanualState() const;
@@ -239,6 +240,7 @@ namespace arms_ros2_control::command
         int base_state_{
             arms_ros2_control_msgs::msg::WbcCurrentState::BASE_LOCKED};
         bool wbc_head_marker_visible_{false};
+        bool head_vr_active_{false};
 
         rclcpp::Time last_marker_update_time_;
         double marker_update_interval_;

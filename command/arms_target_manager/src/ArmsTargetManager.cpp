@@ -167,6 +167,21 @@ namespace arms_ros2_control::command
             (head_marker_->isLegacyEnabled() || shouldShowWbcHeadMarker());
     }
 
+    void ArmsTargetManager::setHeadVrActive(bool active)
+    {
+        if (head_vr_active_ == active)
+        {
+            return;
+        }
+        head_vr_active_ = active;
+        if (head_marker_)
+        {
+            // Let final-target feedback update the display immediately after VR takeover.
+            head_marker_->clearCommandCooldown();
+        }
+        updateHeadMarkerVisibility();
+    }
+
     void ArmsTargetManager::updateHeadMarkerVisibility()
     {
         if (!server_ || !head_marker_)
@@ -195,9 +210,7 @@ namespace arms_ros2_control::command
             head_marker_->clearCommandCooldown();
         }
 
-        auto marker = head_marker_->createMarker(
-            "head_target", head_marker_->getPose(),
-            show_wbc || isStateDisabled(current_controller_state_), show_wbc);
+        auto marker = buildMarker("head_target", "head");
         server_->insert(marker);
         server_->setCallback(
             marker.name,
@@ -554,8 +567,18 @@ namespace arms_ros2_control::command
             if (shouldShowHeadMarker())
             {
                 const bool wbc = shouldShowWbcHeadMarker();
-                return head_marker_->createMarker(
+                auto marker = head_marker_->createMarker(
                     name, head_marker_->getPose(), wbc || enable_interaction, wbc);
+                if (head_vr_active_)
+                {
+                    // Keep the visible arrow; the factory's disabled mode hides it too.
+                    marker.controls.erase(std::remove_if(marker.controls.begin(), marker.controls.end(),
+                        [](const auto& control) {
+                            return control.interaction_mode !=
+                                visualization_msgs::msg::InteractiveMarkerControl::NONE;
+                        }), marker.controls.end());
+                }
+                return marker;
             }
             visualization_msgs::msg::InteractiveMarker empty_marker;
             empty_marker.name = name;
@@ -665,6 +688,10 @@ namespace arms_ros2_control::command
         }
         else if (marker_name == "head_target")
         {
+            if (head_vr_active_)
+            {
+                return;
+            }
             if (shouldShowWbcHeadMarker())
             {
                 head_marker_->setPose(transformed_pose);
@@ -764,6 +791,10 @@ namespace arms_ros2_control::command
 
         if (marker_type == "head")
         {
+            if (head_vr_active_)
+            {
+                return;
+            }
             if (shouldShowWbcHeadMarker())
             {
                 head_marker_->publishTargetPose(true, true);

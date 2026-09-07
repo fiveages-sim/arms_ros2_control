@@ -179,6 +179,10 @@ namespace arms_ros2_control::command
          * @param msg VR 头显 pose 消息
          */
         void vrHeadCallback(geometry_msgs::msg::Pose::SharedPtr msg);
+        void robotHeadPoseCallback(geometry_msgs::msg::PoseStamped::ConstSharedPtr msg);
+        bool headTrackingReady() const;
+        void stopHeadTracking();
+        void publishHeadTarget();
 
         /**
          * 摇杆轴值回调函数（合并处理左右摇杆）
@@ -560,6 +564,20 @@ namespace arms_ros2_control::command
         Eigen::Quaterniond right_orientation_ = Eigen::Quaterniond::Identity();
         Eigen::Vector3d vr_head_position_ = Eigen::Vector3d::Zero();
         Eigen::Quaterniond vr_head_orientation_ = Eigen::Quaterniond::Identity();
+
+        // All callbacks use the node's default mutually-exclusive callback group.
+        rclcpp::Subscription<geometry_msgs::msg::PoseStamped>::SharedPtr sub_robot_head_;
+        rclcpp::Publisher<geometry_msgs::msg::Pose>::SharedPtr pub_head_target_;
+        geometry_msgs::msg::PoseStamped robot_head_pose_;
+        bool has_robot_head_pose_{false};
+        bool has_vr_head_pose_{false};
+        bool head_tracking_active_{false};
+        Eigen::Vector3d vr_head_base_position_ = Eigen::Vector3d::Zero();
+        Eigen::Quaterniond vr_head_base_orientation_ = Eigen::Quaterniond::Identity();
+        Eigen::Vector3d robot_head_base_position_ = Eigen::Vector3d::Zero();
+        Eigen::Quaterniond robot_head_base_orientation_ = Eigen::Quaterniond::Identity();
+        // Last published command with its current-pose frame, not measured pose.
+        std::optional<geometry_msgs::msg::PoseStamped> last_head_target_;
 
         // 最后实际发布 frame（ee_frame_id_）的 Pose，仅用于变化检测
         Eigen::Vector3d prev_calculated_left_position_ = Eigen::Vector3d::Zero();
