@@ -129,6 +129,7 @@ private:
     uint8_t left_arm_state = 0;
     uint8_t right_arm_state = 0;
     bool home_joint_reference_enabled = false;
+    bool head_midpoint_gaze_active = false;
   };
 
   // ROS2

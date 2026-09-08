@@ -634,6 +634,7 @@ namespace arms_rviz_control_plugin
         current_wbc_state_.left_arm_state = msg->left_arm_state;
         current_wbc_state_.right_arm_state = msg->right_arm_state;
         current_wbc_state_.home_joint_reference_enabled = msg->home_joint_reference_enabled;
+        current_wbc_state_.head_midpoint_gaze_active = msg->head_midpoint_gaze_active;
 
         QMetaObject::invokeMethod(this, [this]() { refreshWbcUi(); }, Qt::QueuedConnection);
     }
@@ -834,10 +835,13 @@ namespace arms_rviz_control_plugin
 
         const bool head_coupled = current_wbc_state_.body_state ==
             arms_ros2_control_msgs::msg::WbcCurrentState::BODY_HEAD_COUPLED;
+        const bool gaze_active = current_wbc_state_.head_midpoint_gaze_active;
         updateSwitchVisualState(head_switch_.get(),
-                                capability_state_.head_tracking_ee_enabled && !head_coupled,
+                                capability_state_.head_tracking_ee_enabled && !head_coupled && !gaze_active,
                                 isHeadEnabled());
-        head_switch_->setToolTip(head_coupled ? "头腰耦合模式下不可启用独立头部跟踪" : "独立头部位姿跟踪");
+        head_switch_->setToolTip(
+            gaze_active ? "自定义模式下头部中点注视已启用" :
+            head_coupled ? "头腰耦合模式下不可启用独立头部跟踪" : "独立头部位姿跟踪");
 
         updateSwitchVisualState(home_pose_switch_.get(),
                                 capability_state_.has_home_joint_reference,
@@ -859,7 +863,8 @@ namespace arms_rviz_control_plugin
     void OCS2FSMPanel::onHeadToggled()
     {
         if (!capability_state_.head_tracking_ee_enabled || current_wbc_state_.body_state ==
-            arms_ros2_control_msgs::msg::WbcCurrentState::BODY_HEAD_COUPLED) return;
+            arms_ros2_control_msgs::msg::WbcCurrentState::BODY_HEAD_COUPLED ||
+            current_wbc_state_.head_midpoint_gaze_active) return;
         publishModeCommand(isHeadEnabled() ? "HEAD_DISABLE" : "HEAD_ENABLE");
     }
 

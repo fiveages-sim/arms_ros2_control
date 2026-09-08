@@ -29,3 +29,8 @@ bool home_joint_reference_enabled
 uint8 HEAD_DISABLED=0
 uint8 HEAD_ENABLED=1
 uint8 head_state
+
+# True when the head camera is autonomously gazing at the left/right end-effector midpoint
+# (CUSTOM_LOCKED body mode with customJointLock.headMidpointGaze.activate=true). head_state is
+# HEAD_DISABLED whenever this is true; HEAD_ENABLE is rejected while this is true.
+bool head_midpoint_gaze_active

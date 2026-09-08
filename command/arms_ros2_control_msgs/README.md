@@ -185,3 +185,5 @@ ROS 2 接口包：[`arms_ros2_control`](../..) 系统所使用的 **msg / srv / 
 ### 独立头部状态
 
 `WbcCurrentState.head_state` 使用 `HEAD_DISABLED=0` / `HEAD_ENABLED=1`，独立于 `body_state`。`BODY_HEAD_TRACKING=6` 仅保留为旧协议常量，新发布端不再输出。消息结构升级后必须重编译并统一重启所有发布端和订阅端。
+
+`WbcCurrentState.head_midpoint_gaze_active`（bool）表示 OCS2 是否正在自动注视双手中点：`body_state=BODY_CUSTOM_LOCKED` 且机器人配置的 `customJointLock.headMidpointGaze.activate=true` 时为真，此时 `head_state` 恒为 `HEAD_DISABLED`。该字段仅表示任务已激活，不表示已经对准或目标可达。
