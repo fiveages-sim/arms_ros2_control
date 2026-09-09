@@ -151,7 +151,8 @@ namespace arms_ros2_control::command
 
     bool ArmsTargetManager::shouldShowBodyMarker() const
     {
-        return (current_controller_state_ == 3) && (body_state_ == 2);
+        return (current_controller_state_ == 3) && (body_state_ == 2) &&
+            head_state_ != arms_ros2_control_msgs::msg::WbcCurrentState::HEAD_FORWARD;
     }
 
     bool ArmsTargetManager::shouldShowWbcHeadMarker() const

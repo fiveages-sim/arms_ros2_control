@@ -10,3 +10,6 @@ bool has_bimanual_coupling
 bool body_tracking_ee_enabled
 bool head_tracking_ee_enabled
 bool has_home_joint_reference
+
+# Configured ability to gaze at the midpoint of both end effectors.
+bool head_midpoint_gaze_enabled

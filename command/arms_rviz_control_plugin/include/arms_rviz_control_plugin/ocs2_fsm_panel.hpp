@@ -58,6 +58,7 @@ private Q_SLOTS:
   void onLeftArmToggled();
   void onRightArmToggled();
   void onBodyModeChanged(int index);
+  void onHeadModeChanged(int index);
   void onHomePoseTrackingToggled();
 
 private:
@@ -76,6 +77,7 @@ private:
 
   void refreshWbcUi();
   void updateBodyComboBox();
+  void updateHeadComboBox();
   void updateSwitchVisualState(SwitchButton* sw, bool capability_available, bool logical_on);
 
   bool isBaseLocked() const;
@@ -87,10 +89,7 @@ private:
   bool isBodyVertical() const;
   bool isBodyTracking() const;
   bool isBodyLocked() const;
-  bool isBodyHeadCoupled() const;
   bool isBodyCustomLocked() const;
-  bool isHeadEnabled() const;
-  void onHeadToggled();
 
   int getCurrentBodyModeIndex() const;
   QString getBodyModeCommand(int modeIndex) const;
@@ -102,9 +101,7 @@ private:
     BODY_MODE_VERTICAL = 1,
     BODY_MODE_TRACKING = 2,
     BODY_MODE_LOCKED = 3,
-    BODY_MODE_HEAD_COUPLED = 4,
-    BODY_MODE_CUSTOM_LOCKED = 5,
-
+    BODY_MODE_CUSTOM_LOCKED = 5
   };
 
   struct CapabilityState
@@ -117,6 +114,7 @@ private:
     bool has_bimanual_coupling = false;
     bool body_tracking_ee_enabled = false;
     bool head_tracking_ee_enabled = false;
+    bool head_midpoint_gaze_enabled = false;
     bool has_home_joint_reference = false;
   };
 
@@ -124,12 +122,11 @@ private:
   {
     uint8_t base_state = 0;
     uint8_t body_state = 0;
-    uint8_t bimanual_state = 0;
     uint8_t head_state = 0;
+    uint8_t bimanual_state = 0;
     uint8_t left_arm_state = 0;
     uint8_t right_arm_state = 0;
     bool home_joint_reference_enabled = false;
-    bool head_midpoint_gaze_active = false;
   };
 
   // ROS2
@@ -161,8 +158,6 @@ private:
 
   std::unique_ptr<QLabel> base_label_;
   std::unique_ptr<QLabel> bimanual_label_;
-  std::unique_ptr<QLabel> head_label_;
-  std::unique_ptr<SwitchButton> head_switch_;
   std::unique_ptr<QLabel> left_arm_label_;
   std::unique_ptr<QLabel> right_arm_label_;
   std::unique_ptr<QLabel> home_pose_label_;
@@ -175,6 +170,8 @@ private:
 
   std::unique_ptr<QLabel> body_label_;
   std::unique_ptr<QComboBox> body_combo_box_;
+  std::unique_ptr<QLabel> head_label_;
+  std::unique_ptr<QComboBox> head_combo_box_;
 
   // Current state tracking
   int32_t current_command_ = 0;

@@ -19,18 +19,20 @@ uint8 ARM_DISABLED=0
 uint8 ARM_ENABLED=1
 
 uint8 base_state
+# Selected body mode; temporarily overridden by the legacy head/waist constraints in HEAD_FORWARD.
 uint8 body_state
 uint8 bimanual_state
 uint8 left_arm_state
 uint8 right_arm_state
 bool home_joint_reference_enabled
 
-# Independent head tracking
+# Head task. HEAD_ENABLED remains an alias for marker/VR tracking consumers.
 uint8 HEAD_DISABLED=0
 uint8 HEAD_ENABLED=1
+uint8 HEAD_TRACKING=1
+uint8 HEAD_GAZE=2
+uint8 HEAD_FORWARD=3
 uint8 head_state
 
-# True when the head camera is autonomously gazing at the left/right end-effector midpoint
-# (CUSTOM_LOCKED body mode with customJointLock.headMidpointGaze.activate=true). head_state is
-# HEAD_DISABLED whenever this is true; HEAD_ENABLE is rejected while this is true.
+# Task activation, not a guarantee of alignment or reachability. Independent of body_state.
 bool head_midpoint_gaze_active
