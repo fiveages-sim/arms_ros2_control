@@ -26,7 +26,6 @@
 namespace arms_ros2_control::command
 {
     // 静态常量定义
-    const std::string VRInputHandler::XR_NODE_NAME = "/xr_target_node";
     const double VRInputHandler::POSITION_THRESHOLD = 0.01; // 1cm threshold for position changes
     const double VRInputHandler::ORIENTATION_THRESHOLD = 0.005; // threshold for orientation changes (quaternion angle)
 
@@ -816,20 +815,6 @@ namespace arms_ros2_control::command
         return current_fsm_state_.load();
     }
 
-    bool VRInputHandler::checkNodeExists(const std::shared_ptr<rclcpp::Node>& node, const std::string& targetNodeName)
-    {
-        std::vector<std::string> nodeNames = node->get_node_graph_interface()->get_node_names();
-
-        for (const auto& name : nodeNames)
-        {
-            if (name == targetNodeName)
-            {
-                return true;
-            }
-        }
-        return false;
-    }
-
     void VRInputHandler::enable()
     {
         enabled_.store(true);
@@ -1013,18 +998,11 @@ namespace arms_ros2_control::command
 
     void VRInputHandler::vrLeftCallback(const geometry_msgs::msg::Pose::SharedPtr msg)
     {
-        if (checkNodeExists(node_, XR_NODE_NAME) && !enabled_.load())
+        if (!enabled_.load())
         {
             RCLCPP_INFO_THROTTLE(node_->get_logger(), *node_->get_clock(), 5000,
-                                 "🕹️🕶️🕹️ xr_target_node found, VR control ENABLED!");
+                                 "🕹️🕶️🕹️ VR left pose received, VR control ENABLED!");
             this->enable();
-        }
-        else if (!checkNodeExists(node_, XR_NODE_NAME) && enabled_.load())
-        {
-            this->disable();
-            RCLCPP_WARN_THROTTLE(node_->get_logger(), *node_->get_clock(), 5000,
-                                 "🕹️🕶️🕹️ xr_target_node not found, VR control DISABLED!");
-            return;
         }
 
         // 左话题接收的是左手柄数据

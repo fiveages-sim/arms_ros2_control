@@ -117,14 +117,6 @@ namespace arms_ros2_control::command
         }
 
         /**
-         * 检查节点是否存在
-         * @param node ROS节点指针
-         * @param targetNodeName 目标节点名称
-         * @return true如果节点存在，false否则
-         */
-        bool checkNodeExists(const std::shared_ptr<rclcpp::Node>& node, const std::string& targetNodeName);
-
-        /**
          * FSM命令回调函数（用于跟踪FSM状态）
          * 由外部统一订阅后调用，避免重复订阅
          * @param msg FSM命令消息
@@ -770,7 +762,6 @@ namespace arms_ros2_control::command
         std::shared_ptr<tf2_ros::TransformListener> tf_listener_;
 
         // 常量
-        static const std::string XR_NODE_NAME;
         static const double POSITION_THRESHOLD;
         static const double ORIENTATION_THRESHOLD;
     };
