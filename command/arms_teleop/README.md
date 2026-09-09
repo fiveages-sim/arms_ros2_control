@@ -118,14 +118,18 @@ ros2 run arms_teleop foot_pedal_teleop --ros-args \
 An explicit stable `device` path remains available for diagnostics and overrides auto-discovery.
 
 By default the node exclusively grabs that device (`grab_device:=true`), so pedal events do not
-reach the desktop or other applications. Each pedal press emits one XR event; releases and Linux
-key-repeat events are ignored. Zero (no event) continues to be published at 30 Hz.
+reach the desktop or other applications. Linux key-repeat events are ignored. Zero (no event)
+continues to be published at 30 Hz.
 
-- F13: FSM up, event `11`.
-- F14: FSM down, event `12`.
-- F15: toggle left-arm teleoperation, event `3`.
-- F16: toggle right-arm teleoperation, event `6`.
-- F17: toggle whole teleoperation, event `4` (optional and disabled by default).
+- F13: FSM down, event `12`.
+- F14: FSM up, event `11`.
+- F15 short press: toggle left-arm teleoperation, event `3`.
+- F15 long press (default 800 ms): toggle mirror mode, event `7`.
+- F16 short press: toggle right-arm teleoperation, event `6`.
+- F16 long press (default 800 ms): toggle whole teleoperation between STORAGE and UPDATE,
+  event `4`. A long press emits only event `4`; it does not also emit event `6`.
+
+Double-click gestures are intentionally not used.
 
 Parameters:
 
@@ -135,9 +139,10 @@ Parameters:
 - `grab_device` (default `true`): exclusively consume this input device.
 - `xr.publish_rate_hz` (default `30.0`): `/xr/controller_state` state-stream frequency.
 - `xr.controller_state_topic` (default `/xr/controller_state`): XR event output topic.
-- `enable_whole_teleop_toggle` (default `false`): enable or disable the optional F17 mapping.
-- `keys.fsm_up/fsm_down/left_arm_toggle/right_arm_toggle/whole_teleop_toggle`: Linux input key
-  codes, default F13-F17 (`183`-`187`).
+- `whole_teleop_long_press_ms` (default `800`): F16 hold duration required for event `4`.
+- `mirror_long_press_ms` (default `800`): F15 hold duration required for event `7`.
+- `keys.fsm_up/fsm_down/left_arm_toggle/right_arm_toggle`: Linux input key codes, default
+  F13-F16 (`183`-`186`).
 
 If opening the device fails with `Permission denied`, configure an input-device udev rule or run
 the node as a user with permission to read that evdev device. Do not use the ordinary keyboard's

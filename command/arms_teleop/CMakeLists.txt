@@ -48,6 +48,10 @@ target_link_libraries(keyboard_teleop PUBLIC
 )
 
 add_executable(foot_pedal_teleop src/foot_pedal_teleop.cpp)
+target_include_directories(foot_pedal_teleop
+        PUBLIC
+        "$<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>"
+        "$<INSTALL_INTERFACE:include/${PROJECT_NAME}>")
 target_link_libraries(foot_pedal_teleop PUBLIC
         ${rclcpp_TARGETS}
         ${std_msgs_TARGETS}
