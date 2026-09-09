@@ -1632,7 +1632,7 @@ namespace arms_rviz_control_plugin
         waist_left_pressed_ = true;
         waist_right_pressed_ = false;
 
-        publishWaistTurning(-getWaistTurningScale());
+        publishWaistTurning(getWaistTurningScale());
         updateWaistRepeatTimerState();
     }
 
@@ -1653,8 +1653,7 @@ namespace arms_rviz_control_plugin
         waist_right_pressed_ = true;
         waist_left_pressed_ = false;
 
-        // 这里用你当前测试正确的符号
-        publishWaistTurning(getWaistTurningScale());
+        publishWaistTurning(-getWaistTurningScale());
         updateWaistRepeatTimerState();
     }
 
@@ -1683,11 +1682,11 @@ namespace arms_rviz_control_plugin
 
         if (waist_left_pressed_ && !waist_right_pressed_)
         {
-            publishWaistTurning(-getWaistTurningScale());
+            publishWaistTurning(getWaistTurningScale());
         }
         else if (waist_right_pressed_ && !waist_left_pressed_)
         {
-            publishWaistTurning(getWaistTurningScale());
+            publishWaistTurning(-getWaistTurningScale());
         }
     }
 

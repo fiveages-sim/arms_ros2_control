@@ -247,6 +247,8 @@ jobs:
             hardwares/rokae_ros2_control
             hardwares/ht_ros2_control
             hardwares/arx_ros2_control
+            hardwares/inex_ros2_control
+            hardwares/eyou_canfd_ros2_control
           )
           paths=("${wbc_paths[@]}")
           if [[ "${BUNDLE}" == "full" ]]; then
@@ -292,7 +294,9 @@ jobs:
               hardwares/juxie_ros2_control/package.xml \
               hardwares/rokae_ros2_control/package.xml \
               hardwares/ht_ros2_control/package.xml \
-              hardwares/arx_ros2_control/package.xml; do
+              hardwares/arx_ros2_control/package.xml \
+              hardwares/inex_ros2_control/package.xml \
+              hardwares/eyou_canfd_ros2_control/package.xml; do
               if [[ ! -f "${ws}/${p}" ]]; then
                 echo "Missing ${p} for full bundle." >&2
                 exit 1
@@ -323,6 +327,10 @@ jobs:
                 echo "Missing vendored SOEM libsoem.so for x86_64 (required for full amd64 bundle)." >&2
                 exit 1
               fi
+            fi
+            if [[ ! -f "${ws}/hardwares/inex_ros2_control/external/inex_client/lib/Linux/${arx_arch}/libinex_client.so" ]]; then
+              echo "Missing iNexus client ${arx_arch}/libinex_client.so (required for full bundle)." >&2
+              exit 1
             fi
           fi
 
@@ -505,6 +513,7 @@ jobs:
             build-essential \
             cmake \
             libeigen3-dev \
+            libacl1-dev \
             libmodbus-dev \
             libserialport-dev \
             libyaml-cpp-dev \
@@ -702,6 +711,8 @@ jobs:
             rsync -a "${ws}/hardwares/rokae_ros2_control/" "${source_root}/rokae_ros2_control/"
             rsync -a "${ws}/hardwares/ht_ros2_control/" "${source_root}/ht_ros2_control/"
             rsync -a "${ws}/hardwares/arx_ros2_control/" "${source_root}/arx_ros2_control/"
+            rsync -a "${ws}/hardwares/inex_ros2_control/" "${source_root}/inex_ros2_control/"
+            rsync -a "${ws}/hardwares/eyou_canfd_ros2_control/" "${source_root}/eyou_canfd_ros2_control/"
           fi
 
       - name: Install workspace dependencies
@@ -789,7 +800,7 @@ jobs:
             exit 1
           fi
           if [[ "${{ matrix.bundle }}" == "full" ]]; then
-            for pkg in gripper_hardware_common marvin_ros2_control modbus_ros2_control can_ros2_control juxie_ros2_control rokae_ros2_control ht_ros2_control arx_ros2_control; do
+            for pkg in gripper_hardware_common marvin_ros2_control modbus_ros2_control can_ros2_control juxie_ros2_control rokae_ros2_control ht_ros2_control arx_ros2_control inex_ros2_control eyou_canfd_ros2_control; do
               if [[ ! -d "${install_root}/share/${pkg}" ]]; then
                 echo "${pkg} was not installed into the package root." >&2
                 exit 1
@@ -818,7 +829,7 @@ jobs:
 
           if [[ "${BUNDLE}" == "full" ]]; then
             deb_description="Prebuilt arms_ros2_control full bundle for ROS 2 ${ROS_DISTRO}
-             Includes WBC stack (lina_planning, ocs2_humanoid, ocs2_wbc_controller), topic_based_ros2_control, plus gripper_hardware_common, marvin_ros2_control, modbus_ros2_control, can_ros2_control, juxie_ros2_control, rokae_ros2_control, ht_ros2_control, arx_ros2_control. Installed into ${INSTALL_PREFIX} without shared prefix setup files."
+             Includes WBC stack (lina_planning, ocs2_humanoid, ocs2_wbc_controller), topic_based_ros2_control, plus gripper_hardware_common, marvin_ros2_control, modbus_ros2_control, can_ros2_control, juxie_ros2_control, rokae_ros2_control, ht_ros2_control, arx_ros2_control, inex_ros2_control, eyou_canfd_ros2_control. Installed into ${INSTALL_PREFIX} without shared prefix setup files."
           else
             deb_description="Prebuilt arms_ros2_control WBC bundle for ROS 2 ${ROS_DISTRO}
              Includes command, controllers, arms_controller_common, ocs2_controller_common, lina_planning, ocs2_humanoid, ocs2_wbc_controller, topic_based_ros2_control. Installed into ${INSTALL_PREFIX} without shared prefix setup files."
@@ -835,7 +846,7 @@ jobs:
           # runtime SONAME for the install host; rosdep still handles CI build deps.
           deb_depends="ros-${ROS_DISTRO}-ros-base, ros-dev-tools, ${OCS2_PACKAGE_NAME}, ${COMMON_PACKAGE_NAME}, ros-${ROS_DISTRO}-ament-index-cpp, ros-${ROS_DISTRO}-angles, ros-${ROS_DISTRO}-controller-interface, ros-${ROS_DISTRO}-controller-manager, ros-${ROS_DISTRO}-geometry-msgs, ros-${ROS_DISTRO}-hardware-interface, ros-${ROS_DISTRO}-joy, ros-${ROS_DISTRO}-joint-state-broadcaster, ros-${ROS_DISTRO}-pluginlib, ros-${ROS_DISTRO}-rclcpp-action, ros-${ROS_DISTRO}-rclcpp-lifecycle, ros-${ROS_DISTRO}-rviz2, ros-${ROS_DISTRO}-sensor-msgs, ros-${ROS_DISTRO}-std-msgs, ros-${ROS_DISTRO}-tf2, ros-${ROS_DISTRO}-tf2-geometry-msgs, ros-${ROS_DISTRO}-tf2-ros, ros-${ROS_DISTRO}-urdf, ros-${ROS_DISTRO}-visualization-msgs"
           if [[ "${BUNDLE}" == "full" ]]; then
-            deb_depends+=", libserialport-dev, libyaml-cpp-dev"
+            deb_depends+=", libacl1, libserialport-dev, libyaml-cpp-dev"
           fi
 
           cat > "$package_root/DEBIAN/control" <<EOF
@@ -1361,6 +1372,8 @@ jobs:
                   "rokae_ros2_control",
                   "ht_ros2_control",
                   "arx_ros2_control",
+                  "inex_ros2_control",
+                  "eyou_canfd_ros2_control",
               ])
           for package_name in packages:
               print(package_name, get_package_share_directory(package_name))
@@ -1410,6 +1423,8 @@ jobs:
           find_package(rokae_ros2_control REQUIRED)
           find_package(ht_ros2_control REQUIRED)
           find_package(arx_ros2_control REQUIRED)
+          find_package(inex_ros2_control REQUIRED)
+          find_package(eyou_canfd_ros2_control REQUIRED)
           EOF
           fi
 

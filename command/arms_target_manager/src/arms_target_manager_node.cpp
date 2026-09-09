@@ -31,7 +31,7 @@ int main(int argc, char** argv)
     double vr_pose_scale = node->declare_parameter("vr_pose_scale", 1.0);
     // VR/头显参考link（通常为机器人头部link），可在各机器人target_manager.yaml中配置
     std::string reference_link = node->declare_parameter("reference_link", "head_link2");
-    // FULL_BODY 下 VR 末端目标计算所在的跟随坐标系
+    // VR 末端目标计算所在的跟随坐标系
     std::string vr_follow_frame =
         node->declare_parameter("vr_follow_frame", "base_footprint");
     if (vr_follow_frame.empty())
@@ -116,7 +116,7 @@ int main(int argc, char** argv)
                     reference_link.c_str());
         RCLCPP_INFO(
             node->get_logger(),
-            "VR follow frame: %s (used by FULL_BODY VR target mapping)",
+            "VR follow frame: %s (used by VR target mapping)",
             vr_follow_frame.c_str());
     }
 
