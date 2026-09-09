@@ -11,6 +11,7 @@
 #include <QGuiApplication>
 #include <QScreen>
 #include <QSizePolicy>
+#include <QScrollArea>
 #include <algorithm>
 #include <cmath>
 #include <functional>
@@ -60,7 +61,6 @@ namespace arms_rviz_control_plugin
     OCS2FSMPanel::OCS2FSMPanel(QWidget* parent)
         : Panel(parent)
     {
-        const int panel_min_height = scaled(180);
         const int title_font_size = scaled(14);
         const int badge_font_size = scaled(9);
         const int label_font_size = scaled(13);
@@ -90,7 +90,7 @@ namespace arms_rviz_control_plugin
 
         // Create main layout
         auto* main_layout = new QVBoxLayout(this);
-        setMinimumSize(panel_width, panel_min_height);
+        setMinimumSize(panel_width, scaled(180));
         setSizePolicy(QSizePolicy::Preferred, QSizePolicy::Preferred);
 
         // Title with status indicator - centered
@@ -163,8 +163,18 @@ namespace arms_rviz_control_plugin
 
         // ==================== WBC Control Section (OCS2 mode only) ====================
         wbc_container_ = std::make_unique<QWidget>(this);
-        wbc_container_->setSizePolicy(QSizePolicy::Fixed, QSizePolicy::Fixed);
-        wbc_layout_ = std::make_unique<QVBoxLayout>(wbc_container_.get());
+        wbc_container_->setSizePolicy(QSizePolicy::Preferred, QSizePolicy::Preferred);
+        auto* container_layout = new QVBoxLayout(wbc_container_.get());
+        container_layout->setContentsMargins(0, 0, 0, 0);
+        auto* scroll_area = new QScrollArea(wbc_container_.get());
+        scroll_area->setWidgetResizable(true);
+        scroll_area->setFrameShape(QFrame::NoFrame);
+        auto* wbc_content = new QWidget();
+        wbc_layout_ = std::make_unique<QVBoxLayout>(wbc_content);
+        wbc_layout_->setSizeConstraint(QLayout::SetMinAndMaxSize);
+        wbc_layout_->setAlignment(Qt::AlignTop);
+        scroll_area->setWidget(wbc_content);
+        container_layout->addWidget(scroll_area);
         wbc_layout_->setContentsMargins(0, scaled(8), 0, 0);
         wbc_layout_->setSpacing(scaled(4));
 
@@ -291,10 +301,8 @@ namespace arms_rviz_control_plugin
         upper_button_layout_->addWidget(pair_block, 0, 0);
 
         wbc_layout_->addLayout(upper_button_layout_.get());
-        wbc_container_->setFixedSize(panel_width, wbc_container_->sizeHint().height());
-        button_group_->setFixedSize(panel_width, wbc_container_->height());
-
-        main_layout->addWidget(wbc_container_.get(), 0, Qt::AlignHCenter);
+        button_group_->setFixedSize(panel_width, wbc_content->sizeHint().height());
+        main_layout->addWidget(wbc_container_.get());
 
         // Connect signals
         connect(home_to_hold_btn_.get(), &QPushButton::clicked, this, &OCS2FSMPanel::onHomeToHold);
