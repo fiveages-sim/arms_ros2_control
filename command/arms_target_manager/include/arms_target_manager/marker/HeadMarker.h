@@ -68,6 +68,7 @@ namespace arms_ros2_control::command
          * @return 如果启用头部控制返回 true
          */
         bool isEnabled() const { return enable_head_control_; }
+        bool isPoseInitialized() const { return pose_initialized_; }
 
         /**
          * @brief 创建头部 marker
@@ -173,6 +174,8 @@ namespace arms_ros2_control::command
 
         // 配置
         bool enable_head_control_ = false;
+        bool cartesian_mode_ = false;
+        bool pose_initialized_ = false;
         std::string head_link_name_;
         std::array<double, 3> head_marker_position_ = {1.0, 0.0, 1.5};
 
@@ -202,4 +205,3 @@ namespace arms_ros2_control::command
         mutable bool last_head_rpy_initialized_ = false;
     };
 } // namespace arms_ros2_control::command
-

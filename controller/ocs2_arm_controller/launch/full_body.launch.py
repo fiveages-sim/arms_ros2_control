@@ -23,6 +23,13 @@ import _ocs2_launch_common as ocs2_common
 
 
 def launch_setup(context, *args, **kwargs):
+    head_only = context.launch_configurations.get("head_marker_only", "false").lower() == "true"
+    if head_only:
+        context.launch_configurations["xacro_head_only"] = "true"
+        context.launch_configurations["enable_gripper"] = "false"
+        context.launch_configurations["use_profile_eef"] = "false"
+        context.launch_configurations["left_ft"] = "none"
+        context.launch_configurations["right_ft"] = "none"
     ctx = ocs2_common.build_ocs2_control_context(context)
 
     planning_robot_name = ocs2_common.resolve_planning_robot_name_from_config(
@@ -57,6 +64,19 @@ def launch_setup(context, *args, **kwargs):
     )
     if planning_urdf_params is None:
         return []
+
+    if head_only:
+        if not wbc_available or ctx.robot_name != "fiveages_w2":
+            raise RuntimeError("head_marker_only requires fiveages_w2 with Ocs2WbcController")
+        planning_urdf_params.update({
+            "left_ee_frame": "head_link2",
+            "fsm_default_humanoid_mode": "HM_ARM_LEFT",
+            "head_cartesian_control": True,
+            "selective_velocity_only": True,
+            "velocity_command_joints": ["head_joint1", "head_joint2"],
+            "cached_ob_state": False,
+            "cppad_library_subdir": "ocs2_wheel_humanoid_head",
+        })
 
     main_spawner, ocs2_planning_param_file = ocs2_common.create_main_controller_spawner(
         "ocs2_wbc_controller", planning_urdf_params
@@ -132,6 +152,8 @@ def launch_setup(context, *args, **kwargs):
             output="screen",
             parameters=arms_params + [
                 {"use_sim_time": ctx.use_sim_time},
+                {"head_marker_only": head_only},
+                *([{"enable_head_control": True}] if head_only else []),
                 # WBC MOVEJ has no IK MoveL; keep arm markers hidden (follow actual pose).
                 {"enable_movej_cartesian_markers": not wbc_available},
             ],
@@ -183,6 +205,7 @@ def generate_launch_description():
             DeclareLaunchArgument("world", default_value="dart"),
             DeclareLaunchArgument("enable_arms_target_manager", default_value="true"),
             DeclareLaunchArgument("enable_gripper", default_value="true"),
+            DeclareLaunchArgument("head_marker_only", default_value="false"),
             DeclareLaunchArgument(
                 "use_controller_manager_include",
                 default_value="false",

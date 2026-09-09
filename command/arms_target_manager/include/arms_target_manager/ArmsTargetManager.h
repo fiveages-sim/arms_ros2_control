@@ -192,6 +192,9 @@ namespace arms_ros2_control::command
             wbc_state_callback_;
         rclcpp::Subscription<std_msgs::msg::Float64MultiArray>::SharedPtr body_joint_target_subscriber_;
 
+        bool head_marker_only_{false};
+        void publishHeadCartesianTarget();
+        rclcpp::Publisher<geometry_msgs::msg::PoseStamped>::SharedPtr head_cartesian_publisher_;
         rclcpp::Publisher<nav_msgs::msg::Path>::SharedPtr dual_target_stamped_publisher_;
         rclcpp::Publisher<geometry_msgs::msg::Pose>::SharedPtr body_target_publisher_;
         rclcpp::Publisher<geometry_msgs::msg::PoseStamped>::SharedPtr body_target_stamped_publisher_;

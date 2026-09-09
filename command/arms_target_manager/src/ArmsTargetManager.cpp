@@ -86,12 +86,12 @@ namespace arms_ros2_control::command
 
     bool ArmsTargetManager::shouldShowLeftArmMarker() const
     {
-        return left_arm_state_ != 0;
+        return !head_marker_only_ && left_arm_state_ != 0;
     }
 
     bool ArmsTargetManager::shouldShowRightArmMarker() const
     {
-        return right_arm_state_ != 0;
+        return !head_marker_only_ && right_arm_state_ != 0;
     }
 
     bool ArmsTargetManager::isBimanualCoupled() const
@@ -151,7 +151,7 @@ namespace arms_ros2_control::command
 
     bool ArmsTargetManager::shouldShowBodyMarker() const
     {
-        return (current_controller_state_ == 3) && (body_state_ == 2);
+        return !head_marker_only_ && (current_controller_state_ == 3) && (body_state_ == 2);
     }
 
     int ArmsTargetManager::getCurrentBodyState() const
@@ -270,6 +270,9 @@ namespace arms_ros2_control::command
         rclcpp::Publisher<geometry_msgs::msg::Pose>::SharedPtr pub_right_target,
         rclcpp::Publisher<geometry_msgs::msg::PoseStamped>::SharedPtr pub_right_target_stamped)
     {
+        head_marker_only_ = node_->declare_parameter<bool>("head_marker_only", false);
+        head_cartesian_publisher_ = pub_left_target_stamped;
+        if (head_marker_only_) current_mode_ = MarkerState::CONTINUOUS;
         marker_factory_ = std::make_unique<MarkerFactory>(
             node_, marker_fixed_frame_, disable_auto_update_states_);
 
@@ -595,7 +598,7 @@ namespace arms_ros2_control::command
             if (head_marker_ && head_marker_->isEnabled())
             {
                 geometry_msgs::msg::Pose clamped_pose = transformed_pose;
-                bool was_clamped = head_marker_->clampPoseRotation(clamped_pose);
+                bool was_clamped = !head_marker_only_ && head_marker_->clampPoseRotation(clamped_pose);
                 head_marker_->setPose(clamped_pose);
 
                 if (was_clamped && server_ && isStateDisabled(current_controller_state_))
@@ -606,7 +609,8 @@ namespace arms_ros2_control::command
 
                 if (shouldStreamPoseCommands())
                 {
-                    head_marker_->publishTargetJointAngles();
+                    if (head_marker_only_) publishHeadCartesianTarget();
+                    else head_marker_->publishTargetJointAngles();
                 }
             }
         }
@@ -683,7 +687,8 @@ namespace arms_ros2_control::command
         {
             if (head_marker_ && head_marker_->isEnabled())
             {
-                head_marker_->publishTargetJointAngles(true);
+                if (head_marker_only_) publishHeadCartesianTarget();
+                else head_marker_->publishTargetJointAngles(true);
             }
             return;
         }
@@ -714,6 +719,17 @@ namespace arms_ros2_control::command
             right_arm_marker_->publishTargetPose(true, true);
             return;
         }
+    }
+
+    void ArmsTargetManager::publishHeadCartesianTarget()
+    {
+        if (!head_cartesian_publisher_ || !head_marker_ ||
+            !head_marker_->isPoseInitialized() || current_controller_state_ != 3) return;
+        geometry_msgs::msg::PoseStamped target;
+        target.header.frame_id = marker_fixed_frame_;
+        target.header.stamp = node_->now();
+        target.pose = head_marker_->getPose();
+        head_cartesian_publisher_->publish(target);
     }
 
     void ArmsTargetManager::sendDualArmTargetPose()
@@ -1258,13 +1274,17 @@ namespace arms_ros2_control::command
             return;
         }
 
-        if (!isStateDisabled(current_controller_state_))
+        if (!head_marker_only_ && !isStateDisabled(current_controller_state_))
         {
             return;
         }
 
+        const bool was_initialized = head_marker_->isPoseInitialized();
         geometry_msgs::msg::Pose updated_pose = head_marker_->updateFromJointState(
             joint_msg, isStateDisabled(current_controller_state_));
+
+        if (head_marker_only_ && !was_initialized && head_marker_->isPoseInitialized())
+            updateMarkerShape();
 
         setServerPose("head_target", updated_pose);
         markPendingChanges();

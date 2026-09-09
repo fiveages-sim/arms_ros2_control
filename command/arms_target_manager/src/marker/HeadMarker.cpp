@@ -42,6 +42,8 @@ namespace arms_ros2_control::command
 
     void HeadMarker::initialize()
     {
+        cartesian_mode_ = node_->has_parameter("head_marker_only") &&
+            node_->get_parameter("head_marker_only").as_bool();
         // 读取是否启用头部控制
         node_->declare_parameter<bool>("enable_head_control", false);
         enable_head_control_ = node_->get_parameter("enable_head_control").as_bool();
@@ -187,6 +189,11 @@ namespace arms_ros2_control::command
             joints_to_use.insert("head_yaw");
         }
 
+        if (cartesian_mode_)
+        {
+            return marker_factory_->createArmMarker(name, "Head Target", pose, "red",
+                MarkerState::CONTINUOUS, enable_interaction && pose_initialized_);
+        }
         return marker_factory_->createHeadMarker(name, pose, enable_interaction, joints_to_use);
     }
 
@@ -397,6 +404,22 @@ namespace arms_ros2_control::command
         const sensor_msgs::msg::JointState::ConstSharedPtr& joint_msg,
         bool is_state_disabled)
     {
+        if (cartesian_mode_)
+        {
+            if (is_state_disabled && pose_initialized_) return head_pose_;
+            try
+            {
+                const auto transform = tf_buffer_->lookupTransform(
+                    frame_id_, head_link_name_, tf2::TimePointZero);
+                head_pose_.position.x = transform.transform.translation.x;
+                head_pose_.position.y = transform.transform.translation.y;
+                head_pose_.position.z = transform.transform.translation.z;
+                head_pose_.orientation = transform.transform.rotation;
+                pose_initialized_ = true;
+            }
+            catch (const tf2::TransformException&) {}
+            return head_pose_;
+        }
         // 先检查状态：如果状态禁用，只更新位置（不进行节流检查，因为位置更新是必要的）
         if (is_state_disabled)
         {
@@ -640,4 +663,3 @@ namespace arms_ros2_control::command
         return false;
     }
 } // namespace arms_ros2_control::command
-
