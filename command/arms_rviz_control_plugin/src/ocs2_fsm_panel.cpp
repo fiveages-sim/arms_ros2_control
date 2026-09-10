@@ -337,13 +337,9 @@ namespace arms_rviz_control_plugin
         upper_button_layout_->addWidget(pair_block, 1, 0);
 
         wbc_layout_->addLayout(upper_button_layout_.get());
-        wbc_layout_->addWidget(ocs2_to_hold_wbc_btn, 0, Qt::AlignHCenter);
+        wbc_layout_->addWidget(ocs2_to_hold_wbc_btn);
         wbc_container_->setFixedSize(panel_width, wbc_container_->sizeHint().height());
         button_group_->setFixedSize(panel_width, wbc_container_->height());
-        button_group_->ensurePolished();
-        const auto button_margins = button_layout->contentsMargins();
-        ocs2_to_hold_wbc_btn->setFixedWidth(button_group_->contentsRect().width()
-            - button_margins.left() - button_margins.right());
 
         main_layout->addWidget(wbc_container_.get(), 0, Qt::AlignHCenter);
 
