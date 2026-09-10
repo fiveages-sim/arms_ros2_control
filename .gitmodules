@@ -69,4 +69,4 @@
 [submodule "hardwares/wuji_ros2_control"]
 	path = hardwares/wuji_ros2_control
 	url = git@github.com:fiveages-sim/wuji-ros2-control.git
-	branch = feature/wujihand2
+	branch = main
