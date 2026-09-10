@@ -87,10 +87,13 @@ public:
     void resetRightEndEffectorTarget(
         const vector_t& right_ee_pose, bool update_target_trajectory = true);
 
-    /** Body pose (7: x,y,z, qx,qy,qz,qw) for indices [14:21] when using wheel-humanoid 21-dim layout. */
+    /** Optional body pose block (7: x,y,z, qx,qy,qz,qw). */
     void setBodyPoseReference(const vector_t& body_pose_xyzw_7);
     /** Update only body target (keep arm targets unchanged), optionally pushing trajectory to MPC. */
     void setBodyPoseTargetOnly(const vector_t& body_pose_xyzw_7, bool update_target_trajectory = true);
+    /** Optional head pose block, with the same cache/update semantics as body. */
+    void setHeadPoseReference(const vector_t& head_pose_xyzw_7);
+    void setHeadPoseTargetOnly(const vector_t& head_pose_xyzw_7, bool update_target_trajectory = true);
     /** Publish cached current targets for visualization/marker refresh, without modifying MPC targets. */
     void publishCurrentTargetsFromCache();
 
@@ -108,15 +111,18 @@ public:
      */
     void markLeftCouplingCommand();
 
-    /** Build full reference state for SwitchedHumanoidReferenceManager (dual arms + body). */
-    static vector_t assembleWheelHumanoidTargetState(const vector_t& left_pose7_xyzw, const vector_t& right_pose7_xyzw,
-                                                     const vector_t& body_pose7_xyzw);
+    /** Build the explicit dual-arm + optional body/head layout. */
+    static vector_t assembleWheelHumanoidTargetState(
+        const vector_t& left_pose7_xyzw, const vector_t& right_pose7_xyzw,
+        const vector_t& body_pose7_xyzw, const vector_t& head_pose7_xyzw,
+        bool body_target_enabled, bool head_target_enabled);
 
 private:
     void updateParam();
     void leftPoseCallback(geometry_msgs::msg::Pose::SharedPtr msg);
     void rightPoseCallback(geometry_msgs::msg::Pose::SharedPtr msg);
     void bodyPoseCallback(geometry_msgs::msg::Pose::SharedPtr msg);
+    void headPoseCallback(geometry_msgs::msg::Pose::SharedPtr msg);
     void leftPoseStampedCallback(geometry_msgs::msg::PoseStamped::SharedPtr msg);
     void rightPoseStampedCallback(geometry_msgs::msg::PoseStamped::SharedPtr msg);
     void leftTwistCallback(geometry_msgs::msg::Twist::SharedPtr msg);
@@ -126,6 +132,7 @@ private:
     void bodyRelativeCallback(geometry_msgs::msg::TwistStamped::SharedPtr msg);
     void dualTargetStampedCallback(nav_msgs::msg::Path::SharedPtr msg);
     void bodyPoseStampedCallback(geometry_msgs::msg::PoseStamped::SharedPtr msg);
+    void headPoseStampedCallback(geometry_msgs::msg::PoseStamped::SharedPtr msg);
     void pathCallback(nav_msgs::msg::Path::SharedPtr msg);
     void runInterpolatedPathTrajectory(
         const std::vector<vector_t>& left_arm_waypoints,
@@ -139,20 +146,24 @@ private:
     void updateTrajectoryWithBody(const vector_t& previous_left_target_state, const vector_t& previous_right_target_state,
                                   const vector_t& previous_body_target_state);
     void updateBodyTrajectory(const vector_t& previous_body_target_state);
+    void updateHeadTrajectory(const vector_t& previous_head_target_state);
 
     [[nodiscard]] int effectiveTargetStateDim() const;
     [[nodiscard]] vector_t identityBodyPose7() const;
     [[nodiscard]] vector_t bodySegmentForAssembly() const;
+    [[nodiscard]] bool isWheelHumanoidTargetLayout() const;
     [[nodiscard]] vector_t assembleDualArmReferenceState(const vector_t& left7, const vector_t& right7) const;
 
     void leftPoseStampedPoseCallback(geometry_msgs::msg::Pose::SharedPtr msg);
     void rightPoseStampedPoseCallback(geometry_msgs::msg::Pose::SharedPtr msg);
     void bodyPoseStampedPoseCallback(geometry_msgs::msg::Pose::SharedPtr msg);
+    void headPoseStampedPoseCallback(geometry_msgs::msg::Pose::SharedPtr msg);
 
     /** Apply absolute 7D target [x,y,z,qx,qy,qz,qw]. interpolate=true uses moveL buffer path. */
     void applyLeftAbsoluteTarget(const vector_t& goal7, bool interpolate);
     void applyRightAbsoluteTarget(const vector_t& goal7, bool interpolate);
     void applyBodyAbsoluteTarget(const vector_t& goal7, bool interpolate);
+    void applyHeadAbsoluteTarget(const vector_t& goal7, bool interpolate);
 
     /** Compose one-shot relative Twist (linear=m, angular=rad RPY) onto base7. */
     [[nodiscard]] static vector_t composeTwistDelta(const vector_t& base7,
@@ -202,6 +213,7 @@ private:
     rclcpp::Subscription<geometry_msgs::msg::Pose>::SharedPtr left_pose_subscriber_;
     rclcpp::Subscription<geometry_msgs::msg::Pose>::SharedPtr right_pose_subscriber_;
     rclcpp::Subscription<geometry_msgs::msg::Pose>::SharedPtr body_pose_subscriber_;
+    rclcpp::Subscription<geometry_msgs::msg::Pose>::SharedPtr head_pose_subscriber_;
     rclcpp::Subscription<geometry_msgs::msg::PoseStamped>::SharedPtr left_pose_stamped_subscriber_;
     rclcpp::Subscription<geometry_msgs::msg::PoseStamped>::SharedPtr right_pose_stamped_subscriber_;
     rclcpp::Subscription<geometry_msgs::msg::Twist>::SharedPtr left_twist_subscriber_;
@@ -211,6 +223,7 @@ private:
     rclcpp::Subscription<geometry_msgs::msg::TwistStamped>::SharedPtr body_relative_subscriber_;
     rclcpp::Subscription<nav_msgs::msg::Path>::SharedPtr dual_target_stamped_subscriber_;
     rclcpp::Subscription<geometry_msgs::msg::PoseStamped>::SharedPtr body_pose_stamped_subscriber_;
+    rclcpp::Subscription<geometry_msgs::msg::PoseStamped>::SharedPtr head_pose_stamped_subscriber_;
     rclcpp::Subscription<nav_msgs::msg::Path>::SharedPtr path_subscriber_;
 
     rclcpp::Service<arms_ros2_control_msgs::srv::ExecutePath>::SharedPtr execute_path_service_;
@@ -218,6 +231,7 @@ private:
     rclcpp::Publisher<geometry_msgs::msg::PoseStamped>::SharedPtr left_target_publisher_;
     rclcpp::Publisher<geometry_msgs::msg::PoseStamped>::SharedPtr right_target_publisher_;
     rclcpp::Publisher<geometry_msgs::msg::PoseStamped>::SharedPtr body_target_publisher_;
+    rclcpp::Publisher<geometry_msgs::msg::PoseStamped>::SharedPtr head_target_publisher_;
 
     std::shared_ptr<tf2_ros::Buffer> tf_buffer_;
     std::shared_ptr<tf2_ros::TransformListener> tf_listener_;
@@ -237,8 +251,9 @@ private:
 
     ArmReferenceBuffer left_arm_reference_buffer_;
     ArmReferenceBuffer right_arm_reference_buffer_;
-    /** Body/waist moveL buffer (wheel-humanoid 21-dim); same layout as arm buffers. */
+    /** Optional body/head moveL buffers; same representation as arm buffers. */
     ArmReferenceBuffer body_reference_buffer_;
+    ArmReferenceBuffer head_reference_buffer_;
 
     /** True if any left/right/body reference buffer is still active at time. */
     [[nodiscard]] bool anyReferenceBufferActive(double time) const;
@@ -272,6 +287,7 @@ private:
     vector_t left_target_state_;
     vector_t right_target_state_;
     vector_t body_pose_7_xyzw_;
+    vector_t head_pose_7_xyzw_;
 
     geometry_msgs::msg::Twist left_latched_twist_{};
     geometry_msgs::msg::Twist right_latched_twist_{};

@@ -53,6 +53,8 @@ ROS 2 接口包：[`arms_ros2_control`](../..) 系统所使用的 **msg / srv / 
 | `has_custom_joint_lock` | `bool` | 自定义关节锁定 |
 | `has_bimanual_coupling` | `bool` | 双臂耦合 |
 | `body_tracking_ee_enabled` | `bool` | 身体跟踪末端是否启用 |
+| `head_tracking_ee_enabled` | `bool` | Head 6D 跟踪是否启用 |
+| `head_midpoint_gaze_enabled` | `bool` | 双手末端中点注视能力 |
 | `has_home_joint_reference` | `bool` | HOME 关节参考约束 |
 
 ### `WbcCurrentState`（msg）
@@ -62,7 +64,7 @@ ROS 2 接口包：[`arms_ros2_control`](../..) 系统所使用的 **msg / srv / 
 | 字段 | 类型 | 取值 |
 |------|------|------|
 | `base_state` | `uint8` | `BASE_LOCKED=0` / `BASE_UNLOCKED=1` |
-| `body_state` | `uint8` | `BODY_FREE=0` / `VERTICAL=1` / `TRACKING=2` / `LOCKED=3` / `HEAD_COUPLED=4` / `CUSTOM_LOCKED=5` |
+| `body_state` | `uint8` | `BODY_FREE=0` / `VERTICAL=1` / `TRACKING=2` / `LOCKED=3` / `CUSTOM_LOCKED=5`（4 为旧锁头值，不再发布） |
 | `bimanual_state` | `uint8` | `BIMANUAL_INDEPENDENT=0` / `BIMANUAL_COUPLED=1` |
 | `left_arm_state` / `right_arm_state` | `uint8` | `ARM_DISABLED=0` / `ARM_ENABLED=1` |
 | `home_joint_reference_enabled` | `bool` | HOME 关节参考约束是否打开 |
@@ -180,3 +182,13 @@ ROS 2 接口包：[`arms_ros2_control`](../..) 系统所使用的 **msg / srv / 
 - `std_msgs`
 - `geometry_msgs`
 - `nav_msgs`
+
+### 头部模式
+
+`WbcCurrentState.head_state`：`HEAD_DISABLED=0`（禁用）、`HEAD_TRACKING=1`（追踪，保留 `HEAD_ENABLED=1` 别名）、`HEAD_GAZE=2`（注视双手末端中点）、`HEAD_FORWARD=3`（原锁头的头腰联动及腰部约束）。
+
+`body_state` 回报选择的身体模式。朝前期间由原锁头约束覆盖身体模式；退出朝前后恢复该身体选择。面板在朝前期间禁用身体下拉框，身体 marker 同时隐藏。身体模式不再提供「锁头」。
+
+`WbcCapability.head_midpoint_gaze_enabled` 表示已配置中点注视能力。`head_midpoint_gaze_active` 仅在 `HEAD_GAZE` 生效时为真，与身体自定义模式无关；该字段表示任务激活，不保证已对准或目标可达。`HEAD_DISABLE` 也会停止注视。
+
+消息升级后须重新构建并统一重启发布端和订阅端；OCS2 的 `ModeSchedule.mode_sequence` 和 `MpcObservation.mode` 已扩为 `uint16`，以容纳四种头部状态。

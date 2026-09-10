@@ -117,14 +117,6 @@ namespace arms_ros2_control::command
         }
 
         /**
-         * 检查节点是否存在
-         * @param node ROS节点指针
-         * @param targetNodeName 目标节点名称
-         * @return true如果节点存在，false否则
-         */
-        bool checkNodeExists(const std::shared_ptr<rclcpp::Node>& node, const std::string& targetNodeName);
-
-        /**
          * FSM命令回调函数（用于跟踪FSM状态）
          * 由外部统一订阅后调用，避免重复订阅
          * @param msg FSM命令消息
@@ -179,6 +171,10 @@ namespace arms_ros2_control::command
          * @param msg VR 头显 pose 消息
          */
         void vrHeadCallback(geometry_msgs::msg::Pose::SharedPtr msg);
+        void robotHeadPoseCallback(geometry_msgs::msg::PoseStamped::ConstSharedPtr msg);
+        bool headTrackingReady() const;
+        void stopHeadTracking();
+        void publishHeadTarget();
 
         /**
          * 摇杆轴值回调函数（合并处理左右摇杆）
@@ -580,6 +576,20 @@ namespace arms_ros2_control::command
         Eigen::Vector3d vr_head_position_ = Eigen::Vector3d::Zero();
         Eigen::Quaterniond vr_head_orientation_ = Eigen::Quaterniond::Identity();
 
+        // All callbacks use the node's default mutually-exclusive callback group.
+        rclcpp::Subscription<geometry_msgs::msg::PoseStamped>::SharedPtr sub_robot_head_;
+        rclcpp::Publisher<geometry_msgs::msg::Pose>::SharedPtr pub_head_target_;
+        geometry_msgs::msg::PoseStamped robot_head_pose_;
+        bool has_robot_head_pose_{false};
+        bool has_vr_head_pose_{false};
+        bool head_tracking_active_{false};
+        Eigen::Vector3d vr_head_base_position_ = Eigen::Vector3d::Zero();
+        Eigen::Quaterniond vr_head_base_orientation_ = Eigen::Quaterniond::Identity();
+        Eigen::Vector3d robot_head_base_position_ = Eigen::Vector3d::Zero();
+        Eigen::Quaterniond robot_head_base_orientation_ = Eigen::Quaterniond::Identity();
+        // Last published command with its current-pose frame, not measured pose.
+        std::optional<geometry_msgs::msg::PoseStamped> last_head_target_;
+
         // 最后实际发布 frame（ee_frame_id_）的 Pose，仅用于变化检测
         Eigen::Vector3d prev_calculated_left_position_ = Eigen::Vector3d::Zero();
         Eigen::Quaterniond prev_calculated_left_orientation_ = Eigen::Quaterniond::Identity();
@@ -790,7 +800,6 @@ namespace arms_ros2_control::command
         std::shared_ptr<tf2_ros::TransformListener> tf_listener_;
 
         // 常量
-        static const std::string XR_NODE_NAME;
         static const double POSITION_THRESHOLD;
         static const double ORIENTATION_THRESHOLD;
         // 连续多少帧原始目标逐位相同才判定为上游冻结。实测冻结长度呈双峰分布

@@ -35,6 +35,8 @@ struct Ocs2VisualizerConfig {
     std::string right_ee_frame;
     /// Body/torso frame for reference FK (wheel humanoid). Empty: callers use identity pose for body reference block.
     std::string body_frame;
+    /// Optional head frame; publish current pose only when present in the model.
+    std::string head_frame;
     std::optional<PinocchioGeometryInterface> pinocchio_geometry;
     scalar_t self_collision_activation_distance{0};
 };
@@ -59,11 +61,12 @@ public:
     /** Min distance from the last successful publishDistances under the mutex. */
     scalar_t getLastMinDistance() const;
 
-    /** One FK into RT Data; extract left / right / body (7-vectors). No ROS publish. */
+    /** One FK into RT Data; extract left / right / body / head (7-vectors). No ROS publish. */
     struct EndEffectorPoses {
         vector_t left = vector_t::Zero(7);
         vector_t right = vector_t::Zero(7);
         vector_t body = vector_t::Zero(7);
+        vector_t head = vector_t::Zero(7);
     };
     EndEffectorPoses computeEndEffectorPoses(const vector_t& state) const;
 
@@ -99,6 +102,7 @@ private:
     rclcpp::Publisher<geometry_msgs::msg::PoseStamped>::SharedPtr left_end_effector_pose_publisher_;
     rclcpp::Publisher<geometry_msgs::msg::PoseStamped>::SharedPtr right_end_effector_pose_publisher_;
     rclcpp::Publisher<geometry_msgs::msg::PoseStamped>::SharedPtr body_frame_pose_publisher_;
+    rclcpp::Publisher<geometry_msgs::msg::PoseStamped>::SharedPtr head_frame_pose_publisher_;
 
     std::unique_ptr<GeometryInterfaceVisualization> geometry_visualization_;
     /** Guards geometry_visualization_ (viz-thread publishDistances / getLastMinDistance). */
@@ -123,9 +127,11 @@ private:
     pinocchio::FrameIndex left_ee_frame_id_{0};
     pinocchio::FrameIndex right_ee_frame_id_{0};
     pinocchio::FrameIndex body_frame_id_{0};
+    pinocchio::FrameIndex head_frame_id_{0};
     bool left_ee_frame_valid_{false};
     bool right_ee_frame_valid_{false};
     bool body_frame_valid_{false};
+    bool head_frame_valid_{false};
 
     double pose_publish_period_sec_{0.02};
     mutable rclcpp::Time last_pose_publish_time_{0, 0, RCL_ROS_TIME};

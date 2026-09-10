@@ -26,7 +26,6 @@
 namespace arms_ros2_control::command
 {
     // 静态常量定义
-    const std::string VRInputHandler::XR_NODE_NAME = "/xr_target_node";
     const double VRInputHandler::POSITION_THRESHOLD = 0.01; // 1cm threshold for position changes
     const double VRInputHandler::ORIENTATION_THRESHOLD = 0.005; // threshold for orientation changes (quaternion angle)
     const int VRInputHandler::STALE_MIN_FROZEN_FRAMES = 2; // 连续 >=2 帧逐位相同即判定上游冻结
@@ -138,6 +137,11 @@ namespace arms_ros2_control::command
         };
         sub_head_ = node_->create_subscription<geometry_msgs::msg::Pose>(
             "/teleop/head_pose", 10, vrHeadCallback);
+
+        sub_robot_head_ = node_->create_subscription<geometry_msgs::msg::PoseStamped>(
+            "head_current_pose", 10,
+            [this](geometry_msgs::msg::PoseStamped::ConstSharedPtr msg) { robotHeadPoseCallback(msg); });
+        pub_head_target_ = node_->create_publisher<geometry_msgs::msg::Pose>("head_target", 10);
 
         // 创建按钮事件订阅器（Int32类型）
         auto controllerStateCallback = [this](const std_msgs::msg::Int32::SharedPtr msg)
@@ -450,8 +454,7 @@ namespace arms_ros2_control::command
         mirror_mode_.store(false);
         RCLCPP_INFO(node_->get_logger(), "🔘 [%s] 已切换至非镜像模式", tag);
         is_update_mode_.store(false);
-        // 目标流在此中断/重启，清空斜坡，避免用陈旧输出量缺口
-        resetStaleCatchUpRamp();
+        stopHeadTracking();
         RCLCPP_INFO(node_->get_logger(),
                     "🔘 [%s] 自动切换到 STORAGE 模式 - 正在更新映射尺度，请重新进入 UPDATE 模式",
                     tag);
@@ -817,20 +820,6 @@ namespace arms_ros2_control::command
         return current_fsm_state_.load();
     }
 
-    bool VRInputHandler::checkNodeExists(const std::shared_ptr<rclcpp::Node>& node, const std::string& targetNodeName)
-    {
-        std::vector<std::string> nodeNames = node->get_node_graph_interface()->get_node_names();
-
-        for (const auto& name : nodeNames)
-        {
-            if (name == targetNodeName)
-            {
-                return true;
-            }
-        }
-        return false;
-    }
-
     void VRInputHandler::enable()
     {
         enabled_.store(true);
@@ -846,6 +835,7 @@ namespace arms_ros2_control::command
     void VRInputHandler::disable()
     {
         enabled_.store(false);
+        stopHeadTracking();
         left_grip_direction_suppressed_.store(false);
         body_mode_request_pending_.store(false);
         requested_body_state_.store(-1);
@@ -904,24 +894,121 @@ namespace arms_ros2_control::command
 
     void VRInputHandler::vrHeadCallback(const geometry_msgs::msg::Pose::SharedPtr msg)
     {
-        Eigen::Matrix4d pose = poseMsgToMatrix(msg);
-        matrixToPosOri(pose, vr_head_position_, vr_head_orientation_);
+        const Eigen::Vector3d position(msg->position.x, msg->position.y, msg->position.z);
+        const Eigen::Quaterniond orientation(
+            msg->orientation.w, msg->orientation.x, msg->orientation.y, msg->orientation.z);
+        if (!position.allFinite() || !orientation.coeffs().allFinite() || orientation.norm() < 1e-9)
+        {
+            has_vr_head_pose_ = false;
+            stopHeadTracking();
+            return;
+        }
+        vr_head_position_ = position;
+        vr_head_orientation_ = orientation.normalized();
+        has_vr_head_pose_ = true;
+        publishHeadTarget();
+    }
+
+    void VRInputHandler::robotHeadPoseCallback(geometry_msgs::msg::PoseStamped::ConstSharedPtr msg)
+    {
+        const auto& p = msg->pose.position;
+        const auto& q = msg->pose.orientation;
+        const Eigen::Quaterniond orientation(q.w, q.x, q.y, q.z);
+        if (msg->header.frame_id.empty() || !Eigen::Vector3d(p.x, p.y, p.z).allFinite() ||
+            !orientation.coeffs().allFinite() || orientation.norm() < 1e-9)
+        {
+            has_robot_head_pose_ = false;
+            stopHeadTracking();
+            return;
+        }
+        robot_head_pose_ = *msg;
+        const auto normalized = orientation.normalized();
+        robot_head_pose_.pose.orientation.x = normalized.x();
+        robot_head_pose_.pose.orientation.y = normalized.y();
+        robot_head_pose_.pose.orientation.z = normalized.z();
+        robot_head_pose_.pose.orientation.w = normalized.w();
+        has_robot_head_pose_ = true;
+    }
+
+    bool VRInputHandler::headTrackingReady() const
+    {
+        return target_manager_ && isFullBodyMode() && enabled_.load() && is_update_mode_.load() &&
+            resolvedFsmState() == 3 &&
+            target_manager_->getCurrentHeadState() ==
+                arms_ros2_control_msgs::msg::WbcCurrentState::HEAD_ENABLED &&
+            has_vr_head_pose_ && has_robot_head_pose_;
+    }
+
+    void VRInputHandler::stopHeadTracking()
+    {
+        head_tracking_active_ = false;
+        // Preserve the commanded equilibrium across pauses and compliant displacement.
+        if (target_manager_)
+        {
+            target_manager_->setHeadVrActive(false);
+        }
+    }
+
+    void VRInputHandler::publishHeadTarget()
+    {
+        if (!headTrackingReady())
+        {
+            stopHeadTracking();
+            return;
+        }
+        if (!head_tracking_active_)
+        {
+            const auto& base = last_head_target_ ? *last_head_target_ : robot_head_pose_;
+            const auto& p = base.pose.position;
+            const auto& q = base.pose.orientation;
+            if (!transformPoseBetweenFrames("head", Eigen::Vector3d(p.x, p.y, p.z),
+                    Eigen::Quaterniond(q.w, q.x, q.y, q.z), base.header.frame_id, vr_follow_frame_,
+                    robot_head_base_position_, robot_head_base_orientation_))
+            {
+                return;
+            }
+            vr_head_base_position_ = vr_head_position_;
+            vr_head_base_orientation_ = vr_head_orientation_;
+        }
+
+        // Both upstream wrappers already convert OpenXR axes to robot axes.
+        // Align those axes with vr_follow_frame, independently of hand scale/mirror settings.
+        const Eigen::Vector3d position = robot_head_base_position_ +
+            (vr_head_position_ - vr_head_base_position_);
+        const Eigen::Quaterniond orientation = (vr_head_orientation_ *
+            vr_head_base_orientation_.inverse() * robot_head_base_orientation_).normalized();
+        Eigen::Vector3d publishedPosition;
+        Eigen::Quaterniond publishedOrientation;
+        const auto& frame = robot_head_pose_.header.frame_id;
+        if (!transformPoseBetweenFrames("head", position, orientation, vr_follow_frame_, frame,
+                publishedPosition, publishedOrientation))
+        {
+            stopHeadTracking();
+            return;
+        }
+        geometry_msgs::msg::PoseStamped target;
+        target.header.frame_id = frame;
+        target.header.stamp = node_->now();
+        target.pose.position.x = publishedPosition.x();
+        target.pose.position.y = publishedPosition.y();
+        target.pose.position.z = publishedPosition.z();
+        target.pose.orientation.x = publishedOrientation.x();
+        target.pose.orientation.y = publishedOrientation.y();
+        target.pose.orientation.z = publishedOrientation.z();
+        target.pose.orientation.w = publishedOrientation.w();
+        target_manager_->setHeadVrActive(true);
+        pub_head_target_->publish(target.pose);
+        last_head_target_ = target;
+        head_tracking_active_ = true;
     }
 
     void VRInputHandler::vrLeftCallback(const geometry_msgs::msg::Pose::SharedPtr msg)
     {
-        if (checkNodeExists(node_, XR_NODE_NAME) && !enabled_.load())
+        if (!enabled_.load())
         {
             RCLCPP_INFO_THROTTLE(node_->get_logger(), *node_->get_clock(), 5000,
-                                 "🕹️🕶️🕹️ xr_target_node found, VR control ENABLED!");
+                                 "🕹️🕶️🕹️ VR left pose received, VR control ENABLED!");
             this->enable();
-        }
-        else if (!checkNodeExists(node_, XR_NODE_NAME) && enabled_.load())
-        {
-            this->disable();
-            RCLCPP_WARN_THROTTLE(node_->get_logger(), *node_->get_clock(), 5000,
-                                 "🕹️🕶️🕹️ xr_target_node not found, VR control DISABLED!");
-            return;
         }
 
         // 左话题接收的是左手柄数据
@@ -2375,6 +2462,10 @@ namespace arms_ros2_control::command
             return;
         }
 
+        if (msg->head_state != arms_ros2_control_msgs::msg::WbcCurrentState::HEAD_ENABLED)
+        {
+            stopHeadTracking();
+        }
         home_joint_reference_enabled_.store(msg->home_joint_reference_enabled);
 
         updateArmWbcVrState(
@@ -3358,8 +3449,7 @@ namespace arms_ros2_control::command
                 {
                     // 切换到存储模式
                     is_update_mode_.store(false);
-                    // 目标流在此中断/重启，清空斜坡，避免用陈旧输出量缺口
-                    resetStaleCatchUpRamp();
+                    stopHeadTracking();
                     RCLCPP_INFO(node_->get_logger(), "🔘 [右摇杆按钮] 按下 - 功能: 切换UPDATE/STORAGE模式 - 操作: 切换到STORAGE模式（准备存储新的基准位姿）");
                 }
                 break;
@@ -3510,8 +3600,7 @@ namespace arms_ros2_control::command
                 if (is_update_mode_.load())
                 {
                     is_update_mode_.store(false);
-                    // 目标流在此中断/重启，清空斜坡，避免用陈旧输出量缺口
-                    resetStaleCatchUpRamp();
+                    stopHeadTracking();
                     // 重置摇杆累积偏移
                     left_thumbstick_offset_ = Eigen::Vector3d::Zero();
                     right_thumbstick_offset_ = Eigen::Vector3d::Zero();
@@ -3862,6 +3951,10 @@ namespace arms_ros2_control::command
             return;
         }
 
+        if (new_name != "OCS2")
+        {
+            stopHeadTracking();
+        }
         int32_t new_state = old_state;
         if (new_name == "HOME")
         {
@@ -3897,8 +3990,7 @@ namespace arms_ros2_control::command
                 if (is_update_mode_.load())
                 {
                     is_update_mode_.store(false);
-                    // 目标流在此中断/重启，清空斜坡，避免用陈旧输出量缺口
-                    resetStaleCatchUpRamp();
+                    stopHeadTracking();
                     // 重置摇杆累积偏移
                     left_thumbstick_offset_ = Eigen::Vector3d::Zero();
                     right_thumbstick_offset_ = Eigen::Vector3d::Zero();
