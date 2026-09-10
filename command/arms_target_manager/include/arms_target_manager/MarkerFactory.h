@@ -79,7 +79,9 @@ namespace arms_ros2_control::command
             const std::string& name,
             const geometry_msgs::msg::Pose& pose,
             bool enable_interaction,
-            const std::set<std::string>& available_joints) const;
+            const std::set<std::string>& available_joints,
+            bool full_6d,
+            MarkerState mode) const;
 
     private:
 

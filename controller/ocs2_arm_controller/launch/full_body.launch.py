@@ -134,6 +134,8 @@ def launch_setup(context, *args, **kwargs):
                 {"use_sim_time": ctx.use_sim_time},
                 # WBC MOVEJ has no IK MoveL; keep arm markers hidden (follow actual pose).
                 {"enable_movej_cartesian_markers": not wbc_available},
+                # Full-body WBC capability gate; shared YAML stays false for split_body.
+                {"enable_wbc_head_tracking_marker": wbc_available},
             ],
         )
 
