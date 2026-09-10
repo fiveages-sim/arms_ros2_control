@@ -245,9 +245,31 @@ namespace adaptive_gripper_controller
         pending_target_switch_.store(-1, std::memory_order_relaxed);
         pending_percent_command_.store(-1.0, std::memory_order_relaxed);
 
-        // 注意：夹爪位置计算需要等待 robot_description 解析完成
-        // 暂时使用配置的初始值作为关闭位置
-        target_position_ = config_initial_position_;
+        // 激活时保持夹爪的实测位置。不能使用配置中的初始值作为运动
+        // 目标，否则控制器第一次update()会把默认值（通常为0，即闭合）
+        // 写入硬件，导致夹爪在没有用户命令时移动。
+        const auto current_position =
+            gripper_interfaces_.position_state_interface_->get().get_optional();
+        if (!current_position || !std::isfinite(*current_position))
+        {
+            RCLCPP_ERROR(get_node()->get_logger(),
+                         "Cannot activate gripper controller without a valid current position");
+            gripper_interfaces_.clear();
+            return controller_interface::CallbackReturn::ERROR;
+        }
+        target_position_ = *current_position;
+        if (!gripper_interfaces_.position_command_interface_->get().set_value(target_position_))
+        {
+            RCLCPP_ERROR(get_node()->get_logger(),
+                         "Failed to initialize gripper command to current position %.6f",
+                         target_position_);
+            gripper_interfaces_.clear();
+            return controller_interface::CallbackReturn::ERROR;
+        }
+
+        RCLCPP_INFO(get_node()->get_logger(),
+                    "Holding current gripper position on activation: %.6f",
+                    target_position_);
 
         return controller_interface::CallbackReturn::SUCCESS;
     }

@@ -2,7 +2,8 @@ import os
 import sys
 
 from launch import LaunchDescription
-from launch.actions import DeclareLaunchArgument, OpaqueFunction
+from launch.actions import DeclareLaunchArgument, OpaqueFunction, RegisterEventHandler
+from launch.event_handlers import OnProcessExit
 from launch_ros.actions import Node
 
 from robot_common_launch import (
@@ -59,6 +60,7 @@ def launch_setup(context, *args, **kwargs):
     ft_controllers, ft_spawners = ocs2_common.setup_ft_broadcasters(ctx)
 
     enable_body = context.launch_configurations.get("enable_body", "true").lower() == "true"
+    body_controllers = []
     body_spawners = []
     joint_controller_names = ["ocs2_arm_controller"]
     if enable_body:
@@ -125,13 +127,43 @@ def launch_setup(context, *args, **kwargs):
         extra_rviz_parameters=[{"wbc_available": False}],
     )
 
+    # In split-body mode joint_state_broadcaster may publish before the separately
+    # spawned body controller exists.  The RViz panel checks waist_lifting_enabled
+    # on its first joint-state message, so start RViz only after body spawning has
+    # completed.  This removes the startup race without serializing unrelated
+    # controllers.
+    if ctx.rviz_only:
+        return [rviz_node] if rviz_node else []
+
+    body_spawner = next(
+        (
+            spawner
+            for controller, spawner in zip(body_controllers, body_spawners)
+            if controller["name"] == "body_joint_controller"
+        ),
+        None,
+    )
+    deferred_rviz = None
+    immediate_rviz = rviz_node
+    if rviz_node and body_spawner:
+        deferred_rviz = RegisterEventHandler(
+            OnProcessExit(target_action=body_spawner, on_exit=[rviz_node])
+        )
+        immediate_rviz = None
+
+    optional_nodes = [arms_target_manager] if arms_target_manager else []
+    # Register before body_spawner is launched so a fast spawner exit cannot be
+    # missed by the event handler.
+    if deferred_rviz:
+        optional_nodes.append(deferred_rviz)
+
     return ocs2_common.assemble_nodes(
         ctx,
-        rviz_node=rviz_node,
+        rviz_node=immediate_rviz,
         controller_stack_nodes=controller_stack_nodes,
         main_spawner=main_spawner,
         extra_spawners=hand_spawners + body_spawners + ft_spawners,
-        optional_nodes=[arms_target_manager] if arms_target_manager else [],
+        optional_nodes=optional_nodes,
     )
 
 
