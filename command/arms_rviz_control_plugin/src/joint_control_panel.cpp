@@ -44,126 +44,6 @@ namespace
         tf2::Matrix3x3(q).getRPY(roll, pitch, yaw);
     }
 
-    // joint_states 名称常为字母序，与 linkerhand ros2_control 中关节顺序不一致；与硬件/控制器约定对齐。
-    int dexterousLinkerHandSortKey(const std::string& joint_name)
-    {
-        std::string n = joint_name;
-        std::transform(n.begin(), n.end(), n.begin(), ::tolower);
-        if (n.find("thumb_joint1") != std::string::npos)
-        {
-            return 0;
-        }
-        if (n.find("thumb_joint2") != std::string::npos)
-        {
-            return 1;
-        }
-        if (n.find("thumb_joint3") != std::string::npos)
-        {
-            return 2;
-        }
-        if (n.find("thumb_joint4") != std::string::npos)
-        {
-            return 3;
-        }
-        if (n.find("rotate_joint") != std::string::npos)
-        {
-            return 4;
-        }
-        if (n.find("gripper_joint") != std::string::npos)
-        {
-            return 5;
-        }
-        if (n.find("index_joint") != std::string::npos)
-        {
-            return 6;
-        }
-        if (n.find("middle_joint") != std::string::npos)
-        {
-            return 7;
-        }
-        if (n.find("ring_joint") != std::string::npos)
-        {
-            return 8;
-        }
-        if (n.find("pinky_joint") != std::string::npos)
-        {
-            return 9;
-        }
-        return 100;
-    }
-
-    bool dexterousLinkerHandJointLess(const std::string& a, const std::string& b)
-    {
-        const int ka = dexterousLinkerHandSortKey(a);
-        const int kb = dexterousLinkerHandSortKey(b);
-        if (ka != kb)
-        {
-            return ka < kb;
-        }
-        return a < b;
-    }
-
-    std::vector<std::string> reorderJointsWithSortedDexterousHands(
-        const std::vector<std::string>& old_order,
-        const std::map<std::string, std::string>& joint_to_category)
-    {
-        std::vector<std::string> left_hand;
-        std::vector<std::string> right_hand;
-        for (const auto& n : old_order)
-        {
-            auto it = joint_to_category.find(n);
-            if (it == joint_to_category.end())
-            {
-                continue;
-            }
-            if (it->second == "left_hand")
-            {
-                left_hand.push_back(n);
-            }
-            else if (it->second == "right_hand")
-            {
-                right_hand.push_back(n);
-            }
-        }
-        std::sort(left_hand.begin(), left_hand.end(), dexterousLinkerHandJointLess);
-        std::sort(right_hand.begin(), right_hand.end(), dexterousLinkerHandJointLess);
-
-        std::vector<std::string> result;
-        result.reserve(old_order.size());
-        bool left_block_written = false;
-        bool right_block_written = false;
-        for (const auto& n : old_order)
-        {
-            auto it = joint_to_category.find(n);
-            const std::string cat = (it != joint_to_category.end()) ? it->second : std::string();
-            if (cat == "left_hand")
-            {
-                if (!left_block_written)
-                {
-                    for (const auto& h : left_hand)
-                    {
-                        result.push_back(h);
-                    }
-                    left_block_written = true;
-                }
-                continue;
-            }
-            if (cat == "right_hand")
-            {
-                if (!right_block_written)
-                {
-                    for (const auto& h : right_hand)
-                    {
-                        result.push_back(h);
-                    }
-                    right_block_written = true;
-                }
-                continue;
-            }
-            result.push_back(n);
-        }
-        return result;
-    }
 } // namespace
 
 namespace arms_rviz_control_plugin
@@ -1772,7 +1652,7 @@ namespace arms_rviz_control_plugin
             if (!param_client->wait_for_service(std::chrono::milliseconds(100)))
             {
                 RCLCPP_DEBUG(node_->get_logger(),
-                             "Parameter service for %s is not available; keeping joint_states order for %s",
+                             "Parameter service for %s is not available; joint order unavailable for %s",
                              controller.c_str(), category.c_str());
                 return {};
             }
@@ -1780,7 +1660,7 @@ namespace arms_rviz_control_plugin
             if (!param_client->has_parameter("joints"))
             {
                 RCLCPP_DEBUG(node_->get_logger(),
-                             "Controller %s has no joints parameter; keeping joint_states order for %s",
+                             "Controller %s has no joints parameter; joint order unavailable for %s",
                              controller.c_str(), category.c_str());
                 return {};
             }
@@ -2821,42 +2701,54 @@ namespace arms_rviz_control_plugin
         // 分类快照（含单臂重归类），后续重排后据此重建映射，避免再次 classifyJoint。
         const auto joint_categories_snapshot = joint_to_category_;
 
-        joint_names_ = reorderJointsWithSortedDexterousHands(joint_names_, joint_categories_snapshot);
-
-        // 仅人体 body 控制器：按 joints 参数重排；单臂已归 left，不会进入此分支。
+        // Body 和灵巧手统一采用实际控制器的 joints 参数顺序。
         std::map<std::string, std::vector<std::string>> controller_joint_order;
         const bool has_body_joints = category_to_joints_.find("body") != category_to_joints_.end() &&
             !category_to_joints_["body"].empty();
-        const bool has_body_controller =
-            category_to_controller_.find("body") != category_to_controller_.end() &&
-            !category_to_controller_["body"].empty();
-        if (has_body_joints && has_body_controller)
+        const auto now = std::chrono::steady_clock::now();
+        for (const std::string category : {"body", "left_hand", "right_hand"})
         {
-            const auto now = std::chrono::steady_clock::now();
-            if (last_body_joint_order_attempt_.time_since_epoch().count() != 0 &&
-                now - last_body_joint_order_attempt_ < std::chrono::milliseconds(500))
+            const auto joints_it = category_to_joints_.find(category);
+            if (joints_it == category_to_joints_.end() || joints_it->second.empty())
             {
-                if (status_label_)
-                {
-                    status_label_->setText("等待 body 控制器 joints 参数...");
-                }
+                continue;
+            }
+            const auto controller_it = category_to_controller_.find(category);
+            if (category == "body" &&
+                (controller_it == category_to_controller_.end() || controller_it->second.empty()))
+            {
+                continue;
+            }
+            if (status_label_)
+            {
+                status_label_->setText(QString::fromStdString(
+                    "等待 " + category + " 控制器 joints 参数及匹配的关节状态..."));
+            }
+            if (last_joint_order_attempt_.time_since_epoch().count() != 0 &&
+                now - last_joint_order_attempt_ < std::chrono::milliseconds(500))
+            {
                 return;
             }
-            last_body_joint_order_attempt_ = now;
 
-            const auto body_order = getControllerJointOrderForCategory("body");
-            if (body_order.empty())
+            const auto order = getControllerJointOrderForCategory(category);
+            bool ready = !order.empty();
+            if (category != "body")
             {
-                if (status_label_)
+                // Float64MultiArray 不携带名称：禁止缺项、重复或追加未知关节。
+                std::set<std::string> discovered;
+                for (const auto index : joints_it->second)
                 {
-                    status_label_->setText("等待 body 控制器 joints 参数...");
+                    discovered.insert(joint_names_[index]);
                 }
+                const std::set<std::string> configured(order.begin(), order.end());
+                ready = ready && configured.size() == order.size() && configured == discovered;
+            }
+            if (!ready)
+            {
+                last_joint_order_attempt_ = now;
                 return;
             }
-            controller_joint_order["body"] = body_order;
-            RCLCPP_INFO(node_->get_logger(),
-                        "Body joints will be displayed using controller joints parameter order (%zu joints)",
-                        body_order.size());
+            controller_joint_order[category] = order;
         }
 
         joint_names_ = reorderJointsByControllerOrder(
