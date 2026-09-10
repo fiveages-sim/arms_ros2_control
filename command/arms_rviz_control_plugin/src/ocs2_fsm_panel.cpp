@@ -61,7 +61,6 @@ namespace arms_rviz_control_plugin
     OCS2FSMPanel::OCS2FSMPanel(QWidget* parent)
         : Panel(parent)
     {
-        const int panel_min_height = scaled(180);
         const int title_font_size = scaled(14);
         const int badge_font_size = scaled(9);
         const int label_font_size = scaled(13);
@@ -94,7 +93,6 @@ namespace arms_rviz_control_plugin
 
         // Create main layout
         auto* main_layout = new QVBoxLayout(this);
-        setMinimumSize(panel_width, panel_min_height);
         setSizePolicy(QSizePolicy::Preferred, QSizePolicy::Preferred);
 
         // Title with status indicator - centered
@@ -344,6 +342,12 @@ namespace arms_rviz_control_plugin
         button_group_->setFixedSize(panel_width, wbc_container_->height());
 
         main_layout->addWidget(wbc_container_.get(), 0, Qt::AlignHCenter);
+
+        // Reserve the full WBC height before its initially hidden controls are shown.
+        const auto margins = main_layout->contentsMargins();
+        setMinimumSize(panel_width + margins.left() + margins.right(),
+            margins.top() + title_layout->sizeHint().height()
+            + main_layout->spacing() + wbc_container_->height() + margins.bottom());
 
         // Connect signals
         connect(home_to_hold_btn_.get(), &QPushButton::clicked, this, &OCS2FSMPanel::onHomeToHold);

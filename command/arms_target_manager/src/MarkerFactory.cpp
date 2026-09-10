@@ -91,7 +91,8 @@ namespace arms_ros2_control::command
         const geometry_msgs::msg::Pose& pose,
         bool enable_interaction,
         const std::set<std::string>& available_joints,
-        bool full_6d) const
+        bool full_6d,
+        MarkerState mode) const
     {
         visualization_msgs::msg::InteractiveMarker interactiveMarker;
         interactiveMarker.header.frame_id = frame_id_;
@@ -116,6 +117,13 @@ namespace arms_ros2_control::command
         visualization_msgs::msg::InteractiveMarkerControl arrowControl;
         arrowControl.always_visible = true;
         arrowControl.markers.push_back(arrowMarker);
+        if (full_6d)
+        {
+            auto centerMarker = mode == MarkerState::CONTINUOUS
+                ? createSphereMarker("red") : createBoxMarker("red");
+            centerMarker.color.a = arrowMarker.color.a;
+            arrowControl.markers.push_back(centerMarker);
+        }
         arrowControl.interaction_mode = visualization_msgs::msg::InteractiveMarkerControl::NONE;
         interactiveMarker.controls.push_back(arrowControl);
 

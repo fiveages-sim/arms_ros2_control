@@ -80,7 +80,8 @@ namespace arms_ros2_control::command
             const geometry_msgs::msg::Pose& pose,
             bool enable_interaction,
             const std::set<std::string>& available_joints,
-            bool full_6d = false) const;
+            bool full_6d,
+            MarkerState mode) const;
 
     private:
 

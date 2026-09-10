@@ -191,7 +191,8 @@ namespace arms_ros2_control::command
         const std::string& name,
         const geometry_msgs::msg::Pose& pose,
         bool enable_interaction,
-        bool full_6d) const
+        bool full_6d,
+        MarkerState mode) const
     {
         std::set<std::string> joints_to_use;
         if (!full_6d)
@@ -214,7 +215,7 @@ namespace arms_ros2_control::command
 
         return marker_factory_->createHeadMarker(
             name, pose, enable_interaction, joints_to_use,
-            full_6d);
+            full_6d, mode);
     }
 
     std::vector<double> HeadMarker::quaternionToJointAngles(

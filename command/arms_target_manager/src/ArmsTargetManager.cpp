@@ -571,7 +571,7 @@ namespace arms_ros2_control::command
             {
                 const bool wbc = shouldShowWbcHeadMarker();
                 auto marker = head_marker_->createMarker(
-                    name, head_marker_->getPose(), wbc || enable_interaction, wbc);
+                    name, head_marker_->getPose(), wbc || enable_interaction, wbc, current_mode_);
                 if (head_vr_active_)
                 {
                     // Keep the visible arrow; the factory's disabled mode hides it too.

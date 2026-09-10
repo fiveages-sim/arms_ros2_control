@@ -28,6 +28,7 @@
 namespace arms_ros2_control::command
 {
     class MarkerFactory; // 前向声明
+    enum class MarkerState;
 
     /**
      * @brief HeadMarker - 头部 Marker 管理类
@@ -90,7 +91,8 @@ namespace arms_ros2_control::command
             const std::string& name,
             const geometry_msgs::msg::Pose& pose,
             bool enable_interaction,
-            bool full_6d = false) const;
+            bool full_6d,
+            MarkerState mode) const;
 
         /**
          * @brief 从四元数提取头部关节角度
