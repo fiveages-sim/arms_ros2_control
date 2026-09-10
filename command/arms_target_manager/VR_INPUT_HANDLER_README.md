@@ -32,12 +32,12 @@ VRInputHandler是基于VRMarkerWrapper功能开发的VR输入处理器，专门�
 ## 订阅的Topic
 
 ### VR输入
-- `/xr/left_ee_pose` (`geometry_msgs/msg/Pose`): VR左臂末端执行器pose
-- `/xr/right_ee_pose` (`geometry_msgs/msg/Pose`): VR右臂末端执行器pose
-- `/xr/head_pose` (`geometry_msgs/msg/Pose`): VR头显pose
-- `/xr/controller_state` (`std_msgs/msg/Int32`): 按钮/组合键事件码（单帧）
-- `/xr/thumbstick_axes` (`geometry_msgs/msg/Twist`): 左右摇杆轴值；`linear.z` / `angular.z` 携带左右握把按下状态
-- `/xr/trigger_values` (`geometry_msgs/msg/Twist`): 左右扳机模拟量
+- `/teleop/left_ee_pose` (`geometry_msgs/msg/Pose`): VR左臂末端执行器pose
+- `/teleop/right_ee_pose` (`geometry_msgs/msg/Pose`): VR右臂末端执行器pose
+- `/teleop/head_pose` (`geometry_msgs/msg/Pose`): VR头显pose
+- `/teleop/controller_state` (`std_msgs/msg/Int32`): 按钮/组合键事件码（单帧）
+- `/teleop/thumbstick_axes` (`geometry_msgs/msg/Twist`): 左右摇杆轴值；`linear.z` / `angular.z` 携带左右握把按下状态
+- `/teleop/trigger_values` (`geometry_msgs/msg/Twist`): 左右扳机模拟量
 
 ### 机器人状态
 - `left_current_pose` (`geometry_msgs/msg/PoseStamped`): 机器人左臂当前pose
@@ -280,7 +280,7 @@ VRInputHandler会输出详细的调试信息：
 
 1. **VR控制不响应**
    - 检查VR设备是否连接、`/xr_target_node` 是否存在
-   - 确认topic名称是否为 `/xr/left_ee_pose` 等
+   - 确认topic名称是否为 `/teleop/left_ee_pose` 等
    - 检查是否处于更新模式，以及 FSM 是否为 OCS2
 
 2. **Marker不更新**

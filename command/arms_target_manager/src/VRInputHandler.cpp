@@ -122,14 +122,14 @@ namespace arms_ros2_control::command
             this->vrLeftCallback(msg);
         };
         sub_left_ = node_->create_subscription<geometry_msgs::msg::Pose>(
-            "/xr/left_ee_pose", 10, vrLeftCallback);
+            "/teleop/left_ee_pose", 10, vrLeftCallback);
 
         auto vrRightCallback = [this](const geometry_msgs::msg::Pose::SharedPtr msg)
         {
             this->vrRightCallback(msg);
         };
         sub_right_ = node_->create_subscription<geometry_msgs::msg::Pose>(
-            "/xr/right_ee_pose", 10, vrRightCallback);
+            "/teleop/right_ee_pose", 10, vrRightCallback);
 
         // 头显位姿订阅器
         auto vrHeadCallback = [this](const geometry_msgs::msg::Pose::SharedPtr msg)
@@ -137,7 +137,7 @@ namespace arms_ros2_control::command
             this->vrHeadCallback(msg);
         };
         sub_head_ = node_->create_subscription<geometry_msgs::msg::Pose>(
-            "/xr/head_pose", 10, vrHeadCallback);
+            "/teleop/head_pose", 10, vrHeadCallback);
 
         // 创建按钮事件订阅器（Int32类型）
         auto controllerStateCallback = [this](const std_msgs::msg::Int32::SharedPtr msg)
@@ -145,7 +145,7 @@ namespace arms_ros2_control::command
             this->processButtonEvent(msg);
         };
         sub_controller_state_ = node_->create_subscription<std_msgs::msg::Int32>(
-            "/xr/controller_state", 10, controllerStateCallback);
+            "/teleop/controller_state", 10, controllerStateCallback);
         
         // 创建摇杆轴值订阅器（合并订阅左右摇杆，使用 Twist 消息）
         // linear.x/y 表示左摇杆，angular.x/y 表示右摇杆
@@ -154,7 +154,7 @@ namespace arms_ros2_control::command
             this->thumbstickAxesCallback(msg);
         };
         sub_thumbstick_axes_ = node_->create_subscription<geometry_msgs::msg::Twist>(
-            "/xr/thumbstick_axes", 10, thumbstickAxesCallback);
+            "/teleop/thumbstick_axes", 10, thumbstickAxesCallback);
 
         // 创建扳机模拟量订阅器（合并订阅左右扳机，使用 Twist 消息）
         // linear.x 表示左扳机拉动比例，angular.x 表示右扳机拉动比例
@@ -163,7 +163,7 @@ namespace arms_ros2_control::command
             this->triggerValuesCallback(msg);
         };
         sub_trigger_values_ = node_->create_subscription<geometry_msgs::msg::Twist>(
-            "/xr/trigger_values", 10, triggerValuesCallback);
+            "/teleop/trigger_values", 10, triggerValuesCallback);
 
         // 双臂目标位姿发布器（仅双臂模式；用于尺度校准后发送校准目标）
         if (pub_right_target_)
@@ -213,9 +213,9 @@ namespace arms_ros2_control::command
             "🕹️ FULL_BODY directions: "
             "left grip + left stick cases 21-24; "
             "right grip + right stick cases 25-26, 28 (27 unused)");
-        RCLCPP_INFO(node_->get_logger(), "🕹️🕶️🕹️ Subscribed to button event topic: /xr/controller_state (Int32)");
-        RCLCPP_INFO(node_->get_logger(), "🕹️🕶️🕹️ Subscribed to thumbstick axes topic: /xr/thumbstick_axes (ThumbstickAxes)");
-        RCLCPP_INFO(node_->get_logger(), "🕹️🕶️🕹️ Subscribed to trigger values topic: /xr/trigger_values (linear.x=left, angular.x=right)");
+        RCLCPP_INFO(node_->get_logger(), "🕹️🕶️🕹️ Subscribed to button event topic: /teleop/controller_state (Int32)");
+        RCLCPP_INFO(node_->get_logger(), "🕹️🕶️🕹️ Subscribed to thumbstick axes topic: /teleop/thumbstick_axes (ThumbstickAxes)");
+        RCLCPP_INFO(node_->get_logger(), "🕹️🕶️🕹️ Subscribed to trigger values topic: /teleop/trigger_values (linear.x=left, angular.x=right)");
         RCLCPP_INFO(node_->get_logger(), "🕹️🕶️🕹️ Trigger hand mode: percent control by default; press left Y + right B together to toggle percent/switch mode");
         RCLCPP_INFO(node_->get_logger(), "🕹️🕶️🕹️ Thumbstick scaling: linear=%.3f, angular=%.3f",
                     vr_thumbstick_linear_scale_, vr_thumbstick_angular_scale_);
