@@ -332,7 +332,7 @@ namespace arms_rviz_control_plugin
 
         auto* ocs2_to_hold_wbc_btn = new QPushButton("HOLD", this);
         ocs2_to_hold_wbc_btn->setStyleSheet(buttonStyle("#FF9800"));
-        ocs2_to_hold_wbc_btn->setFixedSize(pair_content_width, hold_button_height);
+        ocs2_to_hold_wbc_btn->setFixedHeight(hold_button_height);
 
         upper_button_layout_->addWidget(pair_block, 1, 0);
 
@@ -340,6 +340,10 @@ namespace arms_rviz_control_plugin
         wbc_layout_->addWidget(ocs2_to_hold_wbc_btn, 0, Qt::AlignHCenter);
         wbc_container_->setFixedSize(panel_width, wbc_container_->sizeHint().height());
         button_group_->setFixedSize(panel_width, wbc_container_->height());
+        button_group_->ensurePolished();
+        const auto button_margins = button_layout->contentsMargins();
+        ocs2_to_hold_wbc_btn->setFixedWidth(button_group_->contentsRect().width()
+            - button_margins.left() - button_margins.right());
 
         main_layout->addWidget(wbc_container_.get(), 0, Qt::AlignHCenter);
 
