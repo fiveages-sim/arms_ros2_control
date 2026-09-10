@@ -241,19 +241,18 @@ namespace arms_rviz_control_plugin
         auto* pair_block = new QWidget(this);
         pair_block->setFixedSize(wbc_row_width, pair_block_height);
         auto* pair_grid = new QGridLayout(pair_block);
-        pair_grid->setContentsMargins(0, 0, 0, 0);
+        const int pair_padding = (pair_cell_width - pair_content_width) / 2;
+        pair_grid->setContentsMargins(pair_padding, 0, pair_padding, 0);
         pair_grid->setHorizontalSpacing(0);
         pair_grid->setVerticalSpacing(grid_v_spacing);
         pair_grid->setColumnMinimumWidth(0, pair_label_width);
         pair_grid->setColumnMinimumWidth(1, inner_spacing);
         pair_grid->setColumnMinimumWidth(2, switch_width);
         pair_grid->setColumnMinimumWidth(3, 0);
-        pair_grid->setColumnMinimumWidth(4, grid_h_spacing);
+        pair_grid->setColumnMinimumWidth(4, grid_h_spacing + 2 * pair_padding);
         pair_grid->setColumnMinimumWidth(5, pair_label_width);
         pair_grid->setColumnMinimumWidth(6, inner_spacing);
         pair_grid->setColumnMinimumWidth(7, switch_width);
-        pair_grid->setColumnStretch(3, 1);
-        pair_grid->setColumnStretch(8, 1);
 
         auto setupPairLabel = [&](QLabel* label) {
             label->setFixedWidth(pair_label_width);
