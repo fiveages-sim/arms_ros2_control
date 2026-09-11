@@ -48,8 +48,8 @@ namespace arms_controller_common
         void exit() override;
         FSMStateName checkChange() override;
 
-        /** Publish gravity/bias-compensated FT telemetry while another FSM state runs. */
-        void publishWrenchTelemetry(const rclcpp::Time& time);
+        /** Process tare requests and publish compensated FT telemetry in other FSM states. */
+        void publishWrenchTelemetry(const rclcpp::Time& time, const rclcpp::Duration& period);
 
     private:
         // ── Per-arm runtime state (index 0 = left, 1 = right) ──
@@ -106,7 +106,6 @@ namespace arms_controller_common
 
             void resetControlState()
             {
-                ft_active = false;
                 wrench_filt.setZero();
                 v_des_filt.setZero();
                 force_integral.setZero();
@@ -115,9 +114,6 @@ namespace arms_controller_common
                 qdot_prev.resize(0);
                 v_pos_prev.setZero();
                 v_pos_filt.setZero();
-                wrench_bias.fill(0.0);
-                zero_cal_sum.fill(0.0);
-                zero_cal_samples = 0;
                 target_valid = false;
                 diag_target_valid = false;
                 target_updates = 0;
@@ -148,6 +144,8 @@ namespace arms_controller_common
         void setupTeleopSubscriptions();
         void setupZeroWrenchService();
         WrenchSnapshot sampleAndPublishWrenches(const rclcpp::Time& time);
+        void updateZeroCalibration(const WrenchSnapshot& snapshot, const rclcpp::Time& time,
+                                   const rclcpp::Duration& period);
         bool kinematicsAvailable() const;
         /** measured=true: joint state interfaces; else hold_positions_. */
         RobotState makeRobotState(bool measured) const;
@@ -250,6 +248,8 @@ namespace arms_controller_common
         double zero_cal_duration_{10.0};
         double zero_cal_settle_{0.2};
         double zero_cal_still_vel_{0.02};
+        // Start automatically on first COMPLIANCE entry, or explicitly via service.
+        bool zero_cal_enabled_{false};
         bool zero_cal_pending_{false};
         bool zero_cal_running_{false};
         bool zero_cal_done_{false};
