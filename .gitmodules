@@ -66,3 +66,7 @@
 	path = hardwares/eyou_canfd_ros2_control
 	url = git@github.com:fiveages-sim/eyou_canfd_ros2_control.git
 	branch = main
+[submodule "hardwares/wuji_ros2_control"]
+	path = hardwares/wuji_ros2_control
+	url = git@github.com:fiveages-sim/wuji-ros2-control.git
+	branch = main
