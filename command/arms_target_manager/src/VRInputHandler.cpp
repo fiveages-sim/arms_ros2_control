@@ -935,7 +935,7 @@ namespace arms_ros2_control::command
         return target_manager_ && isFullBodyMode() && enabled_.load() && is_update_mode_.load() &&
             resolvedFsmState() == 3 &&
             target_manager_->getCurrentHeadState() ==
-                arms_ros2_control_msgs::msg::WbcCurrentState::HEAD_ENABLED &&
+                arms_ros2_control_msgs::msg::WbcCurrentState::HEAD_TRACKING &&
             has_vr_head_pose_ && has_robot_head_pose_;
     }
 
@@ -1562,20 +1562,18 @@ namespace arms_ros2_control::command
 
         Eigen::Vector3d publishPosition = rampedPosition;
         Eigen::Quaterniond publishOrientation = rampedOrientation;
-        if (isFullBodyMode())
+        // 所有模式都在 vr_follow_frame_ 中计算，发布前统一转回控制器坐标系。
+        if (!ee_frame_id_initialized_ ||
+            !transformPoseBetweenFrames(
+                armType,
+                rampedPosition,
+                rampedOrientation,
+                vr_follow_frame_,
+                ee_frame_id_,
+                publishPosition,
+                publishOrientation))
         {
-            if (!ee_frame_id_initialized_ ||
-                !transformPoseBetweenFrames(
-                    armType,
-                    rampedPosition,
-                    rampedOrientation,
-                    vr_follow_frame_,
-                    ee_frame_id_,
-                    publishPosition,
-                    publishOrientation))
-            {
-                return false;
-            }
+            return false;
         }
 
         Eigen::Vector3d& previousPosition = isLeft
@@ -2462,7 +2460,7 @@ namespace arms_ros2_control::command
             return;
         }
 
-        if (msg->head_state != arms_ros2_control_msgs::msg::WbcCurrentState::HEAD_ENABLED)
+        if (msg->head_state != arms_ros2_control_msgs::msg::WbcCurrentState::HEAD_TRACKING)
         {
             stopHeadTracking();
         }

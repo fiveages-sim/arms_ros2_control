@@ -159,7 +159,7 @@ namespace arms_ros2_control::command
     {
         return head_marker_ && head_marker_->isWbcEnabled() &&
             current_controller_state_ == 3 &&
-            head_state_ == arms_ros2_control_msgs::msg::WbcCurrentState::HEAD_ENABLED;
+            head_state_ == arms_ros2_control_msgs::msg::WbcCurrentState::HEAD_TRACKING;
     }
 
     bool ArmsTargetManager::shouldShowHeadMarker() const

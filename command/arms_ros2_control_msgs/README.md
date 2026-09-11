@@ -185,7 +185,7 @@ ROS 2 接口包：[`arms_ros2_control`](../..) 系统所使用的 **msg / srv / 
 
 ### 头部模式
 
-`WbcCurrentState.head_state`：`HEAD_DISABLED=0`（禁用）、`HEAD_TRACKING=1`（追踪，保留 `HEAD_ENABLED=1` 别名）、`HEAD_GAZE=2`（注视双手末端中点）、`HEAD_FORWARD=3`（原锁头的头腰联动及腰部约束）。
+`WbcCurrentState.head_state`：`HEAD_DISABLED=0`（禁用）、`HEAD_TRACKING=1`（追踪）、`HEAD_GAZE=2`（注视双手末端中点）、`HEAD_FORWARD=3`（原锁头的头腰联动及腰部约束）。
 
 `body_state` 回报选择的身体模式。朝前期间由原锁头约束覆盖身体模式；退出朝前后恢复该身体选择。面板在朝前期间禁用身体下拉框，身体 marker 同时隐藏。身体模式不再提供「锁头」。
 
