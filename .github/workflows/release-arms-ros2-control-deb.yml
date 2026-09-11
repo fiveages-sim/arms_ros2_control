@@ -38,11 +38,11 @@ on:
         default: jazzy
         type: string
       ocs2_release_tag:
-        description: Release tag used to fetch the ocs2_ros2 bundle (optional; leave blank to use the latest release)
+        description: ocs2_ros2 release tag (v1.3.0, pre-release, or blank for latest formal / pre-release when this is a rolling build)
         required: false
         type: string
       common_release_tag:
-        description: Release tag used to fetch robot_descriptions common (optional; leave blank to use the latest release)
+        description: robot_descriptions common release tag (v*, pre-release, or blank)
         required: false
         type: string
 
@@ -423,16 +423,21 @@ jobs:
             local fallback_repo="$3"
             local dependency_name="$4"
 
-            if [[ -n "${requested_tag:-}" && "${requested_tag}" != [vV]* ]]; then
-              requested_tag="v${requested_tag}"
-            fi
-
             if [[ -n "${requested_tag:-}" ]]; then
-              if gh release view "$requested_tag" --repo "$primary_repo" --json tagName >/dev/null 2>&1 \
-                || gh release view "$requested_tag" --repo "$fallback_repo" --json tagName >/dev/null 2>&1; then
-                printf '%s\n' "$requested_tag"
-                return 0
+              local candidate
+              local -a candidates=("${requested_tag}")
+              # Version tags may omit the leading v (1.3.0 -> v1.3.0). Rolling names
+              # such as pre-release must stay unprefixed.
+              if [[ "${requested_tag}" != [vV]* ]]; then
+                candidates+=("v${requested_tag}")
               fi
+              for candidate in "${candidates[@]}"; do
+                if gh release view "$candidate" --repo "$primary_repo" --json tagName >/dev/null 2>&1 \
+                  || gh release view "$candidate" --repo "$fallback_repo" --json tagName >/dev/null 2>&1; then
+                  printf '%s\n' "$candidate"
+                  return 0
+                fi
+              done
               echo "Unable to find release tag ${requested_tag} for ${dependency_name} in ${primary_repo} or ${fallback_repo}." >&2
               exit 1
             fi
@@ -1020,16 +1025,21 @@ jobs:
             local fallback_repo="$3"
             local dependency_name="$4"
 
-            if [[ -n "${requested_tag:-}" && "${requested_tag}" != [vV]* ]]; then
-              requested_tag="v${requested_tag}"
-            fi
-
             if [[ -n "${requested_tag:-}" ]]; then
-              if gh release view "$requested_tag" --repo "$primary_repo" --json tagName >/dev/null 2>&1 \
-                || gh release view "$requested_tag" --repo "$fallback_repo" --json tagName >/dev/null 2>&1; then
-                printf '%s\n' "$requested_tag"
-                return 0
+              local candidate
+              local -a candidates=("${requested_tag}")
+              # Version tags may omit the leading v (1.3.0 -> v1.3.0). Rolling names
+              # such as pre-release must stay unprefixed.
+              if [[ "${requested_tag}" != [vV]* ]]; then
+                candidates+=("v${requested_tag}")
               fi
+              for candidate in "${candidates[@]}"; do
+                if gh release view "$candidate" --repo "$primary_repo" --json tagName >/dev/null 2>&1 \
+                  || gh release view "$candidate" --repo "$fallback_repo" --json tagName >/dev/null 2>&1; then
+                  printf '%s\n' "$candidate"
+                  return 0
+                fi
+              done
               echo "Unable to find release tag ${requested_tag} for ${dependency_name} in ${primary_repo} or ${fallback_repo}." >&2
               exit 1
             fi
