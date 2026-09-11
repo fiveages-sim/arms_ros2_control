@@ -67,13 +67,13 @@ namespace ocs2::mobile_manipulator
             ctrl_comp_->updateObservation(time);
         }
 
-        // StateCompliance::run() publishes this telemetry itself. Keep the same
+        // StateCompliance::run() processes FT telemetry and tare itself. Keep the same
         // FT pipeline alive in every other FSM state without creating a second
         // publisher or changing the active motion controller.
         if (state_list_.compliance &&
             (!current_state_ || current_state_->state_name != FSMStateName::COMPLIANCE))
         {
-            state_list_.compliance->publishWrenchTelemetry(time);
+            state_list_.compliance->publishWrenchTelemetry(time, period);
         }
 
         if (mode_ == FSMMode::NORMAL)

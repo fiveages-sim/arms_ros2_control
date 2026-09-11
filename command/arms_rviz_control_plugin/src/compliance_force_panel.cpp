@@ -223,7 +223,7 @@ namespace arms_rviz_control_plugin
         sync_btn_->setToolTip("用最新 compliance_force_status 覆盖本面板编辑框");
         zero_wrench_btn_ = new QPushButton("传感器清零", this);
         zero_wrench_btn_->setToolTip(
-            "重新标定重力补偿后的残余零偏；标定期间请保持双臂静止且末端无接触");
+            "所有控制模式均可清零；重新标定重力补偿后的残余零偏，期间请保持双臂静止且末端无接触");
         btn_row->addWidget(apply_btn_);
         btn_row->addWidget(sync_btn_);
         btn_row->addWidget(zero_wrench_btn_);
@@ -389,7 +389,7 @@ namespace arms_rviz_control_plugin
     {
         if (!zero_wrench_client_ || !zero_wrench_client_->service_is_ready())
         {
-            status_label_->setText("清零失败: 请先进入 COMPLIANCE 模式");
+            status_label_->setText("清零失败: 传感器清零服务不可用，请检查控制器是否已加载");
             return;
         }
 
