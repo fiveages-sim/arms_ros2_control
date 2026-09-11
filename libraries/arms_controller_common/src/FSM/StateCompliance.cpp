@@ -40,6 +40,7 @@ namespace arms_controller_common
         // HOLD/HOME/MOVEJ/OCS2.
         updateParam();
         setupWrenchSubscriptions();
+        setupZeroWrenchService();
     }
 
     FSMStateName StateCompliance::checkChange()
@@ -259,9 +260,12 @@ namespace arms_controller_common
         return snapshot;
     }
 
-    void StateCompliance::publishWrenchTelemetry(const rclcpp::Time& time)
+    void StateCompliance::publishWrenchTelemetry(
+        const rclcpp::Time& time, const rclcpp::Duration& period)
     {
-        (void)sampleAndPublishWrenches(time);
+        updateParam();
+        const WrenchSnapshot snapshot = sampleAndPublishWrenches(time);
+        updateZeroCalibration(snapshot, time, period);
     }
 
     void StateCompliance::setupZeroWrenchService()
@@ -363,13 +367,9 @@ namespace arms_controller_common
             }
         }
 
-        zero_cal_pending_ = true;
-        zero_cal_running_ = false;
-        zero_cal_done_    = false;
-        zero_cal_requested_.store(false, std::memory_order_relaxed);
-        zero_cal_start_ = rclcpp::Time(0, 0, RCL_ROS_TIME);
-        measured_joint_vel_max_ = 0.0;
-        q_meas_prev_all_.resize(0);
+        // Calibration belongs to the FT pipeline. Preserve a completed tare or
+        // an in-flight request when entering COMPLIANCE from another mode.
+        zero_cal_enabled_ = true;
 
         if (kinematics_)
         {
@@ -378,7 +378,6 @@ namespace arms_controller_common
         }
 
         setupTeleopSubscriptions();
-        setupZeroWrenchService();
 
         if (node_)
         {
@@ -426,13 +425,16 @@ namespace arms_controller_common
     {
         for (auto& a : arms_) a.resetComplianceIo();
         force_status_pub_.reset();
-        zero_wrench_service_.reset();
     }
 
-    void StateCompliance::run(const rclcpp::Time& time, const rclcpp::Duration& period)
+    void StateCompliance::updateZeroCalibration(
+        const WrenchSnapshot& snapshot, const rclcpp::Time& time,
+        const rclcpp::Duration& period)
     {
-        updateParam();
+        if (!node_) return;
         const double dt = period.seconds();
+        const auto& net = snapshot.net;
+        const auto& ft_active = snapshot.active;
 
         if (zero_cal_requested_.exchange(false, std::memory_order_acq_rel))
         {
@@ -444,6 +446,7 @@ namespace arms_controller_common
                 a.wrench_filt.setZero();
                 a.v_des_filt.setZero();
             }
+            zero_cal_enabled_ = true;
             zero_cal_pending_ = true;
             zero_cal_running_ = false;
             zero_cal_done_ = false;
@@ -456,11 +459,6 @@ namespace arms_controller_common
                             "COMPLIANCE wrench zero requested; keep arms still and unloaded");
             }
         }
-
-        const WrenchSnapshot wrench_snapshot = sampleAndPublishWrenches(time);
-        const auto& net = wrench_snapshot.net;
-        const auto& ft_active = wrench_snapshot.active;
-        const auto& wrench_frame_id = wrench_snapshot.frame_id;
 
         // ── Measured joint velocity (for zero-cal stillness) ──
         {
@@ -491,9 +489,14 @@ namespace arms_controller_common
         // ── Zero-cal (FT tare; does NOT block position teleop) ──
         // FT late arrival / previous zero-cal failure: re-arm automatically once
         // a sensor is available and no calibration was ever completed.
-        if (!zero_cal_pending_ && !zero_cal_running_ && !zero_cal_done_ &&
+        if (zero_cal_enabled_ && !zero_cal_pending_ && !zero_cal_running_ && !zero_cal_done_ &&
             (ft_active[0] || ft_active[1]))
         {
+            for (auto& a : arms_)
+            {
+                a.zero_cal_sum.fill(0.0);
+                a.zero_cal_samples = 0;
+            }
             zero_cal_pending_ = true;
             RCLCPP_WARN_THROTTLE(node_->get_logger(), *node_->get_clock(), 2000,
                                  "COMPLIANCE: FT available but zero-cal not completed — "
@@ -517,7 +520,7 @@ namespace arms_controller_common
                 // NOT zero_cal_done_: no calibration was performed; it will be
                 // re-armed automatically above once FT becomes available.
                 RCLCPP_WARN(node_->get_logger(),
-                            "COMPLIANCE: no FT within 2 s — position teleop only; "
+                            "COMPLIANCE: no FT within 2 s — calibration waiting; "
                             "zero-cal starts automatically once FT is available.");
             }
         }
@@ -590,6 +593,18 @@ namespace arms_controller_common
                 }
             }
         }
+    }
+
+    void StateCompliance::run(const rclcpp::Time& time, const rclcpp::Duration& period)
+    {
+        updateParam();
+        const double dt = period.seconds();
+
+        const WrenchSnapshot wrench_snapshot = sampleAndPublishWrenches(time);
+        const auto& net = wrench_snapshot.net;
+        const auto& ft_active = wrench_snapshot.active;
+        const auto& wrench_frame_id = wrench_snapshot.frame_id;
+        updateZeroCalibration(wrench_snapshot, time, period);
 
         // ── Tare → contact wrench in base ──
         Eigen::Matrix<double, 6, 1> contact_wrench[2];
