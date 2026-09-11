@@ -20,7 +20,8 @@ OCS2 控制器 **COMPLIANCE** 状态：6 自由度笛卡尔混合控制，每位
 ros2 topic pub /fsm_command std_msgs/msg/Int32 "data: 5" -1
 ```
 
-手臂静止约 10 s（`compliance_zero_cal_duration`），日志出现 `zero_cal done` 后力控可用。  
+若此前尚未清零，首次进入时会自动校准：手臂静止约 10 s（`compliance_zero_cal_duration`），
+日志出现 `zero_cal done` 后力控可用。已在其他模式清零的结果会直接沿用。
 状态可通过 `/compliance_force_status` 的 `zero_cal_done` 或 Panel 状态栏确认。
 
 ### 2. 发送位姿目标（S=0 轴）
@@ -120,20 +121,23 @@ ros2 interface show arms_ros2_control_msgs/msg/ComplianceForceStatus
 原始传感器读数 - 工具重力力/力矩 - 静止清零残余偏置
 ```
 
-控制器激活期间在所有 FSM 状态中持续发布；进入 COMPLIANCE 前尚未完成静止清零时，
+控制器激活期间在所有 FSM 状态中持续发布；尚未完成静止清零时，
 零偏项为 0。若 broadcaster 自身配置了 filter chain，不要再让它发布同名
 `wrench_filtered`，避免同一话题出现两个数据源。
 
 ### 手动清零
 
-进入 COMPLIANCE 后，可在 RViz Compliance Force Panel 点击「传感器清零」，或调用：
+控制器激活后，在任意 FSM 模式（包括 HOLD / HOME / MOVEJ / OCS2 等非 COMPLIANCE 模式）
+均可在 RViz Compliance Force Panel 点击「传感器清零」，或调用：
 
 ```bash
 ros2 service call /compliance_zero_wrench std_srvs/srv/Trigger '{}'
 ```
 
 清零使用 `compliance_zero_cal_duration` 配置的静止采样时间。采样期间保持机械臂静止、末端无接触；
-力控轴在新零偏标定完成前保持禁用。
+服务返回成功表示已接受清零请求，完成时日志输出 `zero_cal done`。清零不会切换当前控制模式；
+COMPLIANCE 力控轴在新零偏标定完成前保持禁用。校准过程与零偏结果跨模式保留，
+进入 COMPLIANCE 时不会覆盖已完成的清零；未请求过清零时，首次进入 COMPLIANCE 会自动启动校准。
 
 `config/robot.local.yaml` 中 `hardware.left_ft` / `right_ft` 为 `none` 时，该侧 broadcaster 不启动。
 
