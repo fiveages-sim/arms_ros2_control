@@ -1562,20 +1562,18 @@ namespace arms_ros2_control::command
 
         Eigen::Vector3d publishPosition = rampedPosition;
         Eigen::Quaterniond publishOrientation = rampedOrientation;
-        if (isFullBodyMode())
+        // 所有模式都在 vr_follow_frame_ 中计算，发布前统一转回控制器坐标系。
+        if (!ee_frame_id_initialized_ ||
+            !transformPoseBetweenFrames(
+                armType,
+                rampedPosition,
+                rampedOrientation,
+                vr_follow_frame_,
+                ee_frame_id_,
+                publishPosition,
+                publishOrientation))
         {
-            if (!ee_frame_id_initialized_ ||
-                !transformPoseBetweenFrames(
-                    armType,
-                    rampedPosition,
-                    rampedOrientation,
-                    vr_follow_frame_,
-                    ee_frame_id_,
-                    publishPosition,
-                    publishOrientation))
-            {
-                return false;
-            }
+            return false;
         }
 
         Eigen::Vector3d& previousPosition = isLeft
