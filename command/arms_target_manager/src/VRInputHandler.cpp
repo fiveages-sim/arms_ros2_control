@@ -935,7 +935,7 @@ namespace arms_ros2_control::command
         return target_manager_ && isFullBodyMode() && enabled_.load() && is_update_mode_.load() &&
             resolvedFsmState() == 3 &&
             target_manager_->getCurrentHeadState() ==
-                arms_ros2_control_msgs::msg::WbcCurrentState::HEAD_ENABLED &&
+                arms_ros2_control_msgs::msg::WbcCurrentState::HEAD_TRACKING &&
             has_vr_head_pose_ && has_robot_head_pose_;
     }
 
@@ -2462,7 +2462,7 @@ namespace arms_ros2_control::command
             return;
         }
 
-        if (msg->head_state != arms_ros2_control_msgs::msg::WbcCurrentState::HEAD_ENABLED)
+        if (msg->head_state != arms_ros2_control_msgs::msg::WbcCurrentState::HEAD_TRACKING)
         {
             stopHeadTracking();
         }

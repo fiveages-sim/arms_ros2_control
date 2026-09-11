@@ -316,7 +316,7 @@ VRInputHandler会输出详细的调试信息：
 
 ### 头显驱动 WBC Head 6D 目标
 
-启用现有 `enable_vr` 后，头部跟踪直接使用现有状态：控制拓扑为 FULL_BODY、VR enabled、UPDATE、FSM=OCS2、head_state=HEAD_ENABLED。没有新增头部使能或缩放配置。
+启用现有 `enable_vr` 后，头部跟踪直接使用现有状态：控制拓扑为 FULL_BODY、VR enabled、UPDATE、FSM=OCS2、head_state=HEAD_TRACKING。没有新增头部使能或缩放配置。
 
 - 输入 `/xr/head_pose`（Pose）和 `head_current_pose`（PoseStamped），输出相对话题 `head_target`（Pose）。头部实际位姿订阅独立于左右手缓存。
 - 头显上游 TeleVuer/XRoboToolkit wrapper 已完成 OpenXR → 机器人轴转换。头显增量按机器人轴与 `vr_follow_frame` 对齐的约定计算，平移为 **1:1**，不受双手校准比例和镜像模式影响。
