@@ -166,6 +166,10 @@ namespace arms_ros2_control::command
          */
         void vrRightCallback(geometry_msgs::msg::Pose::SharedPtr msg);
 
+        void publishVrTargets();
+        void publishLeftVrTarget();
+        void publishRightVrTarget();
+
         /**
          * VR头显pose回调函数
          * @param msg VR 头显 pose 消息
@@ -519,6 +523,12 @@ namespace arms_ros2_control::command
 
         rclcpp::Client<ListControllers>::SharedPtr list_controllers_client_;
         rclcpp::TimerBase::SharedPtr control_topology_timer_;
+        rclcpp::TimerBase::SharedPtr vr_target_timer_;
+        static constexpr std::chrono::milliseconds VR_INPUT_TIMEOUT{200};
+        std::chrono::steady_clock::time_point left_vr_received_{};
+        std::chrono::steady_clock::time_point right_vr_received_{};
+        bool left_vr_rebase_pending_{false};
+        bool right_vr_rebase_pending_{false};
         std::atomic<ControlTopology> control_topology_{ControlTopology::UNKNOWN};
         std::optional<rclcpp::Client<ListControllers>::FutureAndRequestId>
             pending_topology_request_;

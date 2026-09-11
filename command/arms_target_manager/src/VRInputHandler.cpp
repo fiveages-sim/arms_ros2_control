@@ -80,13 +80,15 @@ namespace arms_ros2_control::command
             std::chrono::seconds(1),
             [this]() { detectControlTopology(); });
 
+        vr_target_timer_ = node_->create_wall_timer(
+            std::chrono::milliseconds(20), [this]() { publishVrTargets(); });
+
         // 初始化 TF 组件（用于在 reference_link 与末端 frame 之间进行坐标变换）
         tf_buffer_ = std::make_shared<tf2_ros::Buffer>(node_->get_clock());
         tf_listener_ = std::make_shared<tf2_ros::TransformListener>(*tf_buffer_);
         RCLCPP_INFO(
             node_->get_logger(),
-            "VR stale-input catch-up ramp recovery is enabled (frozen >= %d identical frames).",
-            STALE_MIN_FROZEN_FRAMES);
+            "VR arm targets: 100 Hz, input timeout 200 ms; catch-up smoothing disabled.");
         // 检测左右控制器名称
         detectGripperControllers(hand_controllers_);
         
@@ -1002,6 +1004,16 @@ namespace arms_ros2_control::command
         head_tracking_active_ = true;
     }
 
+    void VRInputHandler::publishVrTargets()
+    {
+        if (!enabled_.load() || !is_update_mode_.load())
+        {
+            return;
+        }
+        publishLeftVrTarget();
+        publishRightVrTarget();
+    }
+
     void VRInputHandler::vrLeftCallback(const geometry_msgs::msg::Pose::SharedPtr msg)
     {
         if (!enabled_.load())
@@ -1019,15 +1031,51 @@ namespace arms_ros2_control::command
         left_position_ = vr_left_position_raw_;
         left_position_ *= vr_pose_scale_;
 
+        const auto received = std::chrono::steady_clock::now();
+        if (has_vr_left_pose_.load() && received - left_vr_received_ > VR_INPUT_TIMEOUT)
+        {
+            left_vr_rebase_pending_ = true;
+        }
+        left_vr_received_ = received;
         has_vr_left_pose_.store(true);
+        if (enabled_.load() && isFullBodyMode())
+        {
+            prepareArmVrInput(mirror_mode_.load()
+                ? WbcToggleTarget::RIGHT_ARM : WbcToggleTarget::LEFT_ARM);
+        }
+    }
+
+    void VRInputHandler::publishLeftVrTarget()
+    {
+        const auto now = std::chrono::steady_clock::now();
+        if (!has_vr_left_pose_.load())
+        {
+            return;
+        }
+        if (now - left_vr_received_ > VR_INPUT_TIMEOUT)
+        {
+            left_vr_rebase_pending_ = true;
+            return;
+        }
         const WbcToggleTarget controlledArm = mirror_mode_.load()
             ? WbcToggleTarget::RIGHT_ARM
             : WbcToggleTarget::LEFT_ARM;
-        if (enabled_.load() &&
-            isFullBodyMode() &&
-            !prepareArmVrInput(controlledArm))
+        if (isArmVrInputSuppressed(controlledArm))
         {
             return;
+        }
+
+        if (left_vr_rebase_pending_)
+        {
+            if (!rebaseArmVrControlFromCurrentPose(controlledArm))
+            {
+                return;
+            }
+            if (controlledArm == WbcToggleTarget::LEFT_ARM ? left_arm_paused_.load() : right_arm_paused_.load())
+            {
+                applyPauseAfterRebase(controlledArm);
+            }
+            left_vr_rebase_pending_ = false;
         }
 
         if (enabled_.load())
@@ -1132,15 +1180,51 @@ namespace arms_ros2_control::command
         right_position_ = vr_right_position_raw_;
         right_position_ *= vr_pose_scale_;
 
+        const auto received = std::chrono::steady_clock::now();
+        if (has_vr_right_pose_.load() && received - right_vr_received_ > VR_INPUT_TIMEOUT)
+        {
+            right_vr_rebase_pending_ = true;
+        }
+        right_vr_received_ = received;
         has_vr_right_pose_.store(true);
+        if (enabled_.load() && isFullBodyMode())
+        {
+            prepareArmVrInput(mirror_mode_.load()
+                ? WbcToggleTarget::LEFT_ARM : WbcToggleTarget::RIGHT_ARM);
+        }
+    }
+
+    void VRInputHandler::publishRightVrTarget()
+    {
+        const auto now = std::chrono::steady_clock::now();
+        if (!has_vr_right_pose_.load())
+        {
+            return;
+        }
+        if (now - right_vr_received_ > VR_INPUT_TIMEOUT)
+        {
+            right_vr_rebase_pending_ = true;
+            return;
+        }
         const WbcToggleTarget controlledArm = mirror_mode_.load()
             ? WbcToggleTarget::LEFT_ARM
             : WbcToggleTarget::RIGHT_ARM;
-        if (enabled_.load() &&
-            isFullBodyMode() &&
-            !prepareArmVrInput(controlledArm))
+        if (isArmVrInputSuppressed(controlledArm))
         {
             return;
+        }
+
+        if (right_vr_rebase_pending_)
+        {
+            if (!rebaseArmVrControlFromCurrentPose(controlledArm))
+            {
+                return;
+            }
+            if (controlledArm == WbcToggleTarget::LEFT_ARM ? left_arm_paused_.load() : right_arm_paused_.load())
+            {
+                applyPauseAfterRebase(controlledArm);
+            }
+            right_vr_rebase_pending_ = false;
         }
 
         if (enabled_.load())
@@ -1554,11 +1638,10 @@ namespace arms_ros2_control::command
             return false;
         }
 
-        // 上游 XR 位姿冻结后会一帧补齐整段位移，先把追赶量摊到随后若干帧。
-        // 放在 frame 变换之前，使 recordLastPublishedTarget() 记录的也是真正发出去的目标。
+        // 保留计算系目标缓存，第一阶段不对目标进行追赶平滑。
         Eigen::Vector3d rampedPosition = position;
         Eigen::Quaterniond rampedOrientation = orientation;
-        applyStaleCatchUpRamp(isLeft, rampedPosition, rampedOrientation);
+        // Stage 1: bypass catch-up smoothing; publish the latest calculated target.
 
         Eigen::Vector3d publishPosition = rampedPosition;
         Eigen::Quaterniond publishOrientation = rampedOrientation;
@@ -1582,8 +1665,8 @@ namespace arms_ros2_control::command
         Eigen::Quaterniond& previousOrientation = isLeft
             ? prev_calculated_left_orientation_
             : prev_calculated_right_orientation_;
-        // Temporarily disable pose-change threshold filtering so every valid XR pose
-        // callback publishes a target. Keep the original gate for quick A/B rollback.
+        // Temporarily disable pose-change threshold filtering so every valid
+        // timer tick publishes a target. Keep the original gate for quick A/B rollback.
         /*
         // Coupled: keep left_target heartbeating even when the left controller is still,
         // otherwise the 0.2s leader timeout lets right_target steal and inverse-sync left.
