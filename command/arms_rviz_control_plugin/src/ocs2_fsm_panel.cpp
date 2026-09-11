@@ -836,7 +836,7 @@ namespace arms_rviz_control_plugin
         {
             case State::HEAD_DISABLED: publishModeCommand("HEAD_DISABLE"); break;
             case State::HEAD_TRACKING:
-                if (capability_state_.head_tracking_ee_enabled) publishModeCommand("HEAD_ENABLE");
+                if (capability_state_.head_tracking_ee_enabled) publishModeCommand("HEAD_TRACKING");
                 break;
             case State::HEAD_GAZE:
                 if (capability_state_.head_midpoint_gaze_enabled) publishModeCommand("HEAD_GAZE");

@@ -7,7 +7,6 @@ uint8 BODY_FREE=0
 uint8 BODY_VERTICAL=1
 uint8 BODY_TRACKING=2
 uint8 BODY_LOCKED=3
-uint8 BODY_HEAD_COUPLED=4
 uint8 BODY_CUSTOM_LOCKED=5
 
 # bimanual
@@ -26,9 +25,8 @@ uint8 left_arm_state
 uint8 right_arm_state
 bool home_joint_reference_enabled
 
-# Head task. HEAD_ENABLED remains an alias for marker/VR tracking consumers.
+# Independent head task.
 uint8 HEAD_DISABLED=0
-uint8 HEAD_ENABLED=1
 uint8 HEAD_TRACKING=1
 uint8 HEAD_GAZE=2
 uint8 HEAD_FORWARD=3
