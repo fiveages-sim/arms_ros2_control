@@ -48,6 +48,7 @@ on:
 
 permissions:
   contents: write
+  actions: write
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref_type == 'tag' && github.ref_name || (github.event_name == 'pull_request' && 'pre-release' || github.ref) }}
