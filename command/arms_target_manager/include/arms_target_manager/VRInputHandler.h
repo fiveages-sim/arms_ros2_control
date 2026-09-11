@@ -394,23 +394,23 @@ namespace arms_ros2_control::command
                                      const Eigen::Quaterniond& orientation);
 
         /**
-         * 冻结追赶斜坡：上游 XR 位姿在链路数据未更新时会逐位重发上一帧，恢复后
-         * 一帧补上整段位移（实测最大 124.7mm / 11.5°）。这里检测冻结，并把追赶量
-         * 按冻结帧数等额摊到随后若干帧，使正常运动逐位不受影响。
-         * 仅在真正发布 target 的路径上调用，因此 STORAGE 模式下不生效。
+         * 固定输出一阶平滑：位置线性插值、姿态 slerp，alpha = 1 - exp(-dt / tau)。
+         * 在 vr_follow_frame_ 中计算；只读状态，发布成功后才由调用方提交。
          * @param isLeft true=左臂状态，false=右臂状态
-         * @param position 计算坐标系下的位置，原地改写为摊平后的值
-         * @param orientation 计算坐标系下的方向，原地改写为摊平后的值
+         * @param now 本次输出的单调时钟时间
+         * @param position 计算坐标系下的目标位置，原地改写为平滑后的值
+         * @param orientation 计算坐标系下的目标方向，原地改写为平滑后的值
          */
-        void applyStaleCatchUpRamp(bool isLeft,
-                                   Eigen::Vector3d& position,
-                                   Eigen::Quaterniond& orientation);
+        void smoothTarget(bool isLeft,
+                          std::chrono::steady_clock::time_point now,
+                          Eigen::Vector3d& position,
+                          Eigen::Quaterniond& orientation) const;
 
-        /** 清空冻结追赶斜坡状态；下一帧重新起基准，不会摊平。 */
-        void resetStaleCatchUpRamp(bool isLeft);
+        /** 清空平滑状态；下一次输出直接等于目标。 */
+        void resetTargetSmoothing(bool isLeft);
 
         /** 左右臂一起清空。 */
-        void resetStaleCatchUpRamp();
+        void resetTargetSmoothing();
 
         /** 读取 ArmsTargetManager 中 WBC 已确认的双臂耦合状态。 */
         bool isBimanualCoupled() const;
@@ -614,24 +614,21 @@ namespace arms_ros2_control::command
         Eigen::Vector3d last_published_right_position_ = Eigen::Vector3d::Zero();
         Eigen::Quaterniond last_published_right_orientation_ = Eigen::Quaterniond::Identity();
 
-        // 冻结追赶斜坡状态（每臂一份），语义见 applyStaleCatchUpRamp()。
-        struct StaleCatchUpRamp
+        // 固定输出平滑状态（每臂一份）：最后一次成功发布的计算-frame 输出，语义见 smoothTarget()。
+        struct TargetSmoothing
         {
-            bool has_previous_input = false;
-            // 上一帧进入斜坡的原始目标，用于逐位比较判定"上游冻结"
-            Eigen::Vector3d previous_input_position = Eigen::Vector3d::Zero();
-            Eigen::Quaterniond previous_input_orientation = Eigen::Quaterniond::Identity();
-            int frozen_frames = 0;
-            // 上一帧实际发出的目标，解冻帧据此测量缺口
-            Eigen::Vector3d output_position = Eigen::Vector3d::Zero();
-            Eigen::Quaterniond output_orientation = Eigen::Quaterniond::Identity();
-            // 尚未交付的追赶量；remaining_frames 归零时必然为零
-            Eigen::Vector3d residual_position = Eigen::Vector3d::Zero();
-            Eigen::Quaterniond residual_orientation = Eigen::Quaterniond::Identity();
-            int remaining_frames = 0;
+            bool valid = false;
+            std::chrono::steady_clock::time_point stamp{};
+            Eigen::Vector3d position = Eigen::Vector3d::Zero();
+            Eigen::Quaterniond orientation = Eigen::Quaterniond::Identity();
         };
-        StaleCatchUpRamp left_stale_ramp_;
-        StaleCatchUpRamp right_stale_ramp_;
+        TargetSmoothing left_target_smoothing_;
+        TargetSmoothing right_target_smoothing_;
+        // vr_target_smoothing_tau_s 启动参数；0 表示旁路
+        double target_smoothing_tau_s_ = 0.0;
+        // 单步 dt 上限（约两个 5 ms 输出周期，容忍调度抖动），
+        // 避免 TF 短暂失败等跳过发布后用长间隔算出一次大步长
+        static constexpr double MAX_SMOOTHING_DT_S = 0.01;
 
         // 状态管理
         std::atomic<bool> enabled_;
@@ -812,8 +809,5 @@ namespace arms_ros2_control::command
         // 常量
         static const double POSITION_THRESHOLD;
         static const double ORIENTATION_THRESHOLD;
-        // 连续多少帧原始目标逐位相同才判定为上游冻结。实测冻结长度呈双峰分布
-        // （1 帧 / ≥5 帧），2..5 取任意值结果相同，取下界即可。
-        static const int STALE_MIN_FROZEN_FRAMES;
     };
 } // namespace arms_ros2_control::command
