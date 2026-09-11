@@ -10,6 +10,10 @@
 #
 # Retired: standalone gripper / per-hardware debs / arms-ros2-control-jazzy-wbc.
 # Requires PRIVATE_SUBMODULES_TOKEN (selective submodule init; never submodules: recursive). Debs: install only, no .cpp.
+#
+# Container apt: ros:jazzy images pin Canonical archive.ubuntu.com / ports.ubuntu.com,
+# which time out from GitHub-hosted Azure VMs. Jobs rewrite those URIs to Azure-first
+# mirror lists with short Acquire timeouts so apt fails over in seconds, not minutes.
 
 name: Build arms-ros2-control deb
 
@@ -105,10 +109,53 @@ jobs:
       image: ${{ matrix.image }}
 
     steps:
-      - name: Install GitHub CLI
+      - name: Configure apt and install GitHub CLI
+        timeout-minutes: 8
         shell: bash
         run: |
           set -eo pipefail
+          export DEBIAN_FRONTEND=noninteractive
+
+          # ros:* containers do not inherit the runner image's Azure apt mirrors.
+          cat >/etc/apt/apt.conf.d/99-ci-acquire <<'EOF'
+          Acquire::Retries "1";
+          Acquire::http::Timeout "15";
+          Acquire::https::Timeout "15";
+          Acquire::Languages "none";
+          Acquire::IndexTargets::deb::DEP-11::DefaultEnabled "false";
+          EOF
+
+          mirrors_file=/etc/apt/ci-ubuntu-mirrors.txt
+          if [[ "$(dpkg --print-architecture)" == "arm64" ]]; then
+            printf '%s\n' \
+              $'http://azure.ports.ubuntu.com/ubuntu-ports/\tpriority:1' \
+              $'http://ports.ubuntu.com/ubuntu-ports/\tpriority:2' \
+              > "$mirrors_file"
+          else
+            printf '%s\n' \
+              $'http://azure.archive.ubuntu.com/ubuntu/\tpriority:1' \
+              $'http://archive.ubuntu.com/ubuntu/\tpriority:2' \
+              $'http://security.ubuntu.com/ubuntu/\tpriority:3' \
+              > "$mirrors_file"
+          fi
+
+          rewrite_ubuntu_mirrors() {
+            local f="$1"
+            [[ -f "$f" ]] || return 0
+            sed -E -i \
+              -e 's#https?://(archive|security)\.ubuntu\.com/ubuntu/?#mirror+file:/etc/apt/ci-ubuntu-mirrors.txt#g' \
+              -e 's#https?://ports\.ubuntu\.com/ubuntu-ports/?#mirror+file:/etc/apt/ci-ubuntu-mirrors.txt#g' \
+              "$f"
+          }
+          rewrite_ubuntu_mirrors /etc/apt/sources.list
+          shopt -s nullglob
+          for f in /etc/apt/sources.list.d/*.list /etc/apt/sources.list.d/*.sources; do
+            rewrite_ubuntu_mirrors "$f"
+          done
+
+          echo "Ubuntu apt mirrors ($(dpkg --print-architecture)):"
+          cat "$mirrors_file"
+          grep -RInE 'URIs:|^deb ' /etc/apt/sources.list /etc/apt/sources.list.d 2>/dev/null || true
 
           apt-get update
           apt-get install -y ca-certificates curl gnupg git
@@ -496,11 +543,12 @@ jobs:
           echo "is_prerelease=$is_prerelease" >> "$GITHUB_OUTPUT"
 
       - name: Install build tools
+        timeout-minutes: 10
         shell: bash
         run: |
           set -eo pipefail
+          export DEBIAN_FRONTEND=noninteractive
 
-          apt-get update
           apt-get install -y \
             python3-rosdep \
             python3-colcon-core \
@@ -720,6 +768,7 @@ jobs:
           fi
 
       - name: Install workspace dependencies
+        timeout-minutes: 15
         shell: bash
         env:
           ROS_DISTRO: ${{ steps.meta.outputs.ros_distro }}
@@ -1194,10 +1243,51 @@ jobs:
           deb_file_version="${VERSION//~/.}"
           echo "deb_file=${DEB_PREFIX}_${deb_file_version}_${DEB_ARCH}.deb" >> "$GITHUB_OUTPUT"
 
-      - name: Install verification tools
+      - name: Configure apt and install verification tools
+        timeout-minutes: 8
         shell: bash
         run: |
           set -eo pipefail
+          export DEBIAN_FRONTEND=noninteractive
+
+          cat >/etc/apt/apt.conf.d/99-ci-acquire <<'EOF'
+          Acquire::Retries "1";
+          Acquire::http::Timeout "15";
+          Acquire::https::Timeout "15";
+          Acquire::Languages "none";
+          Acquire::IndexTargets::deb::DEP-11::DefaultEnabled "false";
+          EOF
+
+          mirrors_file=/etc/apt/ci-ubuntu-mirrors.txt
+          if [[ "$(dpkg --print-architecture)" == "arm64" ]]; then
+            printf '%s\n' \
+              $'http://azure.ports.ubuntu.com/ubuntu-ports/\tpriority:1' \
+              $'http://ports.ubuntu.com/ubuntu-ports/\tpriority:2' \
+              > "$mirrors_file"
+          else
+            printf '%s\n' \
+              $'http://azure.archive.ubuntu.com/ubuntu/\tpriority:1' \
+              $'http://archive.ubuntu.com/ubuntu/\tpriority:2' \
+              $'http://security.ubuntu.com/ubuntu/\tpriority:3' \
+              > "$mirrors_file"
+          fi
+
+          rewrite_ubuntu_mirrors() {
+            local f="$1"
+            [[ -f "$f" ]] || return 0
+            sed -E -i \
+              -e 's#https?://(archive|security)\.ubuntu\.com/ubuntu/?#mirror+file:/etc/apt/ci-ubuntu-mirrors.txt#g' \
+              -e 's#https?://ports\.ubuntu\.com/ubuntu-ports/?#mirror+file:/etc/apt/ci-ubuntu-mirrors.txt#g' \
+              "$f"
+          }
+          rewrite_ubuntu_mirrors /etc/apt/sources.list
+          shopt -s nullglob
+          for f in /etc/apt/sources.list.d/*.list /etc/apt/sources.list.d/*.sources; do
+            rewrite_ubuntu_mirrors "$f"
+          done
+
+          echo "Ubuntu apt mirrors ($(dpkg --print-architecture)):"
+          cat "$mirrors_file"
 
           apt-get update
           apt-get install -y ca-certificates curl cmake build-essential
@@ -1340,9 +1430,11 @@ jobs:
           ls -lh "$deps_dir"/*.deb
 
       - name: Install debs and verify package discovery
+        timeout-minutes: 10
         shell: bash
         run: |
           set -eo pipefail
+          export DEBIAN_FRONTEND=noninteractive
 
           ros_distro="${{ steps.meta.outputs.ros_distro }}"
 
