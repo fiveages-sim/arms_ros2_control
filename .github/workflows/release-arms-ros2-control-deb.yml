@@ -1,6 +1,6 @@
 # Sole release path for arms_ros2_control. See README.deb.md.
 #   ros-jazzy-arms-ros2-control       — WBC stack + topic_based_ros2_control (amd64 + arm64)
-#   ros-jazzy-arms-ros2-control-full  — WBC + topic_based_ros2_control + gripper_hardware_common + marvin + modbus + can + juxie + rokae + ht + arx (amd64 + arm64)
+#   ros-jazzy-arms-ros2-control-full  — WBC + topic_based_ros2_control + gripper_hardware_common + marvin + modbus + can + juxie + rokae + ht + arx + inex + eyou_canfd + wuji (amd64 + arm64)
 #
 # Release policy:
 # - push v* tag                    -> formal GitHub Release
@@ -174,6 +174,7 @@ jobs:
             check_pat_repo_read "ht-ros2-control"
             check_pat_repo_read "arx-ros2-control"
             check_pat_repo_read "TJ_FX_ROBOT_CONTRL_SDK"
+            check_pat_repo_read "wuji-ros2-control"
           fi
 
           gitmodules_url_to_https() {
@@ -249,6 +250,7 @@ jobs:
             hardwares/arx_ros2_control
             hardwares/inex_ros2_control
             hardwares/eyou_canfd_ros2_control
+            hardwares/wuji_ros2_control
           )
           paths=("${wbc_paths[@]}")
           if [[ "${BUNDLE}" == "full" ]]; then
@@ -296,7 +298,8 @@ jobs:
               hardwares/ht_ros2_control/package.xml \
               hardwares/arx_ros2_control/package.xml \
               hardwares/inex_ros2_control/package.xml \
-              hardwares/eyou_canfd_ros2_control/package.xml; do
+              hardwares/eyou_canfd_ros2_control/package.xml \
+              hardwares/wuji_ros2_control/package.xml; do
               if [[ ! -f "${ws}/${p}" ]]; then
                 echo "Missing ${p} for full bundle." >&2
                 exit 1
@@ -713,6 +716,7 @@ jobs:
             rsync -a "${ws}/hardwares/arx_ros2_control/" "${source_root}/arx_ros2_control/"
             rsync -a "${ws}/hardwares/inex_ros2_control/" "${source_root}/inex_ros2_control/"
             rsync -a "${ws}/hardwares/eyou_canfd_ros2_control/" "${source_root}/eyou_canfd_ros2_control/"
+            rsync -a "${ws}/hardwares/wuji_ros2_control/" "${source_root}/wuji_ros2_control/"
           fi
 
       - name: Install workspace dependencies
@@ -737,7 +741,7 @@ jobs:
                 --rosdistro "${ROS_DISTRO}" \
                 -r \
                 -y \
-                --skip-keys "robot_common_launch ocs2_mobile_manipulator ocs2_mobile_manipulator_ros ocs2_ros_interfaces ocs2_wheel_humanoid ocs2_wheel_humanoid_ros lina_planning qt5 eigen3"
+                --skip-keys "robot_common_launch wuji_description ocs2_mobile_manipulator ocs2_mobile_manipulator_ros ocs2_ros_interfaces ocs2_wheel_humanoid ocs2_wheel_humanoid_ros lina_planning qt5 eigen3"
             '
 
       - name: Build arms install space
@@ -800,12 +804,16 @@ jobs:
             exit 1
           fi
           if [[ "${{ matrix.bundle }}" == "full" ]]; then
-            for pkg in gripper_hardware_common marvin_ros2_control modbus_ros2_control can_ros2_control juxie_ros2_control rokae_ros2_control ht_ros2_control arx_ros2_control inex_ros2_control eyou_canfd_ros2_control; do
+            for pkg in gripper_hardware_common marvin_ros2_control modbus_ros2_control can_ros2_control juxie_ros2_control rokae_ros2_control ht_ros2_control arx_ros2_control inex_ros2_control eyou_canfd_ros2_control wuji_ros2_control; do
               if [[ ! -d "${install_root}/share/${pkg}" ]]; then
                 echo "${pkg} was not installed into the package root." >&2
                 exit 1
               fi
             done
+            if [[ ! -f "${install_root}/lib/libwuji_sdk_c.so" ]]; then
+              echo "libwuji_sdk_c.so was not installed into the package root (Wuji C SDK)." >&2
+              exit 1
+            fi
           fi
 
       - name: Build deb package
@@ -829,7 +837,7 @@ jobs:
 
           if [[ "${BUNDLE}" == "full" ]]; then
             deb_description="Prebuilt arms_ros2_control full bundle for ROS 2 ${ROS_DISTRO}
-             Includes WBC stack (lina_planning, ocs2_humanoid, ocs2_wbc_controller), topic_based_ros2_control, plus gripper_hardware_common, marvin_ros2_control, modbus_ros2_control, can_ros2_control, juxie_ros2_control, rokae_ros2_control, ht_ros2_control, arx_ros2_control, inex_ros2_control, eyou_canfd_ros2_control. Installed into ${INSTALL_PREFIX} without shared prefix setup files."
+             Includes WBC stack (lina_planning, ocs2_humanoid, ocs2_wbc_controller), topic_based_ros2_control, plus gripper_hardware_common, marvin_ros2_control, modbus_ros2_control, can_ros2_control, juxie_ros2_control, rokae_ros2_control, ht_ros2_control, arx_ros2_control, inex_ros2_control, eyou_canfd_ros2_control, wuji_ros2_control. Installed into ${INSTALL_PREFIX} without shared prefix setup files."
           else
             deb_description="Prebuilt arms_ros2_control WBC bundle for ROS 2 ${ROS_DISTRO}
              Includes command, controllers, arms_controller_common, ocs2_controller_common, lina_planning, ocs2_humanoid, ocs2_wbc_controller, topic_based_ros2_control. Installed into ${INSTALL_PREFIX} without shared prefix setup files."
@@ -1374,6 +1382,7 @@ jobs:
                   "arx_ros2_control",
                   "inex_ros2_control",
                   "eyou_canfd_ros2_control",
+                  "wuji_ros2_control",
               ])
           for package_name in packages:
               print(package_name, get_package_share_directory(package_name))
@@ -1425,6 +1434,7 @@ jobs:
           find_package(arx_ros2_control REQUIRED)
           find_package(inex_ros2_control REQUIRED)
           find_package(eyou_canfd_ros2_control REQUIRED)
+          find_package(wuji_ros2_control REQUIRED)
           EOF
           fi
 
