@@ -741,7 +741,7 @@ jobs:
                 --rosdistro "${ROS_DISTRO}" \
                 -r \
                 -y \
-                --skip-keys "robot_common_launch wuji_description ocs2_mobile_manipulator ocs2_mobile_manipulator_ros ocs2_ros_interfaces ocs2_wheel_humanoid ocs2_wheel_humanoid_ros lina_planning qt5 eigen3"
+                --skip-keys "robot_common_launch ocs2_mobile_manipulator ocs2_mobile_manipulator_ros ocs2_ros_interfaces ocs2_wheel_humanoid ocs2_wheel_humanoid_ros lina_planning qt5 eigen3"
             '
 
       - name: Build arms install space
