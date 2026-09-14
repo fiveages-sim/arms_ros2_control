@@ -47,12 +47,7 @@ namespace ocs2::mobile_manipulator
         std::optional<bool> traj_record_enabled_update;
         for (const auto& param : parameters)
         {
-            if (param.get_name() == "hardware_latency")
-            {
-                hardware_latency_ = param.as_double();
-                RCLCPP_INFO(node_->get_logger(), "Updated hardware_latency to: %f", hardware_latency_);
-            }
-            else if (param.get_name() == "traj_record_dir")
+            if (param.get_name() == "traj_record_dir")
             {
                 traj_record_dir_ = param.as_string();
             }
@@ -153,12 +148,7 @@ namespace ocs2::mobile_manipulator
                 policy_active_ = true;
             }
         }
-        bool trigger_cached_state = (time - last_execute_time_).seconds() < hardware_latency_;
-        if (trigger_cached_state && cached_ob_state_)
-        {
-            observation_.state = cached_last_action_;
-        }
-
+        // Keep measured joint feedback from updateObservation() for closed-loop MPC.
         mpc_mrt_interface_->setCurrentObservation(observation_);
         {
             auto pub_scope = rt_timing_.scope(&rt_timing_.eval_obs_pub_us);
@@ -184,6 +174,7 @@ namespace ocs2::mobile_manipulator
             mpc_mrt_interface_->evaluatePolicy(time.seconds(), observation_.state, optimized_state_, optimized_input_,
                                                planned_mode);
             const auto& policy = mpc_mrt_interface_->getPolicy();
+            // Offset is in controller cycles; 22 cycles at 500 Hz look ahead by 44 ms.
             const double future_time = observation_.time + future_time_offset_ / ctrl_interfaces_.frequency_;
             future_state = LinearInterpolation::interpolate(
                 future_time, policy.timeTrajectory_, policy.stateTrajectory_);
@@ -201,8 +192,6 @@ namespace ocs2::mobile_manipulator
             {
                 ctrl_interfaces_.setJointPositionCommand(i, future_state(i));
             }
-            cached_last_action_ = future_state;
-            last_execute_time_ = time;
         }
         else if (ctrl_interfaces_.control_mode_ == ControlMode::MIX)
         {
