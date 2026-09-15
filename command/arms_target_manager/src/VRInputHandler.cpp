@@ -73,16 +73,57 @@ namespace arms_ros2_control::command
     {
         rcl_interfaces::msg::ParameterDescriptor tau_descriptor;
         tau_descriptor.description =
-            "VR arm target smoothing time constant in seconds; 0 bypasses smoothing";
-        tau_descriptor.read_only = true;
-        target_smoothing_tau_s_ = node_->declare_parameter(
-            "vr_target_smoothing_tau_s", 0.02, tau_descriptor);
-        if (!std::isfinite(target_smoothing_tau_s_) || target_smoothing_tau_s_ < 0.0)
+            "VR arm target smoothing window in seconds (linear interpolation: a new target "
+            "is reached exactly tau seconds after it arrives); 0 bypasses smoothing";
+        // 在线可调：ros2 param set <node> vr_target_smoothing_tau_s <seconds>
+        tau_descriptor.read_only = false;
+        const double declared_tau = node_->declare_parameter(
+            "vr_target_smoothing_tau_s", 0.05, tau_descriptor);
+        if (!std::isfinite(declared_tau) || declared_tau < 0.0)
         {
             throw std::invalid_argument(
                 "vr_target_smoothing_tau_s must be finite and >= 0, got " +
-                std::to_string(target_smoothing_tau_s_));
+                std::to_string(declared_tau));
         }
+        target_smoothing_tau_s_.store(declared_tau);
+
+        // 运行时改 tau：先校验，再把当前正在输出的插值值作为新段的起点，最后生效新 tau，
+        // 于是调参过程中目标连续，不会因换 tau 而跳变。
+        smoothing_param_callback_handle_ = node_->add_on_set_parameters_callback(
+            [this](const std::vector<rclcpp::Parameter>& parameters)
+            {
+                rcl_interfaces::msg::SetParametersResult result;
+                result.successful = true;
+                for (const auto& parameter : parameters)
+                {
+                    if (parameter.get_name() != "vr_target_smoothing_tau_s")
+                    {
+                        continue;
+                    }
+                    if (parameter.get_type() != rclcpp::ParameterType::PARAMETER_DOUBLE)
+                    {
+                        result.successful = false;
+                        result.reason = "vr_target_smoothing_tau_s must be a double";
+                        return result;
+                    }
+                    const double next_tau = parameter.as_double();
+                    if (!std::isfinite(next_tau) || next_tau < 0.0)
+                    {
+                        result.successful = false;
+                        result.reason = "vr_target_smoothing_tau_s must be finite and >= 0";
+                        return result;
+                    }
+                    // 滤波器形式下改 tau 本身就是连续的，不需要重建状态。
+                    target_smoothing_tau_s_.store(next_tau);
+                    RCLCPP_INFO(
+                        node_->get_logger(),
+                        "🕹️ VR target smoothing tau -> %.4f s (per stage %.4f s)%s",
+                        next_tau,
+                        0.5 * next_tau,
+                        next_tau > 0.0 ? "" : " (bypassed)");
+                }
+                return result;
+            });
 
         // 创建 controller topology 检测 client 和启动期重试 timer
         list_controllers_client_ =
@@ -101,9 +142,9 @@ namespace arms_ros2_control::command
         tf_listener_ = std::make_shared<tf2_ros::TransformListener>(*tf_buffer_);
         RCLCPP_INFO(
             node_->get_logger(),
-            "VR arm targets: 200 Hz, input timeout 200 ms; smoothing tau=%.3f s%s",
-            target_smoothing_tau_s_,
-            target_smoothing_tau_s_ > 0.0 ? "" : " (bypassed)");
+            "VR arm targets: 200 Hz, input timeout 200 ms; 2-stage smoothing tau=%.3f s%s",
+            target_smoothing_tau_s_.load(),
+            target_smoothing_tau_s_.load() > 0.0 ? "" : " (bypassed)");
         // 检测左右控制器名称
         detectGripperControllers(hand_controllers_);
         
@@ -1054,6 +1095,8 @@ namespace arms_ros2_control::command
         // 提取原始（未缩放）左手柄位姿
         matrixToPosOri(left_ee_pose_, vr_left_position_raw_, left_orientation_);
         // 在原始位姿基础上应用缩放，得到用于控制的left_position_
+        // （上游 ~98 Hz 且抖动很大，这里保持零阶保持：真正的"插值重采样"需要在抖动
+        //   缓冲里多等一个采样周期，实测 p95 达 25 ms，代价太大；台阶交给下方两级滤波。）
         left_position_ = vr_left_position_raw_;
         left_position_ *= vr_pose_scale_;
 
@@ -1202,7 +1245,7 @@ namespace arms_ros2_control::command
         right_ee_pose_ = poseMsgToMatrix(msg);
         // 提取原始（未缩放）右手柄位姿
         matrixToPosOri(right_ee_pose_, vr_right_position_raw_, right_orientation_);
-        // 在原始位姿基础上应用缩放，得到用于控制的right_position_
+        // 在原始位姿基础上应用缩放，得到用于控制的right_position_（语义同左侧，零阶保持）
         right_position_ = vr_right_position_raw_;
         right_position_ *= vr_pose_scale_;
 
@@ -1721,9 +1764,6 @@ namespace arms_ros2_control::command
         recordLastPublishedTarget(armType, smoothedPosition, smoothedOrientation);
         TargetSmoothing& smoothing = isLeft ? left_target_smoothing_ : right_target_smoothing_;
         smoothing.valid = true;
-        smoothing.stamp = now;
-        smoothing.position = smoothedPosition;
-        smoothing.orientation = smoothedOrientation.normalized();
         previousPosition = publishPosition;
         previousOrientation = publishOrientation.normalized();
         return true;
@@ -1782,20 +1822,44 @@ namespace arms_ros2_control::command
     void VRInputHandler::smoothTarget(bool isLeft,
                                       std::chrono::steady_clock::time_point now,
                                       Eigen::Vector3d& position,
-                                      Eigen::Quaterniond& orientation) const
+                                      Eigen::Quaterniond& orientation)
     {
-        const TargetSmoothing& state = isLeft ? left_target_smoothing_ : right_target_smoothing_;
-        if (target_smoothing_tau_s_ <= 0.0 || !state.valid)
+        TargetSmoothing& state = isLeft ? left_target_smoothing_ : right_target_smoothing_;
+        const Eigen::Vector3d inputPosition = position;
+        const Eigen::Quaterniond inputOrientation = orientation.normalized();
+        const double tau = target_smoothing_tau_s_.load();
+
+        // 旁路（tau=0）与首帧（进入 UPDATE / 重建基准后）：状态直接等于目标，不追赶。
+        if (tau <= 0.0 || !state.valid)
         {
+            state.stage1_position = inputPosition;
+            state.stage1_orientation = inputOrientation;
+            state.stage2_position = inputPosition;
+            state.stage2_orientation = inputOrientation;
+            state.stamp = now;
             return;
         }
 
+        // dt 上限（约两个 5 ms 输出周期）：调度卡顿或跳发布后用长间隔算 alpha 会一拍到位，
+        // 反而在目标上留下一个台阶。
         const double dt = std::clamp(
             std::chrono::duration<double>(now - state.stamp).count(), 0.0, MAX_SMOOTHING_DT_S);
-        const double alpha = 1.0 - std::exp(-dt / target_smoothing_tau_s_);
-        position = state.position + alpha * (position - state.position);
-        // Eigen slerp 已按四元数点积符号选择最短旋转。
-        orientation = state.orientation.slerp(alpha, orientation.normalized()).normalized();
+        state.stamp = now;
+
+        // 两级一阶串联，每级时间常数 tau/2：低频滞后合计仍是 tau，但因为第二级的输入
+        // 是第一级的连续输出，位置曲线是 C1（速度连续）——单级/线性插值斜坡会保留
+        // "分段恒速 + 每个新采样跳一次"的速度台阶，就是 target 上看得见的锯齿。
+        // 15 Hz 处衰减也比单级 tau 好：0.39^2 = 0.15 vs 0.21。
+        const double alpha = 1.0 - std::exp(-dt / (0.5 * tau));
+        state.stage1_position += alpha * (inputPosition - state.stage1_position);
+        state.stage1_orientation =
+            state.stage1_orientation.slerp(alpha, inputOrientation).normalized();
+        state.stage2_position += alpha * (state.stage1_position - state.stage2_position);
+        state.stage2_orientation =
+            state.stage2_orientation.slerp(alpha, state.stage1_orientation).normalized();
+
+        position = state.stage2_position;
+        orientation = state.stage2_orientation;
     }
 
     void VRInputHandler::resetTargetSmoothing(bool isLeft)

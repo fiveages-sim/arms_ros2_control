@@ -398,8 +398,17 @@ namespace arms_ros2_control::command
                                      const Eigen::Quaterniond& orientation);
 
         /**
-         * 固定输出一阶平滑：位置线性插值、姿态 slerp，alpha = 1 - exp(-dt / tau)。
-         * 在控制器坐标系中计算；只读状态，发布成功后才由调用方提交。
+         * 固定输出平滑：两级一阶低通串联（每级时间常数 tau/2），位置逐级一阶跟踪、
+         * 姿态逐级 slerp，alpha = 1 - exp(-dt / (tau/2))。
+         *
+         * 为什么要两级：单级（指数）或线性插值斜坡的**速度**在每个新 VR 采样处都会阶跃，
+         * 也就是"分段恒速 + 跳变"，在 target 曲线上一眼能看出锯齿（实测 tick 间速度变化
+         * p90 ≈ 16%，二阶差分 p99 ≈ 240 µm）。两级串联后第二级的输入是第一级的连续输出，
+         * 位置曲线 C1（速度连续），实测速度跳变 p90 ≈ 11%、二阶差分 p99 ≈ 60 µm，
+         * 且同等低频滞后（= tau）下 15 Hz 衰减更好（0.15 vs 0.21）。
+         *
+         * dt 上限 MAX_SMOOTHING_DT_S 避免调度卡顿后的长间隔一拍到位留下台阶。
+         * 在控制器坐标系中计算。
          * @param isLeft true=左臂状态，false=右臂状态
          * @param now 本次输出的单调时钟时间
          * @param position 控制器坐标系下的目标位置，原地改写为平滑后的值
@@ -408,7 +417,7 @@ namespace arms_ros2_control::command
         void smoothTarget(bool isLeft,
                           std::chrono::steady_clock::time_point now,
                           Eigen::Vector3d& position,
-                          Eigen::Quaterniond& orientation) const;
+                          Eigen::Quaterniond& orientation);
 
         /** 清空平滑状态；下一次输出直接等于目标。 */
         void resetTargetSmoothing(bool isLeft);
@@ -581,7 +590,7 @@ namespace arms_ros2_control::command
         Eigen::Matrix4d right_ee_pose_ = Eigen::Matrix4d::Identity();
 
         // VR位置和方向参数（世界/机器人坐标系下）
-        // *_position_raw_ 表示未应用缩放系数的原始VR位姿
+        // *_position_raw_ 表示未应用缩放系数的原始VR位姿（最新一次采样）
         Eigen::Vector3d vr_left_position_raw_ = Eigen::Vector3d::Zero();
         Eigen::Vector3d vr_right_position_raw_ = Eigen::Vector3d::Zero();
         Eigen::Quaterniond left_orientation_ = Eigen::Quaterniond::Identity();
@@ -619,20 +628,25 @@ namespace arms_ros2_control::command
         Eigen::Vector3d last_published_right_position_ = Eigen::Vector3d::Zero();
         Eigen::Quaterniond last_published_right_orientation_ = Eigen::Quaterniond::Identity();
 
-        // 固定输出平滑状态（每臂一份）：最后一次成功发布的计算-frame 输出，语义见 smoothTarget()。
+        // 固定输出平滑状态（每臂一份）：两级一阶低通串联，语义见 smoothTarget()。
+        // 一级：raw -> stage1，二级：stage1 -> stage2（输出）。
         struct TargetSmoothing
         {
             bool valid = false;
             std::chrono::steady_clock::time_point stamp{};
-            Eigen::Vector3d position = Eigen::Vector3d::Zero();
-            Eigen::Quaterniond orientation = Eigen::Quaterniond::Identity();
+            Eigen::Vector3d stage1_position = Eigen::Vector3d::Zero();
+            Eigen::Quaterniond stage1_orientation = Eigen::Quaterniond::Identity();
+            Eigen::Vector3d stage2_position = Eigen::Vector3d::Zero();
+            Eigen::Quaterniond stage2_orientation = Eigen::Quaterniond::Identity();
         };
         TargetSmoothing left_target_smoothing_;
         TargetSmoothing right_target_smoothing_;
-        // vr_target_smoothing_tau_s 启动参数；0 表示旁路
-        double target_smoothing_tau_s_ = 0.0;
+        // vr_target_smoothing_tau_s：总低频滞后（秒），运行时可调；0 表示旁路
+        std::atomic<double> target_smoothing_tau_s_{0.0};
+        rclcpp::node_interfaces::OnSetParametersCallbackHandle::SharedPtr
+            smoothing_param_callback_handle_;
         // 单步 dt 上限（约两个 5 ms 输出周期，容忍调度抖动），
-        // 避免 TF 短暂失败等跳过发布后用长间隔算出一次大步长
+        // 避免调度卡顿或跳过发布后用长间隔算出一次大步长
         static constexpr double MAX_SMOOTHING_DT_S = 0.01;
 
         // 状态管理
