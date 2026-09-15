@@ -132,6 +132,7 @@ namespace arms_controller_common
          * @return True if a trajectory has been initialized
          */
         bool isInitialized() const;
+        bool isSingleNode() const { return mode_ == TrajectoryMode::SINGLE_NODE; }
 
         /**
          * @brief Set trajectory duration for multi-node trajectories

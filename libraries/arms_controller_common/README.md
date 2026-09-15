@@ -290,3 +290,35 @@ auto state_hold = std::make_shared<StateHold>(ctrl_interfaces_, gravity_comp, no
 cd ~/ros2_ws
 colcon build --packages-select arms_controller_common
 ```
+
+### MoveJ `servo` 实时关节跟随
+
+设置控制器参数 `movej_interpolation_type: servo`，通过已有
+`target_joint_position`（或 `/left`、`/right`、`/body`、`/head` 分组话题）持续发送关节位置。
+此模式使用移植自 `rokae_ros2_control::DoubleSFilter` 的三阶状态反馈滤波器，
+不依赖 lina_planning，也不为每条目标启动新的点到点轨迹。
+
+```yaml
+movej_interpolation_type: servo
+movej_max_velocity: 2.0       # rad/s
+movej_max_acceleration: 4.0   # rad/s²
+movej_max_jerk: 20.0          # rad/s³
+```
+
+- 进入 MOVEJ 时，以实测位置、实测速度（没有速度接口时为 0）、初始加速度 0 初始化。
+  在 MOVEJ 内修改插值模式后，下一条位置目标触发模式更新；切入 servo 的首个控制周期
+  从最后下发的位置和实测速度初始化。限幅参数在初始化时载入，修改后重新进入模式生效。
+- 同一 servo 会话中，新目标只覆盖目标位置，保留滤波器的 `q/dq/ddq`，不触发先减速再重规划。
+  分组消息只更新对应关节，其他关节继续追踪各自最后的目标；初次进入时未指定的关节目标为进入位置。
+- 现有位置消息不提供目标速度和加速度，因此两者均为 0，不做数值微分或预测。
+  `movej_duration` 和 `movej_auto_extend_duration` 不用于 servo；到位后滤波状态继续保留。
+- 使用实际控制周期，内部拆分为不超过 1 ms 的积分步长。非正、非有限或超过 100 ms 的周期不推进滤波状态。
+  内部子步不会提高硬件命令下发频率。
+- 退出 MOVEJ 或被其他运动抢占后，下次 servo 初始化会重新建立状态。
+  定时单段、多路点轨迹不能选择 servo；HOME 也不能使用 servo。
+- 保留原算法的离散切换律和梯形积分：速度、加速度可能有离散超限，到位附近可能有微小抖动，
+  不能视为严格运动约束保证。沿用目标位置限位，不提供制动距离意义上的位置边界保证。
+  此模式不增加遥操作消息超时机制；停止发送后会继续追踪最后目标。
+
+验证：`test_movej_servo` 使用模拟关节接口覆盖进入初始化、连续换目标、分组交替更新、
+无效目标、退出重入以及 none/linear 与 servo 的模式切换。测试不驱动实机。

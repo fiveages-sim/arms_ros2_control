@@ -14,7 +14,8 @@ namespace arms_controller_common
         TANH,
         LINEAR,
         DOUBLES,
-        NONE
+        NONE,
+        SERVO
     };
 
     inline std::string toLowerCopy(std::string s)
@@ -32,6 +33,8 @@ namespace arms_controller_common
             return "linear";
         case InterpolationType::DOUBLES:
             return "doubles";
+        case InterpolationType::SERVO:
+            return "servo";
         case InterpolationType::NONE:
             return "none";
         case InterpolationType::TANH:
@@ -42,7 +45,7 @@ namespace arms_controller_common
 
     /**
      * @brief Parse interpolation type from string (case-insensitive).
-     * @param type "tanh", "linear", or "none"
+     * @param type "tanh", "linear", "doubles", "none", or "servo"
      * @param fallback Returned when type is unknown
      */
     inline InterpolationType parseInterpolationType(const std::string& type,
@@ -60,6 +63,10 @@ namespace arms_controller_common
         if (t == "doubles")
         {
             return InterpolationType::DOUBLES;
+        }
+        if (t == "servo")
+        {
+            return InterpolationType::SERVO;
         }
         if (t == "none")
         {

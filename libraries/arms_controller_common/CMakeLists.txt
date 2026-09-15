@@ -122,4 +122,13 @@ if(lina_planning_FOUND)
 endif()
 ament_export_targets(export_${PROJECT_NAME} HAS_LIBRARY_TARGET)
 
+if(BUILD_TESTING)
+    enable_testing()
+    add_executable(test_movej_servo test/test_movej_servo.cpp)
+    target_link_libraries(test_movej_servo PRIVATE ${PROJECT_NAME})
+    add_test(NAME movej_servo COMMAND test_movej_servo)
+    set_tests_properties(movej_servo PROPERTIES TIMEOUT 30
+        ENVIRONMENT "LD_LIBRARY_PATH=$<TARGET_FILE_DIR:${PROJECT_NAME}>:$ENV{LD_LIBRARY_PATH}")
+endif()
+
 ament_package()
