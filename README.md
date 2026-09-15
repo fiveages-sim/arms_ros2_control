@@ -204,6 +204,24 @@ The `ocs2_wbc_controller` provides whole-body MPC for wheel-based dual-arm platf
 - Dual-arm EE tracking with torso constraints and runtime `HumanoidMode` switching
 - Diff-drive and omni / holonomic mobile base (`manipulatorModelType` 1 / 4)
 
+#### OCS2 feedback mode (arm and WBC)
+
+Both controllers use the same `ros__parameters`:
+
+```yaml
+closed_loop: true       # Default: use measured joint positions for MPC feedback.
+hardware_latency: 0.2   # Seconds; used only when closed_loop is false.
+```
+
+With `closed_loop: false`, the existing open-loop behavior is retained: MPC uses the cached
+position command while the elapsed time since the last position command is less than
+`hardware_latency`, and measured joint positions once that window expires. WBC mobile-base
+pose feedback is retained in both modes. `future_time_offset` still controls trajectory lookahead
+in either mode.
+
+Both parameters can be changed at runtime. `closed_loop` replaces `cached_ob_state`;
+configurations that need the previous cached-observation behavior must set `closed_loop: false`.
+
 #### Adaptive Gripper Controller
 
 The `adaptive_gripper_controller` provides basic gripper control functionality with position reading and output capabilities.

@@ -66,6 +66,8 @@ namespace ocs2::mobile_manipulator
                                AutoDeclareFunc auto_declare)
             : node_(node), ctrl_interfaces_(ctrl_interfaces)
         {
+            closed_loop_ = auto_declare("closed_loop", true);
+            hardware_latency_ = auto_declare("hardware_latency", 0.2);
             // Declare dir before enabled so both can be applied together from yaml/callback.
             traj_record_dir_ = auto_declare("traj_record_dir", std::string("/tmp/traj_record"));
             const bool traj_record_enabled = auto_declare("traj_record_enabled", false);
@@ -181,6 +183,9 @@ namespace ocs2::mobile_manipulator
             observation_.state = interface_->getInitialState();
             observation_.input = vector_t::Zero(interface_->getManipulatorModelInfo().inputDim);
             observation_.time = 0.0;
+
+            last_execute_time_ = node_->now();
+            cached_last_action_ = observation_.state;
         }
 
         ~CtrlComponent() { stopVisualizationThread(); }
@@ -320,6 +325,11 @@ namespace ocs2::mobile_manipulator
         std::vector<std::string> joint_names_;
         bool dual_arm_mode_;
         double future_time_offset_; // Lookahead in controller cycles (seconds = offset / frequency).
+        /// Closed loop uses measured state; open loop uses cached commands during hardware latency.
+        std::atomic_bool closed_loop_{true};
+        std::atomic<double> hardware_latency_{0.2};
+        rclcpp::Time last_execute_time_;
+        vector_t cached_last_action_;
         std::string traj_record_dir_{"/tmp/traj_record"};
         rclcpp::node_interfaces::OnSetParametersCallbackHandle::SharedPtr parameter_callback_handle_;
         rcl_interfaces::msg::SetParametersResult on_parameter_change(

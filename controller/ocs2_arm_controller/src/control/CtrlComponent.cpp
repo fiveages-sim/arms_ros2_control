@@ -47,7 +47,19 @@ namespace ocs2::mobile_manipulator
         std::optional<bool> traj_record_enabled_update;
         for (const auto& param : parameters)
         {
-            if (param.get_name() == "traj_record_dir")
+            if (param.get_name() == "closed_loop")
+            {
+                closed_loop_.store(param.as_bool(), std::memory_order_relaxed);
+                RCLCPP_INFO(node_->get_logger(), "closed_loop=%s: hardware_latency %s",
+                            param.as_bool() ? "true" : "false",
+                            param.as_bool() ? "ignored" : "enabled");
+            }
+            else if (param.get_name() == "hardware_latency")
+            {
+                hardware_latency_.store(param.as_double(), std::memory_order_relaxed);
+                RCLCPP_INFO(node_->get_logger(), "Updated hardware_latency to: %f (open loop only)", param.as_double());
+            }
+            else if (param.get_name() == "traj_record_dir")
             {
                 traj_record_dir_ = param.as_string();
             }
@@ -148,7 +160,13 @@ namespace ocs2::mobile_manipulator
                 policy_active_ = true;
             }
         }
-        // Keep measured joint feedback from updateObservation() for closed-loop MPC.
+        // Closed loop keeps the measured observation and bypasses hardware latency entirely.
+        if (!closed_loop_.load(std::memory_order_relaxed) &&
+            (time - last_execute_time_).seconds() < hardware_latency_.load(std::memory_order_relaxed))
+        {
+            observation_.state = cached_last_action_;
+        }
+
         mpc_mrt_interface_->setCurrentObservation(observation_);
         {
             auto pub_scope = rt_timing_.scope(&rt_timing_.eval_obs_pub_us);
@@ -192,6 +210,8 @@ namespace ocs2::mobile_manipulator
             {
                 ctrl_interfaces_.setJointPositionCommand(i, future_state(i));
             }
+            cached_last_action_ = future_state;
+            last_execute_time_ = time;
         }
         else if (ctrl_interfaces_.control_mode_ == ControlMode::MIX)
         {
