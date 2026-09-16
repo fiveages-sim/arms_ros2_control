@@ -269,6 +269,9 @@ namespace arms_ros2_control::command
          */
         void processChassisAxes();
 
+        // WBC 底盘解锁期间屏蔽所有 VR 底盘速度（包括清零），保留手柄模式。
+        void publishChassisVelocity(const geometry_msgs::msg::Twist& velocity);
+
         /**
          * 切换底盘控制模式（case 20 触发）
          * 进入：清零并停止末端摇杆累积；退出：清零底盘与腰部命令
@@ -278,6 +281,7 @@ namespace arms_ros2_control::command
         /**
          * 把 /cmd_vel、waist_lifting_command、waist_turning_command 三个话题各发一次 0
          * 用于退出底盘模式、disable、enabled 变 false 等场景，防止残留运动
+         * WBC 底盘解锁期间不向 /cmd_vel 发零速，避免干扰全身控制。
          */
         void resetChassisAndWaistCommands();
 
