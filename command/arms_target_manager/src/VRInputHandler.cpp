@@ -3079,7 +3079,7 @@ namespace arms_ros2_control::command
             // waist_lifting / waist_turning 保持 0（已在上方初始化）
         }
 
-        pub_cmd_vel_->publish(cmd_vel);
+        publishChassisVelocity(cmd_vel);
         pub_waist_lifting_->publish(waist_lifting);
         pub_waist_turning_->publish(waist_turning);
 
@@ -3092,11 +3092,24 @@ namespace arms_ros2_control::command
                      waist_lifting.data, waist_turning.data);
     }
 
+    void VRInputHandler::publishChassisVelocity(const geometry_msgs::msg::Twist& velocity)
+    {
+        // 以 WBC 实际反馈为准；锁定后下一帧摇杆输入自动恢复底盘控制。
+        if (isFullBodyMode() && target_manager_ &&
+            target_manager_->getCurrentBaseState() ==
+                arms_ros2_control_msgs::msg::WbcCurrentState::BASE_UNLOCKED)
+        {
+            return;
+        }
+
+        pub_cmd_vel_->publish(velocity);
+    }
+
     void VRInputHandler::resetChassisAndWaistCommands()
     {
-        // 三个话题各发一次 0，防止底盘/腰部残留运动
+        // 底盘清零同样遵守 WBC 优先级；腰部照常清零。
         auto zero_vel = geometry_msgs::msg::Twist();
-        pub_cmd_vel_->publish(zero_vel);
+        publishChassisVelocity(zero_vel);
 
         auto zero_float = std_msgs::msg::Float64();
         zero_float.data = 0.0;
