@@ -15,6 +15,7 @@
 #include <QPainter>
 #include <QPainterPath>
 #include <QPaintEvent>
+#include <QTabWidget>
 
 #include <algorithm>
 #include <cmath>
@@ -229,7 +230,8 @@ namespace arms_rviz_control_plugin
         btn_row->addWidget(zero_wrench_btn_);
         main->addLayout(btn_row);
 
-        auto* ident_group = new QGroupBox("相位辨识", this);
+        auto* ident_tabs = new QTabWidget(this);
+        auto* ident_group = new QWidget(ident_tabs);
         auto* ident_layout = new QVBoxLayout(ident_group);
         auto* ident_settings = new QHBoxLayout();
         identification_arm_combo_ = new QComboBox(ident_group);
@@ -280,7 +282,9 @@ namespace arms_rviz_control_plugin
         export_identification_btn_->setToolTip(
             "将当前逐轴辨识结果导出为 Excel 可直接打开的 UTF-8 CSV 文件");
         ident_layout->addWidget(export_identification_btn_);
-        main->addWidget(ident_group);
+        ident_tabs->addTab(ident_group, "底层位置环 / 接触链路辨识");
+        ident_tabs->addTab(makePayloadWidget(), "末端负载辨识");
+        main->addWidget(ident_tabs);
 
         auto* hint = new QLabel(
             "仅在 COMPLIANCE 模式下有数据。F_meas 已含反馈符号约定。", this);
@@ -324,7 +328,19 @@ namespace arms_rviz_control_plugin
         });
     }
 
-    ComplianceForcePanel::~ComplianceForcePanel() = default;
+    ComplianceForcePanel::~ComplianceForcePanel()
+    {
+        if (payload_process_ && payload_process_->state() != QProcess::NotRunning)
+        {
+            payload_process_->disconnect(this);
+            payload_process_->terminate();
+            if (!payload_process_->waitForFinished(2000))
+            {
+                payload_process_->kill();
+                payload_process_->waitForFinished(1000);
+            }
+        }
+    }
 
     void ComplianceForcePanel::onInitialize()
     {
@@ -598,17 +614,14 @@ namespace arms_rviz_control_plugin
         last_status_ = *msg;
         have_status_ = true;
         if (status_watchdog_) status_watchdog_->start();
-        const double force_limit = std::clamp(
-            std::isfinite(msg->force_setpoint_limit)
-                ? msg->force_setpoint_limit : 20.0,
-            0.1, 20.0);
-        const double torque_limit = std::clamp(
-            std::isfinite(msg->torque_setpoint_limit)
-                ? msg->torque_setpoint_limit : 5.0,
-            0.01, 5.0);
+        // Older controllers leave these fields at zero (unset), not a 0 N limit.
         for (int i = 0; i < 6; ++i)
         {
-            const double limit = i < 3 ? force_limit : torque_limit;
+            const double maximum = i < 3 ? 20.0 : 5.0;
+            const double reported = i < 3 ? msg->force_setpoint_limit : msg->torque_setpoint_limit;
+            const double limit = std::clamp(
+                std::isfinite(reported) && reported > 0.0 ? reported : maximum,
+                i < 3 ? 0.1 : 0.01, maximum);
             QSignalBlocker blocker(setpoint_spin_[i]);
             setpoint_spin_[i]->setRange(-limit, limit);
         }
@@ -616,25 +629,19 @@ namespace arms_rviz_control_plugin
             ? msg->right_joint_count : msg->left_joint_count;
         identification_joint_spin_->setMaximum(std::max(0, joint_count - 1));
 
-        const QString cal = QString("tare L=%1 R=%2")
-                                .arg(msg->left_tare_valid ? "OK" : "--")
-                                .arg(msg->right_tare_valid ? "OK" : "--");
         const QString ft = QString("FT L=%1 R=%2")
                                .arg(msg->left_ft_active ? "on" : "off")
                                .arg(msg->right_ft_active ? "on" : "off");
-        const QString ready = QString("force L=%1 R=%2")
-                                  .arg(msg->left_force_ready ? "ready" : "off")
-                                  .arg(msg->right_force_ready ? "ready" : "off");
-        QString text = QString("COMPLIANCE  |  %1  |  %2  |  %3")
-                           .arg(cal, ft, ready);
+        QString text = QString("COMPLIANCE  |  %1  |  zero=%2")
+                           .arg(ft)
+                           .arg(msg->zero_cal_done ? "done" : "pending");
         if (msg->identification_active)
         {
             const QString channel = msg->identification_mode == 1
                 ? QString("J%1").arg(msg->identification_joint)
                 : QString("axis%1").arg(msg->identification_axis);
-            text += QString("  |  辨识 %1 %2% @ %3 Hz")
+            text += QString("  |  辨识 %1 @ %2 Hz")
                 .arg(channel)
-                .arg(msg->identification_progress * 100.0, 0, 'f', 0)
                 .arg(msg->identification_frequency, 0, 'f', 2);
         }
         else if (!msg->identification_message.empty() &&

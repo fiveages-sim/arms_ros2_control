@@ -23,4 +23,10 @@
     base_class_type="rviz_common::Panel">
     <description>WBC capability status panel</description>
   </class>
+  <class
+    name="arms_rviz_control_plugin/ComplianceForcePanel"
+    type="arms_rviz_control_plugin::ComplianceForcePanel"
+    base_class_type="rviz_common::Panel">
+    <description>COMPLIANCE force control, position-loop and payload identification</description>
+  </class>
 </library>

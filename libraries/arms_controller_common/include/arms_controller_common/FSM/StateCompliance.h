@@ -69,6 +69,9 @@ namespace arms_controller_common
             Eigen::Matrix<double, 6, 1> pos_integral{Eigen::Matrix<double, 6, 1>::Zero()};
             Eigen::Matrix<double, 6, 1> force_integral{Eigen::Matrix<double, 6, 1>::Zero()};
             Eigen::Matrix<double, 6, 1> force_disp{Eigen::Matrix<double, 6, 1>::Zero()};
+            Eigen::Vector3d workspace_position_reference{Eigen::Vector3d::Zero()};
+            std::array<Eigen::Matrix3d, 3> workspace_rotation_reference;
+            std::array<bool, 6> workspace_axis_active{};
             Eigen::Matrix<double, 6, 1> wrench_filt{Eigen::Matrix<double, 6, 1>::Zero()};
             // Low-pass filtered force-axis velocity (adds virtual inertia / damping
             // to the admittance law, suppresses low-frequency drag oscillation).
@@ -140,6 +143,8 @@ namespace arms_controller_common
         ArmSide& arm(bool is_left) { return arms_[is_left ? 0 : 1]; }
 
         void updateParam();
+        bool checkMeasuredWorkspace();
+        bool stopForWorkspaceViolation(const std::string& reason);
         void setupWrenchSubscriptions();
         void setupTeleopSubscriptions();
         void setupZeroWrenchService();
@@ -181,6 +186,7 @@ namespace arms_controller_common
 
         // ── Shared joint command buffer (left then right) ──
         std::vector<double> hold_positions_;
+        bool workspace_fault_{false};  // Latched until explicitly entering COMPLIANCE again.
 
         // ── Teleop / selection ──
         bool teleop_enable_{true};
@@ -192,9 +198,11 @@ namespace arms_controller_common
         bool pending_retarget_{false};
 
         // ── Position-axis gains ──
+        // 这里是所有 compliance_* 参数的唯一定义处：updateParam() 会用下面的
+        // 初值在节点上补声明缺失参数，机型 YAML 覆盖同名参数即可生效。
         // 位置环实测延迟 τ≈34ms、>3Hz 谐振峰 → 环路带宽 ωc=K 须 <3Hz：
-        // K=15(2.4Hz, PM≈50°) 远离谐振区；K=30(4.8Hz) 会来回振荡。D softens as K/(1+D).
-        std::vector<double> hybrid_pos_stiffness_{15.0, 15.0, 15.0, 10.0, 10.0, 10.0};
+        // K=20(3.2Hz) 贴近上限；K=30(4.8Hz) 会来回振荡。D softens as K/(1+D).
+        std::vector<double> hybrid_pos_stiffness_{20.0, 20.0, 20.0, 10.0, 10.0, 10.0};
         std::vector<double> hybrid_pos_damping_{0.0, 0.0, 0.0, 0.0, 0.0, 0.0};
         // 位控轴速度阻尼（随速度渐隐）：v -= B·fade·J·qdot_prev，|v|>vmax/3
         // 时全额生效（防拖动反转振荡/带速过零冲过头），低速接近目标时线性
@@ -289,6 +297,7 @@ namespace arms_controller_common
         rclcpp::Publisher<arms_ros2_control_msgs::msg::ComplianceForceStatus>::SharedPtr
             force_status_pub_;
         rclcpp::Service<std_srvs::srv::Trigger>::SharedPtr zero_wrench_service_;
+        rclcpp::node_interfaces::OnSetParametersCallbackHandle::SharedPtr force_setpoint_callback_;
         std::atomic_bool zero_cal_requested_{false};
         rclcpp::Time last_force_status_pub_{0, 0, RCL_ROS_TIME};
 

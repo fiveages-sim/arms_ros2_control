@@ -8,7 +8,7 @@
 #include "ocs2_arm_controller/FSM/StateOCS2.h"
 #include "ocs2_arm_controller/FSM/StateHold.h"
 #include "ocs2_arm_controller/FSM/StateMoveJ.h"
-#include "ocs2_arm_controller/FSM/StateCompliance.h"
+#include <arms_controller_common/FSM/StateCompliance.h>
 #include <arms_controller_common/utils/GravityCompensation.h>
 #include "arms_controller_common/utils/Kinematics.h"
 #include <ocs2_controller_common/mpc/MpcExecutionParams.hpp>
@@ -279,55 +279,15 @@ namespace ocs2::mobile_manipulator
                 ctrl_interfaces_, get_node(), joint_names_, gravity_compensation);
             state_list_.movej->setKinematicsSolver(kinematics_);
 
-            // COMPLIANCE: hybrid force/position control (fsm_command=5)
-            auto_declare<std::vector<double>>("compliance_task_selection",
-                                              {1.0, 0.0, 0.0, 0.0, 0.0, 0.0});
-            auto_declare<std::vector<double>>("compliance_hybrid_pos_stiffness",
-                                              {20.0, 20.0, 20.0, 10.0, 10.0, 10.0});
-            auto_declare<std::vector<double>>("compliance_hybrid_pos_damping",
-                                              {0.0, 0.0, 0.0, 0.0, 0.0, 0.0});
-            auto_declare<double>("compliance_hybrid_pos_vel_damping", 0.0);
-            auto_declare<double>("compliance_hybrid_pos_accel_ramp", 0.0);
-            auto_declare<double>("compliance_hybrid_pos_jerk_tau", 0.0);
-            auto_declare<double>("compliance_hybrid_pos_ki", 0.0);
-            auto_declare<double>("compliance_hybrid_pos_ki_max", 0.02);
-            auto_declare<std::vector<double>>("compliance_hybrid_force_damping",
-                                              {5000.0, 5000.0, 5000.0, 250.0, 250.0, 250.0});
-            auto_declare<double>("compliance_hybrid_force_ki", 2.0);
-            auto_declare<double>("compliance_hybrid_force_ki_max", 10.0);
-            auto_declare<double>("compliance_hybrid_force_ki_leak", 0.5);
-            auto_declare<double>("compliance_hybrid_force_deadband", 0.5);
-            auto_declare<std::vector<double>>("compliance_force_setpoint",
-                                              {0.0, 0.0, 0.0, 0.0, 0.0, 0.0});
-            auto_declare<double>("compliance_force_feedback_sign", -1.0);
-            auto_declare<double>("compliance_force_vel_lpf_alpha", 0.3);
-            auto_declare<std::vector<double>>("compliance_hybrid_cart_vmax",
-                                              {0.15, 0.15, 0.15, 0.6, 0.6, 0.6});
-            auto_declare<double>("compliance_hybrid_force_xmax_lin", 0.2);
-            auto_declare<double>("compliance_hybrid_force_xmax_ang", 0.3);
-            auto_declare<double>("compliance_hybrid_force_xmax_margin_ratio", 0.2);
-            auto_declare<double>("compliance_hybrid_joint_vmax", 0.8);
-            auto_declare<double>("compliance_hybrid_joint_limit_margin", 0.02);
-            auto_declare<double>("compliance_hybrid_joint_limit_avoidance_gain", 0.0);
-            auto_declare<double>("compliance_wrist_coupling_max", 0.0);
-            auto_declare<double>("compliance_hybrid_dls_lambda", 0.05);
-            auto_declare<double>("compliance_hybrid_qp_lambda", 1.0);
-            auto_declare<double>("compliance_hybrid_lin_task_weight", 1.0);
-            auto_declare<std::string>("compliance_hybrid_inverse_method", "DLS");
-            auto_declare<double>("compliance_wrench_lpf_alpha", 0.15);
-            auto_declare<double>("compliance_zero_cal_duration", 10.0);
-            auto_declare<double>("compliance_zero_cal_settle", 0.2);
-            auto_declare<double>("compliance_zero_cal_still_vel", 0.02);
-            auto_declare<double>("compliance_gravity_accel", 9.81);
-            auto_declare<double>("compliance_ft_timeout_sec", 0.2);
-            auto_declare<bool>("compliance_teleop_enable", true);
-            // Keep COMPLIANCE targets in the same frame used by StateOCS2.
-            // A YAML override is still honored by auto_declare().
+            // COMPLIANCE: hybrid force/position control (fsm_command=5).
+            // Every compliance_* parameter is declared with its default by
+            // arms_controller_common::StateCompliance::updateParam(); only the
+            // model-dependent reference frame and the tool payload parameters
+            // are declared here.
             auto_declare<std::string>("compliance_teleop_base_frame", control_base_frame);
-            auto_declare<std::string>("compliance_gravity_frame", "world");
             auto_declare<std::vector<double>>("left_dyn_param", {});
             auto_declare<std::vector<double>>("right_dyn_param", {});
-            state_list_.compliance = std::make_shared<StateCompliance>(
+            state_list_.compliance = std::make_shared<arms_controller_common::StateCompliance>(
                 ctrl_interfaces_, get_node(), gravity_compensation, kinematics_);
 
             // ===== Waist lifting parameters copied from BasicJointController =====
