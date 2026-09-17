@@ -16,6 +16,9 @@
 #include <QTimer>
 #include <QVBoxLayout>
 #include <QWidget>
+#include <QLineEdit>
+#include <QPlainTextEdit>
+#include <QProcess>
 
 #include <rviz_common/panel.hpp>
 #include <rclcpp/rclcpp.hpp>
@@ -81,6 +84,23 @@ private:
     void applyUiToController();
     void syncUiFromStatus(const StatusMsg& msg);
     void updateMeasuredLabels(const StatusMsg& msg);
+    QWidget* makePayloadWidget();
+    void startPayloadIdentification();
+    void stopPayloadIdentification();
+    void readPayloadOutput();
+    void setPayloadRunning(bool running);
+
+    QProcess* payload_process_{nullptr};
+    QComboBox* payload_arm_combo_{nullptr};
+    QLineEdit* payload_wrench_topic_{nullptr};
+    QLineEdit* payload_gravity_frame_{nullptr};
+    QLineEdit* payload_joint_topic_{nullptr};
+    QSpinBox* payload_pose_count_{nullptr};
+    QPushButton* payload_start_btn_{nullptr};
+    QPushButton* payload_sample_btn_{nullptr};
+    QPushButton* payload_stop_btn_{nullptr};
+    QPlainTextEdit* payload_log_{nullptr};
+    QByteArray payload_stdout_;
 
     rclcpp::Node::SharedPtr node_;
     rclcpp::Subscription<StatusMsg>::SharedPtr status_sub_;
