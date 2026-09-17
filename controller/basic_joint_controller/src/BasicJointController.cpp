@@ -241,6 +241,7 @@ namespace basic_joint_controller
             "/robot_description", rclcpp::QoS(rclcpp::KeepLast(1)).transient_local(),
             [this](const std_msgs::msg::String::SharedPtr msg)
             {
+                state_list_.home->updateJointLimitsFromURDF(msg->data, joint_names_);
                 state_list_.movej->updateJointLimitsFromURDF(msg->data);
             });
         state_list_.movej->setupJointTrajectoryService("joint_trajectory_with_para");

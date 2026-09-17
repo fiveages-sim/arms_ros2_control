@@ -356,6 +356,7 @@ namespace ocs2::mobile_manipulator
             "/robot_description", rclcpp::QoS(rclcpp::KeepLast(1)).transient_local(),
             [this](const std_msgs::msg::String::SharedPtr msg)
             {
+                state_list_.home->updateJointLimitsFromURDF(msg->data, joint_names_);
                 state_list_.movej->updateJointLimitsFromURDF(msg->data);
             });
         state_list_.movej->setupJointTrajectoryAction("joint_trajectory_with_para");

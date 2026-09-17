@@ -8,6 +8,8 @@
 #include "arms_controller_common/utils/GravityCompensation.h"
 #include "arms_controller_common/utils/JointTrajectoryManager.h"
 #include "arms_controller_common/utils/JointSpeedStopPlanner.h"
+#include "arms_controller_common/utils/JointLimitsManager.h"
+#include <mutex>
 #include <vector>
 #include <memory>
 #include <functional>
@@ -135,6 +137,7 @@ namespace arms_controller_common
             {
                 current_target_       = home_configs_[0];
                 current_config_index_ = 0;
+                cycle_config_index_ = 0;
                 has_multiple_configs_ = home_configs_.size() > 1;
                 RCLCPP_INFO(node_->get_logger(),
                             "Found %zu home configuration(s) (home_1 to home_%zu)",
@@ -154,6 +157,9 @@ namespace arms_controller_common
          * @param rest_pos Rest position vector
          */
         void setRestPose(const std::vector<double>& rest_pos);
+
+        void updateJointLimitsFromURDF(const std::string& description,
+                                       const std::vector<std::string>& joint_names);
 
         void enter() override;
         void run(const rclcpp::Time& time, const rclcpp::Duration& period) override;
@@ -181,8 +187,11 @@ namespace arms_controller_common
         void updateParam();
 
     private:
+        bool validateTarget(const std::vector<double>& target) const;
+        mutable std::mutex limits_mutex_;
+        std::vector<std::string> joint_names_;
+        std::unique_ptr<JointLimitsManager> joint_limits_;
         void switchConfiguration();
-        void switchConfigurationImpl();
         void selectConfigurationImpl(size_t config_index);
         void startInterpolation();
         void startInterpolationImpl();
@@ -202,6 +211,9 @@ namespace arms_controller_common
         std::vector<double> start_pos_;                     // Starting position
         std::vector<double> current_target_;                // Current target configuration
         size_t current_config_index_{0};                    // Current configuration index
+
+        // Last slot visited by cyclic selection, including rejected targets.
+        size_t cycle_config_index_{0};
 
         // Interpolation
         double duration_{3.0};                              // Interpolation duration in seconds (default value, will be updated by updateParam())
