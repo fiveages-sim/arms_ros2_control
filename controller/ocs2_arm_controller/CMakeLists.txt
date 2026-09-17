@@ -38,7 +38,6 @@ add_library(${PROJECT_NAME} SHARED
         src/FSM/StateOCS2.cpp
         src/FSM/StateHold.cpp
         src/FSM/StateMoveJ.cpp
-        src/FSM/StateCompliance.cpp
 )
 
 target_include_directories(${PROJECT_NAME}
@@ -83,6 +82,10 @@ install(
 )
 
 ament_export_dependencies(${CONTROLLER_INCLUDE_DEPENDS})
+
+install(PROGRAMS scripts/identify_payload.py DESTINATION lib/${PROJECT_NAME})
+install(FILES scripts/payload_motion.py DESTINATION lib/${PROJECT_NAME})
+install(FILES COMPLIANCE.md DESTINATION share/${PROJECT_NAME})
 ament_export_targets(export_${PROJECT_NAME} HAS_LIBRARY_TARGET)
 
 ament_package()

@@ -5,6 +5,8 @@
 
 #include <algorithm>
 #include <cmath>
+#include <sstream>
+#include <stdexcept>
 #include <utility>
 
 #include <tf2/exceptions.h>
@@ -12,6 +14,45 @@
 
 namespace arms_controller_common
 {
+    namespace
+    {
+        constexpr double kForceSetpointLimit = 20.0;  // N, per axis
+        constexpr double kTorqueSetpointLimit = 5.0;  // Nm, per axis
+
+        rcl_interfaces::msg::SetParametersResult validateForceSetpoint(
+            const std::vector<rclcpp::Parameter>& parameters)
+        {
+            rcl_interfaces::msg::SetParametersResult result;
+            result.successful = true;
+            for (const auto& parameter : parameters)
+            {
+                if (parameter.get_name() != "compliance_force_setpoint") continue;
+                if (parameter.get_type() != rclcpp::ParameterType::PARAMETER_DOUBLE_ARRAY ||
+                    parameter.as_double_array().size() != 6)
+                {
+                    result.successful = false;
+                    result.reason = "compliance_force_setpoint requires six doubles [Fx,Fy,Fz,Mx,My,Mz]";
+                    return result;
+                }
+                const char* axes[] = {"Fx", "Fy", "Fz", "Mx", "My", "Mz"};
+                const auto& values = parameter.as_double_array();
+                for (size_t i = 0; i < values.size(); ++i)
+                {
+                    const double limit = i < 3 ? kForceSetpointLimit : kTorqueSetpointLimit;
+                    if (std::isfinite(values[i]) && std::abs(values[i]) <= limit) continue;
+                    std::ostringstream reason;
+                    reason << "compliance_force_setpoint: " << axes[i] << "=" << values[i]
+                           << " must be finite and within [" << -limit << ", " << limit << "] "
+                           << (i < 3 ? "N" : "Nm");
+                    result.successful = false;
+                    result.reason = reason.str();
+                    return result;
+                }
+            }
+            return result;
+        }
+    }
+
     StateCompliance::StateCompliance(
         CtrlInterfaces& ctrl_interfaces,
         std::shared_ptr<rclcpp_lifecycle::LifecycleNode> node,
@@ -31,6 +72,13 @@ namespace arms_controller_common
         }
         if (node_)
         {
+            force_setpoint_callback_ = node_->add_on_set_parameters_callback(validateForceSetpoint);
+            // Parameters may already have been declared with YAML overrides before this state exists.
+            if (node_->has_parameter("compliance_force_setpoint"))
+            {
+                const auto result = validateForceSetpoint({node_->get_parameter("compliance_force_setpoint")});
+                if (!result.successful) throw std::invalid_argument(result.reason);
+            }
             tf_buffer_   = std::make_shared<tf2_ros::Buffer>(node_->get_clock());
             tf_listener_ = std::make_shared<tf2_ros::TransformListener>(*tf_buffer_);
         }
@@ -45,6 +93,7 @@ namespace arms_controller_common
 
     FSMStateName StateCompliance::checkChange()
     {
+        if (workspace_fault_) return FSMStateName::HOLD;
         switch (ctrl_interfaces_.fsm_command_)
         {
         case 2:  return FSMStateName::HOLD;
@@ -77,6 +126,17 @@ namespace arms_controller_common
                 const auto p = node_->get_parameter(n).as_double_array();
                 if (p.size() == v.size()) v = p;
             } catch (...) {}
+        };
+        // Declares when missing and accepts any size (payload parameters).
+        auto get_array_any = [this](const std::string& n, std::vector<double>& v) {
+            if (!node_->has_parameter(n))
+                node_->declare_parameter(n, rclcpp::ParameterValue(v));
+            try { v = node_->get_parameter(n).as_double_array(); } catch (...) {}
+        };
+        auto get_string = [this](const std::string& n, std::string& s) {
+            if (!node_->has_parameter(n))
+                node_->declare_parameter(n, rclcpp::ParameterValue(s));
+            try { s = node_->get_parameter(n).as_string(); } catch (...) {}
         };
 
         get_array("compliance_task_selection", task_selection_);
@@ -112,9 +172,7 @@ namespace arms_controller_common
         hybrid_dls_lambda_         = get_double("compliance_hybrid_dls_lambda", hybrid_dls_lambda_);
         hybrid_qp_lambda_          = std::max(1e-3, get_double("compliance_hybrid_qp_lambda", hybrid_qp_lambda_));
         hybrid_lin_task_weight_    = std::max(1.0, get_double("compliance_hybrid_lin_task_weight", hybrid_lin_task_weight_));
-        try {
-            hybrid_inverse_method_ = node_->get_parameter("compliance_hybrid_inverse_method").as_string();
-        } catch (...) {}
+        get_string("compliance_hybrid_inverse_method", hybrid_inverse_method_);
         if (hybrid_inverse_method_ != "QP") hybrid_inverse_method_ = "DLS";
 
         wrench_lpf_alpha_ = std::clamp(
@@ -126,20 +184,15 @@ namespace arms_controller_common
         diag_log_ = get_bool("compliance_diag_log", diag_log_);
         diag_log_period_ = std::max(0.1, get_double("compliance_diag_log_period", diag_log_period_));
 
-        try { arms_[0].dyn_param = node_->get_parameter("left_dyn_param").as_double_array(); }
-        catch (...) {}
-        try { arms_[1].dyn_param = node_->get_parameter("right_dyn_param").as_double_array(); }
-        catch (...) {}
+        get_array_any("left_dyn_param", arms_[0].dyn_param);
+        get_array_any("right_dyn_param", arms_[1].dyn_param);
         gravity_accel_ = get_double("compliance_gravity_accel", gravity_accel_);
 
         teleop_enable_ = get_bool("compliance_teleop_enable", teleop_enable_);
-        try {
-            teleop_base_frame_ = node_->get_parameter("compliance_teleop_base_frame").as_string();
-        } catch (...) {}
+        // 力/位姿参考系由机型 .info 的 baseFrame 提供（见 Ocs2ArmController）。
+        get_string("compliance_teleop_base_frame", teleop_base_frame_);
         ft_timeout_sec_ = get_double("compliance_ft_timeout_sec", ft_timeout_sec_);
-        try {
-            gravity_frame_ = node_->get_parameter("compliance_gravity_frame").as_string();
-        } catch (...) {}
+        get_string("compliance_gravity_frame", gravity_frame_);
 
         // 力控→位置控边沿检测（面板取消勾选柔顺轴）：置 pending_retarget_，
         // 由 run() 用当前实测位姿重捕获 target，避免位置轴全速拉回旧目标。
@@ -331,11 +384,16 @@ namespace arms_controller_common
     void StateCompliance::enter()
     {
         updateParam();
+        workspace_fault_ = false;
 
         // Clear the previous COMPLIANCE session before capturing the new
         // initial target.  In particular, resetControlState() invalidates the
         // target, so it must run before the FK result is stored below.
-        for (auto& a : arms_) a.resetControlState();
+        for (auto& a : arms_)
+        {
+            a.resetControlState();
+            a.workspace_axis_active.fill(false);
+        }
 
         const size_t nj = ctrl_interfaces_.joint_position_state_interface_.size();
         hold_positions_.resize(nj);
@@ -595,9 +653,110 @@ namespace arms_controller_common
         }
     }
 
+    bool StateCompliance::stopForWorkspaceViolation(const std::string& reason)
+    {
+        workspace_fault_ = true;
+        // HOLD inherits last_sent_joint_positions_. Capture measured positions now,
+        // before either arm can emit another hybrid-control command.
+        const size_t count = std::min({hold_positions_.size(),
+            ctrl_interfaces_.joint_position_state_interface_.size(),
+            ctrl_interfaces_.joint_position_command_interface_.size(),
+            ctrl_interfaces_.last_sent_joint_positions_.size()});
+        for (size_t i = 0; i < count; ++i)
+        {
+            const auto measured = ctrl_interfaces_.joint_position_state_interface_[i].get().get_optional();
+            const double q = measured.value_or(ctrl_interfaces_.last_sent_joint_positions_[i]);
+            if (!std::isfinite(q)) continue;  // Keep the last command when feedback is invalid.
+            hold_positions_[i] = q;
+            ctrl_interfaces_.setJointPositionCommand(i, q);
+        }
+        for (auto& velocity : ctrl_interfaces_.joint_velocity_command_interface_)
+            std::ignore = velocity.get().set_value(0.0);
+        for (auto& a : arms_)
+        {
+            a.pos_integral.setZero();
+            a.force_integral.setZero();
+            a.v_des_filt.setZero();
+            a.qdot_prev.setZero();
+        }
+        if (node_) RCLCPP_ERROR(node_->get_logger(),
+            "COMPLIANCE workspace protection -> HOLD: %s. Holding measured joint positions; manual re-entry required.",
+            reason.c_str());
+        return false;
+    }
+
+    bool StateCompliance::checkMeasuredWorkspace()
+    {
+        bool needed = false;
+        for (const auto& a : arms_)
+            for (size_t i = 0; i < 6; ++i)
+                needed = needed || task_selection_[i] >= 0.5 || a.workspace_axis_active[i];
+        if (!needed) return true;
+        if (!kinematicsAvailable())
+            return stopForWorkspaceViolation("kinematics unavailable; cannot check measured workspace");
+        if (ctrl_interfaces_.joint_position_state_interface_.size() <
+            arms_[0].joint_count + arms_[1].joint_count)
+            return stopForWorkspaceViolation("missing measured joint position interfaces");
+        for (const auto& joint : ctrl_interfaces_.joint_position_state_interface_)
+        {
+            const auto q = joint.get().get_optional();
+            if (!q || !std::isfinite(*q))
+                return stopForWorkspaceViolation("invalid measured joint position");
+        }
+        const RobotState measured = makeRobotState(/*measured=*/true);
+        for (int s = 0; s < 2; ++s)
+        {
+            auto& a = arms_[s];
+            if (a.joint_count == 0) continue;
+            EndEffectorPose pose;
+            try { pose = kinematics_->computeSingleEndEffectorPose(measured, kArmName[s]); }
+            catch (const std::exception& error)
+            {
+                return stopForWorkspaceViolation(std::string(kArmName[s]) + ": FK failed: " + error.what());
+            }
+            if (!pose.position.allFinite() || !pose.rotationMatrix.allFinite())
+                return stopForWorkspaceViolation(std::string(kArmName[s]) + ": invalid measured TCP pose");
+            for (size_t i = 0; i < 6; ++i)
+            {
+                const bool enabled = task_selection_[i] >= 0.5;
+                if (!enabled && !a.workspace_axis_active[i]) continue;
+                const double limit = i < 3 ? hybrid_force_xmax_lin_ : hybrid_force_xmax_ang_;
+                if (!std::isfinite(limit) || limit <= 0.0)
+                    return stopForWorkspaceViolation("force workspace limits must be finite and positive");
+                if (!a.workspace_axis_active[i])
+                {
+                    if (i < 3) a.workspace_position_reference(i) = pose.position(i);
+                    else a.workspace_rotation_reference[i - 3] = pose.rotationMatrix;
+                }
+                double displacement;
+                if (i < 3) displacement = pose.position(i) - a.workspace_position_reference(i);
+                else
+                {
+                    const Eigen::AngleAxisd rotation(
+                        pose.rotationMatrix * a.workspace_rotation_reference[i - 3].transpose());
+                    displacement = rotation.angle() * rotation.axis()(i - 3);
+                }
+                // Check previously active axes before accepting a disable/retarget request.
+                if (!std::isfinite(displacement) || std::abs(displacement) > limit + 1e-9)
+                {
+                    const char* axes[] = {"x", "y", "z", "rx", "ry", "rz"};
+                    std::ostringstream reason;
+                    reason << kArmName[s] << " " << axes[i] << " measured displacement="
+                           << displacement << " exceeds +/-" << limit << (i < 3 ? " m" : " rad");
+                    return stopForWorkspaceViolation(reason.str());
+                }
+                a.force_disp(i) = enabled ? displacement : 0.0;
+                a.workspace_axis_active[i] = enabled;
+            }
+        }
+        return true;
+    }
+
     void StateCompliance::run(const rclcpp::Time& time, const rclcpp::Duration& period)
     {
+        if (workspace_fault_) return;
         updateParam();
+        if (!checkMeasuredWorkspace()) return;
         const double dt = period.seconds();
 
         const WrenchSnapshot wrench_snapshot = sampleAndPublishWrenches(time);
@@ -797,6 +956,15 @@ namespace arms_controller_common
                 msg.right_ft_active = ft_active[1];
                 msg.zero_cal_done = zero_cal_done_;
                 msg.force_feedback_sign = force_feedback_sign_;
+                msg.force_setpoint_limit = kForceSetpointLimit;
+                msg.torque_setpoint_limit = kTorqueSetpointLimit;
+                if (kinematics_)
+                {
+                    msg.left_joint_names = kinematics_->getLeftArmJointNames();
+                    msg.right_joint_names = kinematics_->getRightArmJointNames();
+                    msg.left_joint_count = msg.left_joint_names.size();
+                    msg.right_joint_count = msg.right_joint_names.size();
+                }
                 force_status_pub_->publish(msg);
                 last_force_status_pub_ = time;
             }
@@ -1084,9 +1252,7 @@ namespace arms_controller_common
             ramp_position_group(3, 6);
         }
 
-        // Force-axis displacement soft limit. 请求按软限整形；位移积分改用
-        // 上一周期实际达成的任务速度（J·qdot_prev）——按请求积分会在奇异/
-        // 限位卡住期间虚耗行程余量，恢复后软限提前触发。
+        // Force-axis soft limit uses measured TCP displacement from checkMeasuredWorkspace().
         for (int i = 0; i < 6; ++i) {
             if (S(i) < 0.5) { a.force_disp(i) = 0.0; continue; }
             const double xmax = i < 3 ? hybrid_force_xmax_lin_ : hybrid_force_xmax_ang_;
@@ -1096,8 +1262,6 @@ namespace arms_controller_common
                 v_des(i) = (std::copysign(xmax, proposed) - a.force_disp(i)) / dt;
             else if (std::abs(proposed) > xmax - margin)
                 v_des(i) *= std::clamp((xmax - std::abs(proposed)) / margin, 0.0, 1.0);
-            a.force_disp(i) += v_ee_fb(i) * dt;
-            a.force_disp(i) = std::clamp(a.force_disp(i), -xmax, xmax);
         }
 
         // 不做阈值式可行性滤除：λ 阻尼最小二乘对奇异方向按 σ²/(σ²+λ²)

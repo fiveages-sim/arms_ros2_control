@@ -9,6 +9,7 @@ set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 
 # Find dependencies
 find_package(ament_cmake REQUIRED)
+find_package(ament_index_cpp REQUIRED)
 find_package(rclcpp REQUIRED)
 find_package(rviz_common REQUIRED)
 find_package(rviz_ogre_vendor REQUIRED)
@@ -40,6 +41,7 @@ cmake_language(CALL qt${QT_VERSION_MAJOR}_wrap_cpp MOC_FILES
         include/arms_rviz_control_plugin/wbc_capability_panel.hpp
         include/arms_rviz_control_plugin/target_error_display.hpp
         include/arms_rviz_control_plugin/switch_button.hpp
+        include/arms_rviz_control_plugin/compliance_force_panel.hpp
 )
 
 # 设置源代码文件列表
@@ -50,6 +52,8 @@ set(SRC_FILES
         src/wbc_capability_panel.cpp
         src/target_error_display.cpp
         src/switch_button.cpp
+        src/compliance_force_panel.cpp
+        src/payload_identification_panel.cpp
 )
 
 # Include directories
@@ -60,6 +64,7 @@ add_library(${PROJECT_NAME} SHARED ${MOC_FILES} ${SRC_FILES})
 
 target_link_libraries(${PROJECT_NAME} PUBLIC
   Qt${QT_VERSION_MAJOR}::Widgets
+  ament_index_cpp::ament_index_cpp
   ${rclcpp_TARGETS}
   rviz_common::rviz_common
   rviz_ogre_vendor::OgreOverlay

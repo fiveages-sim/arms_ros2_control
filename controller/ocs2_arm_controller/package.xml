@@ -23,6 +23,13 @@
 	<depend>arms_ros2_control_msgs</depend>
 
 	<exec_depend>controller_manager</exec_depend>
+	<exec_depend>rclpy</exec_depend>
+	<exec_depend>sensor_msgs</exec_depend>
+	<exec_depend>geometry_msgs</exec_depend>
+	<exec_depend>control_msgs</exec_depend>
+	<exec_depend>trajectory_msgs</exec_depend>
+	<exec_depend>python3-numpy</exec_depend>
+	<exec_depend>python3-yaml</exec_depend>
 	<exec_depend>joint_state_broadcaster</exec_depend>
 	<exec_depend>force_torque_sensor_broadcaster</exec_depend>
 
@@ -32,4 +39,4 @@
 	<export>
 		<build_type>ament_cmake</build_type>
 	</export>
-</package> 
+</package>
