@@ -37,12 +37,68 @@ namespace arms_controller_common
         }
     }
 
+    void StateHome::updateJointLimitsFromURDF(
+        const std::string& description, const std::vector<std::string>& joint_names)
+    {
+        std::lock_guard<std::mutex> lock(limits_mutex_);
+        joint_names_ = joint_names;
+        // Replace the snapshot so malformed/new descriptions cannot retain stale limits.
+        joint_limits_ = std::make_unique<JointLimitsManager>(node_->get_logger());
+        joint_limits_->parseFromURDF(description, joint_names_);
+    }
+
+    bool StateHome::validateTarget(const std::vector<double>& target) const
+    {
+        const auto count = ctrl_interfaces_.joint_position_command_interface_.size();
+        if (target.empty() || target.size() != count)
+        {
+            RCLCPP_ERROR(node_->get_logger(),
+                         "HOME target rejected: got %zu positions, expected %zu",
+                         target.size(), count);
+            return false;
+        }
+        std::lock_guard<std::mutex> lock(limits_mutex_);
+        if (!joint_limits_ || joint_names_.size() != count)
+        {
+            RCLCPP_ERROR(node_->get_logger(), "HOME target rejected: joint limits are not ready");
+            return false;
+        }
+        for (size_t i = 0; i < count; ++i)
+        {
+            const auto& name = joint_names_[i];
+            const auto limits = joint_limits_->getJointLimits(name);
+            if (!std::isfinite(target[i]))
+            {
+                RCLCPP_ERROR(node_->get_logger(), "HOME target rejected: %s is not finite", name.c_str());
+                return false;
+            }
+            if (limits.motion_type == JointMotionType::CONTINUOUS)
+                continue;
+            if (!limits.initialized || !std::isfinite(limits.lower) ||
+                !std::isfinite(limits.upper) || limits.lower > limits.upper)
+            {
+                RCLCPP_ERROR(node_->get_logger(),
+                             "HOME target rejected: %s has no valid position limits", name.c_str());
+                return false;
+            }
+            if (target[i] < limits.lower || target[i] > limits.upper)
+            {
+                RCLCPP_ERROR(node_->get_logger(),
+                             "HOME target rejected: %s target %.9f outside [%.9f, %.9f]",
+                             name.c_str(), target[i], limits.lower, limits.upper);
+                return false;
+            }
+        }
+        return true;
+    }
+
     void StateHome::setHomePosition(const std::vector<double>& home_pos)
     {
         home_configs_.clear();
         home_configs_.push_back(home_pos);
         current_target_ = home_pos;
         current_config_index_ = 0;
+        cycle_config_index_ = 0;
         has_multiple_configs_ = false;
     }
 
@@ -53,6 +109,7 @@ namespace arms_controller_common
         {
             current_target_ = home_configs_[0];
             current_config_index_ = 0;
+            cycle_config_index_ = 0;
             has_multiple_configs_ = home_configs_.size() > 1;
         }
     }
@@ -86,8 +143,16 @@ namespace arms_controller_common
         if (!home_configs_.empty())
         {
             current_config_index_ = 0;
+            cycle_config_index_ = 0;
             current_target_ = home_configs_[0];
         }
+
+        trajectory_manager_.reset();
+        clearPendingMotion();
+        stop_to_zero_active_ = false;
+        speed_stop_planner_.reset();
+        if (!validateTarget(current_target_))
+            return;
 
         // Get current joint positions as starting positions
         start_pos_.clear();
@@ -209,14 +274,14 @@ namespace arms_controller_common
         {
             if (current_command == switch_command_base_)
             {
-                requestMotionOrDefer([this]() { switchConfigurationImpl(); });
+                switchConfiguration();
             }
             else if (current_command >= switch_command_base_ + 1)
             {
                 if (auto target_index = static_cast<size_t>(current_command - (switch_command_base_ + 1));
                     target_index < home_configs_.size())
                 {
-                    requestMotionOrDefer([this, target_index]() { selectConfigurationImpl(target_index); });
+                    selectConfiguration(target_index);
                 }
             }
         }
@@ -467,6 +532,13 @@ namespace arms_controller_common
 
     void StateHome::selectConfiguration(size_t config_index)
     {
+        if (config_index >= home_configs_.size())
+        {
+            RCLCPP_ERROR(node_->get_logger(), "HOME target rejected: invalid configuration index %zu", config_index);
+            return;
+        }
+        if (!validateTarget(home_configs_[config_index]))
+            return;
         requestMotionOrDefer([this, config_index]() { selectConfigurationImpl(config_index); });
     }
 
@@ -480,7 +552,10 @@ namespace arms_controller_common
             return;
         }
 
+        if (!validateTarget(home_configs_[config_index]))
+            return;
         current_config_index_ = config_index;
+        cycle_config_index_ = config_index;
         current_target_ = home_configs_[config_index];
         startInterpolationImpl();
     }
@@ -500,29 +575,25 @@ namespace arms_controller_common
 
     void StateHome::switchConfiguration()
     {
-        requestMotionOrDefer([this]() { switchConfigurationImpl(); });
-    }
-
-    void StateHome::switchConfigurationImpl()
-    {
-        if (!has_multiple_configs_)
+        if (has_multiple_configs_)
         {
-            RCLCPP_WARN(node_->get_logger(), "Cannot switch: only one configuration available");
-            return;
+            // Consume this slot even if validation rejects it; the next request
+            // must be able to reach later configurations without executing this one.
+            cycle_config_index_ = (cycle_config_index_ + 1) % home_configs_.size();
+            selectConfiguration(cycle_config_index_);
         }
-
-        current_config_index_ = (current_config_index_ + 1) % home_configs_.size();
-        current_target_ = home_configs_[current_config_index_];
-        startInterpolationImpl();
     }
 
     void StateHome::startInterpolation()
     {
-        requestMotionOrDefer([this]() { startInterpolationImpl(); });
+        if (validateTarget(current_target_))
+            requestMotionOrDefer([this]() { startInterpolationImpl(); });
     }
 
     void StateHome::startInterpolationImpl()
     {
+        if (!validateTarget(current_target_))
+            return;
         start_pos_.clear();
         for (size_t i = 0; i < ctrl_interfaces_.joint_position_state_interface_.size(); ++i)
         {
