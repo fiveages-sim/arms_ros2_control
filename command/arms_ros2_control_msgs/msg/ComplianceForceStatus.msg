@@ -6,7 +6,7 @@ std_msgs/Header header
 
 float64[6] task_selection
 float64[6] force_setpoint
-# Effective runtime limits after the controller's hard safety clamp.
+# Accepted target magnitudes; exceeding either limit rejects the parameter update.
 float64 force_setpoint_limit
 float64 torque_setpoint_limit
 float64[6] force_measured_left
@@ -14,11 +14,6 @@ float64[6] force_measured_right
 
 bool left_ft_active
 bool right_ft_active
-# Per-arm readiness; zero_cal_done is kept for backward-compatible summary UI.
-bool left_tare_valid
-bool right_tare_valid
-bool left_force_ready
-bool right_force_ready
 bool zero_cal_done
 float64 force_feedback_sign
 
@@ -26,13 +21,15 @@ float64 force_feedback_sign
 # 2=contact chain (actual displacement -> measured wrench).
 uint8 identification_mode
 bool identification_active
-float64 identification_progress
 string identification_arm
 uint8 identification_axis
 # Arm-local joint index used by mode 1.
 uint8 identification_joint
 uint8 left_joint_count
 uint8 right_joint_count
+# Controller kinematics groups used for payload standstill checks.
+string[] left_joint_names
+string[] right_joint_names
 float64 identification_frequency
 float64 identification_input
 float64 identification_output
