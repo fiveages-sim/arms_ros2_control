@@ -131,6 +131,7 @@ namespace arms_controller_common
 
     void StateMoveJ::updateParam()
     {
+        const auto previous_type = interpolation_type_;
         duration_ = node_->get_parameter("movej_duration").as_double();
         interpolation_type_ = parseInterpolationType(node_->get_parameter("movej_interpolation_type").as_string(),
                                                      InterpolationType::TANH);
@@ -141,6 +142,83 @@ namespace arms_controller_common
         trajectory_manager_.setControllerFrequency(ctrl_interfaces_.frequency_);
         updateMoveJVelocityParameters();
         updateCartesianDefaults();
+        if (previous_type != interpolation_type_ &&
+            (previous_type == InterpolationType::SERVO || interpolation_type_ == InterpolationType::SERVO))
+        {
+            servo_initialized_ = false;
+            // Single-position interpolation is rebuilt on the next update.
+            // Explicit trajectories keep their own execution path.
+            if (!joint_trajectory_action_active_ &&
+                (!trajectory_manager_.isInitialized() || trajectory_manager_.isSingleNode()))
+            {
+                trajectory_manager_.reset();
+                interpolation_active_ = false;
+            }
+        }
+    }
+
+    bool StateMoveJ::canUpdateServoTarget() const
+    {
+        return interpolation_type_ == InterpolationType::SERVO &&
+               !stop_to_zero_active_ && !trajectory_manager_.isInitialized() &&
+               !move_cartesian_active_ && !waist_lifting_active_ && !waist_turning_active_ &&
+               !joint_trajectory_action_active_ && !linear_action_active_ && !circle_action_active_;
+    }
+
+    void StateMoveJ::initializeServo(const std::vector<double>& positions)
+    {
+        const auto command = ctrl_interfaces_.getCommandMotionState();
+        servo_filters_.assign(positions.size(), JointServoFilter{});
+        for (size_t i = 0; i < positions.size(); ++i)
+        {
+            auto& filter = servo_filters_[i];
+            filter.v_min = -movej_max_velocity_;
+            filter.v_max = movej_max_velocity_;
+            filter.a_min = -movej_max_acceleration_;
+            filter.a_max = movej_max_acceleration_;
+            filter.jerk_limit = movej_max_jerk_;
+            const double velocity = i < command.velocities.size() ? command.velocities[i] : 0.0;
+            const double acceleration = i < command.accelerations.size() ? command.accelerations[i] : 0.0;
+            filter.reset(positions[i], std::isfinite(velocity) ? velocity : 0.0,
+                         std::isfinite(acceleration) ? acceleration : 0.0);
+        }
+        servo_initialized_ = true;
+        use_prefix_filter_ = false;
+    }
+
+    std::vector<double> StateMoveJ::advanceServo(double period)
+    {
+        if (!std::isfinite(period) || period <= 0.0 || period > 0.1 ||
+            servo_filters_.size() != target_pos_.size() ||
+            !validatePositionRequest(joint_names_, target_pos_))
+            return {}; // Do not advance the filter on invalid/stale controller ticks.
+        // Keep the original filter's integration step at or below 1 ms.
+        const size_t steps = static_cast<size_t>(std::ceil(period / 0.001));
+        std::vector<double> result(servo_filters_.size());
+        for (size_t i = 0; i < servo_filters_.size(); ++i)
+        {
+            auto& filter = servo_filters_[i];
+            filter.dt = period / static_cast<double>(steps);
+            const auto limits = joint_limits_manager_->getJointLimits(joint_names_[i]);
+            for (size_t step = 0; step < steps; ++step)
+            {
+                const double previous_position = filter.q;
+                filter.updateTo(target_pos_[i]);
+                if (!std::isfinite(filter.q) || !std::isfinite(filter.qd) || !std::isfinite(filter.qdd))
+                {
+                    filter.reset(previous_position);
+                    break;
+                }
+                if (limits.motion_type != JointMotionType::CONTINUOUS)
+                {
+                    const double bounded = std::clamp(filter.q, limits.lower, limits.upper);
+                    if (bounded != filter.q)
+                        filter.reset(bounded);
+                }
+            }
+            result[i] = filter.q;
+        }
+        return result;
     }
 
     void StateMoveJ::declareMoveJVelocityParameters()
@@ -168,9 +246,16 @@ namespace arms_controller_common
 
     void StateMoveJ::updateMoveJVelocityParameters()
     {
-        movej_max_velocity_ = std::max(1e-6, node_->get_parameter("movej_max_velocity").as_double());
-        movej_max_acceleration_ = std::max(1e-6, node_->get_parameter("movej_max_acceleration").as_double());
-        movej_max_jerk_ = std::max(1e-6, node_->get_parameter("movej_max_jerk").as_double());
+        const auto read_limit = [this](const char* name, double previous)
+        {
+            const double value = node_->get_parameter(name).as_double();
+            if (std::isfinite(value) && value > 0.0) return value;
+            RCLCPP_WARN(node_->get_logger(), "Invalid %s; retaining %.6f", name, previous);
+            return previous;
+        };
+        movej_max_velocity_ = read_limit("movej_max_velocity", movej_max_velocity_);
+        movej_max_acceleration_ = read_limit("movej_max_acceleration", movej_max_acceleration_);
+        movej_max_jerk_ = read_limit("movej_max_jerk", movej_max_jerk_);
         movej_auto_extend_duration_ = node_->get_parameter("movej_auto_extend_duration").as_bool();
         trajectory_manager_.setDefaultJointMotionLimits(
             movej_max_velocity_, movej_max_acceleration_, movej_max_jerk_);
@@ -401,6 +486,17 @@ namespace arms_controller_common
 
         // Check if we have a target position
         std::lock_guard lock(target_mutex_);
+        servo_initialized_ = false;
+        if (interpolation_type_ == InterpolationType::SERVO)
+        {
+            start_pos_ = ctrl_interfaces_.last_sent_joint_positions_;
+            initializeServo(start_pos_);
+            if (!has_target_ || target_pos_.size() != start_pos_.size())
+                target_pos_ = start_pos_;
+            has_target_ = true;
+            interpolation_active_ = true;
+            return;
+        }
         if (has_target_ && target_pos_.size() == start_pos_.size())
         {
             if (initTargetJointPositionInterpolation(start_pos_, target_pos_))
@@ -429,6 +525,9 @@ namespace arms_controller_common
     {
         std::lock_guard lock(target_mutex_);
 
+        if (trajectory_manager_.isInitialized() || move_cartesian_active_ ||
+            waist_lifting_active_ || waist_turning_active_ || stop_to_zero_active_)
+            servo_initialized_ = false;
 
         const int32_t fsm_cmd = ctrl_interfaces_.fsm_command_;
         if (fsm_cmd == 1 || fsm_cmd == 2)
@@ -771,6 +870,12 @@ namespace arms_controller_common
             maintainCommandFromLastSent();
             return;
         }
+        else if (interpolation_type_ == InterpolationType::SERVO)
+        {
+            if (!servo_initialized_)
+                initializeServo(ctrl_interfaces_.last_sent_joint_positions_);
+            interpolation_active_ = true;
+        }
         else if (interpolation_type_ == InterpolationType::NONE)
         {
             if (hold_positions_.size() != ctrl_interfaces_.joint_position_command_interface_.size())
@@ -861,7 +966,10 @@ namespace arms_controller_common
 
         // Get next trajectory point from unified manager (works for both single and multi-node)
         double runtime_step = period.seconds();
-        std::vector<double> next_positions = trajectory_manager_.getNextPoint(runtime_step);
+        const bool servo_step = interpolation_type_ == InterpolationType::SERVO &&
+                                !trajectory_manager_.isInitialized();
+        std::vector<double> next_positions = servo_step
+            ? advanceServo(runtime_step) : trajectory_manager_.getNextPoint(runtime_step);
 
         if (next_positions.empty())
         {
@@ -970,7 +1078,11 @@ namespace arms_controller_common
             }
 
             ctrl_interfaces_.setJointPositionCommand(i, position_to_set);
-            if (trajectory_manager_.lastVelocities().size() == next_positions.size())
+            if (servo_step)
+            {
+                ctrl_interfaces_.setCommandDerivatives(i, servo_filters_[i].qd, servo_filters_[i].qdd);
+            }
+            else if (trajectory_manager_.lastVelocities().size() == next_positions.size())
             {
                 const bool held = use_prefix_filter_ && i < joint_mask_.size() && !joint_mask_[i];
                 ctrl_interfaces_.setCommandDerivatives(i, held ? 0.0 : trajectory_manager_.lastVelocities()[i],
@@ -991,7 +1103,7 @@ namespace arms_controller_common
                 finishJointTrajectoryAction(true, false, "Joint trajectory completed successfully");
             }
         }
-        else if (trajectory_manager_.isCompleted())
+        else if (!servo_step && trajectory_manager_.isCompleted())
         {
             refreshHoldPositions();
             target_pos_ = ctrl_interfaces_.last_sent_joint_positions_;
@@ -1030,6 +1142,7 @@ namespace arms_controller_common
         std::lock_guard lock(target_mutex_);
         // Mark state as inactive
         state_active_ = false;
+        servo_initialized_ = false;
 
         // Reset all state variables
         interpolation_active_ = false;
@@ -1168,6 +1281,7 @@ namespace arms_controller_common
 
     void StateMoveJ::abortActiveMotionForStop()
     {
+        servo_initialized_ = false;
         trajectory_manager_.reset();
         interpolation_active_ = false;
 
@@ -1385,8 +1499,9 @@ namespace arms_controller_common
     {
         std::lock_guard lock(target_mutex_);
         if (!validatePositionRequest(joint_names_, target_pos)) return;
-        if (!stop_to_zero_active_ && has_target_ && areJointPositionsSame(target_pos_, target_pos)) return;
         updateParam();
+        if (interpolation_type_ != InterpolationType::SERVO && interpolation_active_ &&
+            !stop_to_zero_active_ && has_target_ && areJointPositionsSame(target_pos_, target_pos)) return;
 
         if (!state_active_)
         {
@@ -1396,12 +1511,23 @@ namespace arms_controller_common
             return;
         }
 
+        if (canUpdateServoTarget())
+        {
+            setTargetPositionImpl(target_pos);
+            return;
+        }
         const std::vector<double> captured_target = target_pos;
         requestMotionOrDefer([this, captured_target]() { setTargetPositionImpl(captured_target); });
     }
 
     void StateMoveJ::setTargetPositionImpl(const std::vector<double>& target_pos)
     {
+        if (target_pos.size() != joint_names_.size() ||
+            !std::all_of(target_pos.begin(), target_pos.end(), [](double q) { return std::isfinite(q); }))
+        {
+            RCLCPP_WARN(node_->get_logger(), "Ignoring invalid joint position target");
+            return;
+        }
         use_prefix_filter_ = false;
         active_prefix_.clear();
         joint_mask_.clear();
@@ -1424,7 +1550,7 @@ namespace arms_controller_common
             }
         }
 
-        if (is_same_target && interpolation_active_)
+        if (is_same_target && interpolation_active_ && interpolation_type_ != InterpolationType::SERVO)
         {
             RCLCPP_DEBUG(node_->get_logger(), "Received same target position, skipping re-interpolation");
             return;
@@ -1433,6 +1559,8 @@ namespace arms_controller_common
         target_pos_ = applyJointLimits(target_pos, "target position");
         has_target_ = true;
         publishCurrentTargetJoint(target_pos_);
+        if (interpolation_type_ == InterpolationType::SERVO)
+            return;
         interpolation_active_ = false;
         trajectory_manager_.reset();
     }
@@ -1449,8 +1577,9 @@ namespace arms_controller_common
                 if (i < target_pos_.size()) previous_target.push_back(target_pos_[i]);
             }
         if (!validatePositionRequest(selected_names, target_pos)) return;
-        if (!stop_to_zero_active_ && has_target_ && areJointPositionsSame(previous_target, target_pos)) return;
         updateParam();
+        if (interpolation_type_ != InterpolationType::SERVO && interpolation_active_ &&
+            !stop_to_zero_active_ && has_target_ && areJointPositionsSame(previous_target, target_pos)) return;
 
         if (!state_active_)
         {
@@ -1461,6 +1590,11 @@ namespace arms_controller_common
             return;
         }
 
+        if (canUpdateServoTarget())
+        {
+            setTargetPositionImpl(prefix, target_pos);
+            return;
+        }
         const std::string captured_prefix = prefix;
         const std::vector<double> captured_target = target_pos;
         requestMotionOrDefer([this, captured_prefix, captured_target]()
@@ -1481,7 +1615,8 @@ namespace arms_controller_common
         }
 
         // Validate target position size
-        if (target_pos.size() != matching_joints)
+        if (matching_joints == 0 || target_pos.size() != matching_joints ||
+            !std::all_of(target_pos.begin(), target_pos.end(), [](double q) { return std::isfinite(q); }))
         {
             RCLCPP_WARN(node_->get_logger(),
                         "Target position size (%zu) does not match number of joints with prefix '%s' (%zu). "
@@ -1521,6 +1656,13 @@ namespace arms_controller_common
 
         has_target_ = true;
         publishCurrentTargetJoint(target_pos_);
+        if (interpolation_type_ == InterpolationType::SERVO)
+        {
+            // Each prefix updates only its targets; other joints keep tracking theirs.
+            use_prefix_filter_ = false;
+            active_prefix_.clear();
+            return;
+        }
         use_prefix_filter_ = true;
         active_prefix_ = prefix;
         refreshHoldPositions();
@@ -1560,7 +1702,7 @@ namespace arms_controller_common
             }
         }
 
-        RCLCPP_INFO(node_->get_logger(),
+        RCLCPP_DEBUG(node_->get_logger(),
                     "Updated joint mask for prefix '%s': %zu joints will be controlled, %zu will be held",
                     prefix.c_str(), matching_count, joint_names_.size() - matching_count);
     }
@@ -1774,9 +1916,14 @@ namespace arms_controller_common
 
     void StateMoveJ::setTrajectory(const trajectory_msgs::msg::JointTrajectory& trajectory)
     {
-        updateParam();
         std::lock_guard lock(target_mutex_);
+        updateParam();
 
+        if (interpolation_type_ == InterpolationType::SERVO)
+        {
+            RCLCPP_WARN(node_->get_logger(), "servo accepts target_joint_position, not timed trajectories");
+            return;
+        }
         if (!validateTrajectory(trajectory))
         {
             return;
@@ -1791,6 +1938,7 @@ namespace arms_controller_common
 
     void StateMoveJ::setTrajectoryImpl(const trajectory_msgs::msg::JointTrajectory& trajectory)
     {
+        if (interpolation_type_ == InterpolationType::SERVO) return;
         // 2. Map joint names
         std::vector<size_t> joint_indices = mapJointNames(trajectory.joint_names);
         if (joint_indices.empty())
@@ -3206,6 +3354,12 @@ namespace arms_controller_common
         (void)goal;
 
         std::lock_guard lock(target_mutex_);
+        if (parseInterpolationType(node_->get_parameter("movej_interpolation_type").as_string()) ==
+            InterpolationType::SERVO)
+        {
+            RCLCPP_WARN(node_->get_logger(), "Joint trajectory actions do not support servo");
+            return rclcpp_action::GoalResponse::REJECT;
+        }
         if (!state_active_ || !validateWaypointRequest(goal->joint_names, goal->waypoints))
         {
             RCLCPP_WARN(node_->get_logger(), "Rejecting joint trajectory action goal: StateMoveJ is not active");
@@ -3395,6 +3549,13 @@ namespace arms_controller_common
         {
             message = "Invalid joint trajectory request"; planned_duration = 0.0; return false;
         }
+        updateParam();
+        if (interpolation_type_ == InterpolationType::SERVO)
+        {
+            message = "servo accepts target_joint_position, not timed trajectories";
+            planned_duration = 0.0;
+            return false;
+        }
         if (!isMotionBusy() && !stop_to_zero_active_)
         {
             return startJointTrajectoryRequestImpl(
@@ -3431,6 +3592,13 @@ namespace arms_controller_common
         }
 
         updateParam();
+
+        if (interpolation_type_ == InterpolationType::SERVO)
+        {
+            message = "servo accepts target_joint_position, not timed trajectories";
+            planned_duration = 0.0;
+            return false;
+        }
 
         // 2. 验证关节名称
         std::string error_msg;
