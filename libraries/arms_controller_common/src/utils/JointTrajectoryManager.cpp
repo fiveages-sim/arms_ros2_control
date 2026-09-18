@@ -58,6 +58,11 @@ namespace arms_controller_common
         double max_acceleration,
         double max_jerk)
     {
+        if (type == InterpolationType::SERVO)
+        {
+            RCLCPP_ERROR(logger_, "servo is supported only by MOVEJ target_joint_position streaming");
+            return false;
+        }
         if (!std::isfinite(max_velocity) || max_velocity <= 0 ||
             !std::isfinite(max_acceleration) || max_acceleration <= 0 ||
             !std::isfinite(max_jerk) || max_jerk <= 0)
@@ -250,6 +255,11 @@ namespace arms_controller_common
         (void)joint_blend_ratios;
 #endif
 
+        if (type == InterpolationType::SERVO)
+        {
+            RCLCPP_ERROR(logger_, "servo does not support timed multi-node trajectories");
+            return false;
+        }
         if (!validateMultiNodeParams(waypoints, durations))
         {
             return false;

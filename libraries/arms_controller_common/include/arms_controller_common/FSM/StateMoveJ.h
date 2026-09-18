@@ -5,6 +5,7 @@
 
 #include "arms_controller_common/FSM/FSMState.h"
 #include "arms_controller_common/utils/Interpolation.h"
+#include "arms_controller_common/utils/JointServoFilter.h"
 #include "arms_controller_common/utils/GravityCompensation.h"
 #include "arms_controller_common/utils/JointTrajectoryManager.h"
 #include "arms_controller_common/utils/JointSpeedStopPlanner.h"
@@ -348,6 +349,12 @@ namespace arms_controller_common
 
         std::shared_ptr<rclcpp_lifecycle::LifecycleNode> node_;
         std::shared_ptr<GravityCompensation> gravity_compensation_;
+
+        void initializeServo(const std::vector<double>& positions);
+        bool canUpdateServoTarget() const;
+        std::vector<double> advanceServo(double period);
+        std::vector<JointServoFilter> servo_filters_;
+        bool servo_initialized_{false};
 
         double duration_{3.0}; // Interpolation duration in seconds
         double movej_max_velocity_{2.0};
