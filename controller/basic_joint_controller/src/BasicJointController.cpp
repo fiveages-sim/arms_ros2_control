@@ -81,6 +81,7 @@ namespace basic_joint_controller
             mode_ = FSMMode::NORMAL;
         }
 
+        ctrl_interfaces_.recordCommandMotion(period.seconds());
         return controller_interface::return_type::OK;
     }
 
