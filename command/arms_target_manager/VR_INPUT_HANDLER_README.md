@@ -175,6 +175,8 @@ FULL_BODY 下右握把+右摇杆方向组合仍会锁存并清零右轴（含预
 
 这与事件 26 的 `BASE_UNLOCK` 不是同一层：前者是手柄遥控速度，后者是 MPC 是否允许底盘自由度。
 
+`/cmd_vel` 交接：仅在 **FULL_BODY + FSM=OCS2 + `BASE_UNLOCKED`** 时 VR 不发 `/cmd_vel`（让给 WBC）。HOLD / HOME / MOVEJ，或 OCS2 里手动 `BASE_LOCK`，手柄底盘照常可用。SPLIT_BODY 不让路。退出 OCS2 的零速由 WBC `stopBase()` 负责；退出 CHASSIS / `disable()` 仍由 VR 清零。
+
 ### 全身控制速查
 
 ```

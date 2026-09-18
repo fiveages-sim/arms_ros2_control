@@ -3092,12 +3092,19 @@ namespace arms_ros2_control::command
                      waist_lifting.data, waist_turning.data);
     }
 
+    bool VRInputHandler::wbcOwnsChassisVelocity() const
+    {
+        // 仅全身 OCS2 且底盘规划解锁时让路；HOLD / 锁底盘由 VR 直发 /cmd_vel。
+        return isFullBodyMode() &&
+               current_fsm_state_.load() == 3 &&
+               target_manager_ &&
+               target_manager_->getCurrentBaseState() ==
+                   arms_ros2_control_msgs::msg::WbcCurrentState::BASE_UNLOCKED;
+    }
+
     void VRInputHandler::publishChassisVelocity(const geometry_msgs::msg::Twist& velocity)
     {
-        // 以 WBC 实际反馈为准；锁定后下一帧摇杆输入自动恢复底盘控制。
-        if (isFullBodyMode() && target_manager_ &&
-            target_manager_->getCurrentBaseState() ==
-                arms_ros2_control_msgs::msg::WbcCurrentState::BASE_UNLOCKED)
+        if (wbcOwnsChassisVelocity())
         {
             return;
         }
@@ -3107,7 +3114,7 @@ namespace arms_ros2_control::command
 
     void VRInputHandler::resetChassisAndWaistCommands()
     {
-        // 底盘清零同样遵守 WBC 优先级；腰部照常清零。
+        // 底盘清零同样遵守 WBC 占用规则；腰部照常清零。
         auto zero_vel = geometry_msgs::msg::Twist();
         publishChassisVelocity(zero_vel);
 

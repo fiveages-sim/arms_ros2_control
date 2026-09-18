@@ -17,8 +17,10 @@
 #include <geometry_msgs/msg/twist.hpp>
 #include <rclcpp/rclcpp.hpp>
 #include <std_msgs/msg/float64.hpp>
+#include <std_msgs/msg/int32.hpp>
 #include <arms_ros2_control_msgs/msg/inputs.hpp>
 #include <arms_ros2_control_msgs/msg/teleop_mode.hpp>
+#include <arms_ros2_control_msgs/msg/wbc_current_state.hpp>
 
 class KeyboardTeleop final : public rclcpp::Node {
 public:
@@ -38,6 +40,8 @@ private:
     void restoreTerminal();
     void publishWaistZero();
     void publishTeleopMode();
+    void publishChassisCommand();
+    [[nodiscard]] bool wbcOwnsChassisVelocity() const;
 
     double speedMultiplier() const;
 
@@ -51,6 +55,8 @@ private:
     rclcpp::Publisher<geometry_msgs::msg::Twist>::SharedPtr chassis_pub_;
     rclcpp::Publisher<std_msgs::msg::Float64>::SharedPtr waist_lift_pub_;
     rclcpp::Publisher<std_msgs::msg::Float64>::SharedPtr waist_turn_pub_;
+    rclcpp::Subscription<std_msgs::msg::Int32>::SharedPtr fsm_state_sub_;
+    rclcpp::Subscription<arms_ros2_control_msgs::msg::WbcCurrentState>::SharedPtr wbc_state_sub_;
 
     rclcpp::TimerBase::SharedPtr timer_;
 
@@ -81,6 +87,9 @@ private:
 
     arms_ros2_control_msgs::msg::Inputs inputs_{};
     geometry_msgs::msg::Twist chassis_cmd_{};
+
+    std::int32_t fsm_state_{2};
+    std::int32_t base_state_{arms_ros2_control_msgs::msg::WbcCurrentState::BASE_LOCKED};
 
     bool prev_active_n_{false};
     bool prev_active_m_{false};

@@ -131,6 +131,8 @@ Waist lift/turn topics are published as zero from the keyboard node. Keyboard te
 - `control_input` (`arms_ros2_control_msgs/msg/Inputs`) — high-rate axes; `target` is the active arm (1=left, 2=right)
 - `teleop_mode` (`arms_ros2_control_msgs/msg/TeleopMode`) — latched mode snapshot (`Reliable` + `TransientLocal`): `active`, `control_mode`, `mirror_movement`, `speed_level`, `speed_scale`, with `stamp`. Published once at startup and again when those fields change (not on target-arm switch; use `Inputs.target` for that). Joystick starts with `active=false` until right-stick enable; keyboard always `active=true`.
 - `/cmd_vel` (`geometry_msgs/msg/Twist`)
+
+Chassis `/cmd_vel` yields to WBC only when **FSM=OCS2 and `BASE_UNLOCKED`**. HOLD / locked-base OCS2 / split-body (no WBC state) keep publishing. Leaving OCS2 is zeroed by WBC `stopBase()`, not by these nodes. ARM-mode keyboard zeros are also skipped while WBC owns the topic.
 - `/body_joint_controller/waist_lifting_command` (`std_msgs/msg/Float64`)
 - `/body_joint_controller/waist_turning_command` (`std_msgs/msg/Float64`)
 
@@ -138,9 +140,11 @@ The joystick stack also publishes `/fsm_command` (`std_msgs/msg/Int32`). The key
 
 `TeleopMode.speed_level` / `speed_scale`: keyboard uses levels 1–10 with `speed_scale = level * 0.1`; joystick uses `0`=LOW / `1`=HIGH with the configured low/high scales.
 
-### Subscribed topics (joystick only)
+### Subscribed topics
 
-- `joy` (`sensor_msgs/msg/Joy`)
+- `joy` (`sensor_msgs/msg/Joy`) — joystick only
+- `/fsm_state` (`std_msgs/msg/Int32`, latched) — both nodes
+- `/ocs2_wbc_controller/current_state` (`arms_ros2_control_msgs/msg/WbcCurrentState`) — both nodes; absent → treat base as locked
 
 ## Parameters (joystick launch)
 
