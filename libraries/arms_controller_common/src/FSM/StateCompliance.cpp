@@ -148,6 +148,14 @@ namespace arms_controller_common
         hybrid_pos_ki_     = get_double("compliance_hybrid_pos_ki", hybrid_pos_ki_);
         hybrid_pos_ki_max_ = get_double("compliance_hybrid_pos_ki_max", hybrid_pos_ki_max_);
         get_array("compliance_hybrid_force_damping", hybrid_force_damping_);
+        get_array("compliance_hybrid_force_pos_stiffness", hybrid_force_pos_stiffness_);
+        // 设 realize_tol=0 可关闭响应守卫。stall_time 下限 0.05 s 防止误配成瞬时触发。
+        hybrid_force_realize_tol_ = std::max(0.0,
+            get_double("compliance_hybrid_force_realize_tol", hybrid_force_realize_tol_));
+        hybrid_force_stall_time_ = std::max(0.05,
+            get_double("compliance_hybrid_force_stall_time", hybrid_force_stall_time_));
+        hybrid_force_stall_release_ = std::max(0.0,
+            get_double("compliance_hybrid_force_stall_release", hybrid_force_stall_release_));
         hybrid_force_ki_       = get_double("compliance_hybrid_force_ki", hybrid_force_ki_);
         hybrid_force_ki_max_   = get_double("compliance_hybrid_force_ki_max", hybrid_force_ki_max_);
         hybrid_force_ki_leak_  = std::max(0.0, get_double("compliance_hybrid_force_ki_leak", hybrid_force_ki_leak_));
@@ -393,6 +401,11 @@ namespace arms_controller_common
         {
             a.resetControlState();
             a.workspace_axis_active.fill(false);
+            // 行程/参考必须随会话一起清空：否则重新进入 COMPLIANCE 时会沿用
+            // 上一次的行程，力控轴可能"一进来就已顶到软限位"而无法调整。
+            a.workspace_rot_travel.setZero();
+            a.workspace_rot_prev_valid = false;
+            a.force_disp_pinned.fill(false);
         }
 
         const size_t nj = ctrl_interfaces_.joint_position_state_interface_.size();
@@ -716,6 +729,25 @@ namespace arms_controller_common
             }
             if (!pose.position.allFinite() || !pose.rotationMatrix.allFinite())
                 return stopForWorkspaceViolation(std::string(kArmName[s]) + ": invalid measured TCP pose");
+
+            // 旋转行程积分：把本周期实测姿态相对上周期的增量（小角度旋转向量）
+            // 按 base 轴分量累加。单周期增量 <= 0.6 rad/s · dt（约 1e-3 rad），
+            // log 映射在这里完全良态；关键在"累加"本身是加性的——不会像
+            // log(R·R_refᵀ) 那样在总转角接近 180° 时失真或恒为 0（那会让力控
+            // 旋转轴的越界保护整个失效），也不会因为旋转不可交换而把别的轴
+            // 转出来的姿态算进本轴行程。反馈毛刺按原样累加：宁可保守触发保护，
+            // 也不漏计（非有限值由下面的 isfinite 检查兜底）。
+            if (a.workspace_rot_prev_valid)
+            {
+                Eigen::Quaterniond dq(pose.rotationMatrix * a.workspace_rot_prev.transpose());
+                if (dq.coeffs().w() < 0.0) dq.coeffs() *= -1.0;
+                const Eigen::AngleAxisd delta(dq);
+                if (delta.angle() > 1e-12)
+                    a.workspace_rot_travel += delta.angle() * delta.axis();
+            }
+            a.workspace_rot_prev = pose.rotationMatrix;
+            a.workspace_rot_prev_valid = true;
+
             for (size_t i = 0; i < 6; ++i)
             {
                 const bool enabled = task_selection_[i] >= 0.5;
@@ -725,17 +757,13 @@ namespace arms_controller_common
                     return stopForWorkspaceViolation("force workspace limits must be finite and positive");
                 if (!a.workspace_axis_active[i])
                 {
+                    // 启用沿：平移记参考点，旋转把该轴自己的行程清零（各轴独立起算）。
                     if (i < 3) a.workspace_position_reference(i) = pose.position(i);
-                    else a.workspace_rotation_reference[i - 3] = pose.rotationMatrix;
+                    else a.workspace_rot_travel(i - 3) = 0.0;
                 }
                 double displacement;
                 if (i < 3) displacement = pose.position(i) - a.workspace_position_reference(i);
-                else
-                {
-                    const Eigen::AngleAxisd rotation(
-                        pose.rotationMatrix * a.workspace_rotation_reference[i - 3].transpose());
-                    displacement = rotation.angle() * rotation.axis()(i - 3);
-                }
+                else displacement = a.workspace_rot_travel(i - 3);
                 // Check previously active axes before accepting a disable/retarget request.
                 if (!std::isfinite(displacement) || std::abs(displacement) > limit + 1e-9)
                 {
@@ -1123,6 +1151,34 @@ namespace arms_controller_common
                     ? f_err - std::copysign(db, f_err) : 0.0;
                 if (diag_due) { diag_f_err[i] = f_err; diag_f_eff[i] = f_eff; }
 
+                // ── 响应守卫（鲁棒导纳）────────────────────────────────
+                // 判据用"累积行程比"（指令/实测），不是瞬时速度比——后者会被底层
+                // 位置环延迟（≈34 ms）误判。比值 ≈0 = 请求了但没动 → 环路没合上
+                // （环境不给增益 / 被刚性约束堵住）。此时继续发指令只会把位置指令
+                // 积成"越顶越狠"，所以：保持、不升级，并让虚拟位移缓慢回退以自动重试。
+                const double xmax_i = i < 3 ? hybrid_force_xmax_lin_ : hybrid_force_xmax_ang_;
+                const double cmd_travel = std::abs(a.force_vdisp(i));
+                const double ach_travel = std::abs(a.force_disp(i));
+                a.force_stall_time[i] =
+                    cmd_travel > 5e-3 * xmax_i &&
+                    ach_travel < hybrid_force_realize_tol_ * cmd_travel
+                        ? a.force_stall_time[i] + dt : 0.0;
+                a.force_axis_stalled[i] = a.force_stall_time[i] >= hybrid_force_stall_time_;
+                if (a.force_axis_stalled[i])
+                {
+                    if (node_)
+                    {
+                        static rclcpp::Clock kStallWarnClock(RCL_STEADY_TIME);
+                        RCLCPP_WARN_THROTTLE(node_->get_logger(), kStallWarnClock, 2000,
+                            "COMPLIANCE %s: force axis %ld no response (cmd %.4f %s, meas %.4f) "
+                            "— holding; check contact/TCP or use S=0.",
+                            kArmName[is_left ? 0 : 1], static_cast<long>(i),
+                            cmd_travel, i < 3 ? "m" : "rad", ach_travel);
+                    }
+                    // 虚拟位移缓慢回退 → 行程比恢复 → 自动重试。
+                    a.force_vdisp(i) *= std::max(0.0, 1.0 - hybrid_force_stall_release_ * dt);
+                }
+
                 // Leakage: force_integral *= (1 - leak·dt). Prevents wind-up
                 // accumulation during sustained drag (main oscillation driver).
                 // Applied also inside the deadband so a stale integral cannot
@@ -1134,7 +1190,7 @@ namespace arms_controller_common
                 const double req_prev = std::abs(a.v_des_filt(i));
                 const double ach_prev = std::abs(v_ee_fb(i));
                 const bool realized = req_prev < 1e-4 || ach_prev > 0.3 * req_prev;
-                if (!realized)
+                if (!realized || a.force_axis_stalled[i])
                 {
                     a.force_integral(i) *= std::max(
                         0.0, 1.0 - 2.0 * hybrid_force_ki_leak_ * dt);
@@ -1146,6 +1202,18 @@ namespace arms_controller_common
                 a.force_integral(i) = std::clamp(
                     a.force_integral(i), -hybrid_force_ki_max_, hybrid_force_ki_max_);
                 v_des(i) = (f_eff + a.force_integral(i)) / std::max(D, 1e-3);
+
+                // 可选回弹项（力控轴上的位控刚度）：v -= K·实测行程。
+                // 纯导纳只有积分、没有恢复力：一旦力/力矩误差不可达（几何增益
+                // 变号、被环境约束），轴会一路漂到行程限位，随后被软限位静默冻结
+                // ——既不能继续调整，也不会自己回中（表现就是"扭矩一直增大不回调"）。
+                // K>0 时轴稳定在有限偏置 phi ≈ (f_eff+I)/(D·K)，误差消失后自动回中。
+                const double K_pos = i < static_cast<int>(hybrid_force_pos_stiffness_.size())
+                                         ? std::max(0.0, hybrid_force_pos_stiffness_[i]) : 0.0;
+                if (K_pos > 0.0) v_des(i) -= K_pos * a.force_disp(i);
+
+                // 响应守卫确认停滞：保持当前位形，不再通过加大指令去"顶"。
+                if (a.force_axis_stalled[i]) v_des(i) = 0.0;
             }
 
         }
@@ -1252,16 +1320,53 @@ namespace arms_controller_common
             ramp_position_group(3, 6);
         }
 
-        // Force-axis soft limit uses measured TCP displacement from checkMeasuredWorkspace().
+        // Force-axis soft limit：门限用**导纳自己的虚拟位移**（指令行程），不再用
+        // 实测位移。用实测位移做门限时，运动被堵住它不增长 → 门限永不触发 →
+        // 位置指令无界累积（"力矩读数一直涨、不回调"）。改成对自己的状态限幅后，
+        // 即使环境完全没有响应，指令也停在 ±xmax。实测行程仍由
+        // checkMeasuredWorkspace() 负责越界 HOLD。
         for (int i = 0; i < 6; ++i) {
-            if (S(i) < 0.5) { a.force_disp(i) = 0.0; continue; }
+            if (S(i) < 0.5)
+            {
+                a.force_disp(i) = 0.0; a.force_vdisp(i) = 0.0;
+                a.force_disp_pinned[i] = false;
+                a.force_axis_stalled[i] = false; a.force_stall_time[i] = 0.0;
+                continue;
+            }
             const double xmax = i < 3 ? hybrid_force_xmax_lin_ : hybrid_force_xmax_ang_;
             const double margin = hybrid_force_xmax_margin_ratio_ * xmax;
-            const double proposed = a.force_disp(i) + v_des(i) * dt;
+            const double proposed = a.force_vdisp(i) + v_des(i) * dt;
+            a.force_disp_pinned[i] = false;
             if (std::abs(proposed) > xmax)
-                v_des(i) = (std::copysign(xmax, proposed) - a.force_disp(i)) / dt;
+            {
+                const double requested = v_des(i);
+                v_des(i) = (std::copysign(xmax, proposed) - a.force_vdisp(i)) / dt;
+                // 已到边界且仍在往外推：本周期输出被强制归零，轴已无调整能力。
+                // 以前这里是静默的，看起来就像"力矩轴不响应偏差"。
+                a.force_disp_pinned[i] =
+                    std::abs(a.force_vdisp(i)) >= xmax - 1e-6 &&
+                    requested * a.force_vdisp(i) > 0.0;
+                if (a.force_disp_pinned[i] && node_)
+                {
+                    static rclcpp::Clock kTravelWarnClock(RCL_STEADY_TIME);
+                    RCLCPP_WARN_THROTTLE(
+                        node_->get_logger(), kTravelWarnClock, 2000,
+                        "COMPLIANCE %s: force axis %ld travel saturated at %+.4f %s "
+                        "(limit %s=%.4f) — admittance velocity forced to 0, the axis can "
+                        "no longer adjust. Set compliance_hybrid_force_pos_stiffness or "
+                        "increase compliance_hybrid_force_xmax_%s.",
+                        kArmName[is_left ? 0 : 1], static_cast<long>(i),
+                        a.force_vdisp(i), i < 3 ? "m" : "rad",
+                        i < 3 ? "compliance_hybrid_force_xmax_lin"
+                              : "compliance_hybrid_force_xmax_ang",
+                        xmax, i < 3 ? "lin" : "ang");
+                }
+            }
             else if (std::abs(proposed) > xmax - margin)
                 v_des(i) *= std::clamp((xmax - std::abs(proposed)) / margin, 0.0, 1.0);
+            // 有界累积（导纳自身的状态）
+            a.force_vdisp(i) = std::clamp(
+                a.force_vdisp(i) + v_des(i) * dt, -xmax, xmax);
         }
 
         // 不做阈值式可行性滤除：λ 阻尼最小二乘对奇异方向按 σ²/(σ²+λ²)
@@ -1669,21 +1774,31 @@ namespace arms_controller_common
             for (int i = 0; i < 6; ++i)
                 if (S(i) < 0.5) diag_res += (v_des(i) - v_ach(i)) * (v_des(i) - v_ach(i));
             diag_res = std::sqrt(diag_res);
-            char e[6][12], va[6][12];
+            char e[6][12], va[6][12], fd[6][26];
             for (int i = 0; i < 6; ++i)
             {
+                // va（vach = J·qdot）对力控轴同样有意义：它是"指令发出去之后有没有
+                // 被逆解/接触实现"的唯一直接证据。之前力控轴也被屏蔽成 --，导致
+                // 分不清"没发指令"和"发了没实现"。e（位置误差）对力控轴无意义。
+                std::snprintf(va[i], sizeof(va[i]), "%+.3f", v_ach(i));
                 if (S(i) >= 0.5)
                 {
                     std::snprintf(e[i], sizeof(e[i]), "--");
-                    std::snprintf(va[i], sizeof(va[i]), "--");
+                    // fdisp = 力控轴行程"指令/实测"：指令侧增长而实测侧不涨 =
+                    // 发了但没动（响应守在跑）；! = 指令行程顶到软限位；
+                    // ? = 已确认停滞（保持、不升级）。
+                    std::snprintf(fd[i], sizeof(fd[i]), "%+.4f/%+.4f%s%s",
+                                  a.force_vdisp(i), a.force_disp(i),
+                                  a.force_disp_pinned[i] ? "!" : "",
+                                  a.force_axis_stalled[i] ? "?" : "");
                 }
                 else
                 {
                     std::snprintf(e[i], sizeof(e[i]), "%+.3f", diag_err[i]);
-                    std::snprintf(va[i], sizeof(va[i]), "%+.3f", v_ach(i));
+                    std::snprintf(fd[i], sizeof(fd[i]), "--");
                 }
             }
-            char buf[1024];
+            char buf[1280];
             std::snprintf(buf, sizeof(buf),
                 "[COMPLIANCE diag] %s err=[%s %s %s %s %s %s] | "
                 "v=[%.3f %.3f %.3f %.2f %.2f %.2f] vach=[%s %s %s %s %s %s] res=%.3f | "
@@ -1691,7 +1806,8 @@ namespace arms_controller_common
                 "align=[%.3e %.3e pos=%.3e] clip=%.3e "
                 "bounds=[%s] sat=[%s] jlim=[%s] | "
                 "qgap=[j%ld %+.4f] tcp_gap=[%.3f m %.3f rad] target=[%zu %.3f m %.3f rad] | "
-                "f_err=[%.2f %.2f %.2f %.2f %.2f %.2f] f_eff=[%.2f %.2f %.2f %.2f %.2f %.2f]",
+                "f_err=[%.2f %.2f %.2f %.2f %.2f %.2f] f_eff=[%.2f %.2f %.2f %.2f %.2f %.2f] "
+                "fdisp=[%s %s %s %s %s %s]",
                 kArmName[is_left ? 0 : 1],
                 e[0], e[1], e[2], e[3], e[4], e[5],
                 v_des(0), v_des(1), v_des(2), v_des(3), v_des(4), v_des(5),
@@ -1704,7 +1820,8 @@ namespace arms_controller_common
                 track_gap, track_rot_gap,
                 target_updates, target_shift, target_rot_shift,
                 diag_f_err[0], diag_f_err[1], diag_f_err[2], diag_f_err[3], diag_f_err[4], diag_f_err[5],
-                diag_f_eff[0], diag_f_eff[1], diag_f_eff[2], diag_f_eff[3], diag_f_eff[4], diag_f_eff[5]);
+                diag_f_eff[0], diag_f_eff[1], diag_f_eff[2], diag_f_eff[3], diag_f_eff[4], diag_f_eff[5],
+                fd[0], fd[1], fd[2], fd[3], fd[4], fd[5]);
             RCLCPP_INFO(node_->get_logger(), "%s", buf);
         }
 
