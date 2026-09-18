@@ -70,8 +70,25 @@ namespace arms_controller_common
             Eigen::Matrix<double, 6, 1> force_integral{Eigen::Matrix<double, 6, 1>::Zero()};
             Eigen::Matrix<double, 6, 1> force_disp{Eigen::Matrix<double, 6, 1>::Zero()};
             Eigen::Vector3d workspace_position_reference{Eigen::Vector3d::Zero()};
-            std::array<Eigen::Matrix3d, 3> workspace_rotation_reference;
+            // 力控旋转轴的加性逐轴行程 [rad]：每周期把实测姿态的小角度增量按
+            // base 轴分量累加。原实现用 log(R·R_refᵀ) 的投影，有两个致命缺陷：
+            // (1) 总转角接近 180° 时该投影会失真甚至恒为 0 → 越界保护完全失效；
+            // (2) 旋转不可交换，别的轴转出来的姿态会被算进本轴行程 → 力矩轴的
+            //     行程预算被别的轴吃掉，随后被软限位静默冻结、无法再调整。
+            Eigen::Vector3d workspace_rot_travel{Eigen::Vector3d::Zero()};
+            Eigen::Matrix3d workspace_rot_prev{Eigen::Matrix3d::Identity()};
+            bool workspace_rot_prev_valid{false};
             std::array<bool, 6> workspace_axis_active{};
+            // 力控轴行程已顶到软限位且仍在往外推（本周期输出被强制为 0）。
+            std::array<bool, 6> force_disp_pinned{};
+            // 力控轴"导纳自身"的虚拟位移（积分 v_des，有界）——软限位门限用它。
+            // 用实测位移做门限时，运动被堵住它不增长 → 门限永不触发 → 位置指令
+            // 无界累积（"力矩读数一直涨"）。对自己的状态限幅后，即使环境完全
+            // 没有响应，指令也停在 ±xmax。同时它是"响应守卫"的分子/分母之一。
+            Eigen::Matrix<double, 6, 1> force_vdisp{Eigen::Matrix<double, 6, 1>::Zero()};
+            // 响应守卫：连续处于"请求了但实测没动"的时长 [s] 与确认标志。
+            std::array<double, 6> force_stall_time{};
+            std::array<bool, 6> force_axis_stalled{};
             Eigen::Matrix<double, 6, 1> wrench_filt{Eigen::Matrix<double, 6, 1>::Zero()};
             // Low-pass filtered force-axis velocity (adds virtual inertia / damping
             // to the admittance law, suppresses low-frequency drag oscillation).
@@ -114,6 +131,9 @@ namespace arms_controller_common
                 force_integral.setZero();
                 pos_integral.setZero();
                 force_disp.setZero();
+                force_vdisp.setZero();
+                force_stall_time.fill(0.0);
+                force_axis_stalled.fill(false);
                 qdot_prev.resize(0);
                 v_pos_prev.setZero();
                 v_pos_filt.setZero();
@@ -220,6 +240,18 @@ namespace arms_controller_common
 
         // ── Force-axis gains ──
         std::vector<double> hybrid_force_damping_{5000.0, 5000.0, 5000.0, 250.0, 250.0, 250.0};
+        // 力控轴上的回弹（位控）刚度 [1/s]：v -= K·实测行程。0 = 纯导纳（现状）。
+        // 纯导纳没有恢复力：力/力矩误差一旦不可达（几何增益变号、被环境约束），
+        // 轴会一路漂到行程限位，然后被软限位静默冻结——既不能继续调整，也不会
+        // 自己回中。旋转力控轴设 0.5~2.0 可稳定在有限偏置并在误差消失后回中。
+        std::vector<double> hybrid_force_pos_stiffness_{0.0, 0.0, 0.0, 0.0, 0.0, 0.0};
+        // 响应守卫（鲁棒导纳）：请求了运动但实测几乎没动 → 判为"环路没合上"
+        // （环境不给增益 / 被刚性约束堵住）→ 保持当前位形、不再加大指令，并让
+        // 虚拟位移缓慢回退以自动重试。realize_tol：实测/指令行程比阈值；
+        // stall_time：确认时长 [s]；stall_release：虚拟位移回退速率 [1/s]。
+        double hybrid_force_realize_tol_{0.25};
+        double hybrid_force_stall_time_{0.2};
+        double hybrid_force_stall_release_{1.0};
         double hybrid_force_ki_{2.0};
         double hybrid_force_ki_max_{10.0};
         double hybrid_force_ki_leak_{0.5};        // integral leakage [1/s], anti-windup during drag
