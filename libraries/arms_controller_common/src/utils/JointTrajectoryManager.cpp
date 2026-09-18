@@ -58,6 +58,13 @@ namespace arms_controller_common
         double max_acceleration,
         double max_jerk)
     {
+        if (!std::isfinite(max_velocity) || max_velocity <= 0 ||
+            !std::isfinite(max_acceleration) || max_acceleration <= 0 ||
+            !std::isfinite(max_jerk) || max_jerk <= 0)
+        {
+            RCLCPP_ERROR(logger_, "Invalid joint motion limits");
+            return false;
+        }
         if (!validateSingleNodeParams(start_pos, target_pos, duration, type))
         {
             return false;
@@ -66,6 +73,9 @@ namespace arms_controller_common
         // Reset state
         reset();
 
+        active_max_velocity_ = max_velocity;
+        active_max_acceleration_ = max_acceleration;
+        active_max_jerk_ = max_jerk;
         // Store parameters
         start_pos_ = start_pos;
         target_pos_ = target_pos;
@@ -134,10 +144,7 @@ namespace arms_controller_common
                             start_joint_point.joint_pos(i) = start_pos_[i];
                             end_joint_point.joint_pos(i) = target_pos_[i];
                         }
-                        if (auto_extend_duration)
-                        {
-                            applyJointLimits(traj_param, nr_of_joints);
-                        }
+                        applyJointLimits(traj_param, nr_of_joints);
 
                         planning::TrajectoryInitParameters movej_init_para(
                             start_joint_point, end_joint_point, traj_param, period_);
@@ -160,14 +167,20 @@ namespace arms_controller_common
 
                 try
                 {
-                    if (auto_extend_duration)
                     {
+
                         if (!initDoublesPlanner(duration_, false))
                         {
                             reset();
                             return false;
                         }
                         const double t_min = movej_planner_->getTotalTime();
+                        if (!auto_extend_duration && duration_ + 1e-9 < t_min)
+                        {
+                            RCLCPP_ERROR(logger_, "DOUBLES duration violates motion limits; enable auto extension");
+                            reset();
+                            return false;
+                        }
                         const double actual = std::max(duration_, t_min);
                         if (actual > duration_ + 1e-6)
                         {
@@ -188,16 +201,6 @@ namespace arms_controller_common
                         duration_ = actual;
                         planningTime_ = actual;
                     }
-                    else if (!initDoublesPlanner(duration_, true))
-                    {
-                        reset();
-                        return false;
-                    }
-                    else
-                    {
-                        planningTime_ = duration_;
-                    }
-
                     mode_ = TrajectoryMode::SINGLE_NODE;
                 }
                 catch (const std::exception& e)
@@ -254,6 +257,10 @@ namespace arms_controller_common
 
         // Reset state
         reset();
+        active_max_velocity_ = default_max_velocity_;
+        active_max_acceleration_ = default_max_acceleration_;
+        active_max_jerk_ = default_max_jerk_;
+
 
         // Store parameters
         waypoints_ = waypoints;
@@ -357,6 +364,12 @@ namespace arms_controller_common
 
                     planning::TrajectoryParameter param(trajectory_duration_, nr_of_joints);
                     param.time_mode = true; // Enable automatic time calculation
+                    for (size_t i = 0; i < nr_of_joints; ++i)
+                    {
+                        param.joint_max_vel(i) = active_max_velocity_;
+                        param.joint_max_acc(i) = active_max_acceleration_;
+                        param.joint_max_jerk(i) = active_max_jerk_;
+                    }
 
                     // Use single parameter, lina planning will auto-calculate segment times
                     // The total_time in param will be distributed proportionally to all segments
@@ -410,6 +423,8 @@ namespace arms_controller_common
 
     std::vector<double> JointTrajectoryManager::getNextPoint(double step_seconds)
     {
+        last_velocities_.clear();
+        last_accelerations_.clear();
         if (!initialized_)
         {
             // Use simple warning since we don't have a clock in this context
@@ -425,6 +440,10 @@ namespace arms_controller_common
 
         if (completed_)
         {
+            const size_t n = mode_ == TrajectoryMode::SINGLE_NODE ? target_pos_.size()
+                : (waypoints_.empty() ? 0 : waypoints_.back().size());
+            last_velocities_.assign(n, 0.0);
+            last_accelerations_.assign(n, 0.0);
             // Return final position
             if (mode_ == TrajectoryMode::SINGLE_NODE)
             {
@@ -570,6 +589,8 @@ namespace arms_controller_common
 #ifdef HAS_LINA_PLANNING
             if (movej_planner_)
             {
+                if (std::isfinite(step_seconds) && step_seconds > 0.0)
+                    movej_planner_->period = step_seconds;
                 planning::TrajectPoint movej_point = movej_planner_->run();
 
                 if (movej_planner_->isMotionOver())
@@ -588,6 +609,8 @@ namespace arms_controller_common
                 for (size_t i = 0; i < static_cast<size_t>(movej_point.joint_pos.getJointSize()); ++i)
                 {
                     result.push_back(movej_point.joint_pos(i));
+                    last_velocities_.push_back(movej_point.joint_vel(i));
+                    last_accelerations_.push_back(movej_point.joint_acc(i));
                 }
 
                 return result;
@@ -760,6 +783,8 @@ namespace arms_controller_common
         for (size_t i = 0; i < num_joints; ++i)
         {
             result.push_back(traj_point.joint_pos(i));
+            last_velocities_.push_back(traj_point.joint_vel(i));
+            last_accelerations_.push_back(traj_point.joint_acc(i));
         }
 
         return result;

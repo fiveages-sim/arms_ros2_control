@@ -128,6 +128,7 @@ namespace ocs2::mobile_manipulator
             ctrl_comp_->maybeRequestVisualizationUpdate(time);
         }
         ctrl_comp_->endRtCycle(current_state_ ? current_state_->state_name_string : fsm);
+        ctrl_interfaces_.recordCommandMotion(period.seconds());
         return controller_interface::return_type::OK;
     }
 
