@@ -53,21 +53,31 @@ VRInputHandler是基于VRMarkerWrapper功能开发的VR输入处理器，专门�
 ### 启动参数
 - `enable_vr`: 是否启用VR控制，默认true
 - `vr_update_rate`: VR更新频率，默认500.0Hz
-- `vr_follow_frame`: VR 末端目标计算坐标系，FULL_BODY / SPLIT_BODY 均生效，默认 `base_footprint`
+- `vr_follow_frame`: VR 增量参考轴系，恢复时冻结 F → C 旋转，FULL_BODY / SPLIT_BODY 均生效，默认 `base_footprint`
 
 ### VR 目标坐标系
 
-`vr_follow_frame` 默认是 `base_footprint`。进入 UPDATE/rebase 时，
-`VRInputHandler` 将 current pose 从其 `header.frame_id` 转换到
-`vr_follow_frame` 并锁存；每条高频 VR 输入在该 frame 中计算目标，
-再转换回 current-pose frame 后发布普通 `Pose`。
+`vr_follow_frame` 指定 VR 增量的参考轴系 F；控制器坐标系 C 来自
+current_pose 的 `header.frame_id`。进入 UPDATE、暂停恢复或单臂重新接管时，
+每臂独立查询并冻结 F → C 的旋转 `R_C_F`。机器人锚点和目标缓存始终保存在 C 中。
 
-- mobile-base：通常为 `world -> base_footprint` 锁存，
-  `base_footprint -> world` 发布；
-- fixed-base：通常两个 frame 都是 `base_footprint`，直接复制；
-- split-body：可设为 `arm_base`，将 VR 增量表达在机械臂基座轴系，
-  发布前再从 `arm_base` 转到 current-pose frame；
-- TF 不可用：跳过本周期，不更新缓存，下一条 VR 输入自动重试。
+```text
+delta_p_F = inverse(R_v0) * (p_v - p_v0)
+delta_R_F = inverse(R_v0) * R_v
+p_target_C = p_anchor_C + R_C_F * delta_p_F
+R_target_C = R_C_F * delta_R_F * inverse(R_C_F) * R_anchor_C
+```
+
+镜像、缩放和摇杆仍按原规则作用于 VR/F 中的增量。平移增量只旋转，
+不叠加 TF 平移；连续目标在 C 中平滑并发布，不再每帧查询底盘 TF。
+因此 base_footprint 移动或转向不会带动静止 VR 对应的 world target。
+
+- 普通恢复优先使用最后发布的 C 中目标作为锚点，无历史目标时使用实际末端。
+- WBC 手臂重新启用从实际末端重新接管；另一臂的冻结旋转不变。
+- 普通暂停冻结 VR 输入，保持本轮旋转；摇杆仍可调整目标，恢复时才更新旋转。
+- TF 不可用时基准无效，停止该臂发布并重试；成功时重新对齐 VR 起点、清零摇杆偏移，下一帧恢复发布。
+- F 与 C 相同时使用单位旋转；split-body 同样遵循冻结增量轴系的规则。
+- 校准和头部跟踪保留各自的实时 TF 语义；校准写入手臂缓存的是 C 中目标。
 - `robot.local.yaml` 只选择 `info_file_name`，不配置本参数。
 
 ## 全身控制操作说明
@@ -268,7 +278,7 @@ VRInputHandler会输出详细的调试信息：
 
 ## 注意事项
 
-1. **坐标系一致性**: 所有控制拓扑都在 `vr_follow_frame` 下计算，发布前转换到 `ee_frame_id_`
+1. **坐标系一致性**: 手臂锚点与发布目标均在 `ee_frame_id_`，仅用恢复时冻结的旋转转换 `vr_follow_frame` 中的增量
 2. **频率匹配**: VR更新频率应与系统处理能力匹配
 3. **阈值调整**: 根据实际需求调整变化检测阈值
 4. **线程安全**: 所有状态变量都使用原子操作确保线程安全
