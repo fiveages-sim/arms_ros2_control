@@ -1,4 +1,4 @@
-// USB keyboard foot-pedal adapter for the XR controller event stream.
+// USB keyboard foot-pedal adapter for the teleop controller event stream.
 
 #include "arms_teleop/foot_pedal_teleop.h"
 
@@ -61,7 +61,7 @@ FootPedalTeleop::FootPedalTeleop()
     grab_device_ = declare_parameter<bool>("grab_device", true);
     publish_rate_hz_ = declare_parameter<double>("xr.publish_rate_hz", 30.0);
     controller_state_topic_ = declare_parameter<std::string>(
-        "xr.controller_state_topic", "/xr/controller_state");
+        "xr.controller_state_topic", "/teleop/controller_state");
     whole_teleop_long_press_ms_ = declare_parameter<std::int64_t>(
         "whole_teleop_long_press_ms", 800);
     mirror_long_press_ms_ = declare_parameter<std::int64_t>(

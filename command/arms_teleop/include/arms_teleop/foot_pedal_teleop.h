@@ -51,7 +51,7 @@ private:
     std::string device_serial_;
     bool grab_device_{true};
     double publish_rate_hz_{30.0};
-    std::string controller_state_topic_{"/xr/controller_state"};
+    std::string controller_state_topic_{"/teleop/controller_state"};
     std::int64_t whole_teleop_long_press_ms_{800};
     std::int64_t mirror_long_press_ms_{800};
     int key_fsm_down_{KEY_F13};
