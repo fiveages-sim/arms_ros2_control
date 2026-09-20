@@ -56,7 +56,7 @@ namespace arms_ros2_control::command
          * @param vr_thumbstick_angular_scale VR摇杆角度缩放因子（单位 rad/step）
          * @param vr_pose_scale 手柄位姿位置缩放因子（左右共用；事件 15 左Y+右B 固定按左侧 Z 距校准）
          * @param reference_link 参考link名称（例如 head_link2），用于VR/头显关联
-         * @param vr_follow_frame VR 末端目标计算坐标系（默认 base_footprint）
+         * @param vr_follow_frame VR 增量参考轴系，恢复时冻结到控制器系的旋转（默认 base_footprint）
          */
         VRInputHandler(
             rclcpp::Node::SharedPtr node,
@@ -252,7 +252,6 @@ namespace arms_ros2_control::command
         void clearArmPause(WbcToggleTarget arm);
         bool handleCase16YbModeToggle();
         bool rebaseArmVrControlFromCurrentPose(WbcToggleTarget arm);
-        bool setRobotBaseFromCurrentPose(const std::string& armType);
         void clearLastPublishedTarget(const std::string& armType);
 
         /**
@@ -269,8 +268,9 @@ namespace arms_ros2_control::command
          */
         void processChassisAxes();
 
-        // WBC 底盘解锁期间屏蔽所有 VR 底盘速度（包括清零），保留手柄模式。
+        // OCS2 且 WBC 底盘规划解锁时屏蔽 VR 底盘速度（包括清零），保留手柄模式。
         void publishChassisVelocity(const geometry_msgs::msg::Twist& velocity);
+        [[nodiscard]] bool wbcOwnsChassisVelocity() const;
 
         /**
          * 切换底盘控制模式（case 20 触发）
@@ -281,7 +281,7 @@ namespace arms_ros2_control::command
         /**
          * 把 /cmd_vel、waist_lifting_command、waist_turning_command 三个话题各发一次 0
          * 用于退出底盘模式、disable、enabled 变 false 等场景，防止残留运动
-         * WBC 底盘解锁期间不向 /cmd_vel 发零速，避免干扰全身控制。
+         * OCS2 且 WBC 底盘规划解锁时不向 /cmd_vel 发零速，避免干扰全身控制。
          */
         void resetChassisAndWaistCommands();
 
@@ -382,11 +382,11 @@ namespace arms_ros2_control::command
         int32_t resolvedFsmState() const;
 
         /**
-         * 将计算坐标系下的目标转换到控制发布 frame，再做变化检测并发布到 left_target/right_target。
-         * position/orientation 为 vr_follow_frame_ Pose。
+         * 将控制器坐标系下的目标平滑后发布到 left_target/right_target。
+         * position/orientation 为 ee_frame_id_ Pose。
          * @param armType 手臂类型 ("left" 或 "right")
-         * @param position 计算坐标系下的位置
-         * @param orientation 计算坐标系下的方向
+         * @param position 控制器坐标系下的位置
+         * @param orientation 控制器坐标系下的方向
          * @return true 表示本次请求真正发布；false 表示首次解耦重建、TF 失败、未变化或发布器不可用
          */
         bool publishTargetPoseDirect(const std::string& armType,
@@ -399,8 +399,8 @@ namespace arms_ros2_control::command
          * 按冻结帧数等额摊到随后若干帧，使正常运动逐位不受影响。
          * 仅在真正发布 target 的路径上调用，因此 STORAGE 模式下不生效。
          * @param isLeft true=左臂状态，false=右臂状态
-         * @param position 计算坐标系下的位置，原地改写为摊平后的值
-         * @param orientation 计算坐标系下的方向，原地改写为摊平后的值
+         * @param position 控制器坐标系下的位置，原地改写为摊平后的值
+         * @param orientation 控制器坐标系下的方向，原地改写为摊平后的值
          */
         void applyStaleCatchUpRamp(bool isLeft,
                                    Eigen::Vector3d& position,
@@ -445,10 +445,10 @@ namespace arms_ros2_control::command
 
         /**
          * 记录最后一次实际发布出去的目标位姿，用作暂停恢复/进入 UPDATE 的 command 连续性基准。
-         * 保存的是 vr_follow_frame_ Pose。
+         * 保存的是 ee_frame_id_ Pose。
          * @param armType 手臂类型 ("left" 或 "right")
-         * @param position 计算坐标系下的位置
-         * @param orientation 计算坐标系下的方向
+         * @param position 控制器坐标系下的位置
+         * @param orientation 控制器坐标系下的方向
          */
         void recordLastPublishedTarget(const std::string& armType,
                                        const Eigen::Vector3d& position,
@@ -460,12 +460,13 @@ namespace arms_ros2_control::command
         void clearLastPublishedTargets();
 
         /**
-         * 将对应手臂的 robot base 设置为最后 command target；若还没有发布历史，则回退到 current pose。
-         * current pose 会从 ee_frame_id_ 转到 vr_follow_frame_；失败时不覆盖基准。
+         * 设置对应手臂的机器人锚点，可优先沿用最后目标或直接使用实际末端。
+         * 锚点保持在 ee_frame_id_，同时冻结 F -> C 旋转；失败时基准无效，不发布。
          * @param armType 手臂类型 ("left" 或 "right")
-         * @return true 表示基准已在正确计算 frame 中建立
+         * @param preferLastCommand true 优先最后目标、无历史时用实际末端；false 直接用实际末端
+         * @return true 表示控制器系锚点和冻结旋转均有效
          */
-        bool setRobotBaseFromLastCommandOrCurrent(const std::string& armType);
+        bool setRobotBase(const std::string& armType, bool preferLastCommand);
 
         /**
          * 将Pose消息转换为Eigen::Matrix4d
@@ -600,7 +601,7 @@ namespace arms_ros2_control::command
         Eigen::Vector3d prev_calculated_right_position_ = Eigen::Vector3d::Zero();
         Eigen::Quaterniond prev_calculated_right_orientation_ = Eigen::Quaterniond::Identity();
 
-        // 最后一次实际发布对应的计算-frame command target（vr_follow_frame_ Pose）。
+        // 最后一次实际发布的控制器系 command target（ee_frame_id_ Pose）。
         bool has_last_published_left_target_ = false;
         Eigen::Vector3d last_published_left_position_ = Eigen::Vector3d::Zero();
         Eigen::Quaterniond last_published_left_orientation_ = Eigen::Quaterniond::Identity();
@@ -708,7 +709,11 @@ namespace arms_ros2_control::command
         Eigen::Vector3d vr_base_right_position_ = Eigen::Vector3d::Zero();
         Eigen::Quaterniond vr_base_right_orientation_ = Eigen::Quaterniond::Identity();
 
-        // 机器人末端基准：vr_follow_frame_ 中锁存的 Pose
+        // 每臂恢复时冻结的 F -> C 旋转；有效性由 robot_base_valid_ 管理。
+        Eigen::Quaterniond left_follow_rotation_ = Eigen::Quaterniond::Identity();
+        Eigen::Quaterniond right_follow_rotation_ = Eigen::Quaterniond::Identity();
+
+        // 机器人末端基准：ee_frame_id_ 中锁存的 Pose
         Eigen::Vector3d robot_base_left_position_ = Eigen::Vector3d::Zero();
         Eigen::Quaterniond robot_base_left_orientation_ = Eigen::Quaterniond::Identity();
         Eigen::Vector3d robot_base_right_position_ = Eigen::Vector3d::Zero();
@@ -791,7 +796,7 @@ namespace arms_ros2_control::command
         // 参考link名称（用于将VR头显/手柄关联到机器人某个link），从target_manager.yaml读取，默认"base_link"
         std::string reference_link_;
 
-        // VR 目标的计算坐标系；由 vr_follow_frame 参数配置
+        // VR 增量的参考轴系；每次恢复时冻结其到控制器系的旋转
         std::string vr_follow_frame_;
 
         // 来自 left_current_pose/right_current_pose.header.frame_id；

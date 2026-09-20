@@ -477,8 +477,8 @@ namespace arms_ros2_control::command
                     vr_right_position_raw_.x(), vr_right_position_raw_.y(), vr_right_position_raw_.z(),
                     head_ctrl_dist);
 
-        // 计算系：与 publishTargetPoseDirect 保持一致，所有控制拓扑都在
-        // vr_follow_frame_ 中计算，发布前再转回 ee_frame_id_。
+        // 校准使用即时 follow frame 计算完整目标，再转回 ee_frame_id_。
+        // 连续手臂控制则只使用恢复时冻结的旋转映射增量。
         // 手柄-头显偏移量来自 VR 世界系（已在 xr 侧转成前x/左y/上z），其分量按
         // vr_follow_frame_ 的轴系解释。直接加在 ee_frame_id_ 上时，轮式底盘的
         // ee_frame_id_ 是 world，底盘一转向偏移方向就整体转错。
@@ -671,10 +671,10 @@ namespace arms_ros2_control::command
                 // 旧目标当锚点，手臂会从校准位姿弹回旧位置。
                 // 这里把校准终点当作"刚刚发布过的目标"写回缓存：锚点即终点，
                 // 于是不必等手臂收敛就能进 UPDATE，未走完的运动会继续走完。
-                // last_published_* 存计算系的值（与 publishTargetPoseDirect 一致），
+                // last_published_* 存发布系的值（与 publishTargetPoseDirect 一致），
                 // prev_calculated_* 存发布系的值——它被 hasPoseChanged() 无条件读取。
-                recordLastPublishedTarget("left", left_target_pos_calc, left_target_ori_calc);
-                recordLastPublishedTarget("right", right_target_pos_calc, right_target_ori_calc);
+                recordLastPublishedTarget("left", left_pub_pos, left_pub_ori);
+                recordLastPublishedTarget("right", right_pub_pos, right_pub_ori);
                 // 让 robot_base_* 失效，下次进 UPDATE 从上面写回的 command target 重新派生
                 left_robot_base_valid_ = false;
                 right_robot_base_valid_ = false;
@@ -835,6 +835,8 @@ namespace arms_ros2_control::command
     void VRInputHandler::disable()
     {
         enabled_.store(false);
+        left_robot_base_valid_ = false;
+        right_robot_base_valid_ = false;
         stopHeadTracking();
         left_grip_direction_suppressed_.store(false);
         body_mode_request_pending_.store(false);
@@ -857,8 +859,12 @@ namespace arms_ros2_control::command
     void VRInputHandler::robotLeftPoseCallback(const geometry_msgs::msg::PoseStamped::SharedPtr msg)
     {
         // 初始化末端参考坐标系（frame_id）- 左右手共用一次即可
-        if (!ee_frame_id_initialized_ && !msg->header.frame_id.empty())
+        if (!msg->header.frame_id.empty() &&
+            (!ee_frame_id_initialized_ || ee_frame_id_ != msg->header.frame_id))
         {
+            clearLastPublishedTargets();
+            has_robot_current_left_pose_.store(false);
+            has_robot_current_right_pose_.store(false);
             ee_frame_id_ = msg->header.frame_id;
             ee_frame_id_initialized_ = true;
             RCLCPP_INFO(node_->get_logger(),
@@ -876,8 +882,12 @@ namespace arms_ros2_control::command
     void VRInputHandler::robotRightPoseCallback(const geometry_msgs::msg::PoseStamped::SharedPtr msg)
     {
         // 如果还未初始化 frame_id，也可以从右手话题初始化（通常左右相同）
-        if (!ee_frame_id_initialized_ && !msg->header.frame_id.empty())
+        if (!msg->header.frame_id.empty() &&
+            (!ee_frame_id_initialized_ || ee_frame_id_ != msg->header.frame_id))
         {
+            clearLastPublishedTargets();
+            has_robot_current_left_pose_.store(false);
+            has_robot_current_right_pose_.store(false);
             ee_frame_id_ = msg->header.frame_id;
             ee_frame_id_initialized_ = true;
             RCLCPP_INFO(node_->get_logger(),
@@ -1361,69 +1371,46 @@ namespace arms_ros2_control::command
         }
     }
 
-    bool VRInputHandler::setRobotBaseFromLastCommandOrCurrent(
-        const std::string& armType)
+    bool VRInputHandler::setRobotBase(const std::string& armType, bool preferLastCommand)
     {
         const bool isLeft = armType == "left";
-        const bool isRight = armType == "right";
-        if (!isLeft && !isRight)
+        if (!isLeft && armType != "right")
         {
-            RCLCPP_WARN(
-                node_->get_logger(),
-                "🕹️ Cannot set VR robot base for unknown arm '%s'",
-                armType.c_str());
             return false;
         }
-
         bool& valid = isLeft ? left_robot_base_valid_ : right_robot_base_valid_;
-        bool& hasLast = isLeft
-            ? has_last_published_left_target_
-            : has_last_published_right_target_;
-        Eigen::Vector3d& basePosition = isLeft
-            ? robot_base_left_position_
-            : robot_base_right_position_;
-        Eigen::Quaterniond& baseOrientation = isLeft
-            ? robot_base_left_orientation_
-            : robot_base_right_orientation_;
-        const Eigen::Vector3d& lastPosition = isLeft
-            ? last_published_left_position_
-            : last_published_right_position_;
-        const Eigen::Quaterniond& lastOrientation = isLeft
-            ? last_published_left_orientation_
-            : last_published_right_orientation_;
-        const Eigen::Vector3d& currentPosition = isLeft
-            ? robot_current_left_position_
-            : robot_current_right_position_;
-        const Eigen::Quaterniond& currentOrientation = isLeft
-            ? robot_current_left_orientation_
-            : robot_current_right_orientation_;
-
         valid = false;
-        if (hasLast)
-        {
-            basePosition = lastPosition;
-            baseOrientation = lastOrientation.normalized();
-            valid = true;
-            return true;
-        }
-
-        Eigen::Vector3d transformedPosition;
-        Eigen::Quaterniond transformedOrientation;
-        if (!ee_frame_id_initialized_ ||
-            !transformPoseBetweenFrames(
-                armType,
-                currentPosition,
-                currentOrientation,
-                ee_frame_id_,
-                vr_follow_frame_,
-                transformedPosition,
-                transformedOrientation))
+        const bool useLast = preferLastCommand && (isLeft
+            ? has_last_published_left_target_ : has_last_published_right_target_);
+        if (!ee_frame_id_initialized_ || (!useLast && !(isLeft
+            ? has_robot_current_left_pose_.load() : has_robot_current_right_pose_.load())))
         {
             return false;
         }
 
-        basePosition = transformedPosition;
-        baseOrientation = transformedOrientation;
+        // Query F -> C once per rebase. Only its rotation maps VR increments.
+        Eigen::Vector3d unusedTranslation;
+        Eigen::Quaterniond rotation;
+        if (!transformPoseBetweenFrames(armType, Eigen::Vector3d::Zero(),
+                Eigen::Quaterniond::Identity(), vr_follow_frame_, ee_frame_id_,
+                unusedTranslation, rotation))
+        {
+            return false;
+        }
+        const Eigen::Vector3d position = useLast
+            ? (isLeft ? last_published_left_position_ : last_published_right_position_)
+            : (isLeft ? robot_current_left_position_ : robot_current_right_position_);
+        const Eigen::Quaterniond orientation = useLast
+            ? (isLeft ? last_published_left_orientation_ : last_published_right_orientation_)
+            : (isLeft ? robot_current_left_orientation_ : robot_current_right_orientation_);
+        if (!position.allFinite() || !orientation.coeffs().allFinite() || orientation.norm() < 1e-9)
+        {
+            return false;
+        }
+        (isLeft ? robot_base_left_position_ : robot_base_right_position_) = position;
+        (isLeft ? robot_base_left_orientation_ : robot_base_right_orientation_) = orientation.normalized();
+        (isLeft ? left_follow_rotation_ : right_follow_rotation_) = rotation;
+        resetStaleCatchUpRamp(isLeft);
         valid = true;
         return true;
     }
@@ -1445,8 +1432,24 @@ namespace arms_ros2_control::command
         }
 
         bool& valid = isLeft ? left_robot_base_valid_ : right_robot_base_valid_;
-        if (!valid && !setRobotBaseFromLastCommandOrCurrent(armType))
+        if (!valid)
         {
+            if (setRobotBase(armType, /*preferLastCommand=*/true))
+            {
+                // TF may have been unavailable at resume. Start the VR delta at
+                // successful rebase, not at an old sample collected while waiting.
+                const bool useLeftVr = mirror_mode_.load() ? !isLeft : isLeft;
+                const bool paused = isLeft ? left_arm_paused_.load() : right_arm_paused_.load();
+                (useLeftVr ? vr_base_left_position_ : vr_base_right_position_) = useLeftVr
+                    ? (paused ? paused_left_position_ : left_position_)
+                    : (paused ? paused_right_position_ : right_position_);
+                (useLeftVr ? vr_base_left_orientation_ : vr_base_right_orientation_) = useLeftVr
+                    ? (paused ? paused_left_orientation_ : left_orientation_)
+                    : (paused ? paused_right_orientation_ : right_orientation_);
+                (isLeft ? left_thumbstick_offset_ : right_thumbstick_offset_).setZero();
+                (isLeft ? left_thumbstick_yaw_offset_ : right_thumbstick_yaw_offset_) = 0.0;
+            }
+            // The caller already applied the old offsets; use the next fresh sample.
             return false;
         }
 
@@ -1462,10 +1465,15 @@ namespace arms_ros2_control::command
             vrCurrentOrientation,
             vrBasePosition,
             vrBaseOrientation,
-            robotBasePosition,
-            robotBaseOrientation,
+            Eigen::Vector3d::Zero(),
+            Eigen::Quaterniond::Identity(),
             calculatedPosition,
             calculatedOrientation);
+        // The local VR delta is interpreted in F; anchors and outputs remain in C.
+        const auto& rotation = isLeft ? left_follow_rotation_ : right_follow_rotation_;
+        calculatedPosition = robotBasePosition + rotation * calculatedPosition;
+        calculatedOrientation = (rotation * calculatedOrientation * rotation.conjugate() *
+                                 robotBaseOrientation).normalized();
         return publishTargetPoseDirect(
             armType, calculatedPosition, calculatedOrientation);
     }
@@ -1506,7 +1514,7 @@ namespace arms_ros2_control::command
         has_last_published_right_target_ = false;
         right_robot_base_valid_ = false;
         const bool rightBaseReady =
-            setRobotBaseFromLastCommandOrCurrent("right");
+            setRobotBase("right", /*preferLastCommand=*/true);
 
         prev_calculated_right_position_ = robot_current_right_position_;
         prev_calculated_right_orientation_ =
@@ -1555,23 +1563,15 @@ namespace arms_ros2_control::command
         }
 
         // 上游 XR 位姿冻结后会一帧补齐整段位移，先把追赶量摊到随后若干帧。
-        // 放在 frame 变换之前，使 recordLastPublishedTarget() 记录的也是真正发出去的目标。
+        // 在控制器坐标系中平滑，缓存保存实际发布的目标。
         Eigen::Vector3d rampedPosition = position;
         Eigen::Quaterniond rampedOrientation = orientation;
         applyStaleCatchUpRamp(isLeft, rampedPosition, rampedOrientation);
 
         Eigen::Vector3d publishPosition = rampedPosition;
         Eigen::Quaterniond publishOrientation = rampedOrientation;
-        // 所有模式都在 vr_follow_frame_ 中计算，发布前统一转回控制器坐标系。
-        if (!ee_frame_id_initialized_ ||
-            !transformPoseBetweenFrames(
-                armType,
-                rampedPosition,
-                rampedOrientation,
-                vr_follow_frame_,
-                ee_frame_id_,
-                publishPosition,
-                publishOrientation))
+        // Target and catch-up ramp are already expressed in the controller frame.
+        if (!ee_frame_id_initialized_)
         {
             return false;
         }
@@ -2561,60 +2561,6 @@ namespace arms_ros2_control::command
         }
     }
 
-    bool VRInputHandler::setRobotBaseFromCurrentPose(
-        const std::string& armType)
-    {
-        const bool isLeft = armType == "left";
-        const bool isRight = armType == "right";
-        if (!isLeft && !isRight)
-        {
-            return false;
-        }
-
-        const bool hasCurrent = isLeft
-            ? has_robot_current_left_pose_.load()
-            : has_robot_current_right_pose_.load();
-        bool& valid = isLeft
-            ? left_robot_base_valid_
-            : right_robot_base_valid_;
-        valid = false;
-        if (!hasCurrent || !ee_frame_id_initialized_)
-        {
-            return false;
-        }
-
-        const Eigen::Vector3d& currentPosition = isLeft
-            ? robot_current_left_position_
-            : robot_current_right_position_;
-        const Eigen::Quaterniond& currentOrientation = isLeft
-            ? robot_current_left_orientation_
-            : robot_current_right_orientation_;
-        Eigen::Vector3d transformedPosition;
-        Eigen::Quaterniond transformedOrientation;
-        if (!transformPoseBetweenFrames(
-                armType,
-                currentPosition,
-                currentOrientation,
-                ee_frame_id_,
-                vr_follow_frame_,
-                transformedPosition,
-                transformedOrientation))
-        {
-            return false;
-        }
-
-        Eigen::Vector3d& basePosition = isLeft
-            ? robot_base_left_position_
-            : robot_base_right_position_;
-        Eigen::Quaterniond& baseOrientation = isLeft
-            ? robot_base_left_orientation_
-            : robot_base_right_orientation_;
-        basePosition = transformedPosition;
-        baseOrientation = transformedOrientation.normalized();
-        valid = true;
-        return true;
-    }
-
     void VRInputHandler::clearLastPublishedTarget(
         const std::string& armType)
     {
@@ -2654,7 +2600,7 @@ namespace arms_ros2_control::command
         }
 
         const std::string armType = isLeftArm ? "left" : "right";
-        if (!setRobotBaseFromCurrentPose(armType))
+        if (!setRobotBase(armType, /*preferLastCommand=*/false))
         {
             return false;
         }
@@ -3092,12 +3038,19 @@ namespace arms_ros2_control::command
                      waist_lifting.data, waist_turning.data);
     }
 
+    bool VRInputHandler::wbcOwnsChassisVelocity() const
+    {
+        // 仅全身 OCS2 且底盘规划解锁时让路；HOLD / 锁底盘由 VR 直发 /cmd_vel。
+        return isFullBodyMode() &&
+               current_fsm_state_.load() == 3 &&
+               target_manager_ &&
+               target_manager_->getCurrentBaseState() ==
+                   arms_ros2_control_msgs::msg::WbcCurrentState::BASE_UNLOCKED;
+    }
+
     void VRInputHandler::publishChassisVelocity(const geometry_msgs::msg::Twist& velocity)
     {
-        // 以 WBC 实际反馈为准；锁定后下一帧摇杆输入自动恢复底盘控制。
-        if (isFullBodyMode() && target_manager_ &&
-            target_manager_->getCurrentBaseState() ==
-                arms_ros2_control_msgs::msg::WbcCurrentState::BASE_UNLOCKED)
+        if (wbcOwnsChassisVelocity())
         {
             return;
         }
@@ -3107,7 +3060,7 @@ namespace arms_ros2_control::command
 
     void VRInputHandler::resetChassisAndWaistCommands()
     {
-        // 底盘清零同样遵守 WBC 优先级；腰部照常清零。
+        // 底盘清零同样遵守 WBC 占用规则；腰部照常清零。
         auto zero_vel = geometry_msgs::msg::Twist();
         publishChassisVelocity(zero_vel);
 
@@ -3284,7 +3237,7 @@ namespace arms_ros2_control::command
                         vr_base_left_position_ = left_position_;
                         vr_base_left_orientation_ = left_orientation_;
                         const bool baseReady =
-                            setRobotBaseFromLastCommandOrCurrent("right");
+                            setRobotBase("right", /*preferLastCommand=*/true);
 
                         // 重置右摇杆累积偏移
                         right_thumbstick_offset_ = Eigen::Vector3d::Zero();
@@ -3324,7 +3277,7 @@ namespace arms_ros2_control::command
                         vr_base_left_position_ = left_position_;
                         vr_base_left_orientation_ = left_orientation_;
                         const bool baseReady =
-                            setRobotBaseFromLastCommandOrCurrent("left");
+                            setRobotBase("left", /*preferLastCommand=*/true);
 
                         // 重置左摇杆累积偏移
                         left_thumbstick_offset_ = Eigen::Vector3d::Zero();
@@ -3388,9 +3341,9 @@ namespace arms_ros2_control::command
                     vr_base_right_orientation_ = right_orientation_;
 
                     const bool leftBaseReady =
-                        setRobotBaseFromLastCommandOrCurrent("left");
+                        setRobotBase("left", /*preferLastCommand=*/true);
                     const bool rightBaseReady =
-                        setRobotBaseFromLastCommandOrCurrent("right");
+                        setRobotBase("right", /*preferLastCommand=*/true);
                     RCLCPP_INFO(
                         node_->get_logger(),
                         "🕹️ UPDATE bases: left=%s, right=%s, calculation_frame=%s",
@@ -3510,7 +3463,7 @@ namespace arms_ros2_control::command
                         vr_base_right_position_ = right_position_;
                         vr_base_right_orientation_ = right_orientation_;
                         const bool baseReady =
-                            setRobotBaseFromLastCommandOrCurrent("left");
+                            setRobotBase("left", /*preferLastCommand=*/true);
 
                         // 重置左摇杆累积偏移
                         left_thumbstick_offset_ = Eigen::Vector3d::Zero();
@@ -3550,7 +3503,7 @@ namespace arms_ros2_control::command
                         vr_base_right_position_ = right_position_;
                         vr_base_right_orientation_ = right_orientation_;
                         const bool baseReady =
-                            setRobotBaseFromLastCommandOrCurrent("right");
+                            setRobotBase("right", /*preferLastCommand=*/true);
 
                         // 重置右摇杆累积偏移
                         right_thumbstick_offset_ = Eigen::Vector3d::Zero();

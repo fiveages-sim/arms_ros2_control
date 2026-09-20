@@ -61,6 +61,24 @@ KeyboardTeleop::KeyboardTeleop() : Node("keyboard_teleop_node")
             create_publisher<arms_ros2_control_msgs::msg::TeleopMode>("teleop_mode", qos);
     }
     chassis_pub_ = create_publisher<geometry_msgs::msg::Twist>("/cmd_vel", 10);
+    fsm_state_sub_ = create_subscription<std_msgs::msg::Int32>(
+        "/fsm_state", rclcpp::QoS(1).transient_local(),
+        [this](const std_msgs::msg::Int32::SharedPtr msg)
+        {
+            if (msg)
+            {
+                fsm_state_ = msg->data;
+            }
+        });
+    wbc_state_sub_ = create_subscription<arms_ros2_control_msgs::msg::WbcCurrentState>(
+        "/ocs2_wbc_controller/current_state", 10,
+        [this](const arms_ros2_control_msgs::msg::WbcCurrentState::SharedPtr msg)
+        {
+            if (msg)
+            {
+                base_state_ = msg->base_state;
+            }
+        });
     waist_lift_pub_ =
         create_publisher<std_msgs::msg::Float64>("/body_joint_controller/waist_lifting_command", 10);
     waist_turn_pub_ =
@@ -150,6 +168,21 @@ void KeyboardTeleop::publishWaistZero()
     z.data = 0.0;
     waist_lift_pub_->publish(z);
     waist_turn_pub_->publish(z);
+}
+
+bool KeyboardTeleop::wbcOwnsChassisVelocity() const
+{
+    return fsm_state_ == 3 &&
+           base_state_ == arms_ros2_control_msgs::msg::WbcCurrentState::BASE_UNLOCKED;
+}
+
+void KeyboardTeleop::publishChassisCommand()
+{
+    if (wbcOwnsChassisVelocity())
+    {
+        return;
+    }
+    chassis_pub_->publish(chassis_cmd_);
 }
 
 void KeyboardTeleop::publishTeleopMode()
@@ -478,7 +511,7 @@ void KeyboardTeleop::timerCallback()
         publishWaistZero();
         chassis_cmd_.linear.x = chassis_cmd_.linear.y = chassis_cmd_.linear.z = 0.0;
         chassis_cmd_.angular.x = chassis_cmd_.angular.y = chassis_cmd_.angular.z = 0.0;
-        chassis_pub_->publish(chassis_cmd_);
+        publishChassisCommand();
 
         inputs_pub_->publish(inputs_);
         if (std::isfinite(inputs_.hand_command)) {
@@ -496,7 +529,7 @@ void KeyboardTeleop::timerCallback()
         chassis_cmd_.angular.x = 0.0;
         chassis_cmd_.angular.y = 0.0;
         chassis_cmd_.angular.z = rs_x_ch * chassis_angular_scale_ * sm;
-        chassis_pub_->publish(chassis_cmd_);
+        publishChassisCommand();
 
         publishWaistZero();
     }
