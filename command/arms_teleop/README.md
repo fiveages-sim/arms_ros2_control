@@ -93,10 +93,10 @@ source ~/ros2_ws/install/setup.bash
 ros2 run arms_teleop keyboard_teleop --ros-args -p discrete_key_stale_ms:=350
 ```
 
-### USB foot-pedal XR event control
+### USB foot-pedal teleoperation event control
 
 `foot_pedal_teleop` reads one Linux evdev keyboard device and publishes the same
-`std_msgs/Int32` event stream consumed from `/xr/controller_state`. It does not publish
+`std_msgs/Int32` event stream consumed from `/teleop/controller_state`. It does not publish
 `/fsm_command`; FSM transitions and teleoperation toggles are handled centrally by
 `VRInputHandler`.
 
@@ -137,8 +137,8 @@ Parameters:
   stable evdev path.
 - `device_serial` (default empty): disambiguate multiple connected CM6K pedals in auto mode.
 - `grab_device` (default `true`): exclusively consume this input device.
-- `xr.publish_rate_hz` (default `30.0`): `/xr/controller_state` state-stream frequency.
-- `xr.controller_state_topic` (default `/xr/controller_state`): XR event output topic.
+- `teleop.publish_rate_hz` (default `30.0`): `/teleop/controller_state` state-stream frequency.
+- `teleop.controller_state_topic` (default `/teleop/controller_state`): teleoperation event output topic.
 - `whole_teleop_long_press_ms` (default `800`): F16 hold duration required for event `4`.
 - `mirror_long_press_ms` (default `800`): F15 hold duration required for event `7`.
 - `keys.fsm_up/fsm_down/left_arm_toggle/right_arm_toggle`: Linux input key codes, default

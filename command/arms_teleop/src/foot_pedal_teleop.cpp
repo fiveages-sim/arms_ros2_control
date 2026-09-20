@@ -1,4 +1,4 @@
-// USB keyboard foot-pedal adapter for the XR controller event stream.
+// USB keyboard foot-pedal adapter for the common teleoperation event stream.
 
 #include "arms_teleop/foot_pedal_teleop.h"
 
@@ -59,9 +59,9 @@ FootPedalTeleop::FootPedalTeleop()
     device_path_ = declare_parameter<std::string>("device", "auto");
     device_serial_ = declare_parameter<std::string>("device_serial", "");
     grab_device_ = declare_parameter<bool>("grab_device", true);
-    publish_rate_hz_ = declare_parameter<double>("xr.publish_rate_hz", 30.0);
+    publish_rate_hz_ = declare_parameter<double>("teleop.publish_rate_hz", 30.0);
     controller_state_topic_ = declare_parameter<std::string>(
-        "xr.controller_state_topic", "/xr/controller_state");
+        "teleop.controller_state_topic", "/teleop/controller_state");
     whole_teleop_long_press_ms_ = declare_parameter<std::int64_t>(
         "whole_teleop_long_press_ms", 800);
     mirror_long_press_ms_ = declare_parameter<std::int64_t>(
@@ -111,10 +111,10 @@ void FootPedalTeleop::validateParameters() const
         throw std::runtime_error("parameter 'device' must be 'auto' or an evdev device path");
     }
     if (controller_state_topic_.empty()) {
-        throw std::runtime_error("xr.controller_state_topic must not be empty");
+        throw std::runtime_error("teleop.controller_state_topic must not be empty");
     }
     if (publish_rate_hz_ < 1.0 || publish_rate_hz_ > 200.0) {
-        throw std::runtime_error("xr.publish_rate_hz must be between 1 and 200 Hz");
+        throw std::runtime_error("teleop.publish_rate_hz must be between 1 and 200 Hz");
     }
     if (whole_teleop_long_press_ms_ < 300 || whole_teleop_long_press_ms_ > 5000) {
         throw std::runtime_error(
