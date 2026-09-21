@@ -66,6 +66,19 @@ ros2 topic pub /fsm_command std_msgs/msg/Int32 "data: 2" -1
 
 轴序：`[Fx, Fy, Fz, Mx, My, Mz]`，坐标系 `header.frame_id`（默认 `base_link`）。
 
+面板下方的 **曲面贴合** 分组控制贴合外环（见下节），与力控轴共用同一个 **应用设定** 按钮：
+
+| 控件 | 含义 | 写 | 读 |
+|------|------|----|----|
+| 启用贴合外环 | 力矩驱动的目标姿态偏置 | `compliance_align_enable` | `align_enabled` |
+| 最大偏置角 | 可纠正的最大倾角 [°]（默认 15） | `compliance_align_max` [rad] | `align_max` |
+| 回中速率 | 失去接触后的回中速率 [1/s] | `compliance_align_release` | `align_release` |
+| 绕接触点旋转 (RCC) | 转动中心取接触点估计 | `compliance_align_rcc` | `align_rcc` |
+| 实测偏置 L/R | 当前让位角 [°]（绿色正常 / 红色 = 已顶到上限） | — | `align_bias_left/right` |
+
+悬停「实测偏置」可看到轴角向量；分组下方提示行会在旋转轴仍为力控（S=1）时变红警告。
+`|偏置|` 显示为红色表示环境一直在推、贴合不到位（同诊断日志的 `align` 字段）。
+
 OCS2FSMPanel 在 COMPLIANCE 下还提供 **软/中/硬** 刚度预设（写 `compliance_hybrid_*` 参数）。
 
 ---
@@ -207,6 +220,11 @@ float64[6] force_measured_right
 bool left_ft_active / right_ft_active
 bool zero_cal_done
 float64 force_feedback_sign       # 默认 -1.0
+bool align_enabled                # 曲面贴合外环开关
+float64 align_max / align_release
+bool align_rcc
+float64[3] align_bias_left        # 左臂当前让位角（轴角向量，base 系）
+float64[3] align_bias_right
 ```
 
 ```bash
@@ -282,6 +300,60 @@ COMPLIANCE 力控轴在新零偏标定完成前保持禁用。校准过程与零
 | `compliance_hybrid_force_xmax_lin` | `0.2` | 力控各平移轴行程 [m]；实测越界切 HOLD |
 | `compliance_hybrid_force_xmax_ang` | `0.3` | 力控各旋转轴行程 [rad]；实测越界切 HOLD |
 | `compliance_hybrid_force_xmax_margin_ratio` | `0.2` | 软限渐缓区占 xmax 比例 |
+
+### 曲面贴合：力矩驱动的目标姿态偏置
+
+`compliance_align_enable`（默认 `false`）为真时启用贴合外环。**它与力控轴（S=1）的根本区别是：输出不进关节位置积分，而是偏置目标姿态，由位控轴跟踪。**
+
+```
+力矩误差 → 导纳（复用力控 D/死区/积分）→ 轴角偏置 θ_bias（有界）
+         → 绕接触点旋转虚拟目标位姿 → 位控轴(S=0)跟踪它
+```
+
+为什么这样才鲁棒：
+
+- **位控轴永远有增益**（$K\Delta x$）。环境给增益（弹性接触）→ 力矩误差被闭合，贴合成功；
+- 环境不给增益（刚性/无 $k_\theta$）→ 偏置只是**有界地错**（`align_max`，默认 15°），**不会 windup、不会越顶越狠**；
+- 力矩消失或失去接触后由 `align_release` 自动回中（弹簧卸力后自然回位）；
+- **不加回弹项**：偏置本身就是"该姿态需要的让位量"，加弹簧会跟积分抢权限（可纠正量会被压到 $k_{i,max}/(D\cdot K)$ 量级）；有界 + 无接触回中已经够稳；
+- **转动中心取接触点估计**（RCC）：$\Delta_\perp=(f\times\tau)/|f|^2$，绕接触点转使接触点不迁移，避免"嘬入"把误差越转越大；
+- 自动去掉沿力方向的自旋分量（那是摩擦扭转/噪声，不是倾角；纯力接触下 $\tau\cdot f\equiv 0$）；
+- 力小于 `kAlignMinForce`（1 N）或未完成校准时不做对准，偏置按回弹速率回中。
+
+**要求：`rx/ry/rz` 用 `S=0`。** 外环负责偏置，位控负责跟踪；若这三轴仍是 `S=1`，外环偏置的目标位姿没有任何位控轴去跟，会打节流 WARN 提醒。曲面追踪时，路径/遥操作照常给 `target`，外环只叠加姿态偏置。
+
+| 参数 | 默认 | 说明 |
+|------|------|------|
+| `compliance_align_enable` | `false` | 启用贴合外环（力矩轴需 `S=0`） |
+| `compliance_align_max` | `0.26` | 姿态偏置上限 [rad]（15°）——决定最大可纠正的倾角 |
+| `compliance_align_release` | `1.0` | 无接触时偏置的回中速率 [1/s]（弹簧卸力后自动回位） |
+| `compliance_align_rcc` | `true` | 转动中心取接触点估计（防嘬入） |
+
+**操作**：在 **ComplianceForcePanel → 曲面贴合** 分组里勾选「启用贴合外环」，设好最大偏置角、
+回中速率与 RCC，然后点 **应用设定**（与力控轴、F_des 一并下发）。面板同时显示左右臂当前让位角
+并提示旋转轴是否已改为位控。也可以直接 `ros2 param set`：
+
+```bash
+ros2 param set /ocs2_arm_controller compliance_align_enable true
+ros2 param set /ocs2_arm_controller compliance_align_max 0.26      # 15°
+ros2 param set /ocs2_arm_controller compliance_align_release 1.0
+ros2 param set /ocs2_arm_controller compliance_align_rcc true
+```
+
+遥测：`/compliance_force_status` 的 `align_enabled` / `align_max` / `align_release` /
+`align_rcc` / `align_bias_left[3]` / `align_bias_right[3]`（base 系轴角向量，模长即让位角）。
+
+### 贴合状态与坐标系
+
+力控和曲面贴合使用 `compliance_teleop_base_frame`（默认取模型 `baseFrame`），
+力矩参考点为受控 TCP。`compliance_gravity_frame` 只用于计算重力方向，
+不作为力控坐标系。TF 不可用时仅允许使用模型中同名传感器框架的 FK；
+两种方式都失败或结果非有限时转入 HOLD。
+
+贴合外环使用独立的力矩积分。失去接触、FT 失效或尚未完成校准时，
+该积分清零，姿态偏置按 `compliance_align_release` 平滑回中。
+关闭／开启贴合、重新清零传感器及重新进入 COMPLIANCE 会重置贴合偏置和积分。
+关闭贴合后恢复原始目标位姿，由现有位置控制限速／加速度处理跟踪过程。
 
 ### 鲁棒导纳：响应守卫
 
@@ -408,6 +480,7 @@ ros2 param set /ocs2_arm_controller compliance_zero_cal_duration 5.0
 | `jlim` | 本周期被限位钳制的关节（`idx@hi/lo`；`coupling` = 6/7 轴 L1 耦合投影生效） | 非空 → 目标超出可达空间，关节顶限位 |
 | `f_err`/`f_eff` | 力轴误差 / 死区后误差（N、N·m） | 静止无接触时 \|f_err\|>deadband → 零力残差（重新校零或加大死区） |
 | `fdisp` | 力控轴行程 **指令/实测**（m / rad）。指令侧涨而实测侧不涨 = 发了但没动；`!` = 指令行程顶到软限位；`?` = 已确认停滞（保持、不升级） | 出现 `?` 或 `!` 且 `f_err` 持续大 = 该轴已无调整能力（环境不给增益 / 几何增益变号 / 行程用尽） |
+| `align` | 贴合外环的姿态偏置轴角向量 [rad]（模长 = 当前让位角） | 持续增长到 `\|align\|=align_max` = 环境一直在推、贴合不到位；恒为 0 = 没有力矩误差或未启用 |
 | `track_gap` | 实测末端 vs 指令末端距离（m） | 明显增大 → 硬件侧重力补偿不足（下垂在指令之下） |
 
 

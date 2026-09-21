@@ -84,6 +84,7 @@ private:
     void applyUiToController();
     void syncUiFromStatus(const StatusMsg& msg);
     void updateMeasuredLabels(const StatusMsg& msg);
+    void updateAlignLabels(const StatusMsg& msg);
     QWidget* makePayloadWidget();
     void startPayloadIdentification();
     void stopPayloadIdentification();
@@ -121,6 +122,15 @@ private:
     QPushButton* apply_btn_{nullptr};
     QPushButton* sync_btn_{nullptr};
     QPushButton* zero_wrench_btn_{nullptr};
+
+    // ── 曲面贴合（力位混合曲面追踪）：力矩驱动的目标姿态偏置外环 ──
+    QCheckBox* align_enable_cb_{nullptr};
+    QDoubleSpinBox* align_max_spin_{nullptr};       // UI 单位 deg，写 compliance_align_max (rad)
+    QDoubleSpinBox* align_release_spin_{nullptr};   // [1/s]
+    QCheckBox* align_rcc_cb_{nullptr};
+    QLabel* align_left_label_{nullptr};
+    QLabel* align_right_label_{nullptr};
+    QLabel* align_hint_label_{nullptr};
     QPushButton* position_identification_btn_{nullptr};
     QPushButton* all_joint_identification_btn_{nullptr};
     QPushButton* contact_identification_btn_{nullptr};
