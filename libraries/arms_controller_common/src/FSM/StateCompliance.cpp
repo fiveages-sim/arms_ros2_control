@@ -28,6 +28,23 @@ namespace arms_controller_common
             result.successful = true;
             for (const auto& parameter : parameters)
             {
+                const auto& name = parameter.get_name();
+                if (name == "compliance_align_torque_deadband" ||
+                    name == "compliance_align_rotational_damping")
+                {
+                    const bool damping = name == "compliance_align_rotational_damping";
+                    if (parameter.get_type() != rclcpp::ParameterType::PARAMETER_DOUBLE ||
+                        !std::isfinite(parameter.as_double()) ||
+                        (damping ? parameter.as_double() <= 0.0 : parameter.as_double() < 0.0))
+                    {
+                        result.successful = false;
+                        result.reason = name + (damping
+                            ? " must be a finite positive double"
+                            : " must be a finite nonnegative double");
+                        return result;
+                    }
+                    continue;
+                }
                 if (parameter.get_name() != "compliance_force_setpoint") continue;
                 if (parameter.get_type() != rclcpp::ParameterType::PARAMETER_DOUBLE_ARRAY ||
                     parameter.as_double_array().size() != 6)
@@ -165,6 +182,11 @@ namespace arms_controller_common
         align_max_       = std::max(0.0, get_double("compliance_align_max", align_max_));
         align_release_   = std::max(0.0, get_double("compliance_align_release", align_release_));
         align_rcc_       = get_bool("compliance_align_rcc", align_rcc_);
+        align_torque_deadband_ = get_double("compliance_align_torque_deadband", align_torque_deadband_);
+        align_rotational_damping_ = get_double("compliance_align_rotational_damping", align_rotational_damping_);
+        if (!std::isfinite(align_torque_deadband_) || align_torque_deadband_ < 0.0 ||
+            !std::isfinite(align_rotational_damping_) || align_rotational_damping_ <= 0.0)
+            throw std::invalid_argument("Invalid curve-alignment deadband or rotational damping");
         hybrid_force_ki_       = get_double("compliance_hybrid_force_ki", hybrid_force_ki_);
         hybrid_force_ki_max_   = get_double("compliance_hybrid_force_ki_max", hybrid_force_ki_max_);
         hybrid_force_ki_leak_  = std::max(0.0, get_double("compliance_hybrid_force_ki_leak", hybrid_force_ki_leak_));
@@ -1103,17 +1125,16 @@ namespace arms_controller_common
                     const double M_des = i < static_cast<int>(force_setpoint_.size())
                                              ? force_setpoint_[i] : 0.0;
                     const double t_err = M_des - force_feedback_sign_ * a.wrench_filt(i);
-                    const double db = hybrid_force_deadband_;
+                    const double db = align_torque_deadband_;
                     const double t_eff = std::abs(t_err) > db
                         ? t_err - std::copysign(db, t_err) : 0.0;
-                    const double D = i < static_cast<int>(hybrid_force_damping_.size())
-                                         ? hybrid_force_damping_[i] : 100.0;
+                    const double D = align_rotational_damping_;
                     a.alignment.integral(k) *= std::max(0.0, 1.0 - hybrid_force_ki_leak_ * dt);
                     if (std::abs(t_err) >= db)
                         a.alignment.integral(k) += hybrid_force_ki_ * dt * t_eff;
                     a.alignment.integral(k) = std::clamp(
                         a.alignment.integral(k), -hybrid_force_ki_max_, hybrid_force_ki_max_);
-                    w_align(k) = (t_eff + a.alignment.integral(k)) / std::max(D, 1e-3);
+                    w_align(k) = (t_eff + a.alignment.integral(k)) / D;
                 }
                 // 去掉沿力方向的分量：那是摩擦扭转/噪声，不是倾角（纯力接触下 τ·f≡0）。
                 const Eigen::Vector3d f_hat = f_f / f_norm;
