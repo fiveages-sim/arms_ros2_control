@@ -17,6 +17,19 @@ bool right_ft_active
 bool zero_cal_done
 float64 force_feedback_sign
 
+# Surface alignment (曲面贴合): torque-driven target-orientation bias.
+# The loop turns torque error into a bounded axis-angle bias that rotates the
+# TARGET pose around the estimated contact point; position axes (S=0) track it.
+# Requires rx/ry/rz to be position axes, otherwise the bias is not tracked.
+# Bias is expressed in header.frame_id; |bias| [rad] is the current
+# compliant re-orientation angle the environment is asking for.
+bool align_enabled
+float64 align_max
+float64 align_release
+bool align_rcc
+float64[3] align_bias_left
+float64[3] align_bias_right
+
 # Phase-identification telemetry. mode: 0=idle, 1=joint position loop,
 # 2=contact chain (actual displacement -> measured wrench).
 uint8 identification_mode

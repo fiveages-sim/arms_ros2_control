@@ -126,4 +126,12 @@ if(lina_planning_FOUND)
 endif()
 ament_export_targets(export_${PROJECT_NAME} HAS_LIBRARY_TARGET)
 
+if(BUILD_TESTING)
+    find_package(ament_cmake_gtest REQUIRED)
+    ament_add_gtest(test_compliance_support test/test_compliance_support.cpp)
+    target_include_directories(test_compliance_support PRIVATE include)
+    target_link_libraries(test_compliance_support Eigen3::Eigen ${tf2_ros_TARGETS})
+    target_compile_features(test_compliance_support PRIVATE cxx_std_17)
+endif()
+
 ament_package()

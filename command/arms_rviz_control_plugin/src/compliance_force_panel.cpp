@@ -26,6 +26,10 @@ namespace arms_rviz_control_plugin
     {
         const char* kAxisNames[6] = {"Fx", "Fy", "Fz", "Mx", "My", "Mz"};
         const char* kAxisUnits[6] = {"N", "N", "N", "Nm", "Nm", "Nm"};
+
+        // 曲面贴合外环：UI 用角度 (deg)，参数与遥测用弧度 (rad)。
+        constexpr double kRadToDeg = 57.29577951308232;
+        constexpr double kDegToRad = 1.0 / kRadToDeg;
     }  // namespace
 
     PhaseIdentificationPlot::PhaseIdentificationPlot(QWidget* parent)
@@ -214,12 +218,87 @@ namespace arms_rviz_control_plugin
 
         main->addWidget(group);
 
+        // ── 曲面贴合：力矩驱动的目标姿态偏置外环 ──
+        // 与力控轴(S=1)的区别：输出不进关节位置积分，只偏置**目标姿态**，
+        // 由位控轴(S=0)跟踪。因此 rx/ry/rz 必须是位控轴，否则外环无效。
+        auto* align_group = new QGroupBox("曲面贴合（力矩 → 目标姿态偏置）", this);
+        auto* align_grid = new QGridLayout(align_group);
+        align_grid->setHorizontalSpacing(6);
+        align_grid->setVerticalSpacing(2);
+
+        align_enable_cb_ = new QCheckBox("启用贴合外环", align_group);
+        align_enable_cb_->setToolTip(
+            "compliance_align_enable：力矩误差经导纳生成有界轴角偏置，绕接触点旋转\n"
+            "虚拟目标位姿，由位控轴(S=0)跟踪。环境给增益则贴合收敛；\n"
+            "不给增益也只是有界地错，不会 windup，松手/失去接触后自动回中。");
+
+        align_rcc_cb_ = new QCheckBox("绕接触点旋转 (RCC)", align_group);
+        align_rcc_cb_->setChecked(true);   // 与控制器默认一致
+        align_rcc_cb_->setToolTip(
+            "compliance_align_rcc：转动中心取接触点估计 Δ⊥ = (f×τ)/|f|²，\n"
+            "使接触点不迁移，避免越贴越「嘬入」。");
+
+        align_max_spin_ = new QDoubleSpinBox(align_group);
+        align_max_spin_->setDecimals(1);
+        align_max_spin_->setRange(0.0, 90.0);
+        align_max_spin_->setSingleStep(1.0);
+        align_max_spin_->setValue(15.0);   // 与控制器默认 0.26 rad 一致
+        align_max_spin_->setSuffix(" °");
+        align_max_spin_->setMaximumWidth(90);
+        align_max_spin_->setToolTip(
+            "compliance_align_max：姿态偏置上限，决定最大可纠正的倾角（默认 15°）。");
+
+        align_release_spin_ = new QDoubleSpinBox(align_group);
+        align_release_spin_->setDecimals(2);
+        align_release_spin_->setRange(0.0, 10.0);
+        align_release_spin_->setSingleStep(0.1);
+        align_release_spin_->setValue(1.0);   // 与控制器默认一致
+        align_release_spin_->setSuffix(" 1/s");
+        align_release_spin_->setMaximumWidth(90);
+        align_release_spin_->setToolTip(
+            "compliance_align_release：失去接触或力矩消失后偏置的回中速率（默认 1.0）。");
+
+        align_left_label_ = new QLabel("—", align_group);
+        align_right_label_ = new QLabel("—", align_group);
+        align_left_label_->setMinimumWidth(70);
+        align_right_label_->setMinimumWidth(70);
+        align_left_label_->setStyleSheet("QLabel { color: #888; }");
+        align_right_label_->setStyleSheet("QLabel { color: #888; }");
+
+        align_grid->addWidget(align_enable_cb_, 0, 0, 1, 2);
+        align_grid->addWidget(align_rcc_cb_, 0, 2, 1, 2);
+        align_grid->addWidget(new QLabel("最大偏置角", align_group), 1, 0);
+        align_grid->addWidget(align_max_spin_, 1, 1);
+        align_grid->addWidget(new QLabel("回中速率", align_group), 1, 2);
+        align_grid->addWidget(align_release_spin_, 1, 3);
+        align_grid->addWidget(new QLabel("实测偏置 L", align_group), 2, 0);
+        align_grid->addWidget(align_left_label_, 2, 1);
+        align_grid->addWidget(new QLabel("实测偏置 R", align_group), 2, 2);
+        align_grid->addWidget(align_right_label_, 2, 3);
+
+        align_hint_label_ = new QLabel(
+            "外环偏置的是目标姿态，必须由位控轴跟踪：rx/ry/rz 需 S=0。", align_group);
+        align_hint_label_->setWordWrap(true);
+        align_hint_label_->setStyleSheet("QLabel { color: #666; font-size: 11px; }");
+        align_grid->addWidget(align_hint_label_, 3, 0, 1, 4);
+
+        main->addWidget(align_group);
+
+        connect(align_enable_cb_, &QCheckBox::toggled,
+                this, &ComplianceForcePanel::onUserEdited);
+        connect(align_rcc_cb_, &QCheckBox::toggled,
+                this, &ComplianceForcePanel::onUserEdited);
+        connect(align_max_spin_, QOverload<double>::of(&QDoubleSpinBox::valueChanged),
+                this, &ComplianceForcePanel::onUserEdited);
+        connect(align_release_spin_, QOverload<double>::of(&QDoubleSpinBox::valueChanged),
+                this, &ComplianceForcePanel::onUserEdited);
+
         auto* btn_row = new QHBoxLayout();
         apply_btn_ = new QPushButton("应用设定", this);
         apply_btn_->setStyleSheet(
             "QPushButton { background-color: #2196F3; color: white; font-weight: bold; }");
         apply_btn_->setToolTip(
-            "将力控轴选择与 F_des 写入 /ocs2_arm_controller 参数");
+            "将力控轴选择、F_des 与曲面贴合外环参数写入 /ocs2_arm_controller");
         sync_btn_ = new QPushButton("从控制器同步", this);
         sync_btn_->setToolTip("用最新 compliance_force_status 覆盖本面板编辑框");
         zero_wrench_btn_ = new QPushButton("传感器清零", this);
@@ -325,6 +404,12 @@ namespace arms_rviz_control_plugin
                 meas_right_label_[i]->setStyleSheet("QLabel { color: #888; }");
                 err_left_label_[i]->setStyleSheet("QLabel { color: #888; }");
             }
+            align_left_label_->setText("—");
+            align_right_label_->setText("—");
+            align_left_label_->setStyleSheet("QLabel { color: #888; }");
+            align_right_label_->setStyleSheet("QLabel { color: #888; }");
+            align_hint_label_->setText("COMPLIANCE 状态不可用：无法读取贴合外环状态。");
+            align_hint_label_->setStyleSheet("QLabel { color: #666; font-size: 11px; }");
         });
     }
 
@@ -661,6 +746,7 @@ namespace arms_rviz_control_plugin
                 .arg(msg->force_feedback_sign, 0, 'f', 0));
 
         updateMeasuredLabels(*msg);
+        updateAlignLabels(*msg);
 
         identification_plot_->setMode(msg->identification_mode);
         if (msg->identification_active)
@@ -729,6 +815,65 @@ namespace arms_rviz_control_plugin
         }
     }
 
+    void ComplianceForcePanel::updateAlignLabels(const StatusMsg& msg)
+    {
+        const auto paint = [&](QLabel* label, const std::array<double, 3>& bias) {
+            const double angle = std::sqrt(
+                bias[0] * bias[0] + bias[1] * bias[1] + bias[2] * bias[2]);
+            if (!msg.align_enabled)
+            {
+                label->setText("—");
+                label->setStyleSheet("QLabel { color: #888; }");
+                label->setToolTip("贴合外环未启用 (compliance_align_enable=false)");
+                return;
+            }
+            label->setText(QString("%1 °").arg(angle * kRadToDeg, 0, 'f', 2));
+            // |bias| 顶到 align_max = 环境一直在推、贴合不到位（COMPLIANCE.md 诊断表）。
+            const bool saturated = msg.align_max > 1e-9 && angle >= 0.99 * msg.align_max;
+            label->setStyleSheet(saturated
+                ? "QLabel { color: #C62828; font-weight: bold; }"
+                : "QLabel { color: #2E7D32; font-weight: bold; }");
+            label->setToolTip(QString("轴角向量 [%1 %2 %3] rad，模长 = 当前让位角%4")
+                .arg(bias[0], 0, 'f', 4).arg(bias[1], 0, 'f', 4).arg(bias[2], 0, 'f', 4)
+                .arg(saturated
+                    ? "\n已达偏置上限：环境一直在推，贴合不到位（考虑弹性层或把 TCP 标到接触面中心）"
+                    : ""));
+        };
+        paint(align_left_label_, msg.align_bias_left);
+        paint(align_right_label_, msg.align_bias_right);
+
+        // 偏置只能被位控轴跟踪：旋转轴仍为力控时外环不生效（控制器每 5 s 也会 WARN）。
+        QString conflict;
+        for (int i = 3; i < 6; ++i)
+        {
+            if (msg.task_selection[i] > 0.5)
+                conflict += QString("%1 ").arg(kAxisNames[i]);
+        }
+        conflict = conflict.trimmed();
+
+        if (!msg.align_enabled)
+        {
+            align_hint_label_->setText(
+                "贴合外环未启用：偏置只作用于目标姿态，由位控轴 (S=0) 跟踪。");
+            align_hint_label_->setStyleSheet("QLabel { color: #666; font-size: 11px; }");
+        }
+        else if (!conflict.isEmpty())
+        {
+            align_hint_label_->setText(QString(
+                "⚠ %1 仍是力控 (S=1)，外环偏置的目标姿态没有位控轴去跟，贴合不会生效："
+                "请取消这些轴的「力控」后再应用。").arg(conflict));
+            align_hint_label_->setStyleSheet(
+                "QLabel { color: #C62828; font-weight: bold; font-size: 11px; }");
+        }
+        else
+        {
+            align_hint_label_->setText(QString(
+                "贴合外环已启用，rx/ry/rz 均为位控；偏置上限 %1°，|偏置| 贴近上限即贴合不到位。")
+                .arg(msg.align_max * kRadToDeg, 0, 'f', 1));
+            align_hint_label_->setStyleSheet("QLabel { color: #2E7D32; font-size: 11px; }");
+        }
+    }
+
     void ComplianceForcePanel::syncUiFromStatus(const StatusMsg& msg)
     {
         for (int i = 0; i < 6; ++i)
@@ -737,6 +882,16 @@ namespace arms_rviz_control_plugin
             QSignalBlocker b2(setpoint_spin_[i]);
             force_axis_cb_[i]->setChecked(msg.task_selection[i] > 0.5);
             setpoint_spin_[i]->setValue(msg.force_setpoint[i]);
+        }
+        {
+            QSignalBlocker b1(align_enable_cb_);
+            QSignalBlocker b2(align_max_spin_);
+            QSignalBlocker b3(align_release_spin_);
+            QSignalBlocker b4(align_rcc_cb_);
+            align_enable_cb_->setChecked(msg.align_enabled);
+            align_max_spin_->setValue(msg.align_max * kRadToDeg);
+            align_release_spin_->setValue(msg.align_release);
+            align_rcc_cb_->setChecked(msg.align_rcc);
         }
         ui_dirty_ = false;
     }
@@ -767,11 +922,21 @@ namespace arms_rviz_control_plugin
         std::vector<rclcpp::Parameter> params = {
             rclcpp::Parameter("compliance_task_selection", selection),
             rclcpp::Parameter("compliance_force_setpoint", setpoint),
+            rclcpp::Parameter("compliance_align_enable", align_enable_cb_->isChecked()),
+            rclcpp::Parameter("compliance_align_max",
+                              align_max_spin_->value() * kDegToRad),
+            rclcpp::Parameter("compliance_align_release", align_release_spin_->value()),
+            rclcpp::Parameter("compliance_align_rcc", align_rcc_cb_->isChecked()),
         };
+        const bool align_enabled = align_enable_cb_->isChecked();
+        const double align_max_deg = align_max_spin_->value();
+        const double align_release = align_release_spin_->value();
+        const bool align_rcc = align_rcc_cb_->isChecked();
         status_label_->setText("正在应用设定…");
         (void)param_client_->set_parameters(
             params,
-            [this, selection, setpoint](std::shared_future<
+            [this, selection, setpoint, align_enabled, align_max_deg,
+             align_release, align_rcc](std::shared_future<
                 std::vector<rcl_interfaces::msg::SetParametersResult>> future) {
                 bool success = true;
                 std::string reason;
@@ -792,7 +957,8 @@ namespace arms_rviz_control_plugin
                 }
                 QMetaObject::invokeMethod(
                     this,
-                    [this, selection, setpoint, success, reason]() {
+                    [this, selection, setpoint, align_enabled, align_max_deg,
+                     align_release, align_rcc, success, reason]() {
                         if (!success)
                         {
                             ui_dirty_ = true;
@@ -807,11 +973,14 @@ namespace arms_rviz_control_plugin
                             node_->get_logger(),
                             "ComplianceForcePanel applied: "
                             "S=[%.0f %.0f %.0f %.0f %.0f %.0f] "
-                            "F_des=[%.2f %.2f %.2f %.2f %.2f %.2f]",
+                            "F_des=[%.2f %.2f %.2f %.2f %.2f %.2f] "
+                            "align=%s max=%.1fdeg release=%.2f rcc=%s",
                             selection[0], selection[1], selection[2],
                             selection[3], selection[4], selection[5],
                             setpoint[0], setpoint[1], setpoint[2],
-                            setpoint[3], setpoint[4], setpoint[5]);
+                            setpoint[3], setpoint[4], setpoint[5],
+                            align_enabled ? "on" : "off", align_max_deg,
+                            align_release, align_rcc ? "on" : "off");
                     },
                     Qt::QueuedConnection);
             });
