@@ -263,6 +263,8 @@ namespace arms_controller_common
         bool align_enabled_{false};
         double align_max_{0.26};        // 偏置上限 [rad]（15°）
         double align_release_{1.0};     // 无接触时偏置的回中速率 [1/s]
+        double align_torque_deadband_{0.02};  // Nm, independent of force-axis deadband
+        double align_rotational_damping_{20.0};  // Nm s/rad
         bool align_rcc_{true};          // 转动中心取接触点估计（RCC，防嘬入）
         double hybrid_force_ki_{2.0};
         double hybrid_force_ki_max_{10.0};
