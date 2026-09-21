@@ -18,6 +18,8 @@ namespace arms_controller_common
     {
         constexpr double kForceSetpointLimit = 20.0;  // N, per axis
         constexpr double kTorqueSetpointLimit = 5.0;  // Nm, per axis
+        // 曲面贴合：力小于此值时不做对准（力方向/接触点估计不可靠）。
+        constexpr double kAlignMinForce = 1.0;        // N
 
         rcl_interfaces::msg::SetParametersResult validateForceSetpoint(
             const std::vector<rclcpp::Parameter>& parameters)
@@ -156,6 +158,13 @@ namespace arms_controller_common
             get_double("compliance_hybrid_force_stall_time", hybrid_force_stall_time_));
         hybrid_force_stall_release_ = std::max(0.0,
             get_double("compliance_hybrid_force_stall_release", hybrid_force_stall_release_));
+        const bool align_enabled = get_bool("compliance_align_enable", align_enabled_);
+        if (align_enabled != align_enabled_)
+            for (auto& a : arms_) a.alignment.reset();
+        align_enabled_ = align_enabled;
+        align_max_       = std::max(0.0, get_double("compliance_align_max", align_max_));
+        align_release_   = std::max(0.0, get_double("compliance_align_release", align_release_));
+        align_rcc_       = get_bool("compliance_align_rcc", align_rcc_);
         hybrid_force_ki_       = get_double("compliance_hybrid_force_ki", hybrid_force_ki_);
         hybrid_force_ki_max_   = get_double("compliance_hybrid_force_ki_max", hybrid_force_ki_max_);
         hybrid_force_ki_leak_  = std::max(0.0, get_double("compliance_hybrid_force_ki_leak", hybrid_force_ki_leak_));
@@ -514,6 +523,7 @@ namespace arms_controller_common
                 a.zero_cal_sum.fill(0.0);
                 a.zero_cal_samples = 0;
                 a.force_integral.setZero();
+                a.alignment.reset();
                 a.wrench_filt.setZero();
                 a.v_des_filt.setZero();
             }
@@ -800,11 +810,22 @@ namespace arms_controller_common
             std::array<double, 6> tared = net[s];
             for (int i = 0; i < 6; ++i) tared[i] -= arms_[s].wrench_bias[i];
 
-            contact_wrench[s] = ft_active[s]
-                ? wrenchToBase(s,
-                               wrench_frame_id[s].empty() ? kFtFrame[s] : wrench_frame_id[s],
-                               tared)
-                : Eigen::Matrix<double, 6, 1>::Zero();
+            contact_wrench[s].setZero();
+            if (ft_active[s])
+            {
+                try
+                {
+                    contact_wrench[s] = wrenchToBase(s,
+                        wrench_frame_id[s].empty() ? kFtFrame[s] : wrench_frame_id[s], tared);
+                    if (!contact_wrench[s].allFinite())
+                        throw std::runtime_error("non-finite transformed wrench");
+                }
+                catch (const std::exception& error)
+                {
+                    stopForWorkspaceViolation(std::string("wrench transform failed: ") + error.what());
+                    return;
+                }
+            }
         }
 
         // ── Teleop targets ──
@@ -986,6 +1007,16 @@ namespace arms_controller_common
                 msg.force_feedback_sign = force_feedback_sign_;
                 msg.force_setpoint_limit = kForceSetpointLimit;
                 msg.torque_setpoint_limit = kTorqueSetpointLimit;
+                // 曲面贴合遥测：让面板能在不额外读写参数的情况下显示当前让位角。
+                msg.align_enabled = align_enabled_;
+                msg.align_max = align_max_;
+                msg.align_release = align_release_;
+                msg.align_rcc = align_rcc_;
+                for (int k = 0; k < 3; ++k)
+                {
+                    msg.align_bias_left[k] = arms_[0].alignment.bias(k);
+                    msg.align_bias_right[k] = arms_[1].alignment.bias(k);
+                }
                 if (kinematics_)
                 {
                     msg.left_joint_names = kinematics_->getLeftArmJointNames();
@@ -1029,7 +1060,89 @@ namespace arms_controller_common
 
         const EndEffectorPose cur =
             kinematics_->computeSingleEndEffectorPose(state_actual, kArmName[is_left ? 0 : 1]);
-        const EndEffectorPose tgt = a.target_valid ? a.target : cur;
+        EndEffectorPose tgt = a.target_valid ? a.target : cur;
+
+        // wrench EMA：α 按 500 Hz 标定，按实际 dt 折算保持带宽恒定。
+        const double alpha_wrench = std::clamp(wrench_lpf_alpha_ * dt / 0.002, 0.0, 1.0);
+        a.wrench_filt = alpha_wrench * contact_wrench +
+                        (1.0 - alpha_wrench) * a.wrench_filt;
+
+        // ── 曲面贴合：力矩驱动的"目标姿态偏置"外环（可选）────────────────
+        // 与力控轴（S=1）的根本区别：输出不进关节位置积分，而是偏置**目标姿态**，
+        // 由位控轴去跟踪（要求 rx/ry/rz 设 S=0）。位控轴永远有增益（K·Δx），所以：
+        //   环境给增益（弹性接触）→ 力矩误差被闭合 → 贴合成功、可建模；
+        //   环境不给增益（刚性/无 k_θ）→ 偏置只是有界地"错"，不会 windup、
+        //   不会越顶越狠；失去接触后由 align_release 自动回中。
+        // 转动中心取接触点估计（RCC）：Δ⊥=(f×τ)/|f|²，
+        // 绕接触点转 → 接触点不迁移，避免"啃入"把误差越转越大。
+        if (align_enabled_)
+        {
+            if (node_ && (S(3) > 0.5 || S(4) > 0.5 || S(5) > 0.5))
+            {
+                static rclcpp::Clock kAlignWarnClock(RCL_STEADY_TIME);
+                RCLCPP_WARN_THROTTLE(
+                    node_->get_logger(), kAlignWarnClock, 5000,
+                    "COMPLIANCE %s: compliance_align_enable is on but rx/ry/rz are not "
+                    "S=0 — the alignment loop biases the TARGET pose, which only a "
+                    "position axis tracks. Set compliance_task_selection[3..5]=0.",
+                    kArmName[is_left ? 0 : 1]);
+            }
+            const Eigen::Vector3d f_f = a.wrench_filt.head<3>();
+            const double f_norm = f_f.norm();
+            if (!(zero_cal_done_ && ft_active) || f_norm < kAlignMinForce)
+            {
+                // 未标定/无接触：偏置按回中速率衰减（弹簧卸力后自然回位）。
+                a.alignment.release(align_release_, dt);
+            }
+            else
+            {
+                Eigen::Vector3d w_align = Eigen::Vector3d::Zero();
+                for (int k = 0; k < 3; ++k)
+                {
+                    const int i = k + 3;
+                    const double M_des = i < static_cast<int>(force_setpoint_.size())
+                                             ? force_setpoint_[i] : 0.0;
+                    const double t_err = M_des - force_feedback_sign_ * a.wrench_filt(i);
+                    const double db = hybrid_force_deadband_;
+                    const double t_eff = std::abs(t_err) > db
+                        ? t_err - std::copysign(db, t_err) : 0.0;
+                    const double D = i < static_cast<int>(hybrid_force_damping_.size())
+                                         ? hybrid_force_damping_[i] : 100.0;
+                    a.alignment.integral(k) *= std::max(0.0, 1.0 - hybrid_force_ki_leak_ * dt);
+                    if (std::abs(t_err) >= db)
+                        a.alignment.integral(k) += hybrid_force_ki_ * dt * t_eff;
+                    a.alignment.integral(k) = std::clamp(
+                        a.alignment.integral(k), -hybrid_force_ki_max_, hybrid_force_ki_max_);
+                    w_align(k) = (t_eff + a.alignment.integral(k)) / std::max(D, 1e-3);
+                }
+                // 去掉沿力方向的分量：那是摩擦扭转/噪声，不是倾角（纯力接触下 τ·f≡0）。
+                const Eigen::Vector3d f_hat = f_f / f_norm;
+                w_align -= f_hat * f_hat.dot(w_align);
+                // 不加回弹项：偏置本身就是"该姿态需要的让位量"，加弹簧会跟积分
+                // 抢权限（bias_max ≈ ki_max/(D·K)，K=1 时只能纠正 ~2°）。
+                // 有界 + 无接触时回中，已经够稳。
+                a.alignment.bias += w_align * dt;
+                const double n = a.alignment.bias.norm();
+                if (n > align_max_) a.alignment.bias *= align_max_ / n;
+            }
+            Eigen::Vector3d p_c = cur.position;               // 默认绕 TCP
+            if (align_rcc_ && f_norm >= kAlignMinForce)
+            {
+                const Eigen::Vector3d lever =
+                    f_f.cross(a.wrench_filt.tail<3>()) / (f_norm * f_norm);
+                if (lever.allFinite() && lever.norm() <= hybrid_force_xmax_lin_)
+                    p_c += lever;
+            }
+            const double bias_norm = a.alignment.bias.norm();
+            if (bias_norm > 1e-9)
+            {
+                const Eigen::Matrix3d R_align =
+                    Eigen::AngleAxisd(bias_norm, a.alignment.bias / bias_norm).toRotationMatrix();
+                tgt.position = p_c + R_align * (tgt.position - p_c);
+                tgt.setRotation(R_align * tgt.rotationMatrix);
+            }
+        }
+
         // Orientation error must close on the MEASURED pose (like translation).
         // Using the commanded FK hides the position-loop lag from the rotation
         // loop, so a rotating target is tracked only with pure open-loop lag.
@@ -1051,10 +1164,6 @@ namespace arms_controller_common
             v_ee_fb = J * a.qdot_prev;
         }
 
-        // wrench EMA：α 按 500 Hz 标定，按实际 dt 折算保持带宽恒定。
-        const double alpha_wrench = std::clamp(wrench_lpf_alpha_ * dt / 0.002, 0.0, 1.0);
-        a.wrench_filt = alpha_wrench * contact_wrench +
-                        (1.0 - alpha_wrench) * a.wrench_filt;
 
         Eigen::Matrix<double, 6, 1> v_des = Eigen::Matrix<double, 6, 1>::Zero();
 
@@ -1807,7 +1916,7 @@ namespace arms_controller_common
                 "bounds=[%s] sat=[%s] jlim=[%s] | "
                 "qgap=[j%ld %+.4f] tcp_gap=[%.3f m %.3f rad] target=[%zu %.3f m %.3f rad] | "
                 "f_err=[%.2f %.2f %.2f %.2f %.2f %.2f] f_eff=[%.2f %.2f %.2f %.2f %.2f %.2f] "
-                "fdisp=[%s %s %s %s %s %s]",
+                "fdisp=[%s %s %s %s %s %s] align=[%.4f %.4f %.4f]",
                 kArmName[is_left ? 0 : 1],
                 e[0], e[1], e[2], e[3], e[4], e[5],
                 v_des(0), v_des(1), v_des(2), v_des(3), v_des(4), v_des(5),
@@ -1821,7 +1930,8 @@ namespace arms_controller_common
                 target_updates, target_shift, target_rot_shift,
                 diag_f_err[0], diag_f_err[1], diag_f_err[2], diag_f_err[3], diag_f_err[4], diag_f_err[5],
                 diag_f_eff[0], diag_f_eff[1], diag_f_eff[2], diag_f_eff[3], diag_f_eff[4], diag_f_eff[5],
-                fd[0], fd[1], fd[2], fd[3], fd[4], fd[5]);
+                fd[0], fd[1], fd[2], fd[3], fd[4], fd[5],
+                a.alignment.bias(0), a.alignment.bias(1), a.alignment.bias(2));
             RCLCPP_INFO(node_->get_logger(), "%s", buf);
         }
 
@@ -1991,84 +2101,30 @@ namespace arms_controller_common
         // r = p_sensor − p_ee。不做平移时角力控的 wrench 与 twist 不满足
         // 同参考点的功率共轭（r×F 残差，传感器离 EE 越远影响越大）。
         // 原始/重力 wrench 均为传感器系原点参考，减法后统一平移，保持一致。
-        Eigen::Matrix<double, 6, 1> w_base;
-        for (int i = 0; i < 6; ++i) w_base(i) = wrench_ee[i];
-        if (side_index < 0 || side_index > 1) return w_base;
-
-        Eigen::Vector3d p_sensor_base = Eigen::Vector3d::Zero();
-        Eigen::Matrix3d R = Eigen::Matrix3d::Identity();
-        bool have_sensor_pose = false;
-
+        if (side_index < 0 || side_index > 1 || !kinematics_)
+            throw std::runtime_error("COMPLIANCE wrench transform requires arm kinematics");
+        const RobotState state = makeRobotState(/*measured=*/true);
+        const auto tcp = kinematics_->computeSingleEndEffectorPose(state, kArmName[side_index]);
+        Eigen::Matrix<double, 6, 1> wrench;
+        for (int i = 0; i < 6; ++i) wrench(i) = wrench_ee[i];
         if (tf_buffer_)
         {
             try
             {
-                geometry_msgs::msg::TransformStamped tf;
-                try
-                {
-                    tf = tf_buffer_->lookupTransform(
-                        gravity_frame_, sensor_frame, tf2::TimePointZero);
-                }
-                catch (const tf2::TransformException&)
-                {
-                    tf = tf_buffer_->lookupTransform(
-                        "base_link", sensor_frame, tf2::TimePointZero);
-                }
-                const auto& q = tf.transform.rotation;
-                R = Eigen::Quaterniond(q.w, q.x, q.y, q.z).toRotationMatrix();
-                const auto& tr = tf.transform.translation;
-                p_sensor_base = Eigen::Vector3d(tr.x, tr.y, tr.z);
-                have_sensor_pose = true;
+                return compliance_detail::transformWrench(
+                    *tf_buffer_, teleop_base_frame_.empty() ? "base_link" : teleop_base_frame_,
+                    sensor_frame, tcp.position, wrench);
             }
             catch (const tf2::TransformException&) {}
         }
-
-        if (!have_sensor_pose && kinematics_)
-        {
-            // Prefer the FT sensor frame (matches the TF path above); fall back to
-            // the legacy eef frame name if the sensor frame is absent from the model.
-            const std::array<std::string, 3> fallback_frames = {
-                sensor_frame, kFtFrame[side_index], side_index == 0 ? "left_eef" : "right_eef"};
-            for (const auto& frame_name : fallback_frames)
-            {
-                try
-                {
-                    auto pose = kinematics_->computeFramePose(
-                        makeRobotState(/*measured=*/true), frame_name);
-                    R = pose.rotationMatrix;
-                    p_sensor_base = pose.position;
-                    have_sensor_pose = true;
-                    break;
-                }
-                catch (...) {}
-            }
-        }
-        if (!have_sensor_pose) return w_base;
-
-        Eigen::Vector3d f(wrench_ee[0], wrench_ee[1], wrench_ee[2]);
-        Eigen::Vector3d t(wrench_ee[3], wrench_ee[4], wrench_ee[5]);
-        const Eigen::Vector3d f_base = R * f;
-        const Eigen::Vector3d t_base = R * t;
-
-        // EE 原点在 base 系的位置（与 Jacobian 参考点一致）；取不到则退回
-        // 仅旋转（保持旧行为）。
-        Eigen::Vector3d p_ee_base;
-        bool have_ee = false;
-        if (kinematics_ && arms_[side_index].joint_count > 0)
-        {
-            try
-            {
-                const auto ee_pose = kinematics_->computeSingleEndEffectorPose(
-                    makeRobotState(/*measured=*/true), kArmName[side_index]);
-                p_ee_base = ee_pose.position;
-                have_ee = true;
-            }
-            catch (...) {}
-        }
-        const Eigen::Vector3d t_ref =
-            have_ee ? t_base + (p_sensor_base - p_ee_base).cross(f_base) : t_base;
-        w_base << f_base, t_ref;
-        return w_base;
+        // Exact sensor frame only: another frame can have a different origin/rotation.
+        // FK and TCP are both expressed in the planning model's base frame.
+        const auto sensor = kinematics_->computeFramePose(state, sensor_frame);
+        const Eigen::Vector3d force = sensor.rotationMatrix * wrench.head<3>();
+        Eigen::Matrix<double, 6, 1> result;
+        result << force, sensor.rotationMatrix * wrench.tail<3>() +
+            (sensor.position - tcp.position).cross(force);
+        return result;
     }
 
     bool StateCompliance::stampedPoseToBase(

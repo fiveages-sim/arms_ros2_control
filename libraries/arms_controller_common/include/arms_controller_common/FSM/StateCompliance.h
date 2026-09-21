@@ -13,6 +13,7 @@
 #pragma once
 
 #include "arms_controller_common/FSM/FSMState.h"
+#include "arms_controller_common/FSM/ComplianceSupport.h"
 #include "arms_controller_common/utils/GravityCompensation.h"
 #include "arms_controller_common/utils/Kinematics.h"
 
@@ -89,6 +90,8 @@ namespace arms_controller_common
             // 响应守卫：连续处于"请求了但实测没动"的时长 [s] 与确认标志。
             std::array<double, 6> force_stall_time{};
             std::array<bool, 6> force_axis_stalled{};
+            // 曲面贴合：力矩驱动的目标姿态偏置（轴角向量，有界）。
+            compliance_detail::AlignmentState alignment;
             Eigen::Matrix<double, 6, 1> wrench_filt{Eigen::Matrix<double, 6, 1>::Zero()};
             // Low-pass filtered force-axis velocity (adds virtual inertia / damping
             // to the admittance law, suppresses low-frequency drag oscillation).
@@ -134,6 +137,7 @@ namespace arms_controller_common
                 force_vdisp.setZero();
                 force_stall_time.fill(0.0);
                 force_axis_stalled.fill(false);
+                alignment.reset();
                 qdot_prev.resize(0);
                 v_pos_prev.setZero();
                 v_pos_filt.setZero();
@@ -252,6 +256,14 @@ namespace arms_controller_common
         double hybrid_force_realize_tol_{0.25};
         double hybrid_force_stall_time_{0.2};
         double hybrid_force_stall_release_{1.0};
+        // ── 曲面贴合：力矩驱动的"目标姿态偏置"外环（compliance_align_enable）──
+        // 与力控轴不同：输出不进关节位置积分，而是偏置**目标姿态**，由位控轴
+        // 跟踪。位控轴永远有增益（K·Δx），所以环境给增益就收敛（贴合成功）；
+        // 不给增益也只是有界地"错"（align_max），不会 windup / 越顶越狠。
+        bool align_enabled_{false};
+        double align_max_{0.26};        // 偏置上限 [rad]（15°）
+        double align_release_{1.0};     // 无接触时偏置的回中速率 [1/s]
+        bool align_rcc_{true};          // 转动中心取接触点估计（RCC，防嘬入）
         double hybrid_force_ki_{2.0};
         double hybrid_force_ki_max_{10.0};
         double hybrid_force_ki_leak_{0.5};        // integral leakage [1/s], anti-windup during drag
