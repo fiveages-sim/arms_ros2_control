@@ -1095,8 +1095,8 @@ namespace arms_controller_common
         //   环境给增益（弹性接触）→ 力矩误差被闭合 → 贴合成功、可建模；
         //   环境不给增益（刚性/无 k_θ）→ 偏置只是有界地"错"，不会 windup、
         //   不会越顶越狠；失去接触后由 align_release 自动回中。
-        // 转动中心取接触点估计（RCC）：Δ⊥=(f×τ)/|f|²，
-        // 绕接触点转 → 接触点不迁移，避免"啃入"把误差越转越大。
+        // Only adjust orientation. Rotating the position target can turn force-axis
+        // tracking offsets into unwanted tangential motion.
         if (align_enabled_)
         {
             if (node_ && (S(3) > 0.5 || S(4) > 0.5 || S(5) > 0.5))
@@ -1146,20 +1146,13 @@ namespace arms_controller_common
                 const double n = a.alignment.bias.norm();
                 if (n > align_max_) a.alignment.bias *= align_max_ / n;
             }
-            Eigen::Vector3d p_c = cur.position;               // 默认绕 TCP
-            if (align_rcc_ && f_norm >= kAlignMinForce)
-            {
-                const Eigen::Vector3d lever =
-                    f_f.cross(a.wrench_filt.tail<3>()) / (f_norm * f_norm);
-                if (lever.allFinite() && lever.norm() <= hybrid_force_xmax_lin_)
-                    p_c += lever;
-            }
+            // Orientation-only alignment: preserve the original position target.
+            // RCC configuration is retained for compatibility but applies no translation.
             const double bias_norm = a.alignment.bias.norm();
             if (bias_norm > 1e-9)
             {
                 const Eigen::Matrix3d R_align =
                     Eigen::AngleAxisd(bias_norm, a.alignment.bias / bias_norm).toRotationMatrix();
-                tgt.position = p_c + R_align * (tgt.position - p_c);
                 tgt.setRotation(R_align * tgt.rotationMatrix);
             }
         }
