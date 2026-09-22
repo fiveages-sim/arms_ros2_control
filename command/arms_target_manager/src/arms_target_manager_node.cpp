@@ -154,14 +154,19 @@ int main(int argc, char** argv)
                 "enable_movej_cartesian_markers is true but lina_planning is not compiled in; MOVEJ markers stay hidden");
         }
 
-        std::vector<int32_t> disable_auto_update_states{3};
+        // 这些状态下 marker 作为"目标"使用（可拖、不跟随实测位姿）。
+        // 必须含 COMPLIANCE(5)：StateCompliance 直接订阅 left_target/right_target
+        // （kTargetTopic），marker 拖拽本就是柔顺态的指令入口；漏掉 5 会让
+        // MarkerFactory 把 marker 造成 enable_interaction=false
+        // （scale 0.001 / color.a 0）→ RViz 里完全看不到左右 marker。
+        std::vector<int32_t> disable_auto_update_states{3, 5};
         if (movej_cartesian_markers)
         {
             disable_auto_update_states.push_back(4);
         }
         RCLCPP_INFO(
             node->get_logger(),
-            "Interactive arm markers: OCS2%s",
+            "Interactive arm markers: OCS2+COMPLIANCE%s",
             movej_cartesian_markers ? "+MOVEJ (IK MoveL)" : " only");
 
         auto target_manager = std::make_unique<ArmsTargetManager>(
