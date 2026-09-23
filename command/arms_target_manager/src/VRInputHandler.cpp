@@ -1553,7 +1553,7 @@ namespace arms_ros2_control::command
         (isLeft ? robot_base_left_position_ : robot_base_right_position_) = position;
         (isLeft ? robot_base_left_orientation_ : robot_base_right_orientation_) = orientation.normalized();
         (isLeft ? left_follow_rotation_ : right_follow_rotation_) = rotation;
-        resetStaleCatchUpRamp(isLeft);
+        resetTargetSmoothing(isLeft);
         valid = true;
         return true;
     }
