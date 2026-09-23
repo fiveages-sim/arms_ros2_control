@@ -272,6 +272,23 @@ namespace arms_ros2_control::command
         bool rebaseArmVrControlFromCurrentPose(WbcToggleTarget arm);
         void clearLastPublishedTarget(const std::string& armType);
 
+        /** True if quat is within ~angle_rad of identity (optical world R0=I). */
+        static bool isNearIdentityOrientation(
+            const Eigen::Quaterniond& q,
+            double angle_rad = 0.08);
+
+        /**
+         * Full-body Y/B pause resume: wait for topic quat≈I in full-body pause
+         * mode; otherwise snapshot current (controller grip).
+         */
+        void beginArmResume(
+            bool use_left_vr,
+            bool robot_arm_left,
+            const char* log_tag);
+
+        /** Called from VR pose callbacks while resume_pending is set. */
+        void tryCompletePendingArmResume(bool left_vr_topic);
+
         /**
          * 发布 WBC 模式切换命令
          * @param command 模式命令字符串，例如 "BODY_TRACKING"
@@ -653,6 +670,13 @@ namespace arms_ros2_control::command
         std::atomic<int> mirror_mode_profile_{static_cast<int>(MirrorModeProfile::MODE_A)};
         std::atomic<bool> left_arm_paused_; // 左臂是否暂停更新（Y按键控制）
         std::atomic<bool> right_arm_paused_; // 右臂是否暂停更新（B按键控制）
+        std::atomic<bool> left_vr_resume_pending_{false};
+        std::atomic<bool> right_vr_resume_pending_{false};
+        std::atomic<bool> left_vr_resume_robot_is_left_{true};
+        std::atomic<bool> right_vr_resume_robot_is_left_{false};
+        std::chrono::steady_clock::time_point left_vr_resume_pending_since_{};
+        std::chrono::steady_clock::time_point right_vr_resume_pending_since_{};
+        static constexpr auto arm_resume_r0_timeout_ = std::chrono::milliseconds(500);
         std::atomic<bool> left_grip_mode_; // 左摇杆控制模式：false=XY平移, true=Z轴+Yaw
         std::atomic<bool> right_grip_mode_; // 右摇杆控制模式：false=XY平移, true=Z轴+Yaw
         std::atomic<bool> chassis_mode_; // true = 底盘控制模式, false = 末端控制模式（case 20 切换）
