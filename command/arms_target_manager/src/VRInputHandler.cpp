@@ -2956,16 +2956,17 @@ namespace arms_ros2_control::command
 
         std::array<double, 3> positionDelta{0.0, 0.0, 0.0};
         std::array<double, 3> rpyDelta{0.0, 0.0, 0.0};
+        constexpr double body_thumbstick_step_scale = 0.1;
 
         if (body_thumbstick_z_yaw_mode_.load())
         {
-            positionDelta[2] = -left_thumbstick_axes_.y() * vr_thumbstick_linear_scale_;
-            rpyDelta[2] = -left_thumbstick_axes_.x() * vr_thumbstick_angular_scale_;
+            positionDelta[2] = -left_thumbstick_axes_.y() * vr_thumbstick_linear_scale_ * body_thumbstick_step_scale;
+            rpyDelta[2] = -left_thumbstick_axes_.x() * vr_thumbstick_angular_scale_ * body_thumbstick_step_scale;
         }
         else
         {
-            positionDelta[0] = -left_thumbstick_axes_.y() * vr_thumbstick_linear_scale_;
-            positionDelta[1] = -left_thumbstick_axes_.x() * vr_thumbstick_linear_scale_;
+            positionDelta[0] = -left_thumbstick_axes_.y() * vr_thumbstick_linear_scale_ * body_thumbstick_step_scale;
+            positionDelta[1] = -left_thumbstick_axes_.x() * vr_thumbstick_linear_scale_ * body_thumbstick_step_scale;
         }
 
         // 回中时跳过，避免 20Hz 空发布刷新 last_marker_command_time_，
