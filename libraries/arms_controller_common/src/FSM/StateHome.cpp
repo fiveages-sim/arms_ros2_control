@@ -5,6 +5,8 @@
 #include "arms_controller_common/utils/SharedPublishers.h"
 #include <cmath>
 #include <sstream>
+#include <limits>
+#include <tuple>
 
 namespace arms_controller_common
 {
@@ -28,6 +30,9 @@ namespace arms_controller_common
           node_(node),
           trajectory_manager_(node->get_logger())
     {
+        for (const auto& entry : std::vector<std::pair<std::string, double>>{
+                 {"home_max_velocity", 2.0}, {"home_max_acceleration", 4.0}, {"home_max_jerk", 20.0}})
+            if (!node_->has_parameter(entry.first)) node_->declare_parameter(entry.first, entry.second);
         // Get switch_command_base from parameter server
         switch_command_base_ = node->get_parameter("switch_command_base").as_int();
         if (node_)
@@ -37,12 +42,68 @@ namespace arms_controller_common
         }
     }
 
+    void StateHome::updateJointLimitsFromURDF(
+        const std::string& description, const std::vector<std::string>& joint_names)
+    {
+        std::lock_guard<std::mutex> lock(limits_mutex_);
+        joint_names_ = joint_names;
+        // Replace the snapshot so malformed/new descriptions cannot retain stale limits.
+        joint_limits_ = std::make_unique<JointLimitsManager>(node_->get_logger());
+        joint_limits_->parseFromURDF(description, joint_names_);
+    }
+
+    bool StateHome::validateTarget(const std::vector<double>& target) const
+    {
+        const auto count = ctrl_interfaces_.joint_position_command_interface_.size();
+        if (target.empty() || target.size() != count)
+        {
+            RCLCPP_ERROR(node_->get_logger(),
+                         "HOME target rejected: got %zu positions, expected %zu",
+                         target.size(), count);
+            return false;
+        }
+        std::lock_guard<std::mutex> lock(limits_mutex_);
+        if (!joint_limits_ || joint_names_.size() != count)
+        {
+            RCLCPP_ERROR(node_->get_logger(), "HOME target rejected: joint limits are not ready");
+            return false;
+        }
+        for (size_t i = 0; i < count; ++i)
+        {
+            const auto& name = joint_names_[i];
+            const auto limits = joint_limits_->getJointLimits(name);
+            if (!std::isfinite(target[i]))
+            {
+                RCLCPP_ERROR(node_->get_logger(), "HOME target rejected: %s is not finite", name.c_str());
+                return false;
+            }
+            if (limits.motion_type == JointMotionType::CONTINUOUS)
+                continue;
+            if (!limits.initialized || !std::isfinite(limits.lower) ||
+                !std::isfinite(limits.upper) || limits.lower > limits.upper)
+            {
+                RCLCPP_ERROR(node_->get_logger(),
+                             "HOME target rejected: %s has no valid position limits", name.c_str());
+                return false;
+            }
+            if (target[i] < limits.lower || target[i] > limits.upper)
+            {
+                RCLCPP_ERROR(node_->get_logger(),
+                             "HOME target rejected: %s target %.9f outside [%.9f, %.9f]",
+                             name.c_str(), target[i], limits.lower, limits.upper);
+                return false;
+            }
+        }
+        return true;
+    }
+
     void StateHome::setHomePosition(const std::vector<double>& home_pos)
     {
         home_configs_.clear();
         home_configs_.push_back(home_pos);
         current_target_ = home_pos;
         current_config_index_ = 0;
+        cycle_config_index_ = 0;
         has_multiple_configs_ = false;
     }
 
@@ -53,6 +114,7 @@ namespace arms_controller_common
         {
             current_target_ = home_configs_[0];
             current_config_index_ = 0;
+            cycle_config_index_ = 0;
             has_multiple_configs_ = home_configs_.size() > 1;
         }
     }
@@ -86,8 +148,16 @@ namespace arms_controller_common
         if (!home_configs_.empty())
         {
             current_config_index_ = 0;
+            cycle_config_index_ = 0;
             current_target_ = home_configs_[0];
         }
+
+        trajectory_manager_.reset();
+        clearPendingMotion();
+        stop_to_zero_active_ = false;
+        speed_stop_planner_.reset();
+        if (!validateTarget(current_target_))
+            return;
 
         // Get current joint positions as starting positions
         start_pos_.clear();
@@ -109,7 +179,7 @@ namespace arms_controller_common
                 duration_,
                 interpolation_type_,
                 ctrl_interfaces_.frequency_,
-                tanh_scale_))
+                tanh_scale_, true, home_max_velocity_, home_max_acceleration_, home_max_jerk_))
             {
                 RCLCPP_ERROR(node_->get_logger(),
                              "Failed to initialize trajectory manager in StateHome::enter()");
@@ -151,39 +221,8 @@ namespace arms_controller_common
                     toString(interpolation_type_));
     }
 
-    void StateHome::updateJointObservation(double dt, bool advance_prev)
-    {
-        const size_t num_joints = ctrl_interfaces_.joint_position_state_interface_.size();
-        if (advance_prev)
-        {
-            prev_joint_pos_ = current_joint_pos_;
-        }
-        current_joint_pos_.resize(num_joints);
-        joint_vel_.resize(num_joints);
-
-        for (size_t i = 0; i < num_joints; ++i)
-        {
-            const auto value = ctrl_interfaces_.joint_position_state_interface_[i].get().get_optional();
-            current_joint_pos_[i] = value.value_or(0.0);
-        }
-
-        constexpr double kMinDt = 1.0e-6;
-        if (prev_joint_pos_.size() != current_joint_pos_.size() || dt < kMinDt)
-        {
-            std::fill(joint_vel_.begin(), joint_vel_.end(), 0.0);
-            return;
-        }
-
-        const double inv_dt = 1.0 / dt;
-        for (size_t i = 0; i < num_joints; ++i)
-        {
-            joint_vel_[i] = (current_joint_pos_[i] - prev_joint_pos_[i]) * inv_dt;
-        }
-    }
-
     void StateHome::run(const rclcpp::Time& /*time*/, const rclcpp::Duration& period)
     {
-        updateJointObservation(period.seconds());
 
         const int32_t fsm_cmd = ctrl_interfaces_.fsm_command_;
         if (fsm_cmd == 2 || fsm_cmd == 3 || fsm_cmd == 4)
@@ -192,12 +231,6 @@ namespace arms_controller_common
             stop_to_zero_active_ = false;
             speed_stop_planner_.reset();
             abortActiveMotionForStop();
-        }
-
-        if (runStopToZero(period))
-        {
-            last_command_ = ctrl_interfaces_.fsm_command_;
-            return;
         }
 
         int32_t current_command = ctrl_interfaces_.fsm_command_;
@@ -209,14 +242,14 @@ namespace arms_controller_common
         {
             if (current_command == switch_command_base_)
             {
-                requestMotionOrDefer([this]() { switchConfigurationImpl(); });
+                switchConfiguration();
             }
             else if (current_command >= switch_command_base_ + 1)
             {
                 if (auto target_index = static_cast<size_t>(current_command - (switch_command_base_ + 1));
                     target_index < home_configs_.size())
                 {
-                    requestMotionOrDefer([this, target_index]() { selectConfigurationImpl(target_index); });
+                    selectConfiguration(target_index);
                 }
             }
         }
@@ -241,6 +274,9 @@ namespace arms_controller_common
                  i < next_positions.size(); ++i)
             {
                 ctrl_interfaces_.setJointPositionCommand(i, next_positions[i]);
+                if (trajectory_manager_.lastVelocities().size() == next_positions.size())
+                    ctrl_interfaces_.setCommandDerivatives(i, trajectory_manager_.lastVelocities()[i],
+                                                          trajectory_manager_.lastAccelerations()[i]);
             }
         }
         else if (next_positions.empty())
@@ -330,63 +366,79 @@ namespace arms_controller_common
         }
     }
 
-    void StateHome::beginStopToZero()
+    bool StateHome::beginStopToZero()
     {
-        const double dt = 1.0 / std::max(static_cast<double>(ctrl_interfaces_.frequency_), 1.0);
-        updateJointObservation(dt, false);
-
-        std::vector<double> stop_start_pos = ctrl_interfaces_.last_sent_joint_positions_;
-        if (stop_start_pos.size() != current_joint_pos_.size())
+        const auto command = ctrl_interfaces_.getCommandMotionState();
+        std::vector<double> lower, upper;
+        std::lock_guard<std::mutex> limits_lock(limits_mutex_);
+        const auto* limits_manager = joint_limits_.get();
+        if (!limits_manager || joint_names_.size() != command.positions.size())
         {
-            stop_start_pos = current_joint_pos_;
+            RCLCPP_ERROR(node_->get_logger(), "Stop rejected: joint limits not ready; retaining current motion");
+            return false;
         }
-
-        std::ostringstream vel_log;
-        vel_log << "[";
-        for (size_t i = 0; i < joint_vel_.size(); ++i)
+        for (const auto& name : joint_names_)
         {
-            if (i > 0)
+            const auto limits = limits_manager->getJointLimits(name);
+            if (limits.motion_type == JointMotionType::CONTINUOUS)
             {
-                vel_log << ", ";
+                lower.push_back(-std::numeric_limits<double>::infinity());
+                upper.push_back(std::numeric_limits<double>::infinity());
             }
-            vel_log << joint_vel_[i];
+            else if (limits.initialized)
+            {
+                lower.push_back(limits.lower); upper.push_back(limits.upper);
+            }
+            else
+            {
+                RCLCPP_ERROR(node_->get_logger(), "Stop rejected: missing limits for %s", name.c_str());
+                return false;
+            }
         }
-        vel_log << "]";
-        RCLCPP_INFO(node_->get_logger(),
-                    "Home stop-to-zero init: vel_source=finite_diff, dq=%s",
-                    vel_log.str().c_str());
-
-        const double period = dt;
-        if (!speed_stop_planner_.init(
-                stop_start_pos, joint_vel_, period, kDefaultStopMaxAcc, kDefaultStopMaxJerk))
+        double vmax, amax, jmax;
+        if (trajectory_manager_.isInitialized())
         {
-            RCLCPP_WARN(node_->get_logger(), "Failed to initialize joint speed stop planner");
-            stop_to_zero_active_ = false;
-            return;
-        }
-
-        stop_to_zero_active_ = true;
-        RCLCPP_INFO(node_->get_logger(), "Stop-to-zero started before pending home motion");
-    }
-
-    void StateHome::requestMotionOrDefer(std::function<void()> apply_motion)
-    {
-        if (!isMotionBusy() && !stop_to_zero_active_)
-        {
-            apply_motion();
-            return;
-        }
-
-        pending_motion_ = std::move(apply_motion);
-        if (!stop_to_zero_active_)
-        {
-            abortActiveMotionForStop();
-            beginStopToZero();
+            vmax = trajectory_manager_.stopMaxVelocity();
+            amax = trajectory_manager_.stopMaxAcceleration();
+            jmax = trajectory_manager_.stopMaxJerk();
         }
         else
         {
-            RCLCPP_INFO(node_->get_logger(), "Updated pending home motion while stop-to-zero is active");
+            std::tie(vmax, amax, jmax) = std::make_tuple(home_max_velocity_, home_max_acceleration_, home_max_jerk_);
         }
+        const bool truncate = !trajectory_manager_.isInitialized() || !trajectory_manager_.isDoubles();
+        if (!speed_stop_planner_.init(command.positions, command.velocities, command.accelerations,
+                                      vmax, amax, jmax, lower, upper, truncate))
+        {
+            RCLCPP_ERROR(node_->get_logger(), "Stop rejected: %s; retaining current motion",
+                         speed_stop_planner_.error().c_str());
+            return false;
+        }
+        if (speed_stop_planner_.wasTruncated())
+            RCLCPP_WARN(node_->get_logger(), "Synchronized stop will truncate all joints at the first position limit");
+        stop_to_zero_active_ = true;
+        RCLCPP_INFO(node_->get_logger(), "Synchronized joint stop started from command q/v/a (v=%.3f, a=%.3f, j=%.3f)",
+                    vmax, amax, jmax);
+        return true;
+    }
+
+    bool StateHome::requestMotionOrDefer(std::function<void()> apply_motion)
+    {
+        if (stop_to_zero_active_)
+        {
+            pending_motion_ = std::move(apply_motion);
+            return true;
+        }
+        if (!isMotionBusy())
+        {
+            apply_motion();
+            return true;
+        }
+        if (!beginStopToZero()) return false;
+        // The stop is fully validated; only now discard the old trajectory.
+        abortActiveMotionForStop();
+        pending_motion_ = std::move(apply_motion);
+        return true;
     }
 
     bool StateHome::runStopToZero(const rclcpp::Duration& period)
@@ -396,8 +448,7 @@ namespace arms_controller_common
             return false;
         }
 
-        const double runtime_step = period.seconds();
-        std::vector<double> next_positions = speed_stop_planner_.run();
+        std::vector<double> next_positions = speed_stop_planner_.run(period.seconds());
 
         if (!next_positions.empty() &&
             next_positions.size() == ctrl_interfaces_.joint_position_command_interface_.size())
@@ -405,6 +456,8 @@ namespace arms_controller_common
             for (size_t i = 0; i < ctrl_interfaces_.joint_position_command_interface_.size(); ++i)
             {
                 ctrl_interfaces_.setJointPositionCommand(i, next_positions[i]);
+                ctrl_interfaces_.setCommandDerivatives(i, speed_stop_planner_.velocities()[i],
+                                                      speed_stop_planner_.accelerations()[i]);
             }
         }
 
@@ -423,12 +476,14 @@ namespace arms_controller_common
             }
         }
 
-        (void)runtime_step;
         return true;
     }
 
     void StateHome::updateParam()
     {
+        home_max_velocity_ = node_->get_parameter("home_max_velocity").as_double();
+        home_max_acceleration_ = node_->get_parameter("home_max_acceleration").as_double();
+        home_max_jerk_ = node_->get_parameter("home_max_jerk").as_double();
         // Update duration from node parameter
         duration_ = node_->get_parameter("home_duration").as_double();
 
@@ -467,6 +522,13 @@ namespace arms_controller_common
 
     void StateHome::selectConfiguration(size_t config_index)
     {
+        if (config_index >= home_configs_.size())
+        {
+            RCLCPP_ERROR(node_->get_logger(), "HOME target rejected: invalid configuration index %zu", config_index);
+            return;
+        }
+        if (!validateTarget(home_configs_[config_index]))
+            return;
         requestMotionOrDefer([this, config_index]() { selectConfigurationImpl(config_index); });
     }
 
@@ -480,7 +542,10 @@ namespace arms_controller_common
             return;
         }
 
+        if (!validateTarget(home_configs_[config_index]))
+            return;
         current_config_index_ = config_index;
+        cycle_config_index_ = config_index;
         current_target_ = home_configs_[config_index];
         startInterpolationImpl();
     }
@@ -500,29 +565,25 @@ namespace arms_controller_common
 
     void StateHome::switchConfiguration()
     {
-        requestMotionOrDefer([this]() { switchConfigurationImpl(); });
-    }
-
-    void StateHome::switchConfigurationImpl()
-    {
-        if (!has_multiple_configs_)
+        if (has_multiple_configs_)
         {
-            RCLCPP_WARN(node_->get_logger(), "Cannot switch: only one configuration available");
-            return;
+            // Consume this slot even if validation rejects it; the next request
+            // must be able to reach later configurations without executing this one.
+            cycle_config_index_ = (cycle_config_index_ + 1) % home_configs_.size();
+            selectConfiguration(cycle_config_index_);
         }
-
-        current_config_index_ = (current_config_index_ + 1) % home_configs_.size();
-        current_target_ = home_configs_[current_config_index_];
-        startInterpolationImpl();
     }
 
     void StateHome::startInterpolation()
     {
-        requestMotionOrDefer([this]() { startInterpolationImpl(); });
+        if (validateTarget(current_target_))
+            requestMotionOrDefer([this]() { startInterpolationImpl(); });
     }
 
     void StateHome::startInterpolationImpl()
     {
+        if (!validateTarget(current_target_))
+            return;
         start_pos_.clear();
         for (size_t i = 0; i < ctrl_interfaces_.joint_position_state_interface_.size(); ++i)
         {
@@ -541,7 +602,7 @@ namespace arms_controller_common
                 duration_,
                 interpolation_type_,
                 ctrl_interfaces_.frequency_,
-                tanh_scale_
+                tanh_scale_, true, home_max_velocity_, home_max_acceleration_, home_max_jerk_
             );
             publishCurrentTargetJoint(current_target_);
 
