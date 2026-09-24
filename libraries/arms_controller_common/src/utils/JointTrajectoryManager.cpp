@@ -233,8 +233,12 @@ namespace arms_controller_common
         }
 
         initialized_ = true;
-        completed_ = false;
-        percent_ = 0.0;
+        // NONE is a direct target, not a timed motion. Mark it complete before
+        // another HOME request can mistake home_duration for an active trajectory
+        // and start stop-to-zero. getNextPoint() supplies the target with zero
+        // command derivatives; the physical device handles its own motion.
+        completed_ = (type == InterpolationType::NONE);
+        percent_ = completed_ ? 1.0 : 0.0;
 
         RCLCPP_DEBUG(logger_,
                      "Initialized single-node trajectory: %zu joints, duration=%.3f, type=%s",
