@@ -17,6 +17,10 @@
 
 namespace
 {
+    // 目标跟踪误差表：行序 0/1/2 = 左臂/右臂/头部
+    constexpr size_t kErrorHeadRow = 2;
+    constexpr const char* kErrorRowNames[] = {"左臂", "右臂", "头部"};
+
     // ABB OrientZYX(z, y, x) ≡ tf2 setRPY(roll=x, pitch=y, yaw=z) ≡ Rz * Ry * Rx
     geometry_msgs::msg::Quaternion orientZyx(double roll, double pitch, double yaw)
     {
@@ -248,19 +252,19 @@ namespace arms_rviz_control_plugin
 
         main_layout->addLayout(ocs2_pose_send_layout_.get());
 
-        auto* error_group = new QGroupBox("末端目标误差", this);
+        auto* error_group = new QGroupBox("目标跟踪误差", this);
         auto* error_layout = new QVBoxLayout(error_group);
-        for (size_t side = 0; side < target_error_labels_.size(); ++side)
+        for (size_t row = 0; row < target_error_labels_.size(); ++row)
         {
-            target_error_labels_[side] = std::make_unique<QLabel>(
-                side == 0 ? "左臂：等待当前/目标位姿" : "右臂：等待当前/目标位姿", error_group);
-            target_error_labels_[side]->setWordWrap(true);
-            target_error_labels_[side]->setToolTip(
+            target_error_labels_[row] = std::make_unique<QLabel>(
+                QString("%1：等待当前/目标位姿").arg(kErrorRowNames[row]), error_group);
+            target_error_labels_[row]->setWordWrap(true);
+            target_error_labels_[row]->setToolTip(
                 "最新实测末端与最新目标的误差；位置为欧氏距离，姿态为最短旋转角。"
                 "刷新率 20 Hz。"
                 "目标保留最后一帧（不因话题停止更新而清空），不做硬件延迟补偿。"
                 "两话题须描述相同末端及参考坐标系。");
-            error_layout->addWidget(target_error_labels_[side].get());
+            error_layout->addWidget(target_error_labels_[row].get());
         }
         main_layout->addWidget(error_group);
         // 误差显示是人眼读数，20 Hz 足够（原 100 ms = 10 Hz）：高频来源在回调里
@@ -404,20 +408,31 @@ namespace arms_rviz_control_plugin
             "left_current_target", 10,
             std::bind(&JointControlPanel::onLeftCurrentTargetReceived, this, std::placeholders::_1));
 
-        const std::array<std::string, 2> measured_topics{"left_current_pose", "right_current_pose"};
-        for (size_t side = 0; side < measured_topics.size(); ++side)
+        // 这些位姿在控制的 RT 线程里发布，但被 setPosePublishPeriod 节流到 50 Hz（mpc_frequency /
+        // dds_publish_hz），所以订阅侧只有 ~50 msg/s/话题：best-effort + keep_last(1)，
+        // 不向发布端要 ACK/反压，也不做堆分配。
+        const std::array<std::string, 3> measured_topics{
+            "left_current_pose", "right_current_pose", "head_current_pose"};
+        for (size_t row = 0; row < measured_topics.size(); ++row)
         {
-            // 控制器以 500 Hz 发这两个位姿：只要最新一帧，best-effort + depth=1，
-            // 不为过期帧排队，也不做任何堆分配（快照在锁外算好）。
-            measured_pose_subscribers_[side] = node_->create_subscription<geometry_msgs::msg::PoseStamped>(
-                measured_topics[side], rclcpp::SensorDataQoS().keep_last(1),
-                [this, side](const geometry_msgs::msg::PoseStamped::SharedPtr msg)
+            measured_pose_subscribers_[row] = node_->create_subscription<geometry_msgs::msg::PoseStamped>(
+                measured_topics[row], rclcpp::SensorDataQoS().keep_last(1),
+                [this, row](const geometry_msgs::msg::PoseStamped::SharedPtr msg)
                 {
                     const TargetErrorSample sample = targetErrorSampleFrom(*msg);
-                    std::lock_guard<std::mutex> lock(target_error_mutexes_[side][0]);
-                    target_error_samples_[side][0] = sample;
+                    std::lock_guard<std::mutex> lock(target_error_mutexes_[row][0]);
+                    target_error_samples_[row][0] = sample;
                 });
         }
+        // 头部目标：只有任务启用 headTrackingEE 时参考管理器才发布。
+        head_current_target_subscriber_ = node_->create_subscription<geometry_msgs::msg::PoseStamped>(
+            "head_current_target", rclcpp::SensorDataQoS().keep_last(1),
+            [this](const geometry_msgs::msg::PoseStamped::SharedPtr msg)
+            {
+                const TargetErrorSample sample = targetErrorSampleFrom(*msg);
+                std::lock_guard<std::mutex> lock(target_error_mutexes_[kErrorHeadRow][1]);
+                target_error_samples_[kErrorHeadRow][1] = sample;
+            });
 
         body_pose_current_target_subscriber_ = node_->create_subscription<geometry_msgs::msg::PoseStamped>(
             "body_current_target", 10,
@@ -735,22 +750,27 @@ namespace arms_rviz_control_plugin
         constexpr auto kMeasuredStaleTimeout = std::chrono::seconds(1);
         const auto now = std::chrono::steady_clock::now();
 
-        for (size_t side = 0; side < target_error_samples_.size(); ++side)
+        for (size_t row = 0; row < target_error_samples_.size(); ++row)
         {
             TargetErrorSample measured;
             TargetErrorSample target;
             {
-                std::lock_guard<std::mutex> lock(target_error_mutexes_[side][0]);
-                measured = target_error_samples_[side][0];
+                std::lock_guard<std::mutex> lock(target_error_mutexes_[row][0]);
+                measured = target_error_samples_[row][0];
             }
             {
-                std::lock_guard<std::mutex> lock(target_error_mutexes_[side][1]);
-                target = target_error_samples_[side][1];
+                std::lock_guard<std::mutex> lock(target_error_mutexes_[row][1]);
+                target = target_error_samples_[row][1];
             }
 
-            const QString prefix = side == 0 ? "左臂：" : "右臂：";
+            // 头部行只在存在笛卡尔跟踪（headTrackingEE + HEAD_TRACKING 模式）时是有效误差，
+            // 否则只说明原因，不显示一个假的误差。
+            constexpr uint8_t kHeadTracking = arms_ros2_control_msgs::msg::WbcCurrentState::HEAD_TRACKING;
+            const QString prefix = QString("%1：").arg(kErrorRowNames[row]);
             QString value;
-            if (!measured.valid || !target.valid)
+            if (row == kErrorHeadRow && wbc_head_state_ != kHeadTracking)
+                value = "无头部笛卡尔目标（需 HEAD_TRACKING）";
+            else if (!measured.valid || !target.valid)
                 value = "等待当前/目标位姿";
             else if (now - measured.received > kMeasuredStaleTimeout)
                 value = "当前位姿已超时";
@@ -779,7 +799,7 @@ namespace arms_rviz_control_plugin
                         .arg(angle * 180.0 / std::acos(-1.0), 0, 'f', 2);
                 }
             }
-            target_error_labels_[side]->setText(prefix + value);
+            target_error_labels_[row]->setText(prefix + value);
         }
     }
 
@@ -856,6 +876,8 @@ namespace arms_rviz_control_plugin
         {
             return;
         }
+        // 头部误差行需要头部模式判定（见 updateTargetErrors）。
+        wbc_head_state_ = msg->head_state;
         const uint8_t prev = wbc_body_state_;
         wbc_body_state_ = msg->body_state;
         if (prev != wbc_body_state_ && is_joint_control_enabled_)

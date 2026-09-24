@@ -206,7 +206,7 @@ namespace arms_rviz_control_plugin
         std::string body_frame_;
         std::mutex frame_id_mutex_;
 
-        // ── 末端目标误差（左右臂）──────────────────────────────────────────────
+        // ── 目标跟踪误差（左臂 / 右臂 / 头部）──────────────────────────────────
         // Separate from the legacy *_current_pose_ fields, which contain targets.
         //
         // 实测位姿话题是 500 Hz，所以这里不缓存 PoseStamped、不存 std::string：
@@ -225,12 +225,13 @@ namespace arms_rviz_control_plugin
             std::chrono::steady_clock::time_point received{};
             bool valid{false};
         };
-        // [side][0] = 实测末端, [side][1] = 目标
-        std::array<std::array<TargetErrorSample, 2>, 2> target_error_samples_{};
-        std::array<std::array<std::mutex, 2>, 2> target_error_mutexes_;
-        std::array<rclcpp::Subscription<geometry_msgs::msg::PoseStamped>::SharedPtr, 2>
+        // [row][0] = 实测末端, [row][1] = 目标；row 0/1/2 = 左臂/右臂/头部
+        std::array<std::array<TargetErrorSample, 2>, 3> target_error_samples_{};
+        std::array<std::array<std::mutex, 2>, 3> target_error_mutexes_;
+        std::array<rclcpp::Subscription<geometry_msgs::msg::PoseStamped>::SharedPtr, 3>
             measured_pose_subscribers_;
-        std::array<std::unique_ptr<QLabel>, 2> target_error_labels_;
+        std::array<std::unique_ptr<QLabel>, 3> target_error_labels_;
+        rclcpp::Subscription<geometry_msgs::msg::PoseStamped>::SharedPtr head_current_target_subscriber_;
         void updateTargetErrors();
         /** 把消息压成 POD 快照：参考坐标系只保留 64 位哈希，供两侧"是否同一坐标系"比较。 */
         static TargetErrorSample targetErrorSampleFrom(const geometry_msgs::msg::PoseStamped& msg);
@@ -242,6 +243,7 @@ namespace arms_rviz_control_plugin
         bool right_current_pose_valid_ = false;
         bool body_current_pose_valid_ = false;
         uint8_t wbc_body_state_ = 0;  // WbcCurrentState::body_state
+        uint8_t wbc_head_state_ = 0;  // WbcCurrentState::head_state（1 = HEAD_TRACKING）
 
         // Joint limits manager
         std::shared_ptr<arms_controller_common::JointLimitsManager> joint_limits_manager_;
