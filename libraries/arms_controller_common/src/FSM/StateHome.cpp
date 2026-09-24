@@ -214,11 +214,18 @@ namespace arms_controller_common
             }
         }
 
-        RCLCPP_INFO(node_->get_logger(),
-                    "Starting interpolation to home configuration %zu over %.1f seconds (type=%s)",
-                    current_config_index_,
-                    duration_,
-                    toString(interpolation_type_));
+        if (interpolation_type_ == InterpolationType::NONE)
+        {
+            RCLCPP_INFO(node_->get_logger(),
+                        "Direct home target selected: configuration %zu (no interpolation)",
+                        current_config_index_);
+        }
+        else
+        {
+            RCLCPP_INFO(node_->get_logger(),
+                        "Starting interpolation to home configuration %zu over %.1f seconds (type=%s)",
+                        current_config_index_, duration_, toString(interpolation_type_));
+        }
     }
 
     void StateHome::run(const rclcpp::Time& /*time*/, const rclcpp::Duration& period)
@@ -606,9 +613,18 @@ namespace arms_controller_common
             );
             publishCurrentTargetJoint(current_target_);
 
-            RCLCPP_INFO(node_->get_logger(),
-                        "Starting interpolation to configuration %zu over %.1f seconds (type=%s)",
-                        current_config_index_, duration_, toString(interpolation_type_));
+            if (interpolation_type_ == InterpolationType::NONE)
+            {
+                RCLCPP_INFO(node_->get_logger(),
+                            "Direct home target selected: configuration %zu (no interpolation)",
+                            current_config_index_);
+            }
+            else
+            {
+                RCLCPP_INFO(node_->get_logger(),
+                            "Starting interpolation to configuration %zu over %.1f seconds (type=%s)",
+                            current_config_index_, duration_, toString(interpolation_type_));
+            }
         }
         else
         {
