@@ -42,7 +42,7 @@ my_controller:
 
     # --- MoveJ ---
     movej_duration: 3.0
-    movej_interpolation_type: "tanh"  # "tanh" | "linear" | "doubles" | "none"
+    movej_interpolation_type: "tanh"  # "tanh" | "linear" | "doubles" | "none" | "servo"
     movej_tanh_scale: 3.0
     movej_trajectory_duration: 3.0
     movej_trajectory_blend_ratio: 0.0
@@ -318,3 +318,7 @@ Home 和 MoveJ 状态均支持可配置插值方式：
 ### 线程安全
 
 `StateMoveJ::setTargetPosition()` 内部使用互斥锁保护，可从任意 ROS 回调线程安全调用。
+
+`movej_interpolation_type: servo` 提供保持速度、加速度状态的实时位置跟随，复用
+`movej_max_velocity`、`movej_max_acceleration`、`movej_max_jerk`。详细行为及限制见
+[公共控制库说明](../../libraries/arms_controller_common/README.md#movej-servo-实时关节跟随)。

@@ -5,6 +5,7 @@
 
 #include "arms_controller_common/FSM/FSMState.h"
 #include "arms_controller_common/utils/Interpolation.h"
+#include "arms_controller_common/utils/JointServoFilter.h"
 #include "arms_controller_common/utils/GravityCompensation.h"
 #include "arms_controller_common/utils/JointTrajectoryManager.h"
 #include "arms_controller_common/utils/JointSpeedStopPlanner.h"
@@ -277,13 +278,16 @@ namespace arms_controller_common
         bool isNonWaistMotionBusy() const;
         void requestWaistOnlyMotionOrDefer(std::function<void()> apply_motion);
         void beginWaistSpeedjStop();
-        void requestMotionOrDefer(std::function<void()> apply_motion);
+        bool requestMotionOrDefer(std::function<void()> apply_motion, std::function<void()> on_replaced = {});
         void requestWaistMotionOrDefer(std::function<void()> apply_motion);
         void abortActiveMotionForStop();
-        void beginStopToZero();
+        bool beginStopToZero();
+        bool validatePositionRequest(const std::vector<std::string>& names,
+                                     const std::vector<double>& positions) const;
+        bool validateWaypointRequest(const std::vector<std::string>& names,
+            const std::vector<arms_ros2_control_msgs::msg::JointWaypoint>& waypoints) const;
         void clearPendingMotion();
         bool runStopToZero(const rclcpp::Duration& period);
-        void updateJointObservation(double dt, bool advance_prev = true);
 
         void setTargetPositionImpl(const std::vector<double>& target_pos);
         void setTargetPositionImpl(const std::string& prefix, const std::vector<double>& target_pos);
@@ -345,6 +349,12 @@ namespace arms_controller_common
 
         std::shared_ptr<rclcpp_lifecycle::LifecycleNode> node_;
         std::shared_ptr<GravityCompensation> gravity_compensation_;
+
+        void initializeServo(const std::vector<double>& positions);
+        bool canUpdateServoTarget() const;
+        std::vector<double> advanceServo(double period);
+        std::vector<JointServoFilter> servo_filters_;
+        bool servo_initialized_{false};
 
         double duration_{3.0}; // Interpolation duration in seconds
         double movej_max_velocity_{2.0};
@@ -664,15 +674,11 @@ namespace arms_controller_common
         Eigen::VectorXd getCurrentJointAngles() const;
         bool checkAndHandleCollision();
 
-        std::vector<double> current_joint_pos_;
-        std::vector<double> prev_joint_pos_;
-        std::vector<double> joint_vel_;
 
         bool stop_to_zero_active_{false};
         std::function<void()> pending_motion_;
+        std::function<void()> pending_motion_cancel_;
         std::function<void()> pending_waist_motion_;
         JointSpeedStopPlanner speed_stop_planner_;
-        static constexpr double kDefaultStopMaxAcc = 0.5;
-        static constexpr double kDefaultStopMaxJerk = 5.0;
     };
 } // namespace arms_controller_common

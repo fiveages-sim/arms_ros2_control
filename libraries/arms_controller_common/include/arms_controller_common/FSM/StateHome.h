@@ -8,6 +8,8 @@
 #include "arms_controller_common/utils/GravityCompensation.h"
 #include "arms_controller_common/utils/JointTrajectoryManager.h"
 #include "arms_controller_common/utils/JointSpeedStopPlanner.h"
+#include "arms_controller_common/utils/JointLimitsManager.h"
+#include <mutex>
 #include <vector>
 #include <memory>
 #include <functional>
@@ -135,6 +137,7 @@ namespace arms_controller_common
             {
                 current_target_       = home_configs_[0];
                 current_config_index_ = 0;
+                cycle_config_index_ = 0;
                 has_multiple_configs_ = home_configs_.size() > 1;
                 RCLCPP_INFO(node_->get_logger(),
                             "Found %zu home configuration(s) (home_1 to home_%zu)",
@@ -154,6 +157,9 @@ namespace arms_controller_common
          * @param rest_pos Rest position vector
          */
         void setRestPose(const std::vector<double>& rest_pos);
+
+        void updateJointLimitsFromURDF(const std::string& description,
+                                       const std::vector<std::string>& joint_names);
 
         void enter() override;
         void run(const rclcpp::Time& time, const rclcpp::Duration& period) override;
@@ -181,19 +187,21 @@ namespace arms_controller_common
         void updateParam();
 
     private:
+        bool validateTarget(const std::vector<double>& target) const;
+        mutable std::mutex limits_mutex_;
+        std::vector<std::string> joint_names_;
+        std::unique_ptr<JointLimitsManager> joint_limits_;
         void switchConfiguration();
-        void switchConfigurationImpl();
         void selectConfigurationImpl(size_t config_index);
         void startInterpolation();
         void startInterpolationImpl();
 
         bool isMotionBusy() const;
-        void requestMotionOrDefer(std::function<void()> apply_motion);
+        bool requestMotionOrDefer(std::function<void()> apply_motion);
         void abortActiveMotionForStop();
-        void beginStopToZero();
+        bool beginStopToZero();
         void clearPendingMotion();
         bool runStopToZero(const rclcpp::Duration& period);
-        void updateJointObservation(double dt, bool advance_prev = true);
 
         std::shared_ptr<GravityCompensation> gravity_compensation_;
 
@@ -203,7 +211,11 @@ namespace arms_controller_common
         std::vector<double> current_target_;                // Current target configuration
         size_t current_config_index_{0};                    // Current configuration index
 
+        // Last slot visited by cyclic selection, including rejected targets.
+        size_t cycle_config_index_{0};
+
         // Interpolation
+        double home_max_velocity_{2.0}, home_max_acceleration_{4.0}, home_max_jerk_{20.0};
         double duration_{3.0};                              // Interpolation duration in seconds (default value, will be updated by updateParam())
         InterpolationType interpolation_type_{InterpolationType::TANH};
         double tanh_scale_{3.0};
@@ -220,17 +232,11 @@ namespace arms_controller_common
         int32_t last_command_{0};                           // Last command value for edge detection
         bool has_multiple_configs_{false};                  // Whether multiple configurations are available
 
-        // Joint observation (finite difference velocity)
-        std::vector<double> current_joint_pos_;
-        std::vector<double> prev_joint_pos_;
-        std::vector<double> joint_vel_;
 
         // Stop-to-zero then apply pending motion
         bool stop_to_zero_active_{false};
         std::function<void()> pending_motion_;
         JointSpeedStopPlanner speed_stop_planner_;
-        static constexpr double kDefaultStopMaxAcc = 0.5;
-        static constexpr double kDefaultStopMaxJerk = 5.0;
     };
 } // namespace arms_controller_common
 
