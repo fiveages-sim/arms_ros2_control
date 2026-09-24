@@ -1,6 +1,7 @@
 #pragma once
 
 #include <memory>
+#include <array>
 #include <QLabel>
 #include <QHBoxLayout>
 #include <QGroupBox>
@@ -204,6 +205,20 @@ namespace arms_rviz_control_plugin
         std::string right_ee_frame_;
         std::string body_frame_;
         std::mutex frame_id_mutex_;
+
+        // Separate from the legacy *_current_pose_ fields, which contain targets.
+        struct TargetErrorState
+        {
+            geometry_msgs::msg::PoseStamped measured, target;
+            bool have_measured{false}, have_target{false};
+            std::chrono::steady_clock::time_point received{};
+        };
+        std::array<TargetErrorState, 2> target_error_state_;
+        std::mutex target_error_mutex_;
+        std::array<rclcpp::Subscription<geometry_msgs::msg::PoseStamped>::SharedPtr, 2>
+            measured_pose_subscribers_;
+        std::array<std::unique_ptr<QLabel>, 2> target_error_labels_;
+        void updateTargetErrors();
 
         geometry_msgs::msg::Pose left_current_pose_;
         geometry_msgs::msg::Pose right_current_pose_;
