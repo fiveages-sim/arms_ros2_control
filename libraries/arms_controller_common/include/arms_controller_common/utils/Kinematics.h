@@ -319,6 +319,12 @@ namespace arms_controller_common
         // Pinocchio模型和数据
         pinocchio::Model model_;
         mutable pinocchio::Data data_;
+        // Exact full-model configuration backing data_. FK and Jacobian queries
+        // share this cache; changed measured/commanded/IK states always recompute.
+        // Like data_, this cache requires serialized access to this instance.
+        Eigen::VectorXd cached_joint_positions_;
+        bool kinematics_cache_valid_{false};
+        bool jacobians_valid_{false};
 
         // 框架名称
         std::string baseFrameName_;

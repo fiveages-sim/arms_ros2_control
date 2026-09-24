@@ -190,7 +190,7 @@ namespace arms_controller_common
                                geometry_msgs::msg::Pose& pose_base) const;
         bool updateTargetFromPose(bool is_left, const geometry_msgs::msg::Pose& pose_base);
 
-        void stepHybridControl(bool is_left, double dt,
+        bool stepHybridControl(bool is_left, double dt,
                                const Eigen::Matrix<double, 6, 1>& contact_wrench,
                                bool ft_active);
 
@@ -313,6 +313,7 @@ namespace arms_controller_common
         bool diag_log_{true};
         double diag_log_period_{1.0};
         std::array<std::chrono::steady_clock::time_point, 2> last_diag_log_{};
+        std::array<std::chrono::steady_clock::time_point, 2> last_stall_snapshot_{};
 
         Eigen::VectorXd q_meas_prev_all_;
         double measured_joint_vel_max_{0.0};
