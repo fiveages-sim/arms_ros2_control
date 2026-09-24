@@ -47,10 +47,17 @@ namespace ocs2::mobile_manipulator
         std::optional<bool> traj_record_enabled_update;
         for (const auto& param : parameters)
         {
-            if (param.get_name() == "hardware_latency")
+            if (param.get_name() == "closed_loop")
             {
-                hardware_latency_ = param.as_double();
-                RCLCPP_INFO(node_->get_logger(), "Updated hardware_latency to: %f", hardware_latency_);
+                closed_loop_.store(param.as_bool(), std::memory_order_relaxed);
+                RCLCPP_INFO(node_->get_logger(), "closed_loop=%s: hardware_latency %s",
+                            param.as_bool() ? "true" : "false",
+                            param.as_bool() ? "ignored" : "enabled");
+            }
+            else if (param.get_name() == "hardware_latency")
+            {
+                hardware_latency_.store(param.as_double(), std::memory_order_relaxed);
+                RCLCPP_INFO(node_->get_logger(), "Updated hardware_latency to: %f (open loop only)", param.as_double());
             }
             else if (param.get_name() == "traj_record_dir")
             {
@@ -153,8 +160,9 @@ namespace ocs2::mobile_manipulator
                 policy_active_ = true;
             }
         }
-        bool trigger_cached_state = (time - last_execute_time_).seconds() < hardware_latency_;
-        if (trigger_cached_state && cached_ob_state_)
+        // Closed loop keeps the measured observation and bypasses hardware latency entirely.
+        if (!closed_loop_.load(std::memory_order_relaxed) &&
+            (time - last_execute_time_).seconds() < hardware_latency_.load(std::memory_order_relaxed))
         {
             observation_.state = cached_last_action_;
         }
@@ -184,6 +192,7 @@ namespace ocs2::mobile_manipulator
             mpc_mrt_interface_->evaluatePolicy(time.seconds(), observation_.state, optimized_state_, optimized_input_,
                                                planned_mode);
             const auto& policy = mpc_mrt_interface_->getPolicy();
+            // Offset is in controller cycles; 22 cycles at 500 Hz look ahead by 44 ms.
             const double future_time = observation_.time + future_time_offset_ / ctrl_interfaces_.frequency_;
             future_state = LinearInterpolation::interpolate(
                 future_time, policy.timeTrajectory_, policy.stateTrajectory_);

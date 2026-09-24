@@ -21,6 +21,7 @@
 #include <cctype>
 #include <cmath>
 #include <limits>
+#include <stdexcept>
 #include <tf2_geometry_msgs/tf2_geometry_msgs.hpp>
 
 namespace arms_ros2_control::command
@@ -28,7 +29,6 @@ namespace arms_ros2_control::command
     // 静态常量定义
     const double VRInputHandler::POSITION_THRESHOLD = 0.01; // 1cm threshold for position changes
     const double VRInputHandler::ORIENTATION_THRESHOLD = 0.005; // threshold for orientation changes (quaternion angle)
-    const int VRInputHandler::STALE_MIN_FROZEN_FRAMES = 2; // 连续 >=2 帧逐位相同即判定上游冻结
 
     VRInputHandler::VRInputHandler(
         rclcpp::Node::SharedPtr node,
@@ -71,6 +71,60 @@ namespace arms_ros2_control::command
           , reference_link_(reference_link)
           , vr_follow_frame_(vr_follow_frame)
     {
+        rcl_interfaces::msg::ParameterDescriptor tau_descriptor;
+        tau_descriptor.description =
+            "VR arm target smoothing window in seconds (linear interpolation: a new target "
+            "is reached exactly tau seconds after it arrives); 0 bypasses smoothing";
+        // 在线可调：ros2 param set <node> vr_target_smoothing_tau_s <seconds>
+        tau_descriptor.read_only = false;
+        const double declared_tau = node_->declare_parameter(
+            "vr_target_smoothing_tau_s", 0.05, tau_descriptor);
+        if (!std::isfinite(declared_tau) || declared_tau < 0.0)
+        {
+            throw std::invalid_argument(
+                "vr_target_smoothing_tau_s must be finite and >= 0, got " +
+                std::to_string(declared_tau));
+        }
+        target_smoothing_tau_s_.store(declared_tau);
+
+        // 运行时改 tau：先校验，再把当前正在输出的插值值作为新段的起点，最后生效新 tau，
+        // 于是调参过程中目标连续，不会因换 tau 而跳变。
+        smoothing_param_callback_handle_ = node_->add_on_set_parameters_callback(
+            [this](const std::vector<rclcpp::Parameter>& parameters)
+            {
+                rcl_interfaces::msg::SetParametersResult result;
+                result.successful = true;
+                for (const auto& parameter : parameters)
+                {
+                    if (parameter.get_name() != "vr_target_smoothing_tau_s")
+                    {
+                        continue;
+                    }
+                    if (parameter.get_type() != rclcpp::ParameterType::PARAMETER_DOUBLE)
+                    {
+                        result.successful = false;
+                        result.reason = "vr_target_smoothing_tau_s must be a double";
+                        return result;
+                    }
+                    const double next_tau = parameter.as_double();
+                    if (!std::isfinite(next_tau) || next_tau < 0.0)
+                    {
+                        result.successful = false;
+                        result.reason = "vr_target_smoothing_tau_s must be finite and >= 0";
+                        return result;
+                    }
+                    // 滤波器形式下改 tau 本身就是连续的，不需要重建状态。
+                    target_smoothing_tau_s_.store(next_tau);
+                    RCLCPP_INFO(
+                        node_->get_logger(),
+                        "🕹️ VR target smoothing tau -> %.4f s (per stage %.4f s)%s",
+                        next_tau,
+                        0.5 * next_tau,
+                        next_tau > 0.0 ? "" : " (bypassed)");
+                }
+                return result;
+            });
+
         // 创建 controller topology 检测 client 和启动期重试 timer
         list_controllers_client_ =
             node_->create_client<ListControllers>(
@@ -80,13 +134,17 @@ namespace arms_ros2_control::command
             std::chrono::seconds(1),
             [this]() { detectControlTopology(); });
 
+        vr_target_timer_ = node_->create_wall_timer(
+            std::chrono::milliseconds(5), [this]() { publishVrTargets(); });
+
         // 初始化 TF 组件（用于在 reference_link 与末端 frame 之间进行坐标变换）
         tf_buffer_ = std::make_shared<tf2_ros::Buffer>(node_->get_clock());
         tf_listener_ = std::make_shared<tf2_ros::TransformListener>(*tf_buffer_);
         RCLCPP_INFO(
             node_->get_logger(),
-            "VR stale-input catch-up ramp recovery is enabled (frozen >= %d identical frames).",
-            STALE_MIN_FROZEN_FRAMES);
+            "VR arm targets: 200 Hz, input timeout 200 ms; 2-stage smoothing tau=%.3f s%s",
+            target_smoothing_tau_s_.load(),
+            target_smoothing_tau_s_.load() > 0.0 ? "" : " (bypassed)");
         // 检测左右控制器名称
         detectGripperControllers(hand_controllers_);
         
@@ -675,6 +733,7 @@ namespace arms_ros2_control::command
                 // prev_calculated_* 存发布系的值——它被 hasPoseChanged() 无条件读取。
                 recordLastPublishedTarget("left", left_pub_pos, left_pub_ori);
                 recordLastPublishedTarget("right", right_pub_pos, right_pub_ori);
+                resetTargetSmoothing();
                 // 让 robot_base_* 失效，下次进 UPDATE 从上面写回的 command target 重新派生
                 left_robot_base_valid_ = false;
                 right_robot_base_valid_ = false;
@@ -845,7 +904,7 @@ namespace arms_ros2_control::command
         right_wbc_toggle_request_pending_.store(false);
         requested_wbc_toggle_target_.store(WbcToggleTarget::NONE);
         resetYbModeLatchAndConversions();
-        resetStaleCatchUpRamp();
+        resetTargetSmoothing();
         RCLCPP_INFO(node_->get_logger(), "🕹️🕶️🕹️ VR control DISABLED!");
 
         // 禁用 VR 控制时，若处于底盘模式则退出并清零底盘/腰部命令，防止残留运动
@@ -1012,6 +1071,16 @@ namespace arms_ros2_control::command
         head_tracking_active_ = true;
     }
 
+    void VRInputHandler::publishVrTargets()
+    {
+        if (!enabled_.load() || !is_update_mode_.load())
+        {
+            return;
+        }
+        publishLeftVrTarget();
+        publishRightVrTarget();
+    }
+
     void VRInputHandler::vrLeftCallback(const geometry_msgs::msg::Pose::SharedPtr msg)
     {
         if (!enabled_.load())
@@ -1026,18 +1095,56 @@ namespace arms_ros2_control::command
         // 提取原始（未缩放）左手柄位姿
         matrixToPosOri(left_ee_pose_, vr_left_position_raw_, left_orientation_);
         // 在原始位姿基础上应用缩放，得到用于控制的left_position_
+        // （上游 ~98 Hz 且抖动很大，这里保持零阶保持：真正的"插值重采样"需要在抖动
+        //   缓冲里多等一个采样周期，实测 p95 达 25 ms，代价太大；台阶交给下方两级滤波。）
         left_position_ = vr_left_position_raw_;
         left_position_ *= vr_pose_scale_;
 
+        const auto received = std::chrono::steady_clock::now();
+        if (has_vr_left_pose_.load() && received - left_vr_received_ > VR_INPUT_TIMEOUT)
+        {
+            left_vr_rebase_pending_ = true;
+        }
+        left_vr_received_ = received;
         has_vr_left_pose_.store(true);
+        if (enabled_.load() && isFullBodyMode())
+        {
+            prepareArmVrInput(mirror_mode_.load()
+                ? WbcToggleTarget::RIGHT_ARM : WbcToggleTarget::LEFT_ARM);
+        }
+    }
+
+    void VRInputHandler::publishLeftVrTarget()
+    {
+        const auto now = std::chrono::steady_clock::now();
+        if (!has_vr_left_pose_.load())
+        {
+            return;
+        }
+        if (now - left_vr_received_ > VR_INPUT_TIMEOUT)
+        {
+            left_vr_rebase_pending_ = true;
+            return;
+        }
         const WbcToggleTarget controlledArm = mirror_mode_.load()
             ? WbcToggleTarget::RIGHT_ARM
             : WbcToggleTarget::LEFT_ARM;
-        if (enabled_.load() &&
-            isFullBodyMode() &&
-            !prepareArmVrInput(controlledArm))
+        if (isArmVrInputSuppressed(controlledArm))
         {
             return;
+        }
+
+        if (left_vr_rebase_pending_)
+        {
+            if (!rebaseArmVrControlFromCurrentPose(controlledArm))
+            {
+                return;
+            }
+            if (controlledArm == WbcToggleTarget::LEFT_ARM ? left_arm_paused_.load() : right_arm_paused_.load())
+            {
+                applyPauseAfterRebase(controlledArm);
+            }
+            left_vr_rebase_pending_ = false;
         }
 
         if (enabled_.load())
@@ -1138,19 +1245,55 @@ namespace arms_ros2_control::command
         right_ee_pose_ = poseMsgToMatrix(msg);
         // 提取原始（未缩放）右手柄位姿
         matrixToPosOri(right_ee_pose_, vr_right_position_raw_, right_orientation_);
-        // 在原始位姿基础上应用缩放，得到用于控制的right_position_
+        // 在原始位姿基础上应用缩放，得到用于控制的right_position_（语义同左侧，零阶保持）
         right_position_ = vr_right_position_raw_;
         right_position_ *= vr_pose_scale_;
 
+        const auto received = std::chrono::steady_clock::now();
+        if (has_vr_right_pose_.load() && received - right_vr_received_ > VR_INPUT_TIMEOUT)
+        {
+            right_vr_rebase_pending_ = true;
+        }
+        right_vr_received_ = received;
         has_vr_right_pose_.store(true);
+        if (enabled_.load() && isFullBodyMode())
+        {
+            prepareArmVrInput(mirror_mode_.load()
+                ? WbcToggleTarget::LEFT_ARM : WbcToggleTarget::RIGHT_ARM);
+        }
+    }
+
+    void VRInputHandler::publishRightVrTarget()
+    {
+        const auto now = std::chrono::steady_clock::now();
+        if (!has_vr_right_pose_.load())
+        {
+            return;
+        }
+        if (now - right_vr_received_ > VR_INPUT_TIMEOUT)
+        {
+            right_vr_rebase_pending_ = true;
+            return;
+        }
         const WbcToggleTarget controlledArm = mirror_mode_.load()
             ? WbcToggleTarget::LEFT_ARM
             : WbcToggleTarget::RIGHT_ARM;
-        if (enabled_.load() &&
-            isFullBodyMode() &&
-            !prepareArmVrInput(controlledArm))
+        if (isArmVrInputSuppressed(controlledArm))
         {
             return;
+        }
+
+        if (right_vr_rebase_pending_)
+        {
+            if (!rebaseArmVrControlFromCurrentPose(controlledArm))
+            {
+                return;
+            }
+            if (controlledArm == WbcToggleTarget::LEFT_ARM ? left_arm_paused_.load() : right_arm_paused_.load())
+            {
+                applyPauseAfterRebase(controlledArm);
+            }
+            right_vr_rebase_pending_ = false;
         }
 
         if (enabled_.load())
@@ -1279,7 +1422,7 @@ namespace arms_ros2_control::command
         left_robot_base_valid_ = false;
         right_robot_base_valid_ = false;
 
-        resetStaleCatchUpRamp();
+        resetTargetSmoothing();
     }
 
     bool VRInputHandler::transformPoseBetweenFrames(
@@ -1410,7 +1553,7 @@ namespace arms_ros2_control::command
         (isLeft ? robot_base_left_position_ : robot_base_right_position_) = position;
         (isLeft ? robot_base_left_orientation_ : robot_base_right_orientation_) = orientation.normalized();
         (isLeft ? left_follow_rotation_ : right_follow_rotation_) = rotation;
-        resetStaleCatchUpRamp(isLeft);
+        resetTargetSmoothing(isLeft);
         valid = true;
         return true;
     }
@@ -1491,7 +1634,7 @@ namespace arms_ros2_control::command
     void VRInputHandler::rebaseRightArmVrControl()
     {
         const bool paused = right_arm_paused_.load();
-        resetStaleCatchUpRamp(false);
+        resetTargetSmoothing(false);
 
         if (mirror_mode_.load())
         {
@@ -1562,15 +1705,15 @@ namespace arms_ros2_control::command
             return false;
         }
 
-        // 上游 XR 位姿冻结后会一帧补齐整段位移，先把追赶量摊到随后若干帧。
         // 在控制器坐标系中平滑，缓存保存实际发布的目标。
-        Eigen::Vector3d rampedPosition = position;
-        Eigen::Quaterniond rampedOrientation = orientation;
-        applyStaleCatchUpRamp(isLeft, rampedPosition, rampedOrientation);
+        const auto now = std::chrono::steady_clock::now();
+        Eigen::Vector3d smoothedPosition = position;
+        Eigen::Quaterniond smoothedOrientation = orientation;
+        smoothTarget(isLeft, now, smoothedPosition, smoothedOrientation);
 
-        Eigen::Vector3d publishPosition = rampedPosition;
-        Eigen::Quaterniond publishOrientation = rampedOrientation;
-        // Target and catch-up ramp are already expressed in the controller frame.
+        Eigen::Vector3d publishPosition = smoothedPosition;
+        Eigen::Quaterniond publishOrientation = smoothedOrientation;
+        // Targets are already expressed in the controller frame.
         if (!ee_frame_id_initialized_)
         {
             return false;
@@ -1582,8 +1725,8 @@ namespace arms_ros2_control::command
         Eigen::Quaterniond& previousOrientation = isLeft
             ? prev_calculated_left_orientation_
             : prev_calculated_right_orientation_;
-        // Temporarily disable pose-change threshold filtering so every valid XR pose
-        // callback publishes a target. Keep the original gate for quick A/B rollback.
+        // Temporarily disable pose-change threshold filtering so every valid
+        // timer tick publishes a target. Keep the original gate for quick A/B rollback.
         /*
         // Coupled: keep left_target heartbeating even when the left controller is still,
         // otherwise the 0.2s leader timeout lets right_target steal and inverse-sync left.
@@ -1617,7 +1760,10 @@ namespace arms_ros2_control::command
             pub_right_target_->publish(pose);
         }
 
-        recordLastPublishedTarget(armType, rampedPosition, rampedOrientation);
+        // 最后命令缓存记录平滑后的实际输出，重建基准时与已发布目标连续。
+        recordLastPublishedTarget(armType, smoothedPosition, smoothedOrientation);
+        TargetSmoothing& smoothing = isLeft ? left_target_smoothing_ : right_target_smoothing_;
+        smoothing.valid = true;
         previousPosition = publishPosition;
         previousOrientation = publishOrientation.normalized();
         return true;
@@ -1673,116 +1819,58 @@ namespace arms_ros2_control::command
         return false;
     }
 
-    void VRInputHandler::applyStaleCatchUpRamp(bool isLeft,
-                                               Eigen::Vector3d& position,
-                                               Eigen::Quaterniond& orientation)
+    void VRInputHandler::smoothTarget(bool isLeft,
+                                      std::chrono::steady_clock::time_point now,
+                                      Eigen::Vector3d& position,
+                                      Eigen::Quaterniond& orientation)
     {
-        StaleCatchUpRamp& ramp = isLeft ? left_stale_ramp_ : right_stale_ramp_;
-
+        TargetSmoothing& state = isLeft ? left_target_smoothing_ : right_target_smoothing_;
         const Eigen::Vector3d inputPosition = position;
-        const Eigen::Quaterniond inputOrientation = orientation;
+        const Eigen::Quaterniond inputOrientation = orientation.normalized();
+        const double tau = target_smoothing_tau_s_.load();
 
-        if (!ramp.has_previous_input)
+        // 旁路（tau=0）与首帧（进入 UPDATE / 重建基准后）：状态直接等于目标，不追赶。
+        if (tau <= 0.0 || !state.valid)
         {
-            ramp.has_previous_input = true;
-            ramp.previous_input_position = inputPosition;
-            ramp.previous_input_orientation = inputOrientation;
-            ramp.output_position = inputPosition;
-            ramp.output_orientation = inputOrientation;
+            state.stage1_position = inputPosition;
+            state.stage1_orientation = inputOrientation;
+            state.stage2_position = inputPosition;
+            state.stage2_orientation = inputOrientation;
+            state.stamp = now;
             return;
         }
 
-        // 逐位比较：上游冻结时 xr_target_node 重发同一帧，而本文件的换算是确定性的，
-        // 于是算出的目标也逐位相同；摇杆偏移等真实指令运动不会命中这一条。
-        const bool identical =
-            inputPosition == ramp.previous_input_position &&
-            inputOrientation.coeffs() == ramp.previous_input_orientation.coeffs();
+        // dt 上限（约两个 5 ms 输出周期）：调度卡顿或跳发布后用长间隔算 alpha 会一拍到位，
+        // 反而在目标上留下一个台阶。
+        const double dt = std::clamp(
+            std::chrono::duration<double>(now - state.stamp).count(), 0.0, MAX_SMOOTHING_DT_S);
+        state.stamp = now;
 
-        ramp.previous_input_position = inputPosition;
-        ramp.previous_input_orientation = inputOrientation;
+        // 两级一阶串联，每级时间常数 tau/2：低频滞后合计仍是 tau，但因为第二级的输入
+        // 是第一级的连续输出，位置曲线是 C1（速度连续）——单级/线性插值斜坡会保留
+        // "分段恒速 + 每个新采样跳一次"的速度台阶，就是 target 上看得见的锯齿。
+        // 15 Hz 处衰减也比单级 tau 好：0.39^2 = 0.15 vs 0.21。
+        const double alpha = 1.0 - std::exp(-dt / (0.5 * tau));
+        state.stage1_position += alpha * (inputPosition - state.stage1_position);
+        state.stage1_orientation =
+            state.stage1_orientation.slerp(alpha, inputOrientation).normalized();
+        state.stage2_position += alpha * (state.stage1_position - state.stage2_position);
+        state.stage2_orientation =
+            state.stage2_orientation.slerp(alpha, state.stage1_orientation).normalized();
 
-        bool armedThisFrame = false;
-        if (identical)
-        {
-            ++ramp.frozen_frames;
-        }
-        else
-        {
-            if (ramp.frozen_frames >= STALE_MIN_FROZEN_FRAMES)
-            {
-                // 解冻帧：缺口 = 当前输入 - 当前输出，摊开帧数 N = 冻结帧数。
-                // 缺口是现场量出来的，因此上一次斜坡没还完的部分会自动计入。
-                const int spread = ramp.frozen_frames;
-                const double keep =
-                    static_cast<double>(spread - 1) / static_cast<double>(spread);
-
-                Eigen::Quaterniond aligned = inputOrientation;
-                if (aligned.dot(ramp.output_orientation) < 0.0)
-                {
-                    aligned.coeffs() = -aligned.coeffs();
-                }
-
-                const Eigen::Vector3d gap = inputPosition - ramp.output_position;
-                ramp.residual_position = gap * keep;
-                ramp.residual_orientation = Eigen::Quaterniond::Identity().slerp(
-                    keep,
-                    (ramp.output_orientation.conjugate() * aligned).normalized());
-                ramp.remaining_frames = spread - 1;
-                armedThisFrame = true;
-
-                RCLCPP_DEBUG(
-                    node_->get_logger(),
-                    "🕹️ [%s] XR 冻结 %d 帧，追赶 %.1fmm 分摊到 %d 帧",
-                    isLeft ? "left" : "right",
-                    spread,
-                    gap.norm() * 1000.0,
-                    spread);
-            }
-            ramp.frozen_frames = 0;
-        }
-
-        if (!armedThisFrame && ramp.remaining_frames > 0)
-        {
-            // 等额递减：残差 <- 残差 * (剩余-1)/剩余，最后一帧精确归零。
-            const double keep = static_cast<double>(ramp.remaining_frames - 1) /
-                                static_cast<double>(ramp.remaining_frames);
-            ramp.residual_position *= keep;
-            ramp.residual_orientation =
-                Eigen::Quaterniond::Identity().slerp(keep, ramp.residual_orientation);
-            --ramp.remaining_frames;
-            if (ramp.remaining_frames == 0)
-            {
-                ramp.residual_position.setZero();
-                ramp.residual_orientation.setIdentity();
-            }
-        }
-
-        if (ramp.remaining_frames > 0)
-        {
-            Eigen::Quaterniond aligned = inputOrientation;
-            if (aligned.dot(ramp.output_orientation) < 0.0)
-            {
-                aligned.coeffs() = -aligned.coeffs();
-            }
-            position = inputPosition - ramp.residual_position;
-            orientation =
-                (aligned * ramp.residual_orientation.conjugate()).normalized();
-        }
-        // 无残差时不改写入参，正常运动逐位不受影响。
-
-        ramp.output_position = position;
-        ramp.output_orientation = orientation;
+        position = state.stage2_position;
+        orientation = state.stage2_orientation;
     }
 
-    void VRInputHandler::resetStaleCatchUpRamp(bool isLeft)
+    void VRInputHandler::resetTargetSmoothing(bool isLeft)
     {
-        (isLeft ? left_stale_ramp_ : right_stale_ramp_) = StaleCatchUpRamp{};
+        (isLeft ? left_target_smoothing_ : right_target_smoothing_) = TargetSmoothing{};
     }
 
-    void VRInputHandler::resetStaleCatchUpRamp()
+    void VRInputHandler::resetTargetSmoothing()
     {
-        left_stale_ramp_ = StaleCatchUpRamp{};
-        right_stale_ramp_ = StaleCatchUpRamp{};
+        left_target_smoothing_ = TargetSmoothing{};
+        right_target_smoothing_ = TargetSmoothing{};
     }
 
     void VRInputHandler::calculatePoseFromDifference(const Eigen::Vector3d& vrCurrentPos,
@@ -2569,14 +2657,14 @@ namespace arms_ros2_control::command
             has_last_published_left_target_ = false;
             last_published_left_position_.setZero();
             last_published_left_orientation_.setIdentity();
-            resetStaleCatchUpRamp(true);
+            resetTargetSmoothing(true);
         }
         else if (armType == "right")
         {
             has_last_published_right_target_ = false;
             last_published_right_position_.setZero();
             last_published_right_orientation_.setIdentity();
-            resetStaleCatchUpRamp(false);
+            resetTargetSmoothing(false);
         }
     }
 
@@ -2604,7 +2692,7 @@ namespace arms_ros2_control::command
         {
             return false;
         }
-        resetStaleCatchUpRamp(isLeftArm);
+        resetTargetSmoothing(isLeftArm);
 
         if (useLeftVr)
         {
@@ -2792,7 +2880,7 @@ namespace arms_ros2_control::command
         {
             right_arm_paused_.store(true);
         }
-        resetStaleCatchUpRamp(isLeftArm);
+        resetTargetSmoothing(isLeftArm);
     }
 
     void VRInputHandler::clearArmPause(WbcToggleTarget arm)
@@ -2822,7 +2910,7 @@ namespace arms_ros2_control::command
             paused_right_position_ = Eigen::Vector3d::Zero();
             paused_right_orientation_ = Eigen::Quaterniond::Identity();
         }
-        resetStaleCatchUpRamp(isLeftArm);
+        resetTargetSmoothing(isLeftArm);
     }
 
     bool VRInputHandler::handleCase16YbModeToggle()
@@ -3392,8 +3480,8 @@ namespace arms_ros2_control::command
                     }
 
                     is_update_mode_.store(true);
-                    // 目标流在此中断/重启，清空斜坡，避免用陈旧输出量缺口
-                    resetStaleCatchUpRamp();
+                    // 目标流在此中断/重启，清空平滑状态，首帧直接从新基准输出
+                    resetTargetSmoothing();
                     RCLCPP_INFO(node_->get_logger(), "🔘 [右摇杆按钮] 按下 - 功能: 切换UPDATE/STORAGE模式 - 操作: 切换到UPDATE模式（已存储基准位姿，重置摇杆偏移）");
                     RCLCPP_DEBUG(node_->get_logger(),
                                 "   VR Base Positions: Left [%.3f, %.3f, %.3f], Right [%.3f, %.3f, %.3f]",
