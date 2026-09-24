@@ -93,6 +93,76 @@ source ~/ros2_ws/install/setup.bash
 ros2 run arms_teleop keyboard_teleop --ros-args -p discrete_key_stale_ms:=350
 ```
 
+### USB foot-pedal teleoperation event control
+
+`foot_pedal_teleop` reads one Linux evdev keyboard device and publishes the same
+`std_msgs/Int32` event stream consumed from `/teleop/controller_state`. It does not publish
+`/fsm_command`; FSM transitions and teleoperation toggles are handled centrally by
+`VRInputHandler`.
+
+With exactly one supported pedal connected, device discovery is automatic:
+
+```bash
+source ~/ros2_ws/install/setup.bash
+ros2 run arms_teleop foot_pedal_teleop
+```
+
+If multiple CM6K pedals are connected, the node lists their serial numbers and exits instead of
+silently choosing the wrong device. Select the intended unit by serial:
+
+```bash
+ros2 run arms_teleop foot_pedal_teleop --ros-args \
+  -p device_serial:=03CDAB4B081EBD3671FFFFFFFF0300
+```
+
+An explicit stable `device` path remains available for diagnostics and overrides auto-discovery.
+
+By default the node exclusively grabs that device (`grab_device:=true`), so pedal events do not
+reach the desktop or other applications. Linux key-repeat events are ignored. Zero (no event)
+continues to be published at 30 Hz.
+
+- F13: FSM down, event `12`.
+- F14: FSM up, event `11`.
+- F15 short press: toggle left-arm teleoperation, event `3`.
+- F15 long press (default 800 ms): toggle mirror mode, event `7`.
+- F16 short press: toggle right-arm teleoperation, event `6`.
+- F16 long press (default 800 ms): toggle whole teleoperation between STORAGE and UPDATE,
+  event `4`. A long press emits only event `4`; it does not also emit event `6`.
+
+Double-click gestures are intentionally not used.
+
+Parameters:
+
+- `device` (default `auto`): automatically find the CM6K interface-00 keyboard, or use an explicit
+  stable evdev path.
+- `device_serial` (default empty): disambiguate multiple connected CM6K pedals in auto mode.
+- `grab_device` (default `true`): exclusively consume this input device.
+- `teleop.publish_rate_hz` (default `30.0`): `/teleop/controller_state` state-stream frequency.
+- `teleop.controller_state_topic` (default `/teleop/controller_state`): teleoperation event output topic.
+- `whole_teleop_long_press_ms` (default `800`): F16 hold duration required for event `4`.
+- `mirror_long_press_ms` (default `800`): F15 hold duration required for event `7`.
+- `keys.fsm_up/fsm_down/left_arm_toggle/right_arm_toggle`: Linux input key codes, default
+  F13-F16 (`183`-`186`).
+
+If opening the device fails with `Permission denied`, configure an input-device udev rule or run
+the node as a user with permission to read that evdev device. Do not use the ordinary keyboard's
+device path with exclusive grabbing enabled.
+
+For the SayoDevice CM6K pedal (VID `8089`, PID `000c`, interface `00`), install the packaged udev
+rule once:
+
+```bash
+sudo install -m 0644 \
+  src/arms_ros2_control/command/arms_teleop/config/udev/70-sayo-cm6k-foot-pedal.rules \
+  /etc/udev/rules.d/70-sayo-cm6k-foot-pedal.rules
+sudo udevadm control --reload-rules
+```
+
+Unplug and reconnect the pedal after reloading. `TAG+="uaccess"` grants the active local login
+session read access whenever the matching event device is created, so per-plug `setfacl` commands
+are no longer needed. The rule deliberately matches only USB interface `00`, not the auxiliary
+`if01` input interface.
+
 ### Keyboard parameters
 
 | Parameter | Default | Description |
