@@ -189,19 +189,7 @@ ros2 topic pub --once /left_hand_controller/target_percent \
   std_msgs/msg/Float64 "data: 0.6"   # 60% open
 ```
 
-### 5.5 Waist lifting — position
-
-**Topic:** `/{controller_name}/waist_lifting`  
-**Type:** `std_msgs/Float64`  
-**Requires:** `waist_lifting_enabled: true`, active state: MOVEJ
-
-Moves the waist by the specified distance (meters) from its current position.
-
-```bash
-ros2 topic pub --once /body_controller/waist_lifting std_msgs/msg/Float64 "data: 0.05"
-```
-
-### 5.6 Waist lifting — local x/z/phi relative motion
+### 5.5 Waist lifting — local x/z/phi relative motion
 
 **Topic:** `/{controller_name}/waist_lifting_pose_relative`  
 **Type:** `std_msgs/Float64MultiArray`  
@@ -215,7 +203,7 @@ ros2 topic pub --once /body_controller/waist_lifting_pose_relative \
   std_msgs/msg/Float64MultiArray "{data: [0.02, 0.05, 0.10]}"
 ```
 
-### 5.7 Waist lifting — x/z/phi absolute target
+### 5.6 Waist lifting — x/z/phi absolute target
 
 **Topic:** `/{controller_name}/waist_lifting_pose_absolute`  
 **Type:** `std_msgs/Float64MultiArray`  
@@ -232,14 +220,14 @@ The controller looks up TF `source → target`, transforms `(x, z)` into the tar
 
 Defaults match **FiveAges W2** (`base_footprint` / `body_base`). Robots without those links must override the parameters, e.g. ARX Lift / Lift2S: `base_link` / `lift_link`.
 
-Height-only commands (`waist_lifting`, `waist_lifting_command`, `target_joint_position`) do **not** use these frames.
+Height-only commands (`waist_lifting_command`, `target_joint_position`) do **not** use these frames.
 
 ```bash
 ros2 topic pub --once /body_controller/waist_lifting_pose_absolute \
   std_msgs/msg/Float64MultiArray "{data: [0.12, 0.45, 0.20]}"
 ```
 
-### 5.8 Waist lifting — velocity factor
+### 5.7 Waist lifting — velocity factor
 
 **Topic:** `/{controller_name}/waist_lifting_command`  
 **Type:** `std_msgs/Float64` (factor range: `[-1.0, 1.0]`)  
@@ -253,7 +241,7 @@ ros2 topic pub /body_controller/waist_lifting_command std_msgs/msg/Float64 "data
 ros2 topic pub --once /body_controller/waist_lifting_command std_msgs/msg/Float64 "data: 0.0"  # stop
 ```
 
-### 5.9 Waist turning — velocity factor
+### 5.8 Waist turning — velocity factor
 
 **Topic:** `/{controller_name}/waist_turning_command`  
 **Type:** `std_msgs/Float64` (factor range: `[-1.0, 1.0]`)  
@@ -279,7 +267,6 @@ Assuming controller name `my_controller`, joint name `j1`:
 | `/my_controller/target_joint_trajectory` | `JointTrajectory` | MOVEJ | Multi-waypoint trajectory |
 | `/my_controller/target_command` | `Int32` (0/1) | MOVEJ | Hand open/close switch |
 | `/my_controller/target_percent` | `Float64` (0~1) | MOVEJ | Hand proportional control |
-| `/my_controller/waist_lifting` | `Float64` | MOVEJ | Waist position delta |
 | `/my_controller/waist_lifting_pose_relative` | `Float64MultiArray` | MOVEJ | Waist local relative `[dx, dz, dphi]` |
 | `/my_controller/waist_lifting_pose_absolute` | `Float64MultiArray` | MOVEJ | Absolute `[x, z, phi]` (TF frames configurable) |
 | `/my_controller/waist_lifting_command` | `Float64` | MOVEJ | Waist velocity factor |

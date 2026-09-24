@@ -257,38 +257,6 @@ namespace basic_joint_controller
                 state_list_.movej->setupWaistLiftingPoseAction("waist_lifting_pose");
             }
 
-            // 订阅腰部升降话题
-            std::string waist_lifting_topic = "/" + controller_name_ + "/waist_lifting";
-
-            waist_lifting_subscription_ = get_node()->create_subscription<std_msgs::msg::Float64>(
-                waist_lifting_topic, 10,
-                [this](const std_msgs::msg::Float64::SharedPtr msg)
-                {
-                    // 只有在 MOVEJ 状态时才处理
-                    if (!current_state_ || current_state_->state_name != FSMStateName::MOVEJ)
-                    {
-                        return;
-                    }
-
-                    // 通过 StateMoveJ 启动腰部升降
-                    if (state_list_.movej)
-                    {
-                        bool success = state_list_.movej->moveWaistLifting(
-                            Eigen::Vector3d(0.0, msg->data, 0.0)); //兼容旧接口：仅dz
-
-                        if (success)
-                        {
-                            RCLCPP_INFO(get_node()->get_logger(),
-                                        "Waist lifting command received: distance=%.3f",
-                                        msg->data);
-                        }
-                        else
-                        {
-                            RCLCPP_WARN(get_node()->get_logger(),
-                                        "waist lifting command failed");
-                        }
-                    }
-                });
             std::string waist_lifting_pose_relative_topic =
                 "/" + controller_name_ + "/waist_lifting_pose_relative";
             waist_lifting_pose_relative_subscription_ =
