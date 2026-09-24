@@ -88,11 +88,29 @@ namespace arms_ros2_control::command
          */
         bool isEnabled() const { return enabled_.load(); }
 
+        enum class MirrorModeProfile : uint8_t
+        {
+            MODE_A = 0,
+            MODE_B = 1,
+        };
+
         /**
          * 检查是否处于镜像模式
          * @return true如果启用镜像模式，false否则
          */
         bool isMirrorMode() const { return mirror_mode_.load(); }
+
+        bool isMirrorModeProfileA() const
+        {
+            return mirror_mode_.load() &&
+                   mirror_mode_profile_.load() == static_cast<int>(MirrorModeProfile::MODE_A);
+        }
+
+        bool isMirrorModeProfileB() const
+        {
+            return mirror_mode_.load() &&
+                   mirror_mode_profile_.load() == static_cast<int>(MirrorModeProfile::MODE_B);
+        }
 
         enum class ControlTopology
         {
@@ -632,6 +650,7 @@ namespace arms_ros2_control::command
         std::atomic<bool> enabled_;
         std::atomic<bool> is_update_mode_; // true = 更新模式, false = 存储模式
         std::atomic<bool> mirror_mode_; // true = 镜像模式, false = 正常模式
+        std::atomic<int> mirror_mode_profile_{static_cast<int>(MirrorModeProfile::MODE_A)};
         std::atomic<bool> left_arm_paused_; // 左臂是否暂停更新（Y按键控制）
         std::atomic<bool> right_arm_paused_; // 右臂是否暂停更新（B按键控制）
         std::atomic<bool> left_grip_mode_; // 左摇杆控制模式：false=XY平移, true=Z轴+Yaw

@@ -1807,14 +1807,30 @@ namespace arms_ros2_control::command
         // 4. 镜像模式处理（在局部坐标系下应用）
         if (mirror_mode_.load())
         {
-            // 位置翻转（局部坐标系）
-            vrPosDiff_local.x() = -vrPosDiff_local.x(); // 左右翻转
-            vrPosDiff_local.y() = -vrPosDiff_local.y(); // 前后翻转
-            // vrPosDiff_local.z() 保持不变（上下不翻转）
+            const auto profile = static_cast<MirrorModeProfile>(mirror_mode_profile_.load());
 
-            // 旋转翻转（面对面镜像）
-            vrOriDiff.y() = -vrOriDiff.y(); // 翻转Y分量
-            vrOriDiff.x() = -vrOriDiff.x(); // 翻转X分量
+            if (profile == MirrorModeProfile::MODE_A)
+            {
+                // MODE A：保留为空白，供调用方自行填入自定义镜像处理逻辑
+                // 这里不做额外处理，保持原始差值，避免擅自更改用户定义行为。
+                vrPosDiff_local.y() = -vrPosDiff_local.y(); // 前后翻转
+
+                vrOriDiff.x() = -vrOriDiff.x(); // 翻转X分量
+                vrOriDiff.z() = -vrOriDiff.z(); // 翻转Z分量
+            }
+            else
+            {
+                // MODE B：恢复原来的镜像处理逻辑
+                // 位置翻转（局部坐标系）
+                vrPosDiff_local.x() = -vrPosDiff_local.x(); // 左右翻转
+                vrPosDiff_local.y() = -vrPosDiff_local.y(); // 前后翻转
+                // vrPosDiff_local.z() 保持不变（上下不翻转）
+
+                // 旋转翻转（面对面镜像）
+                vrOriDiff.y() = -vrOriDiff.y(); // 翻转Y分量
+                vrOriDiff.x() = -vrOriDiff.x(); // 翻转X分量
+            }
+
             vrOriDiff.normalize(); // 重新归一化
         }
 
@@ -2956,16 +2972,17 @@ namespace arms_ros2_control::command
 
         std::array<double, 3> positionDelta{0.0, 0.0, 0.0};
         std::array<double, 3> rpyDelta{0.0, 0.0, 0.0};
+        constexpr double body_thumbstick_step_scale = 0.1;
 
         if (body_thumbstick_z_yaw_mode_.load())
         {
-            positionDelta[2] = -left_thumbstick_axes_.y() * vr_thumbstick_linear_scale_;
-            rpyDelta[2] = -left_thumbstick_axes_.x() * vr_thumbstick_angular_scale_;
+            positionDelta[2] = -left_thumbstick_axes_.y() * vr_thumbstick_linear_scale_ * body_thumbstick_step_scale;
+            rpyDelta[2] = -left_thumbstick_axes_.x() * vr_thumbstick_angular_scale_ * body_thumbstick_step_scale;
         }
         else
         {
-            positionDelta[0] = -left_thumbstick_axes_.y() * vr_thumbstick_linear_scale_;
-            positionDelta[1] = -left_thumbstick_axes_.x() * vr_thumbstick_linear_scale_;
+            positionDelta[0] = -left_thumbstick_axes_.y() * vr_thumbstick_linear_scale_ * body_thumbstick_step_scale;
+            positionDelta[1] = -left_thumbstick_axes_.x() * vr_thumbstick_linear_scale_ * body_thumbstick_step_scale;
         }
 
         // 回中时跳过，避免 20Hz 空发布刷新 last_marker_command_time_，
@@ -3542,35 +3559,70 @@ namespace arms_ros2_control::command
                 }
                 break;
             }
+            case 29:  // 左握把 + 左摇杆按下（顺序触发）：切换镜像处理方案
+            {
+                if (!mirror_mode_.load())
+                {
+                    RCLCPP_INFO(node_->get_logger(),
+                                "🔘 [左握把+左摇杆顺序组合键] 按下 - 功能: 忽略（镜像模式当前未启用，需先通过左摇杆按钮启用）");
+                    break;
+                }
+
+                const auto current = static_cast<MirrorModeProfile>(mirror_mode_profile_.load());
+                const auto next = (current == MirrorModeProfile::MODE_A)
+                    ? MirrorModeProfile::MODE_B
+                    : MirrorModeProfile::MODE_A;
+                mirror_mode_profile_.store(static_cast<int>(next));
+                RCLCPP_INFO(node_->get_logger(),
+                            "🔘 [左握把+左摇杆顺序组合键] 按下 - 功能: 切换镜像处理方案 -> %s",
+                            next == MirrorModeProfile::MODE_A ? "MODE A（空白，等待自定义逻辑）" : "MODE B（原处理逻辑）");
+
+                if (is_update_mode_.load())
+                {
+                    is_update_mode_.store(false);
+                    stopHeadTracking();
+                    left_thumbstick_offset_ = Eigen::Vector3d::Zero();
+                    right_thumbstick_offset_ = Eigen::Vector3d::Zero();
+                    left_thumbstick_yaw_offset_ = 0.0;
+                    right_thumbstick_yaw_offset_ = 0.0;
+                    paused_left_position_ = Eigen::Vector3d::Zero();
+                    paused_left_orientation_ = Eigen::Quaterniond::Identity();
+                    paused_right_position_ = Eigen::Vector3d::Zero();
+                    paused_right_orientation_ = Eigen::Quaterniond::Identity();
+                    RCLCPP_WARN(node_->get_logger(),
+                                "   自动切换到STORAGE模式 - 请重新进入UPDATE模式以应用镜像处理方案切换");
+                }
+                break;
+            }
             case 7:  // 镜像模式切换（toggle）
             {
                 bool old_mirror_mode = mirror_mode_.load();
                 bool new_mirror_mode = !old_mirror_mode;
                 mirror_mode_.store(new_mirror_mode);
-                
-                // 镜像模式发生变化，记录日志并自动切换到 STORAGE 模式
+                if (!new_mirror_mode)
+                {
+                    mirror_mode_profile_.store(static_cast<int>(MirrorModeProfile::MODE_A));
+                }
+
                 if (new_mirror_mode)
                 {
                     RCLCPP_INFO(node_->get_logger(),
-                                "🔘 [左摇杆按钮] 按下 - 功能: 切换镜像模式 - 操作: 启用镜像模式（左手柄控制右臂，右手柄控制左臂）");
+                                "🔘 [左摇杆按钮] 按下 - 功能: 启用镜像模式（默认处理方案 A）");
                 }
                 else
                 {
                     RCLCPP_INFO(node_->get_logger(),
-                                "🔘 [左摇杆按钮] 按下 - 功能: 切换镜像模式 - 操作: 禁用镜像模式（恢复正常控制）");
+                                "🔘 [左摇杆按钮] 按下 - 功能: 禁用镜像模式（恢复正常控制）");
                 }
-                
-                // 切换镜像模式后，自动切换到STORAGE模式，避免跳变
+
                 if (is_update_mode_.load())
                 {
                     is_update_mode_.store(false);
                     stopHeadTracking();
-                    // 重置摇杆累积偏移
                     left_thumbstick_offset_ = Eigen::Vector3d::Zero();
                     right_thumbstick_offset_ = Eigen::Vector3d::Zero();
                     left_thumbstick_yaw_offset_ = 0.0;
                     right_thumbstick_yaw_offset_ = 0.0;
-                    // 清除暂停时刻的VR位姿记录（镜像模式切换后不再适用）
                     paused_left_position_ = Eigen::Vector3d::Zero();
                     paused_left_orientation_ = Eigen::Quaterniond::Identity();
                     paused_right_position_ = Eigen::Vector3d::Zero();
