@@ -905,8 +905,19 @@ namespace arms_controller_common
         // ── Hybrid control ──
         if (kinematicsAvailable())
         {
-            stepHybridControl(true,  dt, contact_wrench[0], ft_active[0]);
-            stepHybridControl(false, dt, contact_wrench[1], ft_active[1]);
+            const bool left_updated = stepHybridControl(true, dt, contact_wrench[0], ft_active[0]);
+            const bool right_updated = stepHybridControl(false, dt, contact_wrench[1], ft_active[1]);
+            // Keep all measured-state queries together. Query the final command
+            // only after both arms have finished, so it cannot evict the measured
+            // FK/Jacobian cache between the two velocity solves.
+            if (left_updated || right_updated)
+            {
+                const RobotState command = makeRobotState(/*measured=*/false);
+                if (left_updated)
+                    arms_[0].cmd_pose = kinematics_->computeSingleEndEffectorPose(command, kArmName[0]);
+                if (right_updated)
+                    arms_[1].cmd_pose = kinematics_->computeSingleEndEffectorPose(command, kArmName[1]);
+            }
         }
         else
         {
@@ -1052,17 +1063,17 @@ namespace arms_controller_common
         }
     }
 
-    void StateCompliance::stepHybridControl(
+    bool StateCompliance::stepHybridControl(
         bool is_left, double dt,
         const Eigen::Matrix<double, 6, 1>& contact_wrench,
         bool ft_active)
     {
-        if (dt <= 1e-6 || !kinematicsAvailable()) return;
+        if (dt <= 1e-6 || !kinematicsAvailable()) return false;
 
         ArmSide& a = arm(is_left);
         const size_t offset = is_left ? 0 : arms_[0].joint_count;
         const size_t nq = a.joint_count;
-        if (nq == 0 || offset + nq > hold_positions_.size()) return;
+        if (nq == 0 || offset + nq > hold_positions_.size()) return false;
 
         // 诊断快照：err/v/f/qdot/限位事件在各自作用域内填，函数尾统一输出。
         const bool diag_due = diag_log_ && std::chrono::steady_clock::now() - last_diag_log_[is_left ? 0 : 1]
@@ -1165,7 +1176,7 @@ namespace arms_controller_common
         const Eigen::MatrixXd J = kinematics_->computeJacobian(
             state_actual, kArmName[is_left ? 0 : 1]);
         if (J.rows() < 6 || J.cols() != static_cast<Eigen::Index>(nq) || !J.allFinite())
-            return;
+            return false;
 
         // 速度阻尼反馈：上一周期指令速度经 J 映射的末端速度。用指令而非
         // 实测差分——底层位置反馈的延迟/刷新节拍/量化会让差分产生与速度
@@ -1585,7 +1596,7 @@ namespace arms_controller_common
                 Eigen::MatrixXd::Identity(JJt.rows(), JJt.cols());
             qdot = J.transpose() * reg.ldlt().solve(v_des);
         }
-        if (!qdot.allFinite()) return;
+        if (!qdot.allFinite()) return false;
 
         // 7 自由度手臂在完整 6D 任务下仍有一个自运动自由度。原 QP 的
         // λ²||qdot||² 会把纯零空间速度压成 0，因此 j4 到上限后没有主动
@@ -1708,10 +1719,15 @@ namespace arms_controller_common
                 den += v_des(i) * v_des(i);
             }
             const bool stalled = den > 1e-4 && std::sqrt(num / den) > 0.9;
-            if (stalled && node_)
+            const auto stall_now = std::chrono::steady_clock::now();
+            auto& last_snapshot = last_stall_snapshot_[is_left ? 0 : 1];
+            if (stalled && node_ &&
+                (last_snapshot.time_since_epoch().count() == 0 ||
+                 stall_now - last_snapshot >= std::chrono::seconds(5)))
             {
-                static rclcpp::Clock kStallWarnClock(RCL_STEADY_TIME);
-                RCLCPP_WARN_THROTTLE(node_->get_logger(), kStallWarnClock, 5000,
+                // Gate the SVD and formatting too, not only the first log line.
+                last_snapshot = stall_now;
+                RCLCPP_WARN(node_->get_logger(),
                     "COMPLIANCE %s: target unreachable from current posture — holding "
                     "nearest reachable pose (unrealizable velocity %.3f); "
                     "see stall snapshot below", kArmName[is_left ? 0 : 1], std::sqrt(num));
@@ -1953,8 +1969,7 @@ namespace arms_controller_common
         // 速度阻尼反馈使用。
         a.qdot_prev = qdot;
 
-        a.cmd_pose = kinematics_->computeSingleEndEffectorPose(
-            makeRobotState(/*measured=*/false), kArmName[is_left ? 0 : 1]);
+        return true;
     }
 
     Eigen::VectorXd StateCompliance::solveVelocityQp(

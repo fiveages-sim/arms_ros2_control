@@ -377,6 +377,13 @@ namespace arms_controller_common
 
     Eigen::MatrixXd ArmKinematics::getJacobian(std::string armType)
     {
+        // FK queries do not need joint Jacobians. Compute them once, on demand,
+        // using the placements already produced by forwardKinematics().
+        if (!jacobians_valid_)
+        {
+            pinocchio::computeJointJacobians(model_, data_);
+            jacobians_valid_ = true;
+        }
         if (armType == "left")
         {
             int frameId = getFrameId(leftEndEffectorName_);
@@ -535,9 +542,20 @@ namespace arms_controller_common
 
     void ArmKinematics::updateKinematics(const Eigen::VectorXd& jointPositions)
     {
+        if (kinematics_cache_valid_ &&
+            cached_joint_positions_.size() == jointPositions.size() &&
+            (cached_joint_positions_.array() == jointPositions.array()).all())
+        {
+            return;
+        }
+        // Invalidate before touching data_: a failed update must never leave a
+        // cache key pointing to partially updated Pinocchio data.
+        kinematics_cache_valid_ = false;
+        jacobians_valid_ = false;
         pinocchio::forwardKinematics(model_, data_, jointPositions);
         pinocchio::updateFramePlacements(model_, data_);
-        pinocchio::computeJointJacobians(model_, data_, jointPositions);
+        cached_joint_positions_ = jointPositions;
+        kinematics_cache_valid_ = jointPositions.allFinite();
     }
 
     int ArmKinematics::getFrameId(const std::string& frameName) const
