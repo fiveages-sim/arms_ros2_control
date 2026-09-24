@@ -206,19 +206,34 @@ namespace arms_rviz_control_plugin
         std::string body_frame_;
         std::mutex frame_id_mutex_;
 
+        // ── 末端目标误差（左右臂）──────────────────────────────────────────────
         // Separate from the legacy *_current_pose_ fields, which contain targets.
-        struct TargetErrorState
+        //
+        // 实测位姿话题是 500 Hz，所以这里不缓存 PoseStamped、不存 std::string：
+        // 每个来源只留一个 POD 快照（12 个 double + 时间戳），并且**按来源分开加锁**
+        // （实测 / 目标各一把），临界区只有一次 POD 拷贝：
+        //   - 高频回调里零堆分配、零字符串拷贝（原来每帧一次 PoseStamped 深拷贝内含
+        //     std::string frame_id 分配）；
+        //   - 20 Hz 的 GUI 线程不再持锁做整数组+字符串拷贝，与 500 Hz 回调几乎不互等。
+        struct TargetErrorSample
         {
-            geometry_msgs::msg::PoseStamped measured, target;
-            bool have_measured{false}, have_target{false};
+            double position[3]{};
+            double orientation[4]{};      // x, y, z, w
+            uint64_t frame_hash{0};       // 0 = 消息未提供参考坐标系
+            /** 实测侧：用于 1 s 超时判定。目标侧：仅记录到达时间；目标是"保持到
+             *  最后一次设定"的语义，不因话题停止更新而清空（留存最后一帧）。 */
             std::chrono::steady_clock::time_point received{};
+            bool valid{false};
         };
-        std::array<TargetErrorState, 2> target_error_state_;
-        std::mutex target_error_mutex_;
+        // [side][0] = 实测末端, [side][1] = 目标
+        std::array<std::array<TargetErrorSample, 2>, 2> target_error_samples_{};
+        std::array<std::array<std::mutex, 2>, 2> target_error_mutexes_;
         std::array<rclcpp::Subscription<geometry_msgs::msg::PoseStamped>::SharedPtr, 2>
             measured_pose_subscribers_;
         std::array<std::unique_ptr<QLabel>, 2> target_error_labels_;
         void updateTargetErrors();
+        /** 把消息压成 POD 快照：参考坐标系只保留 64 位哈希，供两侧"是否同一坐标系"比较。 */
+        static TargetErrorSample targetErrorSampleFrom(const geometry_msgs::msg::PoseStamped& msg);
 
         geometry_msgs::msg::Pose left_current_pose_;
         geometry_msgs::msg::Pose right_current_pose_;

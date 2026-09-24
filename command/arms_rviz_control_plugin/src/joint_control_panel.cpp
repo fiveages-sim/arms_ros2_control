@@ -257,13 +257,18 @@ namespace arms_rviz_control_plugin
             target_error_labels_[side]->setWordWrap(true);
             target_error_labels_[side]->setToolTip(
                 "最新实测末端与最新目标的误差；位置为欧氏距离，姿态为最短旋转角。"
-                "固定目标保持有效，不做硬件延迟补偿。两话题须描述相同末端及参考坐标系。");
+                "刷新率 20 Hz。"
+                "目标保留最后一帧（不因话题停止更新而清空），不做硬件延迟补偿。"
+                "两话题须描述相同末端及参考坐标系。");
             error_layout->addWidget(target_error_labels_[side].get());
         }
         main_layout->addWidget(error_group);
+        // 误差显示是人眼读数，20 Hz 足够（原 100 ms = 10 Hz）：高频来源在回调里
+        // 只做一次 POD 覆盖存储，"多余帧"不排队、不重绘，只在定时器里统一格式化。
+        constexpr int kErrorRefreshMs = 50;  // 20 Hz
         auto* error_timer = new QTimer(this);
         connect(error_timer, &QTimer::timeout, this, &JointControlPanel::updateTargetErrors);
-        error_timer->start(100);
+        error_timer->start(kErrorRefreshMs);
 
         // Status label
         status_label_ = std::make_unique<QLabel>("请切换到支持关节控制的状态", this);
@@ -402,15 +407,15 @@ namespace arms_rviz_control_plugin
         const std::array<std::string, 2> measured_topics{"left_current_pose", "right_current_pose"};
         for (size_t side = 0; side < measured_topics.size(); ++side)
         {
+            // 控制器以 500 Hz 发这两个位姿：只要最新一帧，best-effort + depth=1，
+            // 不为过期帧排队，也不做任何堆分配（快照在锁外算好）。
             measured_pose_subscribers_[side] = node_->create_subscription<geometry_msgs::msg::PoseStamped>(
-                measured_topics[side], rclcpp::SensorDataQoS(),
+                measured_topics[side], rclcpp::SensorDataQoS().keep_last(1),
                 [this, side](const geometry_msgs::msg::PoseStamped::SharedPtr msg)
                 {
-                    std::lock_guard<std::mutex> lock(target_error_mutex_);
-                    auto& state = target_error_state_[side];
-                    state.measured = *msg;
-                    state.have_measured = true;
-                    state.received = std::chrono::steady_clock::now();
+                    const TargetErrorSample sample = targetErrorSampleFrom(*msg);
+                    std::lock_guard<std::mutex> lock(target_error_mutexes_[side][0]);
+                    target_error_samples_[side][0] = sample;
                 });
         }
 
@@ -698,36 +703,69 @@ namespace arms_rviz_control_plugin
         // This function is kept for compatibility but actual update is done in onJointStateReceived
     }
 
+    JointControlPanel::TargetErrorSample
+    JointControlPanel::targetErrorSampleFrom(const geometry_msgs::msg::PoseStamped& msg)
+    {
+        TargetErrorSample sample;
+        sample.position[0] = msg.pose.position.x;
+        sample.position[1] = msg.pose.position.y;
+        sample.position[2] = msg.pose.position.z;
+        sample.orientation[0] = msg.pose.orientation.x;
+        sample.orientation[1] = msg.pose.orientation.y;
+        sample.orientation[2] = msg.pose.orientation.z;
+        sample.orientation[3] = msg.pose.orientation.w;
+        // frame_id 只用于"两侧是否同一参考系"的比较：存 64 位哈希，避免每帧一次
+        // std::string 拷贝与分配。空字符串约定为 0。
+        uint64_t hash = 1469598103934665603ULL;  // FNV-1a offset basis
+        for (const char c : msg.header.frame_id)
+        {
+            hash ^= static_cast<uint64_t>(static_cast<unsigned char>(c));
+            hash *= 1099511628211ULL;
+        }
+        sample.frame_hash = msg.header.frame_id.empty() ? 0ULL : hash;
+        sample.received = std::chrono::steady_clock::now();
+        sample.valid = true;
+        return sample;
+    }
+
     void JointControlPanel::updateTargetErrors()
     {
-        std::array<TargetErrorState, 2> states;
-        {
-            std::lock_guard<std::mutex> lock(target_error_mutex_);
-            states = target_error_state_;
-        }
+        // 实测位姿停了就提示过时（数据链断了）；目标则**保留最后一帧**——目标是
+        // "保持到最后一次设定"的语义，话题不更新并不代表目标失效，所以不清空误差。
+        constexpr auto kMeasuredStaleTimeout = std::chrono::seconds(1);
         const auto now = std::chrono::steady_clock::now();
-        for (size_t side = 0; side < states.size(); ++side)
+
+        for (size_t side = 0; side < target_error_samples_.size(); ++side)
         {
-            const auto& state = states[side];
+            TargetErrorSample measured;
+            TargetErrorSample target;
+            {
+                std::lock_guard<std::mutex> lock(target_error_mutexes_[side][0]);
+                measured = target_error_samples_[side][0];
+            }
+            {
+                std::lock_guard<std::mutex> lock(target_error_mutexes_[side][1]);
+                target = target_error_samples_[side][1];
+            }
+
             const QString prefix = side == 0 ? "左臂：" : "右臂：";
             QString value;
-            if (!state.have_measured || !state.have_target)
+            if (!measured.valid || !target.valid)
                 value = "等待当前/目标位姿";
-            else if (now - state.received > std::chrono::seconds(1))
+            else if (now - measured.received > kMeasuredStaleTimeout)
                 value = "当前位姿已超时";
-            else if (state.measured.header.frame_id.empty() ||
-                     state.measured.header.frame_id != state.target.header.frame_id)
+            else if (measured.frame_hash == 0 || measured.frame_hash != target.frame_hash)
                 value = "参考坐标系不一致";
             else
             {
-                const auto& a = state.measured.pose;
-                const auto& b = state.target.pose;
-                const double dx = b.position.x - a.position.x;
-                const double dy = b.position.y - a.position.y;
-                const double dz = b.position.z - a.position.z;
-                const double distance = std::hypot(dx, dy, dz);
-                tf2::Quaternion qa(a.orientation.x, a.orientation.y, a.orientation.z, a.orientation.w);
-                tf2::Quaternion qb(b.orientation.x, b.orientation.y, b.orientation.z, b.orientation.w);
+                const double dx = target.position[0] - measured.position[0];
+                const double dy = target.position[1] - measured.position[1];
+                const double dz = target.position[2] - measured.position[2];
+                const double distance = std::hypot(dx, std::hypot(dy, dz));
+                tf2::Quaternion qa(measured.orientation[0], measured.orientation[1],
+                                   measured.orientation[2], measured.orientation[3]);
+                tf2::Quaternion qb(target.orientation[0], target.orientation[1],
+                                   target.orientation[2], target.orientation[3]);
                 if (!std::isfinite(distance) || !std::isfinite(qa.length2()) ||
                     !std::isfinite(qb.length2()) || qa.length2() < 1e-18 || qb.length2() < 1e-18)
                     value = "位姿数据无效";
@@ -748,9 +786,9 @@ namespace arms_rviz_control_plugin
     void JointControlPanel::onLeftCurrentTargetReceived(const geometry_msgs::msg::PoseStamped::SharedPtr msg)
     {
         {
-            std::lock_guard<std::mutex> lock(target_error_mutex_);
-            target_error_state_[0].target = *msg;
-            target_error_state_[0].have_target = true;
+            const TargetErrorSample sample = targetErrorSampleFrom(*msg);
+            std::lock_guard<std::mutex> lock(target_error_mutexes_[0][1]);
+            target_error_samples_[0][1] = sample;
         }
         {
             std::lock_guard<std::mutex> lock(frame_id_mutex_);
@@ -772,9 +810,9 @@ namespace arms_rviz_control_plugin
     void JointControlPanel::onRightCurrentTargetReceived(const geometry_msgs::msg::PoseStamped::SharedPtr msg)
     {
         {
-            std::lock_guard<std::mutex> lock(target_error_mutex_);
-            target_error_state_[1].target = *msg;
-            target_error_state_[1].have_target = true;
+            const TargetErrorSample sample = targetErrorSampleFrom(*msg);
+            std::lock_guard<std::mutex> lock(target_error_mutexes_[1][1]);
+            target_error_samples_[1][1] = sample;
         }
         {
             std::lock_guard<std::mutex> lock(frame_id_mutex_);
