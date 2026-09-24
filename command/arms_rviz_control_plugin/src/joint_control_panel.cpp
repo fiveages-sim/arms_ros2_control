@@ -17,6 +17,10 @@
 
 namespace
 {
+    // 目标跟踪误差表：行序 0/1/2 = 左臂/右臂/头部
+    constexpr size_t kErrorHeadRow = 2;
+    constexpr const char* kErrorRowNames[] = {"左臂", "右臂", "头部"};
+
     // ABB OrientZYX(z, y, x) ≡ tf2 setRPY(roll=x, pitch=y, yaw=z) ≡ Rz * Ry * Rx
     geometry_msgs::msg::Quaternion orientZyx(double roll, double pitch, double yaw)
     {
@@ -248,6 +252,28 @@ namespace arms_rviz_control_plugin
 
         main_layout->addLayout(ocs2_pose_send_layout_.get());
 
+        auto* error_group = new QGroupBox("目标跟踪误差", this);
+        auto* error_layout = new QVBoxLayout(error_group);
+        for (size_t row = 0; row < target_error_labels_.size(); ++row)
+        {
+            target_error_labels_[row] = std::make_unique<QLabel>(
+                QString("%1：等待当前/目标位姿").arg(kErrorRowNames[row]), error_group);
+            target_error_labels_[row]->setWordWrap(true);
+            target_error_labels_[row]->setToolTip(
+                "最新实测末端与最新目标的误差；位置为欧氏距离，姿态为最短旋转角。"
+                "刷新率 20 Hz。"
+                "目标保留最后一帧（不因话题停止更新而清空），不做硬件延迟补偿。"
+                "两话题须描述相同末端及参考坐标系。");
+            error_layout->addWidget(target_error_labels_[row].get());
+        }
+        main_layout->addWidget(error_group);
+        // 误差显示是人眼读数，20 Hz 足够（原 100 ms = 10 Hz）：高频来源在回调里
+        // 只做一次 POD 覆盖存储，"多余帧"不排队、不重绘，只在定时器里统一格式化。
+        constexpr int kErrorRefreshMs = 50;  // 20 Hz
+        auto* error_timer = new QTimer(this);
+        connect(error_timer, &QTimer::timeout, this, &JointControlPanel::updateTargetErrors);
+        error_timer->start(kErrorRefreshMs);
+
         // Status label
         status_label_ = std::make_unique<QLabel>("请切换到支持关节控制的状态", this);
         status_label_->setStyleSheet("QLabel { color: #666666; font-style: italic; padding: 5px; }");
@@ -381,6 +407,32 @@ namespace arms_rviz_control_plugin
         left_current_target_subscriber_ = node_->create_subscription<geometry_msgs::msg::PoseStamped>(
             "left_current_target", 10,
             std::bind(&JointControlPanel::onLeftCurrentTargetReceived, this, std::placeholders::_1));
+
+        // 这些位姿在控制的 RT 线程里发布，但被 setPosePublishPeriod 节流到 50 Hz（mpc_frequency /
+        // dds_publish_hz），所以订阅侧只有 ~50 msg/s/话题：best-effort + keep_last(1)，
+        // 不向发布端要 ACK/反压，也不做堆分配。
+        const std::array<std::string, 3> measured_topics{
+            "left_current_pose", "right_current_pose", "head_current_pose"};
+        for (size_t row = 0; row < measured_topics.size(); ++row)
+        {
+            measured_pose_subscribers_[row] = node_->create_subscription<geometry_msgs::msg::PoseStamped>(
+                measured_topics[row], rclcpp::SensorDataQoS().keep_last(1),
+                [this, row](const geometry_msgs::msg::PoseStamped::SharedPtr msg)
+                {
+                    const TargetErrorSample sample = targetErrorSampleFrom(*msg);
+                    std::lock_guard<std::mutex> lock(target_error_mutexes_[row][0]);
+                    target_error_samples_[row][0] = sample;
+                });
+        }
+        // 头部目标：只有任务启用 headTrackingEE 时参考管理器才发布。
+        head_current_target_subscriber_ = node_->create_subscription<geometry_msgs::msg::PoseStamped>(
+            "head_current_target", rclcpp::SensorDataQoS().keep_last(1),
+            [this](const geometry_msgs::msg::PoseStamped::SharedPtr msg)
+            {
+                const TargetErrorSample sample = targetErrorSampleFrom(*msg);
+                std::lock_guard<std::mutex> lock(target_error_mutexes_[kErrorHeadRow][1]);
+                target_error_samples_[kErrorHeadRow][1] = sample;
+            });
 
         body_pose_current_target_subscriber_ = node_->create_subscription<geometry_msgs::msg::PoseStamped>(
             "body_current_target", 10,
@@ -666,8 +718,98 @@ namespace arms_rviz_control_plugin
         // This function is kept for compatibility but actual update is done in onJointStateReceived
     }
 
+    JointControlPanel::TargetErrorSample
+    JointControlPanel::targetErrorSampleFrom(const geometry_msgs::msg::PoseStamped& msg)
+    {
+        TargetErrorSample sample;
+        sample.position[0] = msg.pose.position.x;
+        sample.position[1] = msg.pose.position.y;
+        sample.position[2] = msg.pose.position.z;
+        sample.orientation[0] = msg.pose.orientation.x;
+        sample.orientation[1] = msg.pose.orientation.y;
+        sample.orientation[2] = msg.pose.orientation.z;
+        sample.orientation[3] = msg.pose.orientation.w;
+        // frame_id 只用于"两侧是否同一参考系"的比较：存 64 位哈希，避免每帧一次
+        // std::string 拷贝与分配。空字符串约定为 0。
+        uint64_t hash = 1469598103934665603ULL;  // FNV-1a offset basis
+        for (const char c : msg.header.frame_id)
+        {
+            hash ^= static_cast<uint64_t>(static_cast<unsigned char>(c));
+            hash *= 1099511628211ULL;
+        }
+        sample.frame_hash = msg.header.frame_id.empty() ? 0ULL : hash;
+        sample.received = std::chrono::steady_clock::now();
+        sample.valid = true;
+        return sample;
+    }
+
+    void JointControlPanel::updateTargetErrors()
+    {
+        // 实测位姿停了就提示过时（数据链断了）；目标则**保留最后一帧**——目标是
+        // "保持到最后一次设定"的语义，话题不更新并不代表目标失效，所以不清空误差。
+        constexpr auto kMeasuredStaleTimeout = std::chrono::seconds(1);
+        const auto now = std::chrono::steady_clock::now();
+
+        for (size_t row = 0; row < target_error_samples_.size(); ++row)
+        {
+            TargetErrorSample measured;
+            TargetErrorSample target;
+            {
+                std::lock_guard<std::mutex> lock(target_error_mutexes_[row][0]);
+                measured = target_error_samples_[row][0];
+            }
+            {
+                std::lock_guard<std::mutex> lock(target_error_mutexes_[row][1]);
+                target = target_error_samples_[row][1];
+            }
+
+            // 头部行只在存在笛卡尔跟踪（headTrackingEE + HEAD_TRACKING 模式）时是有效误差，
+            // 否则只说明原因，不显示一个假的误差。
+            constexpr uint8_t kHeadTracking = arms_ros2_control_msgs::msg::WbcCurrentState::HEAD_TRACKING;
+            const QString prefix = QString("%1：").arg(kErrorRowNames[row]);
+            QString value;
+            if (row == kErrorHeadRow && wbc_head_state_ != kHeadTracking)
+                value = "无头部笛卡尔目标（需 HEAD_TRACKING）";
+            else if (!measured.valid || !target.valid)
+                value = "等待当前/目标位姿";
+            else if (now - measured.received > kMeasuredStaleTimeout)
+                value = "当前位姿已超时";
+            else if (measured.frame_hash == 0 || measured.frame_hash != target.frame_hash)
+                value = "参考坐标系不一致";
+            else
+            {
+                const double dx = target.position[0] - measured.position[0];
+                const double dy = target.position[1] - measured.position[1];
+                const double dz = target.position[2] - measured.position[2];
+                const double distance = std::hypot(dx, std::hypot(dy, dz));
+                tf2::Quaternion qa(measured.orientation[0], measured.orientation[1],
+                                   measured.orientation[2], measured.orientation[3]);
+                tf2::Quaternion qb(target.orientation[0], target.orientation[1],
+                                   target.orientation[2], target.orientation[3]);
+                if (!std::isfinite(distance) || !std::isfinite(qa.length2()) ||
+                    !std::isfinite(qb.length2()) || qa.length2() < 1e-18 || qb.length2() < 1e-18)
+                    value = "位姿数据无效";
+                else
+                {
+                    qa.normalize();
+                    qb.normalize();
+                    const double angle = 2.0 * std::acos(std::clamp(std::abs(qa.dot(qb)), 0.0, 1.0));
+                    value = QString("位置 %1 mm  |  姿态 %2°")
+                        .arg(distance * 1000.0, 0, 'f', 2)
+                        .arg(angle * 180.0 / std::acos(-1.0), 0, 'f', 2);
+                }
+            }
+            target_error_labels_[row]->setText(prefix + value);
+        }
+    }
+
     void JointControlPanel::onLeftCurrentTargetReceived(const geometry_msgs::msg::PoseStamped::SharedPtr msg)
     {
+        {
+            const TargetErrorSample sample = targetErrorSampleFrom(*msg);
+            std::lock_guard<std::mutex> lock(target_error_mutexes_[0][1]);
+            target_error_samples_[0][1] = sample;
+        }
         {
             std::lock_guard<std::mutex> lock(frame_id_mutex_);
             left_target_frame_id_ = msg->header.frame_id;
@@ -687,6 +829,11 @@ namespace arms_rviz_control_plugin
 
     void JointControlPanel::onRightCurrentTargetReceived(const geometry_msgs::msg::PoseStamped::SharedPtr msg)
     {
+        {
+            const TargetErrorSample sample = targetErrorSampleFrom(*msg);
+            std::lock_guard<std::mutex> lock(target_error_mutexes_[1][1]);
+            target_error_samples_[1][1] = sample;
+        }
         {
             std::lock_guard<std::mutex> lock(frame_id_mutex_);
             right_target_frame_id_ = msg->header.frame_id;
@@ -729,6 +876,8 @@ namespace arms_rviz_control_plugin
         {
             return;
         }
+        // 头部误差行需要头部模式判定（见 updateTargetErrors）。
+        wbc_head_state_ = msg->head_state;
         const uint8_t prev = wbc_body_state_;
         wbc_body_state_ = msg->body_state;
         if (prev != wbc_body_state_ && is_joint_control_enabled_)

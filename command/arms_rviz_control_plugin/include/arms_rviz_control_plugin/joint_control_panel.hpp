@@ -1,6 +1,7 @@
 #pragma once
 
 #include <memory>
+#include <array>
 #include <QLabel>
 #include <QHBoxLayout>
 #include <QGroupBox>
@@ -205,6 +206,36 @@ namespace arms_rviz_control_plugin
         std::string body_frame_;
         std::mutex frame_id_mutex_;
 
+        // ── 目标跟踪误差（左臂 / 右臂 / 头部）──────────────────────────────────
+        // Separate from the legacy *_current_pose_ fields, which contain targets.
+        //
+        // 实测位姿话题是 500 Hz，所以这里不缓存 PoseStamped、不存 std::string：
+        // 每个来源只留一个 POD 快照（12 个 double + 时间戳），并且**按来源分开加锁**
+        // （实测 / 目标各一把），临界区只有一次 POD 拷贝：
+        //   - 高频回调里零堆分配、零字符串拷贝（原来每帧一次 PoseStamped 深拷贝内含
+        //     std::string frame_id 分配）；
+        //   - 20 Hz 的 GUI 线程不再持锁做整数组+字符串拷贝，与 500 Hz 回调几乎不互等。
+        struct TargetErrorSample
+        {
+            double position[3]{};
+            double orientation[4]{};      // x, y, z, w
+            uint64_t frame_hash{0};       // 0 = 消息未提供参考坐标系
+            /** 实测侧：用于 1 s 超时判定。目标侧：仅记录到达时间；目标是"保持到
+             *  最后一次设定"的语义，不因话题停止更新而清空（留存最后一帧）。 */
+            std::chrono::steady_clock::time_point received{};
+            bool valid{false};
+        };
+        // [row][0] = 实测末端, [row][1] = 目标；row 0/1/2 = 左臂/右臂/头部
+        std::array<std::array<TargetErrorSample, 2>, 3> target_error_samples_{};
+        std::array<std::array<std::mutex, 2>, 3> target_error_mutexes_;
+        std::array<rclcpp::Subscription<geometry_msgs::msg::PoseStamped>::SharedPtr, 3>
+            measured_pose_subscribers_;
+        std::array<std::unique_ptr<QLabel>, 3> target_error_labels_;
+        rclcpp::Subscription<geometry_msgs::msg::PoseStamped>::SharedPtr head_current_target_subscriber_;
+        void updateTargetErrors();
+        /** 把消息压成 POD 快照：参考坐标系只保留 64 位哈希，供两侧"是否同一坐标系"比较。 */
+        static TargetErrorSample targetErrorSampleFrom(const geometry_msgs::msg::PoseStamped& msg);
+
         geometry_msgs::msg::Pose left_current_pose_;
         geometry_msgs::msg::Pose right_current_pose_;
         geometry_msgs::msg::Pose body_current_pose_;
@@ -212,6 +243,7 @@ namespace arms_rviz_control_plugin
         bool right_current_pose_valid_ = false;
         bool body_current_pose_valid_ = false;
         uint8_t wbc_body_state_ = 0;  // WbcCurrentState::body_state
+        uint8_t wbc_head_state_ = 0;  // WbcCurrentState::head_state（1 = HEAD_TRACKING）
 
         // Joint limits manager
         std::shared_ptr<arms_controller_common::JointLimitsManager> joint_limits_manager_;
