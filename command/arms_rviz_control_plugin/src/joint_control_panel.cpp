@@ -248,6 +248,23 @@ namespace arms_rviz_control_plugin
 
         main_layout->addLayout(ocs2_pose_send_layout_.get());
 
+        auto* error_group = new QGroupBox("末端目标误差", this);
+        auto* error_layout = new QVBoxLayout(error_group);
+        for (size_t side = 0; side < target_error_labels_.size(); ++side)
+        {
+            target_error_labels_[side] = std::make_unique<QLabel>(
+                side == 0 ? "左臂：等待当前/目标位姿" : "右臂：等待当前/目标位姿", error_group);
+            target_error_labels_[side]->setWordWrap(true);
+            target_error_labels_[side]->setToolTip(
+                "最新实测末端与最新目标的误差；位置为欧氏距离，姿态为最短旋转角。"
+                "固定目标保持有效，不做硬件延迟补偿。两话题须描述相同末端及参考坐标系。");
+            error_layout->addWidget(target_error_labels_[side].get());
+        }
+        main_layout->addWidget(error_group);
+        auto* error_timer = new QTimer(this);
+        connect(error_timer, &QTimer::timeout, this, &JointControlPanel::updateTargetErrors);
+        error_timer->start(100);
+
         // Status label
         status_label_ = std::make_unique<QLabel>("请切换到支持关节控制的状态", this);
         status_label_->setStyleSheet("QLabel { color: #666666; font-style: italic; padding: 5px; }");
@@ -381,6 +398,21 @@ namespace arms_rviz_control_plugin
         left_current_target_subscriber_ = node_->create_subscription<geometry_msgs::msg::PoseStamped>(
             "left_current_target", 10,
             std::bind(&JointControlPanel::onLeftCurrentTargetReceived, this, std::placeholders::_1));
+
+        const std::array<std::string, 2> measured_topics{"left_current_pose", "right_current_pose"};
+        for (size_t side = 0; side < measured_topics.size(); ++side)
+        {
+            measured_pose_subscribers_[side] = node_->create_subscription<geometry_msgs::msg::PoseStamped>(
+                measured_topics[side], rclcpp::SensorDataQoS(),
+                [this, side](const geometry_msgs::msg::PoseStamped::SharedPtr msg)
+                {
+                    std::lock_guard<std::mutex> lock(target_error_mutex_);
+                    auto& state = target_error_state_[side];
+                    state.measured = *msg;
+                    state.have_measured = true;
+                    state.received = std::chrono::steady_clock::now();
+                });
+        }
 
         body_pose_current_target_subscriber_ = node_->create_subscription<geometry_msgs::msg::PoseStamped>(
             "body_current_target", 10,
@@ -666,8 +698,60 @@ namespace arms_rviz_control_plugin
         // This function is kept for compatibility but actual update is done in onJointStateReceived
     }
 
+    void JointControlPanel::updateTargetErrors()
+    {
+        std::array<TargetErrorState, 2> states;
+        {
+            std::lock_guard<std::mutex> lock(target_error_mutex_);
+            states = target_error_state_;
+        }
+        const auto now = std::chrono::steady_clock::now();
+        for (size_t side = 0; side < states.size(); ++side)
+        {
+            const auto& state = states[side];
+            const QString prefix = side == 0 ? "左臂：" : "右臂：";
+            QString value;
+            if (!state.have_measured || !state.have_target)
+                value = "等待当前/目标位姿";
+            else if (now - state.received > std::chrono::seconds(1))
+                value = "当前位姿已超时";
+            else if (state.measured.header.frame_id.empty() ||
+                     state.measured.header.frame_id != state.target.header.frame_id)
+                value = "参考坐标系不一致";
+            else
+            {
+                const auto& a = state.measured.pose;
+                const auto& b = state.target.pose;
+                const double dx = b.position.x - a.position.x;
+                const double dy = b.position.y - a.position.y;
+                const double dz = b.position.z - a.position.z;
+                const double distance = std::hypot(dx, dy, dz);
+                tf2::Quaternion qa(a.orientation.x, a.orientation.y, a.orientation.z, a.orientation.w);
+                tf2::Quaternion qb(b.orientation.x, b.orientation.y, b.orientation.z, b.orientation.w);
+                if (!std::isfinite(distance) || !std::isfinite(qa.length2()) ||
+                    !std::isfinite(qb.length2()) || qa.length2() < 1e-18 || qb.length2() < 1e-18)
+                    value = "位姿数据无效";
+                else
+                {
+                    qa.normalize();
+                    qb.normalize();
+                    const double angle = 2.0 * std::acos(std::clamp(std::abs(qa.dot(qb)), 0.0, 1.0));
+                    value = QString("位置 %1 mm  |  姿态 %2°")
+                        .arg(distance * 1000.0, 0, 'f', 2)
+                        .arg(angle * 180.0 / std::acos(-1.0), 0, 'f', 2);
+                }
+            }
+            target_error_labels_[side]->setText(prefix + value);
+        }
+    }
+
     void JointControlPanel::onLeftCurrentTargetReceived(const geometry_msgs::msg::PoseStamped::SharedPtr msg)
     {
+        {
+            std::lock_guard<std::mutex> lock(target_error_mutex_);
+            target_error_state_[0].target = *msg;
+            target_error_state_[0].have_target = true;
+        }
         {
             std::lock_guard<std::mutex> lock(frame_id_mutex_);
             left_target_frame_id_ = msg->header.frame_id;
@@ -687,6 +771,11 @@ namespace arms_rviz_control_plugin
 
     void JointControlPanel::onRightCurrentTargetReceived(const geometry_msgs::msg::PoseStamped::SharedPtr msg)
     {
+        {
+            std::lock_guard<std::mutex> lock(target_error_mutex_);
+            target_error_state_[1].target = *msg;
+            target_error_state_[1].have_target = true;
+        }
         {
             std::lock_guard<std::mutex> lock(frame_id_mutex_);
             right_target_frame_id_ = msg->header.frame_id;
