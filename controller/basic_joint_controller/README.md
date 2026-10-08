@@ -254,6 +254,24 @@ Send `0.0` to stop.
 ros2 topic pub /body_controller/waist_turning_command std_msgs/msg/Float64 "data: -0.3"  # turn left
 ```
 
+### 5.9 Waist pitch — velocity factor
+
+**Topic:** `/{controller_name}/waist_phi_command`
+**Type:** `std_msgs/msg/Float64`, factor in `[-1, 1]`.
+
+Requires an active controller in MOVEJ, `waist_lifting_enabled: true`, and a configured pitch capability. Positive values tilt forward; negative values tilt backward; `0.0` decelerates to a stop. A nonzero command continues until stopped or limited; stopping publication alone does not send a stop command. Finite inputs are clamped; NaN/Inf are rejected.
+
+`waist_phi_default_parameter: [0.25, 1.0, 5.0]` specifies maximum velocity (rad/s), acceleration (rad/s²), and jerk (rad/s³); all three must be positive. Parameters are read when a new pitch motion starts. Tune them for the robot's joint limits. The same interface is available in Basic, OCS2 Arm and WBC.
+
+Single-joint waist uses `waist_single_joint_pitch_joint` and its direction/offset mapping while holding lift position. Three-joint waist holds endpoint x/z and uses existing IK. Lifting, turning and pitch motions are mutually exclusive; state exit or controller deactivation clears motion. The fallback planner uses acceleration limiting without jerk shaping.
+
+```bash
+ros2 topic pub --once /body_controller/waist_phi_command std_msgs/msg/Float64 "data: 0.3"
+ros2 topic pub --once /body_controller/waist_phi_command std_msgs/msg/Float64 "data: 0.0"
+```
+
+Python can reuse `send_waist_phi_velocity_scale()` after explicitly setting `waist_phi_command_topic` before connecting; automatic detection is not added here.
+
 ---
 
 ## 6. Topic Summary
@@ -271,6 +289,7 @@ Assuming controller name `my_controller`, joint name `j1`:
 | `/my_controller/waist_lifting_pose_absolute` | `Float64MultiArray` | MOVEJ | Absolute `[x, z, phi]` (TF frames configurable) |
 | `/my_controller/waist_lifting_command` | `Float64` | MOVEJ | Waist velocity factor |
 | `/my_controller/waist_turning_command` | `Float64` | MOVEJ | Waist turning velocity factor |
+| `/my_controller/waist_phi_command` | `Float64` | MOVEJ | Waist pitch velocity factor |
 
 ---
 

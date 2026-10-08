@@ -252,6 +252,24 @@ ros2 topic pub --once /body_controller/waist_lifting_command std_msgs/msg/Float6
 ros2 topic pub /body_controller/waist_turning_command std_msgs/msg/Float64 "data: -0.3"  # 左转
 ```
 
+### 5.9 腰部俯仰速度比例
+
+**话题：** `/{controller_name}/waist_phi_command`
+**消息类型：** `std_msgs/msg/Float64`，比例范围 `[-1, 1]`。
+
+要求控制器已激活、处于 MOVEJ、启用 `waist_lifting_enabled: true` 且已配置俯仰能力。正值前倾，负值后仰，`0.0` 减速停止。非零命令持续执行，直到停止或触及限位；仅停止发布消息不会发送停止指令。有限数值会限幅，NaN/Inf 被拒绝。
+
+`waist_phi_default_parameter: [0.25, 1.0, 5.0]` 依次为最大角速度（rad/s）、角加速度（rad/s²）、角 jerk（rad/s³），均须为正值，在开始一段新俯仰运动时读取；按实际机型关节限制调整。Basic、OCS2 Arm 和 WBC 提供相同接口。
+
+单关节腰部使用 `waist_single_joint_pitch_joint` 及其方向/偏置映射，保持升降位置；三关节腰部保持端点 x/z，通过现有逆解输出关节位置。升降、转向与俯仰互斥，退出状态或停用控制器会清除运动。无 lina 后端采用加速度限制，不提供 jerk 曲线整形。
+
+```bash
+ros2 topic pub --once /body_controller/waist_phi_command std_msgs/msg/Float64 "data: 0.3"
+ros2 topic pub --once /body_controller/waist_phi_command std_msgs/msg/Float64 "data: 0.0"
+```
+
+Python 在连接前手动配置 `waist_phi_command_topic`，即可复用 `send_waist_phi_velocity_scale()`；本次不增加自动检测。
+
 ---
 
 ## 6. 话题汇总
@@ -269,6 +287,7 @@ ros2 topic pub /body_controller/waist_turning_command std_msgs/msg/Float64 "data
 | `/my_controller/waist_lifting_pose_absolute` | `Float64MultiArray` | MOVEJ | 绝对目标 `[x, z, phi]`（TF 坐标系可配置） |
 | `/my_controller/waist_lifting_command` | `Float64` | MOVEJ | 腰部升降速度系数 |
 | `/my_controller/waist_turning_command` | `Float64` | MOVEJ | 腰部转向速度系数 |
+| `/my_controller/waist_phi_command` | `Float64` | MOVEJ | 腰部俯仰速度比例 |
 
 ---
 

@@ -194,6 +194,7 @@ namespace arms_controller_common
          * 实际目标速度 = factor * default_waist_turning_para_[0]
          */
         bool setWaistTurningFactor(double factor);
+        bool setWaistPhiFactor(double factor);
 
 
         /**
@@ -333,6 +334,7 @@ namespace arms_controller_common
             std::string& error_message) const;
         bool setWaistLiftingFactorImpl(double factor);
         bool setWaistTurningFactorImpl(double factor);
+        bool setWaistPhiFactorImpl(double factor);
         bool startJointTrajectoryRequestImpl(
             const std::vector<std::string>& request_joint_names,
             const std::vector<arms_ros2_control_msgs::msg::JointWaypoint>& request_waypoints,
@@ -475,7 +477,10 @@ namespace arms_controller_common
         std::shared_ptr<tf2_ros::Buffer> waist_absolute_tf_buffer_;
         std::string waist_absolute_source_frame_{"base_footprint"};
         std::string waist_absolute_target_frame_{"body_base"};
-        bool waist_lifting_active_{false};
+        bool waist_lifting_active_{false}; // shared lift/phi execution branch
+        double last_waist_phi_factor_{0.0};
+        bool waist_phi_pending_{false};
+        Eigen::Vector3d default_waist_phi_para_{0.25, 1.0, 5.0};
         bool waist_lifting_debug_print_active_{false};
         std::shared_ptr<arms_controller_common::WaistLiftingPlaner> waist_turning_planer_;
         bool waist_turning_active_{false};

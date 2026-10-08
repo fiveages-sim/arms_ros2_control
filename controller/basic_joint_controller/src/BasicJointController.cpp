@@ -176,6 +176,7 @@ namespace basic_joint_controller
                 auto_declare<std::vector<double>>("waist_lifting_default_parameter", {0.25, 1.0, 5.0});
                 auto_declare<std::vector<double>>("waist_turning_default_parameter", {0.25, 1.0, 5.0});
                 auto_declare<double>("waist_turning_direction", 1.0);
+                auto_declare<std::vector<double>>("waist_phi_default_parameter", {0.25, 1.0, 5.0});
                 std::string waist_lifting_type_ = auto_declare<std::string>("waist_lifting_type", "three_joint");
                 if (waist_lifting_type_ == "three_joint")
                 {
@@ -409,6 +410,28 @@ namespace basic_joint_controller
                         }
                     }
                 });
+
+            std::string waist_phi_command_topic = "/" + controller_name_ + "/waist_phi_command";
+            waist_phi_command_subscription_ = get_node()->create_subscription<std_msgs::msg::Float64>(
+                waist_phi_command_topic, 10,
+                [this](const std_msgs::msg::Float64::SharedPtr msg)
+                {
+                    if (get_node()->get_current_state().label() != "active") return;
+                    if (!current_state_ || current_state_->state_name != FSMStateName::MOVEJ)
+                    {
+                        return;
+                    }
+
+                    if (state_list_.movej)
+                    {
+                        bool success = state_list_.movej->setWaistPhiFactor(msg->data);
+                        if (!success)
+                        {
+                            RCLCPP_WARN(get_node()->get_logger(),
+                                        "waist phi command failed");
+                        }
+                    }
+                });
         }
 
         // Subscribe to target_command topic for dexterous hand control (if enabled)
@@ -599,6 +622,7 @@ namespace basic_joint_controller
     controller_interface::CallbackReturn BasicJointController::on_deactivate(
         const rclcpp_lifecycle::State& /*previous_state*/)
     {
+        if (state_list_.movej) state_list_.movej->exit();
         release_interfaces();
         return CallbackReturn::SUCCESS;
     }
@@ -606,6 +630,7 @@ namespace basic_joint_controller
     controller_interface::CallbackReturn BasicJointController::on_cleanup(
         const rclcpp_lifecycle::State& /*previous_state*/)
     {
+        waist_phi_command_subscription_.reset();
         return CallbackReturn::SUCCESS;
     }
 
