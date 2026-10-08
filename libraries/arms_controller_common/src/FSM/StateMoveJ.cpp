@@ -2835,7 +2835,27 @@ namespace arms_controller_common
             default_waist_phi_para_ << parameters[0], parameters[1], parameters[2];
         }
         const double duration = std::abs(factor) < waist_factor_epsilon_ ? 0.0 : 100000000.0;
-        const double speed = factor * default_waist_phi_para_(0);
+        double yaw_sign = 1.0;
+        if (waist_lifting_planer_->isBodyThreeJoint() &&
+            std::abs(factor) >= waist_factor_epsilon_)
+        {
+            double yaw = 0.0;
+            if (waist_turning_joint_index_ < ctrl_interfaces_.last_sent_joint_positions_.size())
+                yaw = ctrl_interfaces_.last_sent_joint_positions_[waist_turning_joint_index_];
+            else if (waist_turning_joint_index_ < ctrl_interfaces_.joint_position_state_interface_.size())
+            {
+                const auto value = ctrl_interfaces_.joint_position_state_interface_[waist_turning_joint_index_]
+                                       .get().get_optional();
+                if (!value) return false;
+                yaw = *value;
+            }
+            else
+                return false;
+            if (!std::isfinite(yaw)) return false;
+            // Match OCS2 WaistPhiPositiveBiasCost (W2 yawOffset = 0).
+            yaw_sign = std::cos(yaw) >= 0.0 ? 1.0 : -1.0;
+        }
+        const double speed = factor * yaw_sign * default_waist_phi_para_(0);
         bool initialized = false;
         if (continuing)
         {
