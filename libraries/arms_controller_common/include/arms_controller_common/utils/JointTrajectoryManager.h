@@ -43,6 +43,8 @@ namespace arms_controller_common
 
         /**
          * @brief Initialize single-node trajectory
+         * NONE is immediately complete; getNextPoint returns the target with zero
+         * command derivatives, independently of duration and physical arrival.
          * @param start_pos Starting joint positions
          * @param target_pos Target joint positions
          * @param duration Trajectory duration in seconds
