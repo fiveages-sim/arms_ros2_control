@@ -23,64 +23,120 @@ colcon build --packages-up-to basic_joint_controller --symlink-install
 
 ## 3. Configuration Parameters
 
+Plugin type: `basic_joint_controller/BasicJointController`.
+
+`joints`, `update_rate`, `command_interfaces`, `state_interfaces`, and optional `command_prefix` are ros2_control ControllerInterface / controller_manager commons. They are read at controller load (**Startup only**). Unload and reload the controller to change them. Shared Home / MoveJ names, defaults, and **When** tags live in [`arms_controller_common`](../../libraries/arms_controller_common/README.md).
+
+**When**
+
+| Tag | Meaning |
+|---|---|
+| **Runtime** | `ros2 param set` is picked up without reloading. This controller has no `add_on_set_parameters_callback`; Home / MoveJ values are re-read via `get_parameter` on the next matching state enter or command. |
+| **Startup only** | Loaded in `on_init` (or when the waist planner is first created). Changing it requires reload or restart. |
+| **Unverified** | Declared, but there is no callback or clear re-read path. |
+
+### Home / MoveJ (shared)
+
+Same parameters as `arms_controller_common`. Documented here so this page stays complete:
+
+| Parameter | Default | When | Notes |
+|---|---|---|---|
+| `home_1` … `home_10` | (from YAML) | Startup only | Preset joint configurations |
+| `home_duration` | `3.0` | Runtime | Interpolation duration (s) |
+| `home_interpolation_type` | `"tanh"` | Runtime | `"tanh"` \| `"linear"` |
+| `home_tanh_scale` | `3.0` | Runtime | tanh curve scale |
+| `switch_command_base` | `100` | Startup only | FSM command base for HOME config switching |
+| `movej_duration` | `3.0` | Runtime | Lower bound for `target_joint_position` (tanh / linear / doubles) |
+| `movej_interpolation_type` | `"tanh"` | Runtime | `"tanh"` \| `"linear"` \| `"doubles"` \| `"none"` |
+| `movej_tanh_scale` | `3.0` | Runtime | tanh curve scale |
+| `movej_trajectory_duration` | `3.0` | Runtime | Multi-waypoint trajectory duration |
+| `movej_trajectory_blend_ratio` | `0.0` | Runtime | Waypoint blend ratio |
+| `movej_max_velocity` | `2.0` | Runtime | Peak joint speed; may extend duration |
+| `movej_max_acceleration` | `4.0` | Runtime | doubles only |
+| `movej_max_jerk` | `20.0` | Runtime | doubles only |
+| `movej_auto_extend_duration` | `true` | Runtime | `false` keeps a fixed duration |
+
+`target_joint_position` (tanh / linear / doubles): duration is a lower bound. If the move would exceed these limits, duration is extended automatically. `none` is not affected. `joint_trajectory_with_para` uses the same vel/acc/jerk when a waypoint omits those arrays.
+
+### Dexterous hand / end-effector
+
+Requires `target_command_enabled: true`. Uses StateHome configurations as open/close poses.
+
+| Parameter | Default | When | Notes |
+|---|---|---|---|
+| `target_command_enabled` | `false` | Startup only | Creates switch/percent subscriptions |
+| `target_command_close_config` | `1` | Startup only | 0-based index of the "close" pose |
+| `target_command_open_config` | `0` | Startup only | 0-based index of the "open" pose |
+
+### Waist lifting
+
+| Parameter | Default | When | Notes |
+|---|---|---|---|
+| `waist_lifting_enabled` | `false` | Startup only | Declares waist params and topics |
+| `waist_lifting_type` | `"three_joint"` | Startup only | `"three_joint"` \| `"single_joint"`; first planner create |
+| `waist_lifting_duration` | `3.0` | Runtime | Re-read on the next waist position plan |
+| `waist_lifting_default_parameter` | `[0.25, 1.0, 5.0]` | Startup only | `[max_speed, accel, decel]`; first planner create |
+| `waist_turning_default_parameter` | `[0.25, 1.0, 5.0]` | Startup only | `[max_speed, accel, decel]`; first planner create |
+| `waist_absolute_source_frame` | `"base_footprint"` | Startup only | Absolute `(x, z)` frame (`waist_lifting_pose_absolute` only) |
+| `waist_absolute_target_frame` | `"body_base"` | Startup only | Frame for phi / relative planning |
+| `waist_l1` | `0.322` | Startup only | three_joint only |
+| `waist_l2` | `0.355` | Startup only | three_joint only |
+| `waist_rotation_direction` | `[1.0, 1.0, 1.0]` | Startup only | three_joint only |
+| `waist_angle_offset` | `[0.0, 0.0, 0.0]` | Startup only | three_joint only |
+| `waist_single_joint_direction` | `1.0` | Startup only | single_joint (e.g. ARX Lift / Lift2S) |
+| `waist_single_joint_offset` | `0.0` | Startup only | single_joint |
+| `waist_single_joint_pitch_joint` | `"_no_pitch_"` | Startup only | Name not in `joints` → pitch disabled |
+| `waist_single_joint_pitch_direction` | `1.0` | Startup only | single_joint |
+| `waist_single_joint_pitch_offset` | `0.0` | Startup only | single_joint |
+
+Defaults for the absolute TF frames match FiveAges W2; override for robots without those link names.
+
+YAML example (copy-paste; **When** is in the tables above):
+
 ```yaml
 my_controller:
   ros__parameters:
-    update_rate: 1000           # Controller update rate (Hz)
-    joints: ["j1", "j2", ...]   # Controlled joint names
+    update_rate: 1000
+    joints: ["j1", "j2", ...]
     command_interfaces: ["position"]
     state_interfaces:  ["position", "velocity"]
 
-    # --- Home configurations (up to 10) ---
-    home_1: [0.0, 0.0, ...]     # Required
-    home_2: [0.5, 0.5, ...]     # Optional
-    home_3: [-0.5, -0.5, ...]   # Optional
+    home_1: [0.0, 0.0, ...]
+    home_2: [0.5, 0.5, ...]
+    home_3: [-0.5, -0.5, ...]
     home_duration: 3.0
-    home_interpolation_type: "tanh"   # "tanh" | "linear"
+    home_interpolation_type: "tanh"
     home_tanh_scale: 3.0
-    switch_command_base: 100    # Base FSM command for config switching
+    switch_command_base: 100
 
-    # --- MoveJ ---
     movej_duration: 3.0
-    movej_interpolation_type: "tanh"  # "tanh" | "linear" | "doubles" | "none"
+    movej_interpolation_type: "tanh"
     movej_tanh_scale: 3.0
     movej_trajectory_duration: 3.0
     movej_trajectory_blend_ratio: 0.0
-    # target_joint_position (tanh / linear / doubles): duration is a lower bound.
-    # If the move would exceed these limits, duration is extended automatically.
-    # none is not affected. Set movej_auto_extend_duration: false to keep a fixed duration.
-    # joint_trajectory_with_para uses the same vel/acc/jerk when a waypoint omits those arrays.
     movej_max_velocity: 2.0
-    movej_max_acceleration: 4.0    # doubles only
-    movej_max_jerk: 20.0           # doubles only
+    movej_max_acceleration: 4.0
+    movej_max_jerk: 20.0
     movej_auto_extend_duration: true
 
-    # --- Dexterous hand / end-effector switch & percent control ---
-    # Requires target_command_enabled: true
-    # Uses StateHome configurations as open/close poses
     target_command_enabled: false
-    target_command_close_config: 1  # Index of "close" pose in home configs (0-based)
-    target_command_open_config: 0   # Index of "open"  pose in home configs (0-based)
+    target_command_close_config: 1
+    target_command_open_config: 0
 
-    # --- Waist lifting ---
     waist_lifting_enabled: false
-    waist_lifting_type: "three_joint"   # "three_joint" | "single_joint"
+    waist_lifting_type: "three_joint"
     waist_lifting_duration: 3.0
-    waist_lifting_default_parameter: [0.25, 1.0, 5.0]  # [max_speed, accel, decel]
-    waist_turning_default_parameter: [0.25, 1.0, 5.0]  # [max_speed, accel, decel]
-    # Absolute pose TF frames (used by waist_lifting_pose_absolute only)
-    # Defaults match FiveAges W2; override for robots without these link names.
-    waist_absolute_source_frame: "base_footprint"  # frame for absolute (x, z)
-    waist_absolute_target_frame: "body_base"       # frame for phi / relative planning
-    # (three_joint only)
+    waist_lifting_default_parameter: [0.25, 1.0, 5.0]
+    waist_turning_default_parameter: [0.25, 1.0, 5.0]
+    waist_absolute_source_frame: "base_footprint"
+    waist_absolute_target_frame: "body_base"
     waist_l1: 0.322
     waist_l2: 0.355
     waist_rotation_direction: [1.0, 1.0, 1.0]
     waist_angle_offset: [0.0, 0.0, 0.0]
-    # (single_joint only — e.g. ARX Lift / Lift2S prismatic column)
     waist_single_joint_direction: 1.0
     waist_single_joint_offset: 0.0
-    waist_single_joint_pitch_joint: "_no_pitch_"   # name not in joints → pitch disabled
+    waist_single_joint_pitch_joint: "_no_pitch_"
     waist_single_joint_pitch_direction: 1.0
     waist_single_joint_pitch_offset: 0.0
 ```
