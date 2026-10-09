@@ -43,7 +43,7 @@ Same parameters as `arms_controller_common`. Documented here so this page stays 
 |---|---|---|---|
 | `home_1` … `home_10` | (from YAML) | Startup only | Preset joint configurations |
 | `home_duration` | `3.0` | Runtime | Interpolation duration (s) |
-| `home_interpolation_type` | `"tanh"` | Runtime | `"tanh"` \| `"linear"` |
+| `home_interpolation_type` | `"linear"` | Runtime | `"tanh"` \| `"linear"` \| `"doubles"` \| `"none"` |
 | `home_tanh_scale` | `3.0` | Runtime | tanh curve scale |
 | `switch_command_base` | `100` | Startup only | FSM command base for HOME config switching |
 | `movej_duration` | `3.0` | Runtime | Lower bound for `target_joint_position` (tanh / linear / doubles) |
@@ -105,7 +105,7 @@ my_controller:
     home_2: [0.5, 0.5, ...]
     home_3: [-0.5, -0.5, ...]
     home_duration: 3.0
-    home_interpolation_type: "tanh"
+    home_interpolation_type: "linear"
     home_tanh_scale: 3.0
     switch_command_base: 100
 

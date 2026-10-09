@@ -43,7 +43,7 @@ colcon build --packages-up-to basic_joint_controller --symlink-install
 |---|---|---|---|
 | `home_1` … `home_10` | （由 YAML 提供） | 仅启动 | 预设关节构型 |
 | `home_duration` | `3.0` | 运行时 | 插值时长（秒） |
-| `home_interpolation_type` | `"tanh"` | 运行时 | `"tanh"` \| `"linear"` |
+| `home_interpolation_type` | `"linear"` | 运行时 | `"tanh"` \| `"linear"` \| `"doubles"` \| `"none"` |
 | `home_tanh_scale` | `3.0` | 运行时 | tanh 曲线尺度 |
 | `switch_command_base` | `100` | 仅启动 | HOME 内切换构型的 FSM 命令基值 |
 | `movej_duration` | `3.0` | 运行时 | `target_joint_position` 时长下限（tanh / linear / doubles） |
@@ -105,7 +105,7 @@ my_controller:
     home_2: [0.5, 0.5, ...]
     home_3: [-0.5, -0.5, ...]
     home_duration: 3.0
-    home_interpolation_type: "tanh"
+    home_interpolation_type: "linear"
     home_tanh_scale: 3.0
     switch_command_base: 100
 
