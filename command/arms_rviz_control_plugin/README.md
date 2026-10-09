@@ -201,3 +201,23 @@ source install/setup.bash
 - 相对增量的角速度分量约定为 RPY（与控制器 `PoseBasedReferenceManager` 一致：`dq = Rz·Ry·Rx`）。
 - Body TRACKING 笛卡尔目标与腰部 Float64 点动分离：追踪时用 `body_target/*`，点动仅用于 MOVEJ / 非追踪场景。
 - 旧 README 中的 `/control_input` 已废弃，现统一使用 `/fsm_command`。
+
+### 三维视窗中的目标跟踪误差 HUD
+
+HUD 作为 `arms_rviz_control_plugin/TargetErrorDisplay` 显示在 RViz 网格视图右上角，
+不再位于 JointControlPanel，也不依赖该控制面板存在。
+W2 的 fullbody/splitbody 和通用 humanoid 配置已启用。
+已有用户配置可在 Displays → Add → TargetErrorDisplay 添加，用 Displays 复选框开关。
+
+独立订阅 left/right/body/head_current_pose 与对应的 current_target，以及
+`/ocs2_wbc_controller/current_state`。没有命令发布器，不影响机器人控制。
+以最高 10 Hz 更新显示内容，仅在文字或颜色变化时更新 Ogre 文字元素、实测 1 秒超时，目标保留最后一帧；不同 frame 或无效位姿不计算误差。
+只显示已启用的手臂（ARM_ENABLED）、位姿跟踪中的 BODY（BODY_TRACKING，且非 HEAD_FORWARD）和 HEAD（HEAD_TRACKING）。未启用部分隐藏并收拢空位，切换时清空对应曲线；未收到模式状态时全部隐藏。模式订阅使用 transient-local，支持 RViz 晚于控制器启动。
+
+位置 ≤5 mm 为绿色、≥20 mm 为红色；姿态 ≤1°为绿色、≥5°为红色，中间黄色。
+无效或超时数值灰色，数值显示破折号。颜色阈值调整入口隐藏，Display 配置中仍保存阈值。
+使用 RViz 底层 Ogre Overlay 的原生 BorderPanel 与 TextArea 元素，每个末端使用独立细边框、完全透明且无填充的背景、大数字和单位标签，无 QWidget 叠加；文字使用原生 Ogre 元素，趋势线使用小尺寸透明纹理。LEFT ARM / RIGHT ARM / BODY / HEAD 分别表示左臂、右臂、躯干和头部；POS (mm) / ANG (deg) 分别为位置和姿态误差。使用 RViz 自带 Liberation Sans Bold 字体并一次性生成高清字形纹理，不需要额外插件。有效误差仅通过数值颜色表示等级，不显示等级文案；无效数据保留具体原因，未启用跟踪时隐藏整个框。固定标签为黑色粗体。数值不截断。此显示为屏幕叠加，不随 Grid 的相机缩放或旋转。
+
+每个框的位置、姿态数字背后各叠加最近 5 秒的半透明误差曲线，最多 5 Hz 更新。横轴按实际时间滚动；纵轴固定为 0 到对应红色阈值的两倍，红色虚线表示红色阈值，超出上限时在顶部显示短标记。无效数据或采样间隔超过 0.6 秒时断线，RViz Reset 清空历史。不显示时间窗口标注，曲线不另占高度；数字保持不透明并在曲线上层显示，单位沿用下方标签。
+
+HUD 以控制器实际反馈 `/fsm_state`（transient-local）为总开关，仅状态 3（OCS2）计算和显示误差。HOME、HOLD、MOVEJ、未知状态或尚未收到状态时隐藏并跳过误差/曲线更新；状态切换清空曲线并等待新的实际位姿。保留目标缓存以兼容仅在目标变化时发布的话题；非 OCS2 模式直接丢弃实际位姿回调数据。
