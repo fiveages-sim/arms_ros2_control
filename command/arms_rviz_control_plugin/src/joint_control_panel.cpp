@@ -11,12 +11,17 @@
 #include <algorithm>
 #include <cmath>
 #include <cctype>
+#include <QGridLayout>
+#include <QFontDatabase>
+#include <QFrame>
+#include <QToolButton>
 #include <map>
 #include <set>
 #include <arms_controller_common/utils/FSMStateTransitionValidator.h>
 
 namespace
 {
+
     // ABB OrientZYX(z, y, x) ≡ tf2 setRPY(roll=x, pitch=y, yaw=z) ≡ Rz * Ry * Rx
     geometry_msgs::msg::Quaternion orientZyx(double roll, double pitch, double yaw)
     {
@@ -729,6 +734,7 @@ namespace arms_rviz_control_plugin
         {
             return;
         }
+        wbc_head_state_ = msg->head_state;
         const uint8_t prev = wbc_body_state_;
         wbc_body_state_ = msg->body_state;
         if (prev != wbc_body_state_ && is_joint_control_enabled_)
@@ -2983,7 +2989,6 @@ namespace arms_rviz_control_plugin
     void JointControlPanel::load(const rviz_common::Config& config)
     {
         Panel::load(config);
-
         QString unit;
         if (config.mapGetString("DisplayUnit", &unit) && display_unit_combo_)
         {
