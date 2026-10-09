@@ -56,6 +56,51 @@ arms_controller_common/
 
 ---
 
+## ROS 2 参数
+
+`basic_joint_controller` 与 `ocs2_arm_controller` 共用本库的 Home / Hold / MoveJ 参数。各控制器 README 只补充包专有项；此处给出共享项及**生效时机**。
+
+**ros2_control 公共参数**（`joints`、`update_rate`、`command_interfaces`、`state_interfaces`，以及可选的 `command_prefix`）属于 `controller_interface::ControllerInterface` / `controller_manager`，在控制器加载时读取（**仅启动**）。修改它们需要卸载并重新加载控制器，不必在每个控制器 README 里完整复述。详见 [ros2_control ControllerInterface](https://control.ros.org/jazzy/doc/ros2_control/controller_interface/doc/userdoc.html)。
+
+**生效时机**
+
+| 标记 | 含义 |
+|---|---|
+| **运行时** | `ros2 param set` 后无需重启控制器。本库通过 `StateHome::updateParam` / `StateMoveJ::updateParam` 在**下一次进入该状态或下一条匹配命令**时 `get_parameter` 重读；不是 `add_on_set_parameters_callback` 的即时回调。 |
+| **仅启动** | 在 `on_init` / 构造 / 首次创建规划器时写入成员，之后不再读取。 |
+| **未核实** | 已声明，但没有回调也没有清晰的重读路径（不要按动态参数使用）。 |
+
+### Home（`StateHome::updateParam`，进入 HOME 或切换构型时重读）
+
+| 参数 | 默认值 | 生效时机 | 说明 |
+|---|---|---|---|
+| `home_1` … `home_10` | （YAML 提供） | 仅启动 | 预设构型；`init()` 从参数覆盖加载，之后不再重读 |
+| `home_duration` | `3.0` | 运行时 | 插值时长（秒） |
+| `home_interpolation_type` | `"linear"`（`auto_declare`） | 运行时 | `"tanh"` / `"linear"` / `"doubles"` / `"none"` |
+| `home_tanh_scale` | `3.0` | 运行时 | tanh 曲线尺度 |
+| `home_max_velocity` | `2.0` | 运行时 | 速度上限 |
+| `home_max_acceleration` | `4.0` | 运行时 | 加速度上限 |
+| `home_max_jerk` | `20.0` | 运行时 | jerk 上限 |
+| `switch_command_base` | `100` | 仅启动 | HOME 内切换构型的 FSM 命令基值（构造时读取一次） |
+
+### MoveJ（`StateMoveJ::updateParam`，进入 MOVEJ 或下一条关节目标/轨迹时重读）
+
+| 参数 | 默认值 | 生效时机 | 说明 |
+|---|---|---|---|
+| `movej_duration` | `3.0` | 运行时 | 单目标时长下限（秒）；`none` / `servo` 不按此时长插值 |
+| `movej_interpolation_type` | `"linear"`（`auto_declare`） | 运行时 | `"tanh"` / `"linear"` / `"doubles"` / `"none"` / `"servo"` |
+| `movej_tanh_scale` | `3.0` | 运行时 | tanh 曲线尺度 |
+| `movej_trajectory_duration` | `3.0` | 运行时 | 多路点轨迹默认总时长 |
+| `movej_trajectory_blend_ratio` | `0.0`（basic）/ `0.2`（ocs2） | 运行时 | 路点融合比例 |
+| `movej_max_velocity` | `2.0` | 运行时 | 速度上限 |
+| `movej_max_acceleration` | `4.0` | 运行时 | 加速度上限（doubles / servo） |
+| `movej_max_jerk` | `20.0` | 运行时 | jerk 上限（doubles / servo） |
+| `movej_auto_extend_duration` | `true` | 运行时 | 超限时是否自动拉长 duration |
+
+腰部运动中，仅 `waist_lifting_duration` 在每次腰部位置规划时重读（**运行时**）。`waist_lifting_type`、默认速度三元组、杆长/方向等在 `setWaistLiftingPlaner()` **首次创建规划器**时读取，之后不再更新（**仅启动**）。`waist_lifting_enabled` 与绝对 TF 坐标系由各控制器在 `on_init` 读取（**仅启动**）。
+
+---
+
 ## StateHome
 
 StateHome 支持最多 10 个预设构型（`home_1`、`home_2`、…），通过 FSM 命令动态切换。

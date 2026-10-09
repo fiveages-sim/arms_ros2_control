@@ -23,64 +23,120 @@ colcon build --packages-up-to basic_joint_controller --symlink-install
 
 ## 3. 配置参数
 
+插件类型：`basic_joint_controller/BasicJointController`。
+
+`joints`、`update_rate`、`command_interfaces`、`state_interfaces` 以及可选的 `command_prefix` 是 ros2_control ControllerInterface / controller_manager 公共参数，在控制器加载时读取（**仅启动**）。修改它们需要卸载并重新加载控制器。Home / MoveJ 的共享名称、默认值与**生效时机**见 [`arms_controller_common`](../../libraries/arms_controller_common/README.md)。
+
+**生效时机**
+
+| 标记 | 含义 |
+|---|---|
+| **运行时** | `ros2 param set` 后无需重载控制器。本控制器没有 `add_on_set_parameters_callback`；Home / MoveJ 在下一次进入该状态或下一条匹配命令时通过 `get_parameter` 重读。 |
+| **仅启动** | 在 `on_init`（或腰部规划器首次创建）时写入成员。修改需要重载或重启。 |
+| **未核实** | 已声明，但没有回调也没有清晰的重读路径。 |
+
+### Home / MoveJ（共享）
+
+与 `arms_controller_common` 相同。本页保留完整列表，避免文档孤立：
+
+| 参数 | 默认值 | 生效时机 | 说明 |
+|---|---|---|---|
+| `home_1` … `home_10` | （由 YAML 提供） | 仅启动 | 预设关节构型 |
+| `home_duration` | `3.0` | 运行时 | 插值时长（秒） |
+| `home_interpolation_type` | `"linear"` | 运行时 | `"tanh"` \| `"linear"` \| `"doubles"` \| `"none"` |
+| `home_tanh_scale` | `3.0` | 运行时 | tanh 曲线尺度 |
+| `switch_command_base` | `100` | 仅启动 | HOME 内切换构型的 FSM 命令基值 |
+| `movej_duration` | `3.0` | 运行时 | `target_joint_position` 时长下限（tanh / linear / doubles） |
+| `movej_interpolation_type` | `"tanh"` | 运行时 | `"tanh"` \| `"linear"` \| `"doubles"` \| `"none"` \| `"servo"` |
+| `movej_tanh_scale` | `3.0` | 运行时 | tanh 曲线尺度 |
+| `movej_trajectory_duration` | `3.0` | 运行时 | 多路点轨迹时长 |
+| `movej_trajectory_blend_ratio` | `0.0` | 运行时 | 路点融合比例 |
+| `movej_max_velocity` | `2.0` | 运行时 | 峰值关节速度；必要时拉长 duration |
+| `movej_max_acceleration` | `4.0` | 运行时 | 仅 doubles / servo |
+| `movej_max_jerk` | `20.0` | 运行时 | 仅 doubles / servo |
+| `movej_auto_extend_duration` | `true` | 运行时 | `false` 则固定时长 |
+
+`target_joint_position`（tanh / linear / doubles）：duration 是下限。若按该时长会超过速度约束，则自动拉长。`none` 不受影响。`joint_trajectory_with_para` 路点未填 vel/acc/jerk 时，也用这组默认值。
+
+### 灵巧手 / 末端执行器
+
+需要 `target_command_enabled: true`。使用 StateHome 的构型作为开/关目标位置。
+
+| 参数 | 默认值 | 生效时机 | 说明 |
+|---|---|---|---|
+| `target_command_enabled` | `false` | 仅启动 | 创建开关/比例订阅 |
+| `target_command_close_config` | `1` | 仅启动 | 「关闭」构型的索引（0-based） |
+| `target_command_open_config` | `0` | 仅启动 | 「打开」构型的索引（0-based） |
+
+### 腰部升降
+
+| 参数 | 默认值 | 生效时机 | 说明 |
+|---|---|---|---|
+| `waist_lifting_enabled` | `false` | 仅启动 | 声明腰部参数与话题 |
+| `waist_lifting_type` | `"three_joint"` | 仅启动 | `"three_joint"` \| `"single_joint"`；规划器首次创建时读取 |
+| `waist_lifting_duration` | `3.0` | 运行时 | 下一次腰部位置规划时重读 |
+| `waist_lifting_default_parameter` | `[0.25, 1.0, 5.0]` | 仅启动 | `[最大速度, 加速度, 减速度]`；规划器首次创建 |
+| `waist_turning_default_parameter` | `[0.25, 1.0, 5.0]` | 仅启动 | `[最大速度, 加速度, 减速度]`；规划器首次创建 |
+| `waist_absolute_source_frame` | `"base_footprint"` | 仅启动 | 绝对 `(x, z)` 坐标系（仅 `waist_lifting_pose_absolute`） |
+| `waist_absolute_target_frame` | `"body_base"` | 仅启动 | phi / 相对规划坐标系 |
+| `waist_l1` | `0.322` | 仅启动 | 仅 three_joint |
+| `waist_l2` | `0.355` | 仅启动 | 仅 three_joint |
+| `waist_rotation_direction` | `[1.0, 1.0, 1.0]` | 仅启动 | 仅 three_joint |
+| `waist_angle_offset` | `[0.0, 0.0, 0.0]` | 仅启动 | 仅 three_joint |
+| `waist_single_joint_direction` | `1.0` | 仅启动 | 仅 single_joint（如 ARX Lift / Lift2S） |
+| `waist_single_joint_offset` | `0.0` | 仅启动 | 仅 single_joint |
+| `waist_single_joint_pitch_joint` | `"_no_pitch_"` | 仅启动 | 不在 `joints` 中则禁用俯仰 |
+| `waist_single_joint_pitch_direction` | `1.0` | 仅启动 | 仅 single_joint |
+| `waist_single_joint_pitch_offset` | `0.0` | 仅启动 | 仅 single_joint |
+
+绝对 TF 默认对齐 FiveAges W2；机型无对应 link 时需覆盖。
+
+YAML 示例（复制用；**生效时机**见上表）：
+
 ```yaml
 my_controller:
   ros__parameters:
-    update_rate: 1000           # 控制器更新频率 (Hz)
-    joints: ["j1", "j2", ...]   # 受控关节名称列表
+    update_rate: 1000
+    joints: ["j1", "j2", ...]
     command_interfaces: ["position"]
     state_interfaces:  ["position", "velocity"]
 
-    # --- Home 构型（最多 10 个）---
-    home_1: [0.0, 0.0, ...]     # 必须
-    home_2: [0.5, 0.5, ...]     # 可选
-    home_3: [-0.5, -0.5, ...]   # 可选
+    home_1: [0.0, 0.0, ...]
+    home_2: [0.5, 0.5, ...]
+    home_3: [-0.5, -0.5, ...]
     home_duration: 3.0
-    home_interpolation_type: "tanh"   # "tanh" | "linear"
+    home_interpolation_type: "linear"
     home_tanh_scale: 3.0
-    switch_command_base: 100    # 切换构型的 FSM 命令基础值
+    switch_command_base: 100
 
-    # --- MoveJ ---
     movej_duration: 3.0
-    movej_interpolation_type: "tanh"  # "tanh" | "linear" | "doubles" | "none" | "servo"
+    movej_interpolation_type: "tanh"
     movej_tanh_scale: 3.0
     movej_trajectory_duration: 3.0
     movej_trajectory_blend_ratio: 0.0
-    # target_joint_position（tanh / linear / doubles）：duration 是下限。
-    # 若按该时长会超过速度约束，则自动拉长。none 不受影响。
-    # 设 movej_auto_extend_duration: false 可退回固定时长。
-    # joint_trajectory_with_para 路点未填 vel/acc/jerk 时，也用这组默认值。
     movej_max_velocity: 2.0
-    movej_max_acceleration: 4.0    # 仅 doubles
-    movej_max_jerk: 20.0           # 仅 doubles
+    movej_max_acceleration: 4.0
+    movej_max_jerk: 20.0
     movej_auto_extend_duration: true
 
-    # --- 灵巧手 / 末端执行器开关与比例控制 ---
-    # 需要 target_command_enabled: true
-    # 使用 StateHome 的构型作为开/关目标位置
     target_command_enabled: false
-    target_command_close_config: 1  # "关闭"构型的索引（0-based）
-    target_command_open_config: 0   # "打开"构型的索引（0-based）
+    target_command_close_config: 1
+    target_command_open_config: 0
 
-    # --- 腰部升降 ---
     waist_lifting_enabled: false
-    waist_lifting_type: "three_joint"   # "three_joint" | "single_joint"
+    waist_lifting_type: "three_joint"
     waist_lifting_duration: 3.0
-    waist_lifting_default_parameter: [0.25, 1.0, 5.0]  # [最大速度, 加速度, 减速度]
-    waist_turning_default_parameter: [0.25, 1.0, 5.0]  # [最大速度, 加速度, 减速度]
-    # 绝对位姿 TF 坐标系（仅 waist_lifting_pose_absolute 使用）
-    # 默认对齐 FiveAges W2；机型无对应 link 时需覆盖
-    waist_absolute_source_frame: "base_footprint"  # 绝对 (x, z) 所在坐标系
-    waist_absolute_target_frame: "body_base"       # phi / 相对规划坐标系
-    # (three_joint 模式专用)
+    waist_lifting_default_parameter: [0.25, 1.0, 5.0]
+    waist_turning_default_parameter: [0.25, 1.0, 5.0]
+    waist_absolute_source_frame: "base_footprint"
+    waist_absolute_target_frame: "body_base"
     waist_l1: 0.322
     waist_l2: 0.355
     waist_rotation_direction: [1.0, 1.0, 1.0]
     waist_angle_offset: [0.0, 0.0, 0.0]
-    # (single_joint 模式专用 — 如 ARX Lift / Lift2S 棱柱升降)
     waist_single_joint_direction: 1.0
     waist_single_joint_offset: 0.0
-    waist_single_joint_pitch_joint: "_no_pitch_"   # 不在 joints 中则禁用俯仰
+    waist_single_joint_pitch_joint: "_no_pitch_"
     waist_single_joint_pitch_direction: 1.0
     waist_single_joint_pitch_offset: 0.0
 ```
