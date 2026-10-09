@@ -183,10 +183,6 @@ namespace arms_ros2_control::command
 
         // 底盘控制模式相关发布器（case 20 触发）
         pub_cmd_vel_ = node_->create_publisher<geometry_msgs::msg::Twist>("/cmd_vel", 10);
-        pub_waist_lifting_ = node_->create_publisher<std_msgs::msg::Float64>(
-            "/body_joint_controller/waist_lifting_command", 10);
-        pub_waist_turning_ = node_->create_publisher<std_msgs::msg::Float64>(
-            "/body_joint_controller/waist_turning_command", 10);
 
         // WBC 模式切换命令发布器（case 21–24 请求身体模式）
         pub_mode_command_ = node_->create_publisher<std_msgs::msg::String>("/mode_command", 10);
@@ -3043,8 +3039,8 @@ namespace arms_ros2_control::command
         }
 
         publishChassisVelocity(cmd_vel);
-        pub_waist_lifting_->publish(waist_lifting);
-        pub_waist_turning_->publish(waist_turning);
+        if (pub_waist_lifting_) pub_waist_lifting_->publish(waist_lifting);
+        if (pub_waist_turning_) pub_waist_turning_->publish(waist_turning);
 
         RCLCPP_DEBUG(node_->get_logger(),
                      "🕹️ [Chassis] grip=%d L.xy=(%.3f,%.3f) R.xy=(%.3f,%.3f) → cmd_vel(lin=%.3f,%.3f ang=%.3f) waist(lift=%.3f turn=%.3f)",
@@ -3083,8 +3079,8 @@ namespace arms_ros2_control::command
 
         auto zero_float = std_msgs::msg::Float64();
         zero_float.data = 0.0;
-        pub_waist_lifting_->publish(zero_float);
-        pub_waist_turning_->publish(zero_float);
+        if (pub_waist_lifting_) pub_waist_lifting_->publish(zero_float);
+        if (pub_waist_turning_) pub_waist_turning_->publish(zero_float);
     }
 
     void VRInputHandler::toggleChassisMode()
@@ -3852,6 +3848,22 @@ namespace arms_ros2_control::command
                     const auto previous = control_topology_.exchange(next);
                     if (previous != next)
                     {
+                        // WBC consumes grip/stick combinations as mode commands;
+                        // only split control uses the direct waist velocity topics.
+                        if (next == ControlTopology::SPLIT_BODY)
+                        {
+                            pub_waist_lifting_ = node_->create_publisher<std_msgs::msg::Float64>(
+                                "/body_joint_controller/waist_lifting_command", 10);
+                            pub_waist_turning_ = node_->create_publisher<std_msgs::msg::Float64>(
+                                "/body_joint_controller/waist_turning_command", 10);
+                        }
+                        else
+                        {
+                            if (pub_waist_lifting_ || pub_waist_turning_)
+                                resetChassisAndWaistCommands();
+                            pub_waist_lifting_.reset();
+                            pub_waist_turning_.reset();
+                        }
                         clearLastPublishedTargets();
                         if (next != ControlTopology::FULL_BODY)
                         {
