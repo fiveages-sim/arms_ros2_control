@@ -811,6 +811,10 @@ namespace arms_ros2_control::command
         static constexpr double chassis_angular_scale_ = 0.5;   // 底盘角速度比例
         static constexpr double waist_lifting_scale_ = 1.0;     // 腰部升降 factor（控制器内部 clamp 到 [-1,1]，>1 无意义）
         static constexpr double waist_turning_scale_ = 1.0;     // 腰部旋转 factor（同上）
+        enum class WaistStickAxis { NONE, LIFTING, TURNING };
+        std::atomic<WaistStickAxis> waist_stick_axis_{WaistStickAxis::NONE};
+        static constexpr double waist_axis_switch_margin_ = 0.1;
+
 
         // 参考link名称（用于将VR头显/手柄关联到机器人某个link），从target_manager.yaml读取，默认"base_link"
         std::string reference_link_;

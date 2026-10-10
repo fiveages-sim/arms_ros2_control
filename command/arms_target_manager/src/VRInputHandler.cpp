@@ -3024,15 +3024,36 @@ namespace arms_ros2_control::command
         const bool right_grip = right_grip_active_.load();
         if (right_grip)
         {
-            // 修饰符模式（按住右握把）：右摇杆 X → 腰部旋转，右摇杆 Y → 腰部升降
-            cmd_vel.angular.z = 0.0; // 修饰符模式下不发底盘转向
-            waist_lifting.data = right_y * waist_lifting_scale_;
-            // 腰部旋转方向对齐 joystick_teleop.cpp（D-pad 右 → 负命令），
-            // 摇杆右拨 → right_x>0 → 命令为负 → 腰部右转
-            waist_turning.data = -right_x * waist_turning_scale_;
+            // 只发送主轴命令；切换需要超过滞回余量，避免斜推时升降/旋转互相抢占。
+            cmd_vel.angular.z = 0.0;
+            const double lift_magnitude = std::abs(right_y);
+            const double turn_magnitude = std::abs(right_x);
+            auto axis = waist_stick_axis_.load();
+            if ((axis == WaistStickAxis::LIFTING && lift_magnitude == 0.0) ||
+                (axis == WaistStickAxis::TURNING && turn_magnitude == 0.0))
+                axis = WaistStickAxis::NONE;
+
+            if (lift_magnitude == 0.0 && turn_magnitude == 0.0)
+                axis = WaistStickAxis::NONE;
+            else if (axis == WaistStickAxis::NONE)
+                axis = lift_magnitude >= turn_magnitude
+                    ? WaistStickAxis::LIFTING : WaistStickAxis::TURNING;
+            else if (axis == WaistStickAxis::LIFTING &&
+                     turn_magnitude > lift_magnitude + waist_axis_switch_margin_)
+                axis = WaistStickAxis::TURNING;
+            else if (axis == WaistStickAxis::TURNING &&
+                     lift_magnitude > turn_magnitude + waist_axis_switch_margin_)
+                axis = WaistStickAxis::LIFTING;
+
+            waist_stick_axis_.store(axis);
+            if (axis == WaistStickAxis::LIFTING)
+                waist_lifting.data = right_y * waist_lifting_scale_;
+            else if (axis == WaistStickAxis::TURNING)
+                waist_turning.data = right_x * waist_turning_scale_;
         }
         else
         {
+            waist_stick_axis_.store(WaistStickAxis::NONE);
             // 默认模式：右摇杆 X → 底盘转向 angular.z，右摇杆 Y 忽略
             cmd_vel.angular.z = right_x * chassis_angular_scale_;
             // waist_lifting / waist_turning 保持 0（已在上方初始化）
@@ -3073,6 +3094,7 @@ namespace arms_ros2_control::command
 
     void VRInputHandler::resetChassisAndWaistCommands()
     {
+        waist_stick_axis_.store(WaistStickAxis::NONE);
         // 底盘清零同样遵守 WBC 占用规则；腰部照常清零。
         auto zero_vel = geometry_msgs::msg::Twist();
         publishChassisVelocity(zero_vel);
