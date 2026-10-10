@@ -90,8 +90,6 @@ namespace arms_ros2_control::command
         const std::string& name,
         const geometry_msgs::msg::Pose& pose,
         bool enable_interaction,
-        const std::set<std::string>& available_joints,
-        bool full_6d,
         MarkerState mode) const
     {
         visualization_msgs::msg::InteractiveMarker interactiveMarker;
@@ -100,79 +98,27 @@ namespace arms_ros2_control::command
         interactiveMarker.name = name;
         interactiveMarker.scale = enable_interaction ? 0.25 : 0.001;
         interactiveMarker.description = "Head Target";
-
-        // 设置位姿
         interactiveMarker.pose = pose;
 
-        // 创建箭头marker表示头部朝向
         visualization_msgs::msg::Marker arrowMarker = createArrowMarker("red");
-
-        // 如果不启用交互，将透明度设置为 0（完全透明）
         if (!enable_interaction)
         {
             arrowMarker.color.a = 0.0;
         }
 
-        // 箭头marker只用于显示，不用于交互
         visualization_msgs::msg::InteractiveMarkerControl arrowControl;
         arrowControl.always_visible = true;
         arrowControl.markers.push_back(arrowMarker);
-        if (full_6d)
-        {
-            auto centerMarker = mode == MarkerState::CONTINUOUS
-                ? createSphereMarker("red") : createBoxMarker("red");
-            centerMarker.color.a = arrowMarker.color.a;
-            arrowControl.markers.push_back(centerMarker);
-        }
+        auto centerMarker = mode == MarkerState::CONTINUOUS
+            ? createSphereMarker("red") : createBoxMarker("red");
+        centerMarker.color.a = arrowMarker.color.a;
+        arrowControl.markers.push_back(centerMarker);
         arrowControl.interaction_mode = visualization_msgs::msg::InteractiveMarkerControl::NONE;
         interactiveMarker.controls.push_back(arrowControl);
 
-        // 根据是否启用交互功能和可用的关节添加旋转控制
         if (enable_interaction)
         {
-            if (full_6d)
-            {
-                addMovementControls(interactiveMarker);
-                return interactiveMarker;
-            }
-            visualization_msgs::msg::InteractiveMarkerControl control;
-
-            // 根据可用的关节添加对应的旋转控制
-            if (available_joints.find("head_roll") != available_joints.end())
-            {
-                // 绕X轴旋转（roll）
-                control.orientation.w = 1;
-                control.orientation.x = 1;
-                control.orientation.y = 0;
-                control.orientation.z = 0;
-                control.name = "rotate_x";
-                control.interaction_mode = visualization_msgs::msg::InteractiveMarkerControl::ROTATE_AXIS;
-                interactiveMarker.controls.push_back(control);
-            }
-
-            if (available_joints.find("head_pitch") != available_joints.end())
-            {
-                // 绕Y轴旋转（pitch）
-                control.orientation.w = 1;
-                control.orientation.x = 0;
-                control.orientation.y = 1;
-                control.orientation.z = 0;
-                control.name = "rotate_y";
-                control.interaction_mode = visualization_msgs::msg::InteractiveMarkerControl::ROTATE_AXIS;
-                interactiveMarker.controls.push_back(control);
-            }
-
-            if (available_joints.find("head_yaw") != available_joints.end())
-            {
-                // 绕Z轴旋转（yaw）
-                control.orientation.w = 1;
-                control.orientation.x = 0;
-                control.orientation.y = 0;
-                control.orientation.z = 1;
-                control.name = "rotate_z";
-                control.interaction_mode = visualization_msgs::msg::InteractiveMarkerControl::ROTATE_AXIS;
-                interactiveMarker.controls.push_back(control);
-            }
+            addMovementControls(interactiveMarker);
         }
 
         return interactiveMarker;

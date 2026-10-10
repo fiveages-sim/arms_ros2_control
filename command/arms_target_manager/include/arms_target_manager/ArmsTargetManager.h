@@ -24,7 +24,6 @@
 #include <tf2_ros/buffer.hpp>
 #include <std_msgs/msg/float64_multi_array.hpp>
 #include <std_msgs/msg/int32.hpp>
-#include <sensor_msgs/msg/joint_state.hpp>
 #include <arms_ros2_control_msgs/msg/wbc_current_state.hpp>
 #include <std_msgs/msg/string.hpp>
 #include <nav_msgs/msg/path.hpp>
@@ -150,9 +149,6 @@ namespace arms_ros2_control::command
 
         void createPublishersAndSubscribers();
 
-        void updateHeadMarkerFromTopic(
-            const sensor_msgs::msg::JointState::ConstSharedPtr& joint_msg);
-
         void updateBodyMarkerVisibility();
         void updateHeadMarkerVisibility();
         void refreshArmMarkersFromLatestCurrentTargets();
@@ -190,7 +186,6 @@ namespace arms_ros2_control::command
         std::shared_ptr<MarkerFactory> marker_factory_;
 
         rclcpp::Subscription<arms_ros2_control_msgs::msg::Inputs>::SharedPtr control_input_subscription_;
-        rclcpp::Subscription<sensor_msgs::msg::JointState>::SharedPtr head_joint_state_subscription_;
         rclcpp::Subscription<arms_ros2_control_msgs::msg::WbcCurrentState>::SharedPtr wbc_state_subscriber_;
         std::function<void(
             const arms_ros2_control_msgs::msg::WbcCurrentState::ConstSharedPtr&)>

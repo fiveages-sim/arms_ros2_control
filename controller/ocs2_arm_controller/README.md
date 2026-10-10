@@ -71,16 +71,44 @@ ros2 launch ocs2_arm_controller demo.launch.py hardware:=isaac type:=AG2F90-C
 
 ### Configuration
 
-The controller can be configured through the YAML configuration file located at:
-`config/ocs2_arm_controller.yaml`
+Plugin type: `ocs2_arm_controller/Ocs2ArmController`.
 
-Key parameters:
-- `joints`: List of joint names
-- `home_pos`: Home position for each joint
-- `zero_pos`: Zero position for each joint
-- `robot_pkg`: Robot package name for OCS2 configuration
-- `update_rate`: Controller update rate in Hz
-- `force_gains`: Default force control gains [kp, kd] for impedance control
+`joints`, `update_rate`, `command_interfaces`, `state_interfaces`, and optional `command_prefix` are ros2_control ControllerInterface / controller_manager commons (**Startup only**). Home / MoveJ / waist names shared with `basic_joint_controller` are documented in [`arms_controller_common`](../../libraries/arms_controller_common/README.md) (Runtime items are re-read on the next matching command or state enter; there is no generic parameter callback for those).
+
+There is no `config/ocs2_arm_controller.yaml` in this package. Robot-specific YAML is supplied by `{robot_name}_description` and launch files.
+
+**When**
+
+| Tag | Meaning |
+|---|---|
+| **Runtime** | `ros2 param set` is picked up without reloading. MoveL items are re-read by `PoseBasedReferenceManager::updateParam` on the next interpolating / stamped command. |
+| **Startup only** | Loaded in `on_init` / `CtrlComponent` construction. Frame overrides are injected into the Interface then; changing a tip requires restart. |
+| **Unverified** | Declared, but there is no callback or clear re-read path. |
+
+Package-specific parameters:
+
+| Parameter | Default | When | Notes |
+|---|---|---|---|
+| `home_pos` | (empty) | Startup only | Fallback HOME target if `home_1` … are absent |
+| `rest_pos` | (empty) | Startup only | Rest pose (this is not `zero_pos`; that name is not a parameter) |
+| `robot_name` | `"cr5"` | Startup only | OCS2 files come from `{robot_name}_description` (there is no `robot_pkg` parameter) |
+| `default_gains` | (empty) | Startup only | HOME / HOLD impedance `[kp, kd]` when MIX interfaces are present |
+| `pd_gains` | (empty) | Startup only | OCS2-state impedance `[kp, kd]` |
+| `base_frame` | task.info `baseFrame` | Startup only | Model / reference base; YAML overrides info |
+| `left_ee_frame` | task.info `eeFrame` | Startup only | Left tip; not hot-reloadable |
+| `right_ee_frame` | task.info `eeFrame1` | Startup only | Right tip; not hot-reloadable |
+| `movel_duration` | `2.0` | Runtime | MoveL duration (s); next stamped / interpolating command |
+| `movel_trajectory_duration` | `2.0` | Runtime | MoveL trajectory duration |
+| `movel_sample_interval` | `0.04` | Runtime | MoveL sample interval |
+| `movel_max_linear_velocity` | `0.3` | Runtime | Linear vel limit |
+| `movel_max_linear_acceleration` | `1.0` | Runtime | Linear acc limit |
+| `movel_max_linear_jerk` | `2.0` | Runtime | Linear jerk limit |
+| `movel_max_angular_velocity` | `1.0` | Runtime | Angular vel limit |
+| `movel_max_angular_acceleration` | `2.0` | Runtime | Angular acc limit |
+| `movel_max_angular_jerk` | `4.0` | Runtime | Angular jerk limit |
+| `movel_auto_extend_duration` | `true` | Runtime | Extend MoveL duration when limits require it |
+
+`ocs2_wbc_controller` is a private submodule and was not readable here. Its extra frame param `body_frame` is **Startup only** per existing `arms_target_manager` notes.
 
 ## Interface Configuration
 
@@ -123,13 +151,14 @@ state_interfaces:
   - velocity
   - effort
 
-# Force control gains [kp, kd]
-force_gains: [100.0, 10.0]  # kp=100, kd=10
+# Impedance gains [kp, kd] (Startup only)
+default_gains: [100.0, 10.0]  # HOME / HOLD
+pd_gains: [100.0, 10.0]       # OCS2 state
 ```
 
 ### Force Control Gains
 
-The `force_gains` parameter defines the default impedance control gains for force control mode:
+`default_gains` and `pd_gains` are `[kp, kd]` vectors loaded at **Startup only** (the older `force_gains` name is not a parameter):
 
 - **kp** (Position gain): Controls the stiffness of the position control loop
   - Higher values make the robot more rigid
@@ -142,9 +171,9 @@ The `force_gains` parameter defines the default impedance control gains for forc
   - Typical range: 1.0 - 100.0
 
 **Example configurations:**
-- High stiffness: `force_gains: [500.0, 50.0]` - For precise positioning tasks
-- Medium compliance: `force_gains: [100.0, 10.0]` - For general manipulation tasks
-- High compliance: `force_gains: [50.0, 5.0]` - For contact tasks and human interaction
+- High stiffness: `default_gains: [500.0, 50.0]` / `pd_gains: [500.0, 50.0]` — precise positioning
+- Medium compliance: `[100.0, 10.0]` — general manipulation
+- High compliance: `[50.0, 5.0]` — contact tasks and human interaction
 
 ## State Transitions
 
@@ -170,8 +199,8 @@ States can transition between each other based on the control input received on 
 
 The OCS2 state integrates with the OCS2 mobile manipulator framework:
 
-- **Task File**: Located at `{robot_pkg}/config/ocs2/task.info`
+- **Task File**: Located at `{robot_name}_description/config/ocs2/task.info`
 - **Planning URDF**: Xacro-generated cache via `robot_common_launch` (`planning_urdf_path`); static `urdf/*.urdf` is not used. The same xacro path applies to `manipulator_ocs2.launch.py` and `humanoid_ocs2.launch.py` in `robot_common_launch` (via `resolve_planning_urdf_file_or_fail`).
-- **Generated Library**: Located at `{robot_pkg}/config/ocs2/generated`
+- **Generated Library**: Located at `{robot_name}_description/config/ocs2/generated`
 
-The controller automatically loads these files based on the `robot_pkg` parameter. 
+The controller automatically loads these files from `{robot_name}_description` (`robot_name` default `"cr5"`). 

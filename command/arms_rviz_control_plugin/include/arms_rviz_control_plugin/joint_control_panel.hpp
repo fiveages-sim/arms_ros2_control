@@ -1,6 +1,7 @@
 #pragma once
 
 #include <memory>
+#include <array>
 #include <QLabel>
 #include <QHBoxLayout>
 #include <QGroupBox>
@@ -221,6 +222,7 @@ namespace arms_rviz_control_plugin
         bool right_current_pose_valid_ = false;
         bool body_current_pose_valid_ = false;
         uint8_t wbc_body_state_ = 0;  // WbcCurrentState::body_state
+        uint8_t wbc_head_state_ = 0;  // WbcCurrentState::head_state（1 = HEAD_TRACKING）
 
         // Joint limits manager
         std::shared_ptr<arms_controller_common::JointLimitsManager> joint_limits_manager_;

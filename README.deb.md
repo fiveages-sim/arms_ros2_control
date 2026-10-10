@@ -62,6 +62,8 @@ sudo dpkg -i ros-jazzy-arms-ros2-control_2.0.0_amd64.deb
 
 运行时依赖：`ros-jazzy-ocs2`、`ros-jazzy-robot-descriptions-common`（旧 OCS2 包名见 `ros-jazzy-ocs2` 的 `Provides` 字段）。
 
+full 包额外声明 `ros-jazzy-ruckig` 依赖：`eyou_canfd_ros2_control` 的 CMake 配置导出了 `ruckig`，下游 `find_package` 时也需要安装该包。
+
 ## 已退役的独立 deb（请勿再打 tag）
 
 以下 workflow 已停用；功能由 **`ros-jazzy-arms-ros2-control-full`** 覆盖：
