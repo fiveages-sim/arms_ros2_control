@@ -1,0 +1,7 @@
+# Configure surface alignment; does not change the controller FSM state.
+bool enable
+# Maximum orientation bias in radians; must be finite and nonnegative.
+float64 max_bias_angle
+---
+bool success
+string message
