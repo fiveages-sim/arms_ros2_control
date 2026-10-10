@@ -26,6 +26,7 @@
 #include <vector>
 
 #include <arms_ros2_control_msgs/msg/compliance_force_status.hpp>
+#include <arms_ros2_control_msgs/srv/set_surface_tracking.hpp>
 #include <geometry_msgs/msg/pose.hpp>
 #include <geometry_msgs/msg/pose_stamped.hpp>
 #include <geometry_msgs/msg/wrench_stamped.hpp>
@@ -172,6 +173,7 @@ namespace arms_controller_common
         void setupWrenchSubscriptions();
         void setupTeleopSubscriptions();
         void setupZeroWrenchService();
+        void setupSurfaceTrackingService();
         WrenchSnapshot sampleAndPublishWrenches(const rclcpp::Time& time);
         void updateZeroCalibration(const WrenchSnapshot& snapshot, const rclcpp::Time& time,
                                    const rclcpp::Duration& period);
@@ -344,6 +346,7 @@ namespace arms_controller_common
         rclcpp::Publisher<arms_ros2_control_msgs::msg::ComplianceForceStatus>::SharedPtr
             force_status_pub_;
         rclcpp::Service<std_srvs::srv::Trigger>::SharedPtr zero_wrench_service_;
+        rclcpp::Service<arms_ros2_control_msgs::srv::SetSurfaceTracking>::SharedPtr surface_tracking_service_;
         rclcpp::node_interfaces::OnSetParametersCallbackHandle::SharedPtr force_setpoint_callback_;
         std::atomic_bool zero_cal_requested_{false};
         rclcpp::Time last_force_status_pub_{0, 0, RCL_ROS_TIME};

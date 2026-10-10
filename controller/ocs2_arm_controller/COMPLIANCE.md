@@ -343,6 +343,26 @@ ros2 param set /ocs2_arm_controller compliance_align_rcc true
 遥测：`/compliance_force_status` 的 `align_enabled` / `align_max` / `align_release` /
 `align_rcc` / `align_bias_left[3]` / `align_bias_right[3]`（base 系轴角向量，模长即让位角）。
 
+### 曲面追踪配置服务
+
+控制器配置后提供 `/set_surface_tracking`（命名空间下使用相对名称），类型为
+`arms_ros2_control_msgs/srv/SetSurfaceTracking`。请求字段 `enable` 开启或关闭贴合外环，
+`max_bias_angle` 设置最大姿态偏置角，单位为弧度，必须有限且非负。
+两项参数原子更新；非法请求不修改配置，响应通过 `success` 和 `message` 返回结果。
+
+```bash
+# 开启，最大偏置约 15 度
+ros2 service call /set_surface_tracking arms_ros2_control_msgs/srv/SetSurfaceTracking \
+  "{enable: true, max_bias_angle: 0.26}"
+# 关闭，并保留 0.26 rad 上限
+ros2 service call /set_surface_tracking arms_ros2_control_msgs/srv/SetSurfaceTracking \
+  "{enable: false, max_bias_angle: 0.26}"
+```
+
+此服务只设置 `compliance_align_enable` 和 `compliance_align_max`，不切换 FSM、
+不设置轴选择或目标力。实际追踪仍需处于 COMPLIANCE、FT 有效、校准完成且
+Rx/Ry/Rz 为位控。返回成功表示配置已接受，控制循环下一次读取参数时生效。
+
 ### 贴合状态与坐标系
 
 力控和曲面贴合使用 `compliance_teleop_base_frame`（默认取模型 `baseFrame`），

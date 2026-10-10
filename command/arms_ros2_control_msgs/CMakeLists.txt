@@ -11,6 +11,7 @@ rosidl_generate_interfaces(${PROJECT_NAME}
         "msg/Inputs.msg"
         "msg/CircleMessage.msg"
         "srv/ExecuteCircle.srv"
+        "srv/SetSurfaceTracking.srv"
         "msg/JointWaypoint.msg"
         "srv/JointTrajectory.srv"
         "srv/ExecutePath.srv"
