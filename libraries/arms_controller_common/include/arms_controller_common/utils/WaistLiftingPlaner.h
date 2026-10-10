@@ -136,6 +136,10 @@ namespace arms_controller_common
                              double total_time, double period);
         bool phi_speed_{false};
         double phi_fixed_z_{0.0};
+        // Fixed x/z phi range, rebuilt on each phi start; reused during speed updates.
+        bool phi_bounds_valid_{false};
+        double phi_lower_bound_{0.0};
+        double phi_upper_bound_{0.0};
 
         // 用给定位置/速度初始化 speedj 规划器
         bool initSpeedJPlannerFromState(double start_pos, double start_vel,

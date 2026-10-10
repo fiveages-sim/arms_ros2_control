@@ -187,6 +187,7 @@ namespace arms_controller_common
         const Eigen::Vector3d& init_joint_angle, const Eigen::Vector3d& lifting_delta,
         const double duration, const double period)
     {
+        phi_bounds_valid_ = false;
         type_speed_ = false;
         phi_speed_ = false;
         speed_mode_max_reachable_valid_ = false;
@@ -320,6 +321,7 @@ namespace arms_controller_common
         const double max_lifting_acc, const double max_lifting_jerk,
         const double total_time, const double period)
     {
+        phi_bounds_valid_ = false;
         type_speed_ = true;
         speed_mode_direction_ = (target_lifting_speed > 0.0) ? 1.0 :
             ((target_lifting_speed < 0.0) ? -1.0 : 0.0);
@@ -371,9 +373,24 @@ namespace arms_controller_common
                 << std::endl;
         }
 
+        if (phi_speed_)
+        {
+            double lower, upper;
+            if (!resolveSpeedModeMaxReachablePos(init_joint_angle, start_pos, -1.0, lower) ||
+                !resolveSpeedModeMaxReachablePos(init_joint_angle, start_pos, 1.0, upper) ||
+                !std::isfinite(lower) || !std::isfinite(upper) || lower > upper)
+                return false;
+            phi_lower_bound_ = lower;
+            phi_upper_bound_ = upper;
+            phi_bounds_valid_ = true;
+        }
+
         if (std::abs(target_lifting_speed) > min_val)
         {
-            if (!resolveSpeedModeMaxReachablePos(
+            if (phi_speed_)
+                speed_mode_max_reachable_pos_ = target_lifting_speed > 0.0
+                    ? phi_upper_bound_ : phi_lower_bound_;
+            else if (!resolveSpeedModeMaxReachablePos(
                     init_joint_angle, start_pos, target_lifting_speed, speed_mode_max_reachable_pos_))
             {
                 return false;
@@ -429,8 +446,9 @@ namespace arms_controller_common
         // SINGLE_JOINT 停止路径沿用上一次 speed 初始化保存的 phi_，只对 lift_joint 减速。
         if (phi_speed_ && std::abs(target_lifting_speed) > min_val)
         {
-            if (!resolveSpeedModeMaxReachablePos(current_joint_angle_, start_pos,
-                    target_lifting_speed, speed_mode_max_reachable_pos_)) return false;
+            if (!phi_bounds_valid_) return false;
+            speed_mode_max_reachable_pos_ = target_lifting_speed > 0.0
+                ? phi_upper_bound_ : phi_lower_bound_;
             speed_mode_max_reachable_valid_ = true;
         }
 
@@ -479,6 +497,7 @@ namespace arms_controller_common
 
     bool WaistLiftingPlaner::calNextPoint(std::vector<double>& next_point)
     {
+        if (isPhiSpeedMode() && !phi_bounds_valid_) return false;
         double planner_pos = 0.0;
         double curr_x = x_;
         double curr_z = 0.0;
@@ -509,10 +528,9 @@ namespace arms_controller_common
                             phi_speed_ ? speed_mode_max_jerk_ : 0.2);
                         const double stop_pos = current_pos + moving_direction * stop_dist;
                         double reachable_pos = speed_mode_max_reachable_pos_;
-                        if (phi_speed_ && moving_direction != speed_mode_direction_ &&
-                            !resolveSpeedModeMaxReachablePos(current_joint_angle_, waist_position_cache_,
-                                                            current_vel, reachable_pos))
-                            return false;
+                        if (phi_speed_)
+                            reachable_pos = moving_direction > 0.0
+                                ? phi_upper_bound_ : phi_lower_bound_;
                         const bool need_stop_replan =
                             (moving_direction > 0.0) ?
                             (stop_pos >= reachable_pos - 0.001) :
@@ -604,10 +622,12 @@ namespace arms_controller_common
         }
 #endif
         // A final hard boundary also covers fallback planning and discretization.
-        if (isPhiSpeedMode() && speed_mode_max_reachable_valid_ &&
-            speed_mode_direction_ * (planner_pos - speed_mode_max_reachable_pos_) >= 0.0)
+        if (isPhiSpeedMode() &&
+            (planner_pos < phi_lower_bound_ || planner_pos > phi_upper_bound_ ||
+             (planner_pos == phi_lower_bound_ && waist_velocity_cache_ < 0.0) ||
+             (planner_pos == phi_upper_bound_ && waist_velocity_cache_ > 0.0)))
         {
-            planner_pos = speed_mode_max_reachable_pos_;
+            planner_pos = std::clamp(planner_pos, phi_lower_bound_, phi_upper_bound_);
             waist_position_cache_ = planner_pos;
             setCurrentVelToZero();
 #ifdef HAS_LINA_PLANNING
@@ -706,6 +726,8 @@ namespace arms_controller_common
     void WaistLiftingPlaner::setThreeJointLimit(
         const Eigen::Vector3d& angle_lower, const Eigen::Vector3d& angle_upper)
     {
+        if (phi_bounds_valid_ && (limit_angler_lower_ != angle_lower || limit_angle_upper_ != angle_upper))
+            phi_bounds_valid_ = false;
         limit_angler_lower_ = angle_lower;
         limit_angle_upper_ = angle_upper;
     }
@@ -713,6 +735,8 @@ namespace arms_controller_common
     void WaistLiftingPlaner::setSingleJointLimit(const double angle_lower,
                                                  const double angle_upper)
     {
+        if (single_joint_limit_lower_ != angle_lower || single_joint_limit_upper_ != angle_upper)
+            phi_bounds_valid_ = false;
         single_joint_limit_lower_ = angle_lower;
         single_joint_limit_upper_ = angle_upper;
     };
@@ -720,6 +744,9 @@ namespace arms_controller_common
     void WaistLiftingPlaner::setSingleJointParameter(const double direction,
                                                      const double offset)
     {
+        const double effective_direction = std::fabs(direction) <= min_val ? 1.0 : direction;
+        if (single_joint_direction_ != effective_direction || single_joint_offset_ != offset)
+            phi_bounds_valid_ = false;
         if (std::fabs(direction) <= min_val)
         {
             std::cerr << "single_joint_direction must be non-zero, fallback to 1.0" << std::endl;
@@ -753,6 +780,9 @@ namespace arms_controller_common
     void WaistLiftingPlaner::setSingleJointPitchParameter(const double direction,
                                                           const double offset)
     {
+        const double effective_direction = std::fabs(direction) <= min_val ? 1.0 : direction;
+        if (single_joint_pitch_direction_ != effective_direction || single_joint_pitch_offset_ != offset)
+            phi_bounds_valid_ = false;
         if (std::fabs(direction) <= min_val)
         {
             std::cerr << "single_joint_pitch_direction must be non-zero, fallback to 1.0" << std::endl;
@@ -768,6 +798,8 @@ namespace arms_controller_common
     void WaistLiftingPlaner::setSingleJointPitchLimit(const double angle_lower,
                                                       const double angle_upper)
     {
+        if (single_joint_pitch_limit_lower_ != angle_lower || single_joint_pitch_limit_upper_ != angle_upper)
+            phi_bounds_valid_ = false;
         single_joint_pitch_limit_lower_ = angle_lower;
         single_joint_pitch_limit_upper_ = angle_upper;
     }
