@@ -71,10 +71,22 @@ namespace arms_ros2_control::command
           , reference_link_(reference_link)
           , vr_follow_frame_(vr_follow_frame)
     {
+        rcl_interfaces::msg::ParameterDescriptor order_descriptor;
+        order_descriptor.description =
+            "VR arm target smoothing: 0 = bypass, 1 = first order, 2 = two cascaded stages";
+        order_descriptor.read_only = true;
+        const auto declared_order = node_->declare_parameter<int>(
+            "vr_target_smoothing_order", 2, order_descriptor);
+        if (declared_order < 0 || declared_order > 2)
+        {
+            throw std::invalid_argument("vr_target_smoothing_order must be 0, 1 or 2");
+        }
+        target_smoothing_order_ = declared_order;
+
         rcl_interfaces::msg::ParameterDescriptor tau_descriptor;
         tau_descriptor.description =
-            "VR arm target smoothing window in seconds (linear interpolation: a new target "
-            "is reached exactly tau seconds after it arrives); 0 bypasses smoothing";
+            "VR arm target smoothing total time constant in seconds; "
+            "each stage uses tau/order; 0 bypasses smoothing";
         // 在线可调：ros2 param set <node> vr_target_smoothing_tau_s <seconds>
         tau_descriptor.read_only = false;
         const double declared_tau = node_->declare_parameter(
@@ -87,8 +99,7 @@ namespace arms_ros2_control::command
         }
         target_smoothing_tau_s_.store(declared_tau);
 
-        // 运行时改 tau：先校验，再把当前正在输出的插值值作为新段的起点，最后生效新 tau，
-        // 于是调参过程中目标连续，不会因换 tau 而跳变。
+        // 在线修改时间常数，保留滤波状态；tau=0 时直接输出目标。
         smoothing_param_callback_handle_ = node_->add_on_set_parameters_callback(
             [this](const std::vector<rclcpp::Parameter>& parameters)
             {
@@ -119,8 +130,8 @@ namespace arms_ros2_control::command
                         node_->get_logger(),
                         "🕹️ VR target smoothing tau -> %.4f s (per stage %.4f s)%s",
                         next_tau,
-                        0.5 * next_tau,
-                        next_tau > 0.0 ? "" : " (bypassed)");
+                        target_smoothing_order_ > 0 ? next_tau / target_smoothing_order_ : 0.0,
+                        target_smoothing_order_ > 0 && next_tau > 0.0 ? "" : " (bypassed)");
                 }
                 return result;
             });
@@ -142,9 +153,10 @@ namespace arms_ros2_control::command
         tf_listener_ = std::make_shared<tf2_ros::TransformListener>(*tf_buffer_);
         RCLCPP_INFO(
             node_->get_logger(),
-            "VR arm targets: 200 Hz, input timeout 200 ms; 2-stage smoothing tau=%.3f s%s",
+            "VR arm targets: 200 Hz, input timeout 200 ms; smoothing order=%d tau=%.3f s%s",
+            target_smoothing_order_,
             target_smoothing_tau_s_.load(),
-            target_smoothing_tau_s_.load() > 0.0 ? "" : " (bypassed)");
+            target_smoothing_order_ > 0 && target_smoothing_tau_s_.load() > 0.0 ? "" : " (bypassed)");
         // 检测左右控制器名称
         detectGripperControllers(hand_controllers_);
         
@@ -1830,7 +1842,7 @@ namespace arms_ros2_control::command
         const double tau = target_smoothing_tau_s_.load();
 
         // 旁路（tau=0）与首帧（进入 UPDATE / 重建基准后）：状态直接等于目标，不追赶。
-        if (tau <= 0.0 || !state.valid)
+        if (target_smoothing_order_ == 0 || tau <= 0.0 || !state.valid)
         {
             state.stage1_position = inputPosition;
             state.stage1_orientation = inputOrientation;
@@ -1846,14 +1858,17 @@ namespace arms_ros2_control::command
             std::chrono::duration<double>(now - state.stamp).count(), 0.0, MAX_SMOOTHING_DT_S);
         state.stamp = now;
 
-        // 两级一阶串联，每级时间常数 tau/2：低频滞后合计仍是 tau，但因为第二级的输入
-        // 是第一级的连续输出，位置曲线是 C1（速度连续）——单级/线性插值斜坡会保留
-        // "分段恒速 + 每个新采样跳一次"的速度台阶，就是 target 上看得见的锯齿。
-        // 15 Hz 处衰减也比单级 tau 好：0.39^2 = 0.15 vs 0.21。
-        const double alpha = 1.0 - std::exp(-dt / (0.5 * tau));
+        // 一阶使用 tau，二阶每级使用 tau/2，保持总低频滞后的参数含义。
+        const double alpha = 1.0 - std::exp(-dt / (tau / target_smoothing_order_));
         state.stage1_position += alpha * (inputPosition - state.stage1_position);
         state.stage1_orientation =
             state.stage1_orientation.slerp(alpha, inputOrientation).normalized();
+        if (target_smoothing_order_ == 1)
+        {
+            position = state.stage1_position;
+            orientation = state.stage1_orientation;
+            return;
+        }
         state.stage2_position += alpha * (state.stage1_position - state.stage2_position);
         state.stage2_orientation =
             state.stage2_orientation.slerp(alpha, state.stage1_orientation).normalized();

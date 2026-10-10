@@ -646,7 +646,7 @@ namespace arms_ros2_control::command
         Eigen::Vector3d last_published_right_position_ = Eigen::Vector3d::Zero();
         Eigen::Quaterniond last_published_right_orientation_ = Eigen::Quaterniond::Identity();
 
-        // 固定输出平滑状态（每臂一份）：两级一阶低通串联，语义见 smoothTarget()。
+        // 固定输出平滑状态（每臂一份）：支持旁路、一阶或两级串联。
         // 一级：raw -> stage1，二级：stage1 -> stage2（输出）。
         struct TargetSmoothing
         {
@@ -660,6 +660,7 @@ namespace arms_ros2_control::command
         TargetSmoothing left_target_smoothing_;
         TargetSmoothing right_target_smoothing_;
         // vr_target_smoothing_tau_s：总低频滞后（秒），运行时可调；0 表示旁路
+        int target_smoothing_order_ = 2;  // 启动参数：0=旁路，1=一阶，2=二阶
         std::atomic<double> target_smoothing_tau_s_{0.0};
         rclcpp::node_interfaces::OnSetParametersCallbackHandle::SharedPtr
             smoothing_param_callback_handle_;
