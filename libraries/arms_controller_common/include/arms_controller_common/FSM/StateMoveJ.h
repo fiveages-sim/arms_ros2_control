@@ -479,7 +479,10 @@ namespace arms_controller_common
         std::string waist_absolute_target_frame_{"body_base"};
         bool waist_lifting_active_{false}; // shared lift/phi execution branch
         double last_waist_phi_factor_{0.0};
-        bool waist_phi_pending_{false};
+        enum class PendingWaistKind { NONE, LIFTING, TURNING, PHI };
+        PendingWaistKind pending_waist_kind_{PendingWaistKind::NONE};
+        PendingWaistKind pending_motion_waist_kind_{PendingWaistKind::NONE};
+        void cancelPendingWaist(PendingWaistKind kind);
         Eigen::Vector3d default_waist_phi_para_{0.25, 1.0, 5.0};
         bool waist_lifting_debug_print_active_{false};
         std::shared_ptr<arms_controller_common::WaistLiftingPlaner> waist_turning_planer_;

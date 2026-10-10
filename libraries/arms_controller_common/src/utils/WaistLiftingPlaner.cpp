@@ -187,7 +187,7 @@ namespace arms_controller_common
         const Eigen::Vector3d& init_joint_angle, const Eigen::Vector3d& lifting_delta,
         const double duration, const double period)
     {
-        phi_bounds_valid_ = false;
+        speed_bounds_valid_ = false;
         type_speed_ = false;
         phi_speed_ = false;
         speed_mode_max_reachable_valid_ = false;
@@ -321,7 +321,11 @@ namespace arms_controller_common
         const double max_lifting_acc, const double max_lifting_jerk,
         const double total_time, const double period)
     {
-        phi_bounds_valid_ = false;
+        if (!std::isfinite(target_lifting_speed) || !std::isfinite(max_lifting_acc) ||
+            !std::isfinite(max_lifting_jerk) || !std::isfinite(total_time) ||
+            !std::isfinite(period) || max_lifting_acc <= 0.0 || max_lifting_jerk <= 0.0 ||
+            total_time < 0.0 || period <= 0.0) return false;
+        speed_bounds_valid_ = false;
         type_speed_ = true;
         speed_mode_direction_ = (target_lifting_speed > 0.0) ? 1.0 :
             ((target_lifting_speed < 0.0) ? -1.0 : 0.0);
@@ -373,28 +377,21 @@ namespace arms_controller_common
                 << std::endl;
         }
 
-        if (phi_speed_)
         {
             double lower, upper;
             if (!resolveSpeedModeMaxReachablePos(init_joint_angle, start_pos, -1.0, lower) ||
                 !resolveSpeedModeMaxReachablePos(init_joint_angle, start_pos, 1.0, upper) ||
                 !std::isfinite(lower) || !std::isfinite(upper) || lower > upper)
                 return false;
-            phi_lower_bound_ = lower;
-            phi_upper_bound_ = upper;
-            phi_bounds_valid_ = true;
+            speed_lower_bound_ = lower;
+            speed_upper_bound_ = upper;
+            speed_bounds_valid_ = true;
         }
 
         if (std::abs(target_lifting_speed) > min_val)
         {
-            if (phi_speed_)
-                speed_mode_max_reachable_pos_ = target_lifting_speed > 0.0
-                    ? phi_upper_bound_ : phi_lower_bound_;
-            else if (!resolveSpeedModeMaxReachablePos(
-                    init_joint_angle, start_pos, target_lifting_speed, speed_mode_max_reachable_pos_))
-            {
-                return false;
-            }
+            speed_mode_max_reachable_pos_ = target_lifting_speed > 0.0
+                ? speed_upper_bound_ : speed_lower_bound_;
             speed_mode_max_reachable_valid_ = true;
         }
 #ifdef HAS_LINA_PLANNING
@@ -432,6 +429,10 @@ namespace arms_controller_common
         const double target_lifting_speed, const double max_lifting_acc,
         const double max_lifting_jerk, const double total_time, const double period)
     {
+        if (!std::isfinite(target_lifting_speed) || !std::isfinite(max_lifting_acc) ||
+            !std::isfinite(max_lifting_jerk) || !std::isfinite(total_time) ||
+            !std::isfinite(period) || max_lifting_acc <= 0.0 || max_lifting_jerk <= 0.0 ||
+            total_time < 0.0 || period <= 0.0) return false;
         type_speed_ = true;
         speed_mode_direction_ = (target_lifting_speed > 0.0) ? 1.0 :
             ((target_lifting_speed < 0.0) ? -1.0 : 0.0);
@@ -444,11 +445,11 @@ namespace arms_controller_common
 
         const double start_pos = waist_position_cache_;
         // SINGLE_JOINT 停止路径沿用上一次 speed 初始化保存的 phi_，只对 lift_joint 减速。
-        if (phi_speed_ && std::abs(target_lifting_speed) > min_val)
+        if (std::abs(target_lifting_speed) > min_val)
         {
-            if (!phi_bounds_valid_) return false;
+            if (!speed_bounds_valid_) return false;
             speed_mode_max_reachable_pos_ = target_lifting_speed > 0.0
-                ? phi_upper_bound_ : phi_lower_bound_;
+                ? speed_upper_bound_ : speed_lower_bound_;
             speed_mode_max_reachable_valid_ = true;
         }
 
@@ -456,7 +457,7 @@ namespace arms_controller_common
         if (std::abs(target_lifting_speed - waist_velocity_cache_) <= min_val)
         {
             speedj_planner_.reset();
-            speed_plan_state_.motion_over = !phi_speed_ || std::abs(target_lifting_speed) <= min_val;
+            speed_plan_state_.motion_over = std::abs(target_lifting_speed) <= min_val;
             speed_plan_state_.period = period;
             waist_velocity_cache_ = target_lifting_speed;
             return true;
@@ -479,7 +480,7 @@ namespace arms_controller_common
         speed_plan_state_.max_acc = std::max(max_lifting_acc, 0.0);
         speed_plan_state_.motion_over =
             (std::abs(target_lifting_speed - waist_velocity_cache_) <= min_val) &&
-            (!phi_speed_ || std::abs(target_lifting_speed) <= min_val);
+            (std::abs(target_lifting_speed) <= min_val);
         if (speed_plan_state_.motion_over)
         {
             waist_velocity_cache_ = target_lifting_speed;
@@ -497,7 +498,7 @@ namespace arms_controller_common
 
     bool WaistLiftingPlaner::calNextPoint(std::vector<double>& next_point)
     {
-        if (isPhiSpeedMode() && !phi_bounds_valid_) return false;
+        if (type_speed_ && !speed_bounds_valid_) return false;
         double planner_pos = 0.0;
         double curr_x = x_;
         double curr_z = 0.0;
@@ -507,8 +508,29 @@ namespace arms_controller_common
         {
             if (!speedj_planner_)
             {
-                if (phi_speed_ && !speed_plan_state_.motion_over)
-                    waist_position_cache_ += waist_velocity_cache_ * speed_plan_state_.period;
+                if (!speed_plan_state_.motion_over &&
+                    std::abs(waist_velocity_cache_) > min_val)
+                {
+                    // Constant speed still needs anticipatory boundary braking.
+                    const double direction = waist_velocity_cache_ > 0.0 ? 1.0 : -1.0;
+                    const double boundary = direction > 0.0 ? speed_upper_bound_ : speed_lower_bound_;
+                    planning::SpeedJ braking;
+                    const double distance = braking.calculateDecDistanceOfV(
+                        waist_velocity_cache_, speed_mode_max_acc_, speed_mode_max_jerk_);
+                    if (speed_mode_max_reachable_valid_ &&
+                        direction * (waist_position_cache_ + direction * distance - boundary) >= -0.001)
+                    {
+                        speed_mode_stop_replanned_ = true;
+                        if (!initSpeedJPlannerFromState(waist_position_cache_, waist_velocity_cache_,
+                                0.0, speed_mode_max_acc_, speed_mode_max_jerk_,
+                                0.0, speed_mode_period_)) return false;
+                        point = speedj_planner_->run();
+                        waist_position_cache_ = point.joint_pos(0);
+                        waist_velocity_cache_ = point.joint_vel(0);
+                    }
+                    else
+                        waist_position_cache_ += waist_velocity_cache_ * speed_plan_state_.period;
+                }
                 planner_pos = waist_position_cache_;
             }
             else
@@ -524,13 +546,10 @@ namespace arms_controller_common
                     if (std::abs(moving_direction) > min_val)
                     {
                         const double stop_dist = speedj_planner_->calculateDecDistanceOfV(
-                            current_vel, phi_speed_ ? speed_mode_max_acc_ : 0.1,
-                            phi_speed_ ? speed_mode_max_jerk_ : 0.2);
+                            current_vel, speed_mode_max_acc_, speed_mode_max_jerk_);
                         const double stop_pos = current_pos + moving_direction * stop_dist;
-                        double reachable_pos = speed_mode_max_reachable_pos_;
-                        if (phi_speed_)
-                            reachable_pos = moving_direction > 0.0
-                                ? phi_upper_bound_ : phi_lower_bound_;
+                        const double reachable_pos = moving_direction > 0.0
+                            ? speed_upper_bound_ : speed_lower_bound_;
                         const bool need_stop_replan =
                             (moving_direction > 0.0) ?
                             (stop_pos >= reachable_pos - 0.001) :
@@ -541,7 +560,7 @@ namespace arms_controller_common
                                 << "current_pos: " << current_pos
                                 << ", current_vel: " << current_vel
                                 << ", stop_pos: " << stop_pos
-                                << ", max_reachable_pos: " << speed_mode_max_reachable_pos_
+                                << ", max_reachable_pos: " << reachable_pos
                                 << std::endl;
                             speed_mode_stop_replanned_ = true;
                             if (!initSpeedJPlannerFromState(
@@ -574,6 +593,20 @@ namespace arms_controller_common
             if (!speed_plan_state_.motion_over)
             {
                 const double dt = speed_plan_state_.period;
+                if (speed_mode_max_reachable_valid_ && !speed_mode_stop_replanned_ &&
+                    std::abs(waist_velocity_cache_) > min_val && speed_plan_state_.max_acc > min_val)
+                {
+                    // Fallback uses acceleration limits only, so estimate the matching stop distance.
+                    const double direction = waist_velocity_cache_ > 0.0 ? 1.0 : -1.0;
+                    const double boundary = direction > 0.0 ? speed_upper_bound_ : speed_lower_bound_;
+                    const double distance = waist_velocity_cache_ * waist_velocity_cache_ /
+                        (2.0 * speed_plan_state_.max_acc);
+                    if (direction * (waist_position_cache_ + direction * distance - boundary) >= -0.001)
+                    {
+                        speed_mode_stop_replanned_ = true;
+                        speed_plan_state_.target_speed = 0.0;
+                    }
+                }
                 if (speed_plan_state_.max_acc > min_val)
                 {
                     const double max_delta_v = speed_plan_state_.max_acc * dt;
@@ -586,7 +619,7 @@ namespace arms_controller_common
                     waist_velocity_cache_ = speed_plan_state_.target_speed;
                 }
 
-                if (phi_speed_ && std::abs(speed_plan_state_.target_speed) <= min_val &&
+                if (std::abs(speed_plan_state_.target_speed) <= min_val &&
                     std::abs(waist_velocity_cache_) <= min_val)
                 {
                     speed_plan_state_.motion_over = true;
@@ -622,12 +655,12 @@ namespace arms_controller_common
         }
 #endif
         // A final hard boundary also covers fallback planning and discretization.
-        if (isPhiSpeedMode() &&
-            (planner_pos < phi_lower_bound_ || planner_pos > phi_upper_bound_ ||
-             (planner_pos == phi_lower_bound_ && waist_velocity_cache_ < 0.0) ||
-             (planner_pos == phi_upper_bound_ && waist_velocity_cache_ > 0.0)))
+        if (type_speed_ &&
+            (planner_pos < speed_lower_bound_ || planner_pos > speed_upper_bound_ ||
+             (planner_pos == speed_lower_bound_ && waist_velocity_cache_ < 0.0) ||
+             (planner_pos == speed_upper_bound_ && waist_velocity_cache_ > 0.0)))
         {
-            planner_pos = std::clamp(planner_pos, phi_lower_bound_, phi_upper_bound_);
+            planner_pos = std::clamp(planner_pos, speed_lower_bound_, speed_upper_bound_);
             waist_position_cache_ = planner_pos;
             setCurrentVelToZero();
 #ifdef HAS_LINA_PLANNING
@@ -726,8 +759,8 @@ namespace arms_controller_common
     void WaistLiftingPlaner::setThreeJointLimit(
         const Eigen::Vector3d& angle_lower, const Eigen::Vector3d& angle_upper)
     {
-        if (phi_bounds_valid_ && (limit_angler_lower_ != angle_lower || limit_angle_upper_ != angle_upper))
-            phi_bounds_valid_ = false;
+        if (speed_bounds_valid_ && (limit_angler_lower_ != angle_lower || limit_angle_upper_ != angle_upper))
+            speed_bounds_valid_ = false;
         limit_angler_lower_ = angle_lower;
         limit_angle_upper_ = angle_upper;
     }
@@ -736,7 +769,7 @@ namespace arms_controller_common
                                                  const double angle_upper)
     {
         if (single_joint_limit_lower_ != angle_lower || single_joint_limit_upper_ != angle_upper)
-            phi_bounds_valid_ = false;
+            speed_bounds_valid_ = false;
         single_joint_limit_lower_ = angle_lower;
         single_joint_limit_upper_ = angle_upper;
     };
@@ -746,7 +779,7 @@ namespace arms_controller_common
     {
         const double effective_direction = std::fabs(direction) <= min_val ? 1.0 : direction;
         if (single_joint_direction_ != effective_direction || single_joint_offset_ != offset)
-            phi_bounds_valid_ = false;
+            speed_bounds_valid_ = false;
         if (std::fabs(direction) <= min_val)
         {
             std::cerr << "single_joint_direction must be non-zero, fallback to 1.0" << std::endl;
@@ -782,7 +815,7 @@ namespace arms_controller_common
     {
         const double effective_direction = std::fabs(direction) <= min_val ? 1.0 : direction;
         if (single_joint_pitch_direction_ != effective_direction || single_joint_pitch_offset_ != offset)
-            phi_bounds_valid_ = false;
+            speed_bounds_valid_ = false;
         if (std::fabs(direction) <= min_val)
         {
             std::cerr << "single_joint_pitch_direction must be non-zero, fallback to 1.0" << std::endl;
@@ -799,7 +832,7 @@ namespace arms_controller_common
                                                       const double angle_upper)
     {
         if (single_joint_pitch_limit_lower_ != angle_lower || single_joint_pitch_limit_upper_ != angle_upper)
-            phi_bounds_valid_ = false;
+            speed_bounds_valid_ = false;
         single_joint_pitch_limit_lower_ = angle_lower;
         single_joint_pitch_limit_upper_ = angle_upper;
     }

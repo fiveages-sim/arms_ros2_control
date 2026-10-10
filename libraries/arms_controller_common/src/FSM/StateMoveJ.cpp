@@ -650,6 +650,7 @@ namespace arms_controller_common
                                 "preempted by a new waist motion");
                             auto apply = std::move(pending_waist_motion_);
                             pending_waist_motion_ = nullptr;
+                            pending_waist_kind_ = PendingWaistKind::NONE;
                             waist_lifting_active_ = false;
                             last_waist_phi_factor_ = 0.0;
                             apply();
@@ -731,6 +732,7 @@ namespace arms_controller_common
                     {
                         auto apply = std::move(pending_waist_motion_);
                         pending_waist_motion_ = nullptr;
+                        pending_waist_kind_ = PendingWaistKind::NONE;
                         apply();
                         return;
                     }
@@ -1239,7 +1241,13 @@ namespace arms_controller_common
 
     void StateMoveJ::requestWaistOnlyMotionOrDefer(std::function<void()> apply_motion)
     {
-        waist_phi_pending_ = false;
+        pending_waist_kind_ = PendingWaistKind::NONE;
+        if (waist_lifting_active_ && waist_lifting_planer_ && !waist_lifting_planer_->isSpeedMode())
+        {
+            // A pose trajectory must stop through the synchronized joint planner.
+            requestMotionOrDefer(std::move(apply_motion));
+            return;
+        }
         if (waist_lifting_active_ || waist_turning_active_)
         {
             const bool already_stopping = static_cast<bool>(pending_waist_motion_);
@@ -1260,7 +1268,7 @@ namespace arms_controller_common
 
     void StateMoveJ::requestWaistMotionOrDefer(std::function<void()> apply_motion)
     {
-        waist_phi_pending_ = false;
+        pending_motion_waist_kind_ = PendingWaistKind::NONE;
         if (!isNonWaistMotionBusy() && !stop_to_zero_active_)
         {
             requestWaistOnlyMotionOrDefer(std::move(apply_motion));
@@ -1274,6 +1282,7 @@ namespace arms_controller_common
         {
             if (beginStopToZero()) abortActiveMotionForStop();
             else pending_motion_ = nullptr;
+            pending_motion_waist_kind_ = PendingWaistKind::NONE;
         }
         else
         {
@@ -1282,9 +1291,26 @@ namespace arms_controller_common
         }
     }
 
+    void StateMoveJ::cancelPendingWaist(PendingWaistKind kind)
+    {
+        if (pending_waist_kind_ == kind)
+        {
+            pending_waist_motion_ = nullptr;
+            pending_waist_kind_ = PendingWaistKind::NONE;
+        }
+        if (pending_motion_waist_kind_ == kind)
+        {
+            if (pending_motion_cancel_) pending_motion_cancel_();
+            pending_motion_cancel_ = nullptr;
+            pending_motion_ = nullptr;
+            pending_motion_waist_kind_ = PendingWaistKind::NONE;
+        }
+    }
+
     void StateMoveJ::clearPendingMotion()
     {
-        waist_phi_pending_ = false;
+        pending_waist_kind_ = PendingWaistKind::NONE;
+        pending_motion_waist_kind_ = PendingWaistKind::NONE;
         if (pending_motion_cancel_) pending_motion_cancel_();
         pending_motion_cancel_ = nullptr;
         pending_motion_ = nullptr;
@@ -1293,6 +1319,8 @@ namespace arms_controller_common
 
     void StateMoveJ::abortActiveMotionForStop()
     {
+        pending_waist_motion_ = nullptr;
+        pending_waist_kind_ = PendingWaistKind::NONE;
         servo_initialized_ = false;
         trajectory_manager_.reset();
         interpolation_active_ = false;
@@ -1390,7 +1418,7 @@ namespace arms_controller_common
 
     bool StateMoveJ::requestMotionOrDefer(std::function<void()> apply_motion, std::function<void()> on_replaced)
     {
-        waist_phi_pending_ = false;
+        pending_motion_waist_kind_ = PendingWaistKind::NONE;
         if (stop_to_zero_active_)
         {
             if (pending_motion_cancel_) pending_motion_cancel_();
@@ -1443,6 +1471,7 @@ namespace arms_controller_common
             {
                 auto apply = std::move(pending_motion_);
                 pending_motion_ = nullptr;
+                pending_motion_waist_kind_ = PendingWaistKind::NONE;
                 pending_motion_cancel_ = nullptr;
                 apply();
                 RCLCPP_INFO(node_->get_logger(), "Pending motion applied");
@@ -2646,33 +2675,27 @@ namespace arms_controller_common
 
     bool StateMoveJ::setWaistLiftingFactor(double factor)
     {
-        if (std::fabs(factor - last_waist_factor_) < waist_factor_epsilon_)
-        {
-            return true;
-        }
-
-        if (!waist_lifting_planer_)
-        {
-            setWaistLiftingPlaner();
-        }
+        if (!std::isfinite(factor)) return false;
+        factor = std::clamp(factor, -1.0, 1.0);
         std::lock_guard lock(target_mutex_);
-
-        if (std::fabs(factor) < waist_factor_epsilon_)
+        if (!state_active_) return false;
+        if (!waist_lifting_planer_) setWaistLiftingPlaner();
+        if (!waist_lifting_planer_) return false;
+        const bool continuing = waist_lifting_active_ && waist_lifting_planer_ && waist_lifting_planer_->isSpeedMode() && !waist_lifting_planer_->isPhiSpeedMode();
+        if (std::abs(factor) < waist_factor_epsilon_)
         {
-            pending_waist_motion_ = nullptr;
+            cancelPendingWaist(PendingWaistKind::LIFTING);
+            if (!continuing || last_waist_factor_ == 0.0) return true;
+            return setWaistLiftingFactorImpl(0.0);
+        }
+        if (continuing && !pending_waist_motion_ && !stop_to_zero_active_)
+        {
+            if (std::abs(factor - last_waist_factor_) < waist_factor_epsilon_) return true;
             return setWaistLiftingFactorImpl(factor);
         }
-
-        if (!isNonWaistMotionBusy() && !stop_to_zero_active_)
-        {
-            const double captured_factor = factor;
-            requestWaistOnlyMotionOrDefer(
-                [this, captured_factor]() { setWaistLiftingFactorImpl(captured_factor); });
-            return true;
-        }
-
-        const double captured_factor = factor;
-        requestWaistMotionOrDefer([this, captured_factor]() { setWaistLiftingFactorImpl(captured_factor); });
+        requestWaistMotionOrDefer([this, factor]() { setWaistLiftingFactorImpl(factor); });
+        if (pending_waist_motion_) pending_waist_kind_ = PendingWaistKind::LIFTING;
+        if (pending_motion_) pending_motion_waist_kind_ = PendingWaistKind::LIFTING;
         return true;
     }
 
@@ -2687,6 +2710,8 @@ namespace arms_controller_common
             return false;
         }
 
+        const bool continuing = waist_lifting_active_ && waist_lifting_planer_->isSpeedMode() &&
+            !waist_lifting_planer_->isPhiSpeedMode();
         // 获取当前腰部关节角度
         Eigen::VectorXd current_angles = getCurrentWaistAngles();
         Eigen::Vector3d angles3d;
@@ -2705,6 +2730,21 @@ namespace arms_controller_common
                         "Invalid waist lifting type or insufficient joint angles");
             return false;
         }
+        if (!continuing)
+        {
+            updateWaistLiftingLimits();
+            const auto& sent = ctrl_interfaces_.last_sent_joint_positions_;
+            if (waist_lifting_planer_->isBodyThreeJoint())
+            {
+                for (size_t i = 0; i < 3 && i < sent.size(); ++i) angles3d(i) = sent[i];
+            }
+            else
+            {
+                if (waist_lift_joint_index_ < sent.size()) angles3d(0) = sent[waist_lift_joint_index_];
+                if (waist_pitch_joint_index_ < sent.size()) angles3d(1) = sent[waist_pitch_joint_index_];
+            }
+            waist_lifting_planer_->setCurrentVelToZero();
+        }
         double clamped_factor = std::clamp(factor, -1.0, 1.0);
         double speedj_time = 100000000.0;
         double target_speed = clamped_factor * default_waist_lifting_para_(0);
@@ -2718,7 +2758,7 @@ namespace arms_controller_common
                         "Waist lifting speedj stop requested from actual angles3d: [%.6f, %.6f, %.6f], using cached planned start",
                         angles3d(0), angles3d(1), angles3d(2));
         }
-        const bool speed_plan_initialized = start_debug_print
+        const bool speed_plan_initialized = continuing
             ? waist_lifting_planer_->initTargetLiftingSpeedFromCache(
                 target_speed, default_waist_lifting_para_(1),
                 default_waist_lifting_para_(2), speedj_time,
@@ -2734,6 +2774,9 @@ namespace arms_controller_common
                         target_speed);
             waist_lifting_planer_->setCurrentVelToZero();
             waist_lifting_debug_print_active_ = false;
+            waist_lifting_active_ = false;
+            last_waist_factor_ = 0.0;
+            motion_mode_ = MotionMode::MOVEJ;
             return false;
         }
         waist_lifting_debug_print_active_ = start_debug_print;
@@ -2785,7 +2828,7 @@ namespace arms_controller_common
         if (std::abs(factor) < waist_factor_epsilon_)
         {
             // Only cancel a queued phi start; leave other callers' requests intact.
-            if (waist_phi_pending_) clearPendingMotion();
+            cancelPendingWaist(PendingWaistKind::PHI);
             if (!waist_lifting_active_ || !waist_lifting_planer_->isPhiSpeedMode())
                 return true;
             if (last_waist_phi_factor_ == 0.0) return true;
@@ -2798,11 +2841,9 @@ namespace arms_controller_common
                 return true;
             return setWaistPhiFactorImpl(factor);
         }
-        requestWaistMotionOrDefer([this, factor]() {
-            waist_phi_pending_ = false;
-            setWaistPhiFactorImpl(factor);
-        });
-        waist_phi_pending_ = static_cast<bool>(pending_motion_) || static_cast<bool>(pending_waist_motion_);
+        requestWaistMotionOrDefer([this, factor]() { setWaistPhiFactorImpl(factor); });
+        if (pending_waist_motion_) pending_waist_kind_ = PendingWaistKind::PHI;
+        if (pending_motion_) pending_motion_waist_kind_ = PendingWaistKind::PHI;
         return true;
     }
 
@@ -2913,29 +2954,27 @@ namespace arms_controller_common
 
     bool StateMoveJ::setWaistTurningFactor(double factor)
     {
-        if (std::fabs(factor - last_waist_turning_factor_) < waist_factor_epsilon_)
-        {
-            return true;
-        }
-
+        if (!std::isfinite(factor)) return false;
+        factor = std::clamp(factor, -1.0, 1.0);
         std::lock_guard lock(target_mutex_);
-
-        if (std::fabs(factor) < waist_factor_epsilon_)
+        if (!state_active_) return false;
+        if (!waist_lifting_planer_) setWaistLiftingPlaner();
+        if (!waist_lifting_planer_) return false;
+        const bool continuing = waist_turning_active_ && waist_turning_planer_ && waist_turning_planer_->isSpeedMode();
+        if (std::abs(factor) < waist_factor_epsilon_)
         {
-            pending_waist_motion_ = nullptr;
+            cancelPendingWaist(PendingWaistKind::TURNING);
+            if (!continuing || last_waist_turning_factor_ == 0.0) return true;
+            return setWaistTurningFactorImpl(0.0);
+        }
+        if (continuing && !pending_waist_motion_ && !stop_to_zero_active_)
+        {
+            if (std::abs(factor - last_waist_turning_factor_) < waist_factor_epsilon_) return true;
             return setWaistTurningFactorImpl(factor);
         }
-
-        if (!isNonWaistMotionBusy() && !stop_to_zero_active_)
-        {
-            const double captured_factor = factor;
-            requestWaistOnlyMotionOrDefer(
-                [this, captured_factor]() { setWaistTurningFactorImpl(captured_factor); });
-            return true;
-        }
-
-        const double captured_factor = factor;
-        requestWaistMotionOrDefer([this, captured_factor]() { setWaistTurningFactorImpl(captured_factor); });
+        requestWaistMotionOrDefer([this, factor]() { setWaistTurningFactorImpl(factor); });
+        if (pending_waist_motion_) pending_waist_kind_ = PendingWaistKind::TURNING;
+        if (pending_motion_) pending_motion_waist_kind_ = PendingWaistKind::TURNING;
         return true;
     }
 
@@ -2967,9 +3006,9 @@ namespace arms_controller_common
             }
         }
 
+        const bool continuing = waist_turning_active_ && waist_turning_planer_->isSpeedMode();
         Eigen::Vector3d angles3d = Eigen::Vector3d::Zero();
-        if (waist_turning_active_ &&
-            waist_turning_joint_index_ < ctrl_interfaces_.last_sent_joint_positions_.size())
+        if (waist_turning_joint_index_ < ctrl_interfaces_.last_sent_joint_positions_.size())
         {
             // A speed change, especially a stop command, must continue from the
             // last commanded position. Starting from delayed hardware feedback
@@ -2992,11 +3031,20 @@ namespace arms_controller_common
             target_speed = 0.0;
         }
 
-        if (!waist_turning_planer_->initTargetLiftingSpeed(angles3d, target_speed, default_waist_turning_para_(1),
-                                                           default_waist_turning_para_(2), speedj_time,
-                                                           1.0 / ctrl_interfaces_.frequency_))
+        if (!continuing) waist_turning_planer_->setCurrentVelToZero();
+        const bool initialized = continuing
+            ? waist_turning_planer_->initTargetLiftingSpeedFromCache(
+                target_speed, default_waist_turning_para_(1), default_waist_turning_para_(2),
+                speedj_time, 1.0 / ctrl_interfaces_.frequency_)
+            : waist_turning_planer_->initTargetLiftingSpeed(
+                angles3d, target_speed, default_waist_turning_para_(1), default_waist_turning_para_(2),
+                speedj_time, 1.0 / ctrl_interfaces_.frequency_);
+        if (!initialized)
         {
             waist_turning_planer_->setCurrentVelToZero();
+            waist_turning_active_ = false;
+            last_waist_turning_factor_ = 0.0;
+            motion_mode_ = MotionMode::MOVEJ;
             return false;
         }
 

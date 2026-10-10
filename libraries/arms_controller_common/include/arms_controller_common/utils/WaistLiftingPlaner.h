@@ -40,9 +40,10 @@ namespace arms_controller_common
         bool initTargetPhiSpeed(const Eigen::Vector3d& init_joint_angle,
                                 double target_speed, double max_acc, double max_jerk,
                                 double total_time, double period = 0.01);
+        bool isSpeedMode() const { return type_speed_; }
         bool isPhiSpeedMode() const { return type_speed_ && phi_speed_; }
 
-        // 用缓存的升降位置/速度续接 speedj 规划（松手停升等，避免从关节角重算起点）
+        // 用当前模式缓存的位置/速度续接 speedj（升降、旋转或俯仰变速/停止）
         bool initTargetLiftingSpeedFromCache(double target_lifting_speed,
                                              double max_lifting_acc,
                                              double max_lifting_jerk,
@@ -136,10 +137,10 @@ namespace arms_controller_common
                              double total_time, double period);
         bool phi_speed_{false};
         double phi_fixed_z_{0.0};
-        // Fixed x/z phi range, rebuilt on each phi start; reused during speed updates.
-        bool phi_bounds_valid_{false};
-        double phi_lower_bound_{0.0};
-        double phi_upper_bound_{0.0};
+        // Scalar range for the current speed mode; rebuilt on start, reused on updates.
+        bool speed_bounds_valid_{false};
+        double speed_lower_bound_{0.0};
+        double speed_upper_bound_{0.0};
 
         // 用给定位置/速度初始化 speedj 规划器
         bool initSpeedJPlannerFromState(double start_pos, double start_vel,
