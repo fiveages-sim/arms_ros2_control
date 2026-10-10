@@ -89,16 +89,9 @@ RViz Joint Panel：绝对 / 相对基座 / 相对末端（手臂）或相对身�
 
 ### Full-body WBC Head 6D Marker
 
-旧关节 Marker 与 WBC 6D Marker 使用独立开关（均为本节点参数，**仅启动**）：
+`enable_wbc_head_tracking_marker`（本节点参数，**仅启动**，默认 `false`）打开 WBC Head XYZ+RPY 六轴 Marker。共享 YAML 中保持关闭；`full_body.launch.py` 只在实际选择 `ocs2_wbc_controller` 时覆盖，`split_body` 不覆盖。Marker 还受运行态门控：只有 FSM=OCS2 且 `WbcCurrentState.head_state=HEAD_TRACKING` 时插入，离开模式立即移除并停止发布。头部相机注视双手中点激活时（`head_midpoint_gaze_active=true`）`head_state` 会随之变为 `HEAD_GAZE`，Marker 走同一门控自动隐藏，VR 头部输入同样停止，无需单独处理。
 
-| 参数 | 用途 | 默认 | 生效时机 |
-|---|---|---|---|
-| `enable_head_control` | 旧头部 RPY-to-joint Marker，发布 `/head_joint_controller/target_joint_position` | `false` | 仅启动 |
-| `enable_wbc_head_tracking_marker` | WBC Head XYZ+RPY 六轴 Marker | `false` | 仅启动 |
-
-共享 YAML 中两个开关均保持关闭；`full_body.launch.py` 只在实际选择 `ocs2_wbc_controller` 时覆盖第二个开关，`split_body` 不覆盖。WBC Marker 还受运行态门控：只有 FSM=OCS2 且 `WbcCurrentState.head_state=HEAD_TRACKING` 时插入，离开模式立即移除并停止发布。头部相机注视双手中点激活时（`head_midpoint_gaze_active=true`）`head_state` 会随之变为 `HEAD_GAZE`，Marker 走同一门控自动隐藏，VR 头部输入同样停止，无需单独处理。
-
-每次进入该模式，Marker 先从 `marker_fixed_frame -> head_link_name` TF 同步当前完整位姿；模式内 Marker 表示最终目标，不持续跟随实际 Head 或 MPC 中间轨迹。自身发布后的短暂回显冷却避免 `head_target -> head_current_target -> Marker` 抖动，其他最终目标随后可通过 `head_current_target` 回写 Marker。旧 `/head_joint_controller/current_target_joint` 是关节数组，不接入 WBC 6D 回写链路。
+每次进入该模式，Marker 先从 `marker_fixed_frame -> head_link_name` TF 同步当前完整位姿；模式内 Marker 表示最终目标，不持续跟随实际 Head 或 MPC 中间轨迹。自身发布后的短暂回显冷却避免 `head_target -> head_current_target -> Marker` 抖动，其他最终目标随后可通过 `head_current_target` 回写 Marker。
 
 ## 参数说明
 

@@ -49,6 +49,10 @@ public:
         material_.reset();
         Ogre::TextureManager::getSingleton().remove(name_);
     }
+    void setLayout(float x, float y, float scale) {
+        panel_->setPosition(x, y);
+        panel_->setDimensions(width * scale, height * scale);
+    }
     void clear() {
         samples_.clear();
         last_ = {};

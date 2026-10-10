@@ -6,6 +6,12 @@
 #include <pluginlib/class_list_macros.hpp>
 
 namespace arms_rviz_control_plugin {
+TargetErrorDisplay::TargetErrorDisplay() {
+    scale_property_ = new rviz_common::properties::FloatProperty(
+        "Scale", 1.0f, "Size of the tracking-error overlay.", this, SLOT(updateScale()));
+    scale_property_->setMin(0.5f);
+    scale_property_->setMax(2.0f);
+}
 TargetErrorDisplay::~TargetErrorDisplay() {
     fsm_subscription_.reset();
     mode_subscription_.reset();
@@ -50,11 +56,15 @@ void TargetErrorDisplay::onInitialize() {
         [data = data_](arms_ros2_control_msgs::msg::WbcCurrentState::ConstSharedPtr message) {
             std::lock_guard<std::mutex> lock(data->mutex);
             using State = arms_ros2_control_msgs::msg::WbcCurrentState;
+            data->wbc_state_received = true;
             data->active = {message->left_arm_state == State::ARM_ENABLED,
                             message->right_arm_state == State::ARM_ENABLED,
                             message->body_state == State::BODY_TRACKING && message->head_state != State::HEAD_FORWARD,
                             message->head_state == State::HEAD_TRACKING};
         });
+}
+void TargetErrorDisplay::updateScale() {
+    if (dashboard_) dashboard_->setScale(scale_property_->getFloat());
 }
 void TargetErrorDisplay::onEnable() { elapsed_ = 1; }
 void TargetErrorDisplay::onDisable() { if (dashboard_) dashboard_->hide(); }
@@ -85,6 +95,7 @@ void TargetErrorDisplay::update(float wall_dt, float) {
     }
     if (!dashboard_) {
         dashboard_ = std::make_unique<ErrorDashboard>();
+        dashboard_->setScale(scale_property_->getFloat());
         dashboard_->show();
         elapsed_ = 0;
         return;  // Allow the initial text geometry to render before the layout refresh.
@@ -103,9 +114,15 @@ void TargetErrorDisplay::update(float wall_dt, float) {
             return;
         }
         samples = data_->samples;
-        active = data_->active;
+        if (data_->wbc_state_received) {
+            active = data_->active;
+        } else {
+            // Split / dual / single-arm ocs2_arm_controller: show ends that publish a target.
+            active = {true, samples[1][1].valid, samples[2][1].valid, samples[3][1].valid};
+        }
     }
     dashboard_->setActive(active);
+    dashboard_->setArmTitle(active[1]);
     const auto now = std::chrono::steady_clock::now();
     for (size_t row = 0; row < 4; ++row) {
         if (!active[row]) continue;

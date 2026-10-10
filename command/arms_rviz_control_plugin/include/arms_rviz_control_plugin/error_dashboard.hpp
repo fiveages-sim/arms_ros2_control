@@ -12,6 +12,7 @@
 #include <OgrePass.h>
 #include <OgreTextureUnitState.h>
 #include <QString>
+#include <algorithm>
 #include <array>
 #include <atomic>
 #include <cmath>
@@ -27,7 +28,7 @@ public:
         font_ = Ogre::FontManager::getSingleton().create(name_+"/font", Ogre::ResourceGroupManager::DEFAULT_RESOURCE_GROUP_NAME);
         font_->setType(Ogre::FT_TRUETYPE);
         font_->setSource("LiberationSans-Bold.ttf");
-        font_->setTrueTypeSize(40);
+        font_->setTrueTypeSize(80);
         font_->setTrueTypeResolution(192);
         font_->load();
         createMaterial("border", Ogre::ColourValue(0.43, 0.49, 0.57, 1));
@@ -37,31 +38,26 @@ public:
         panel_ = static_cast<Ogre::OverlayContainer*>(manager.createOverlayElement("Panel", name_+"/panel"));
         panel_->setMetricsMode(Ogre::GMM_PIXELS);
         panel_->setHorizontalAlignment(Ogre::GHA_RIGHT);
-        panel_->setPosition(-366, 16);
-        panel_->setDimensions(350, 574);
         overlay_->add2D(panel_);
-        const char* names[] = {"LEFT ARM", "RIGHT ARM", "BODY", "HEAD"};
+        const char* names[] = {"ARM", "RIGHT ARM", "BODY", "HEAD"};
         for (size_t row = 0; row < 4; ++row) {
-            const float top = row * 146;
             auto* card = static_cast<Ogre::BorderPanelOverlayElement*>(manager.createOverlayElement(
                 "BorderPanel", name_+"/card"+std::to_string(row)));
             card->setMetricsMode(Ogre::GMM_PIXELS);
-            card->setPosition(0, top);
-            card->setDimensions(350, 136);
-            card->setBorderSize(1);
             card->setBorderMaterialName(name_+"/border");
             panel_->addChild(card);
             cards_[row] = card;
             card->hide();
             text_parent_ = card;
-            addText(names[row], 12, 8, 24, Ogre::ColourValue::Black);
+            titles_[row] = addText(names[row], 12, 8, 24, Ogre::ColourValue::Black);
             for (size_t col = 0; col < 2; ++col) {
                 charts_[row][col] = std::make_unique<ErrorSparkline>(name_+"/chart"+std::to_string(row*2+col), card, 12+col*174);
                 values_[row][col] = addText("--", 12+col*174, 38, 46, muted());
-                addText(col == 0 ? "POS (mm)" : "ANG (deg)", 12+col*174, 86, 20, Ogre::ColourValue::Black);
+                units_[row][col] = addText(col == 0 ? "POS (mm)" : "ANG (deg)", 12+col*174, 86, 20, Ogre::ColourValue::Black);
             }
             status_[row] = addText("Waiting for poses", 12, 112, 16, Ogre::ColourValue::Black);
         }
+        applyLayout();
     }
     ~ErrorDashboard() {
         auto& manager = Ogre::OverlayManager::getSingleton();
@@ -85,19 +81,24 @@ public:
     ErrorDashboard& operator=(const ErrorDashboard&) = delete;
     void setActive(const std::array<bool, 4>& active) {
         if (active == active_) return;
-        size_t visible = 0;
         for (size_t row = 0; row < cards_.size(); ++row) {
             if (active[row] != active_[row]) {
                 for (auto& chart : charts_[row]) chart->clear();
             }
-            if (active[row]) {
-                cards_[row]->setPosition(0, 146*visible++);
-                cards_[row]->show();
-            } else {
-                cards_[row]->hide();
-            }
         }
         active_ = active;
+        applyLayout();
+    }
+    void setScale(float scale) {
+        scale = std::clamp(scale, 0.5f, 2.0f);
+        if (scale == scale_) return;
+        scale_ = scale;
+        applyLayout();
+    }
+    void setArmTitle(bool dual) {
+        const char* caption = dual ? "LEFT ARM" : "ARM";
+        if (titles_[0]->getCaption() == caption) return;
+        titles_[0]->setCaption(caption);
         layout_pending_ = true;
     }
     void clearHistory() { for (auto& row : charts_) for (auto& chart : row) chart->clear(); }
@@ -155,8 +156,44 @@ private:
         text_parent_->addChild(text);
         return text;
     }
-    static void setReading(Ogre::TextAreaOverlayElement* text, double value, bool valid,
-                           double green, double red) {
+    void applyLayout() {
+        const float s = scale_;
+        const float card_w = 350.f * s;
+        const float card_h = 136.f * s;
+        const float stride = 146.f * s;
+        size_t visible = 0;
+        for (size_t row = 0; row < cards_.size(); ++row) {
+            cards_[row]->setDimensions(card_w, card_h);
+            cards_[row]->setBorderSize(std::max(1.f, s));
+            if (active_[row]) {
+                cards_[row]->setPosition(0, stride * visible++);
+                cards_[row]->show();
+            } else {
+                cards_[row]->hide();
+            }
+            titles_[row]->setPosition(12.f * s, 8.f * s);
+            titles_[row]->setCharHeight(24.f * s);
+            titles_[row]->setDimensions(170.f * s, 24.f * s + 2);
+            for (size_t col = 0; col < 2; ++col) {
+                const float x = (12.f + col * 174.f) * s;
+                charts_[row][col]->setLayout(x, 38.f * s, s);
+                values_[row][col]->setPosition(x, 38.f * s);
+                values_[row][col]->setDimensions(170.f * s, 46.f * s + 2);
+                units_[row][col]->setPosition(x, 86.f * s);
+                units_[row][col]->setCharHeight(20.f * s);
+                units_[row][col]->setDimensions(170.f * s, 20.f * s + 2);
+            }
+            status_[row]->setPosition(12.f * s, 112.f * s);
+            status_[row]->setCharHeight(16.f * s);
+            status_[row]->setDimensions(card_w - 24.f * s, 16.f * s + 2);
+        }
+        const float height = visible == 0 ? card_h : (visible - 1) * stride + card_h;
+        panel_->setPosition(-(card_w + 16.f * s), 16.f * s);
+        panel_->setDimensions(card_w, height);
+        layout_pending_ = true;
+    }
+    void setReading(Ogre::TextAreaOverlayElement* text, double value, bool valid,
+                    double green, double red) {
         valid = valid && std::isfinite(value) && value >= 0 &&
                 std::isfinite(green) && std::isfinite(red) && green >= 0 && red > green;
         const auto caption = valid ? QString::number(value, 'f', 2).toStdString() : "--";
@@ -165,21 +202,24 @@ private:
         if (text->getCaption() != caption) text->setCaption(caption);
         if (text->getColour() != color) text->setColour(color);
         // Keep large readings inside their card without clipping the actual value.
-        const float height = caption.size() > 7 ? 32 : 46;
+        const float height = (caption.size() > 7 ? 32.f : 46.f) * scale_;
         if (text->getCharHeight() != height) text->setCharHeight(height);
     }
     std::array<std::array<std::unique_ptr<ErrorSparkline>, 2>, 4> charts_{};
     std::array<bool, 4> active_{};
+    float scale_{1};
     bool layout_pending_{true};
     std::string name_;
     Ogre::Overlay* overlay_{};
     Ogre::OverlayContainer* panel_{};
     Ogre::FontPtr font_;
     std::vector<Ogre::MaterialPtr> materials_;
-    std::array<Ogre::OverlayContainer*, 4> cards_{};
+    std::array<Ogre::BorderPanelOverlayElement*, 4> cards_{};
     Ogre::OverlayContainer* text_parent_{};
     std::vector<Ogre::TextAreaOverlayElement*> texts_;
+    std::array<Ogre::TextAreaOverlayElement*, 4> titles_{};
     std::array<std::array<Ogre::TextAreaOverlayElement*, 2>, 4> values_{};
+    std::array<std::array<Ogre::TextAreaOverlayElement*, 2>, 4> units_{};
     std::array<Ogre::TextAreaOverlayElement*, 4> status_{};
 };
 }

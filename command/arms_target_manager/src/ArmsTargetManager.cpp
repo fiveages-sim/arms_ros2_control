@@ -164,8 +164,7 @@ namespace arms_ros2_control::command
 
     bool ArmsTargetManager::shouldShowHeadMarker() const
     {
-        return head_marker_ &&
-            (head_marker_->isLegacyEnabled() || shouldShowWbcHeadMarker());
+        return shouldShowWbcHeadMarker();
     }
 
     void ArmsTargetManager::setHeadVrActive(bool active)
@@ -191,8 +190,7 @@ namespace arms_ros2_control::command
         }
 
         const bool show_wbc = shouldShowWbcHeadMarker();
-        const bool show_legacy = head_marker_->isLegacyEnabled() && !show_wbc;
-        if (!show_wbc && !show_legacy)
+        if (!show_wbc)
         {
             server_->erase("head_target");
             wbc_head_marker_visible_ = false;
@@ -422,7 +420,6 @@ namespace arms_ros2_control::command
 
         head_marker_ = std::make_shared<HeadMarker>(
             node_, marker_factory_, tf_buffer_, marker_fixed_frame_, control_base_frame_, publish_rate_,
-            "/head_joint_controller/target_joint_position",
             [this](const std::string& marker_name, const geometry_msgs::msg::Pose& pose)
             {
                 if (!server_ || !shouldShowWbcHeadMarker())
@@ -506,11 +503,6 @@ namespace arms_ros2_control::command
             initMarker("right_arm_target", "right_arm", right_menu_handler_);
         }
 
-        if (head_marker_ && head_marker_->isLegacyEnabled())
-        {
-            initMarker("head_target", "head", head_menu_handler_);
-        }
-
         createPublishersAndSubscribers();
 
         marker_update_timer_ = node_->create_wall_timer(
@@ -569,9 +561,8 @@ namespace arms_ros2_control::command
         {
             if (shouldShowHeadMarker())
             {
-                const bool wbc = shouldShowWbcHeadMarker();
                 auto marker = head_marker_->createMarker(
-                    name, head_marker_->getPose(), wbc || enable_interaction, wbc, current_mode_);
+                    name, head_marker_->getPose(), enable_interaction, current_mode_);
                 if (head_vr_active_)
                 {
                     // Keep the visible arrow; the factory's disabled mode hides it too.
@@ -705,23 +696,6 @@ namespace arms_ros2_control::command
                     head_marker_->publishTargetPose();
                 }
             }
-            else if (head_marker_ && head_marker_->isLegacyEnabled())
-            {
-                geometry_msgs::msg::Pose clamped_pose = transformed_pose;
-                bool was_clamped = head_marker_->clampPoseRotation(clamped_pose);
-                head_marker_->setPose(clamped_pose);
-
-                if (was_clamped && server_ && isStateDisabled(current_controller_state_))
-                {
-                    setServerPose(marker_name, clamped_pose);
-                    markPendingChanges();
-                }
-
-                if (shouldStreamPoseCommands())
-                {
-                    head_marker_->publishTargetJointAngles();
-                }
-            }
         }
         else if (marker_name == "body_target" && body_marker_)
         {
@@ -801,10 +775,6 @@ namespace arms_ros2_control::command
             if (shouldShowWbcHeadMarker())
             {
                 head_marker_->publishTargetPose(true, true);
-            }
-            else if (head_marker_ && head_marker_->isLegacyEnabled())
-            {
-                head_marker_->publishTargetJointAngles(true);
             }
             return;
         }
@@ -1160,15 +1130,6 @@ namespace arms_ros2_control::command
 
     void ArmsTargetManager::createPublishersAndSubscribers()
     {
-        if (head_marker_ && head_marker_->isLegacyEnabled())
-        {
-            head_joint_state_subscription_ = node_->create_subscription<sensor_msgs::msg::JointState>(
-                "/joint_states", 10, [this](const sensor_msgs::msg::JointState::ConstSharedPtr msg)
-                {
-                    updateHeadMarkerFromTopic(msg);
-                });
-        }
-
         if (dual_arm_mode_)
         {
             dual_target_stamped_publisher_ = node_->create_publisher<nav_msgs::msg::Path>(
@@ -1363,26 +1324,6 @@ namespace arms_ros2_control::command
             callback)
     {
         wbc_state_callback_ = std::move(callback);
-    }
-
-    void ArmsTargetManager::updateHeadMarkerFromTopic(
-        const sensor_msgs::msg::JointState::ConstSharedPtr& joint_msg)
-    {
-        if (!head_marker_ || !head_marker_->isLegacyEnabled())
-        {
-            return;
-        }
-
-        if (!isStateDisabled(current_controller_state_))
-        {
-            return;
-        }
-
-        geometry_msgs::msg::Pose updated_pose = head_marker_->updateFromJointState(
-            joint_msg, isStateDisabled(current_controller_state_));
-
-        setServerPose("head_target", updated_pose);
-        markPendingChanges();
     }
 
     bool ArmsTargetManager::isStateDisabled(int32_t state) const

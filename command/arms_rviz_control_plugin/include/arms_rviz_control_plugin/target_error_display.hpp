@@ -1,5 +1,6 @@
 #pragma once
 #include <rviz_common/display.hpp>
+#include <rviz_common/properties/float_property.hpp>
 #include <rclcpp/rclcpp.hpp>
 #include <geometry_msgs/msg/pose_stamped.hpp>
 #include <std_msgs/msg/int32.hpp>
@@ -14,7 +15,7 @@ namespace arms_rviz_control_plugin {
 class TargetErrorDisplay : public rviz_common::Display {
     Q_OBJECT
 public:
-    TargetErrorDisplay() = default;
+    TargetErrorDisplay();
     ~TargetErrorDisplay() override;
     void update(float wall_dt, float ros_dt) override;
     void reset() override;
@@ -24,6 +25,8 @@ protected:
     void onInitialize() override;
     void onEnable() override;
     void onDisable() override;
+private Q_SLOTS:
+    void updateScale();
 private:
     struct Sample {
         geometry_msgs::msg::PoseStamped pose{};
@@ -35,6 +38,7 @@ private:
         std::array<std::array<Sample, 2>, 4> samples{};
         std::array<bool, 4> active{};
         bool ocs2_active{false};
+        bool wbc_state_received{false};
         uint64_t fsm_generation{0};
     };
     std::shared_ptr<Data> data_{std::make_shared<Data>()};
@@ -42,6 +46,7 @@ private:
     rclcpp::Subscription<arms_ros2_control_msgs::msg::WbcCurrentState>::SharedPtr mode_subscription_;
     rclcpp::Subscription<std_msgs::msg::Int32>::SharedPtr fsm_subscription_;
     std::unique_ptr<ErrorDashboard> dashboard_;
+    rviz_common::properties::FloatProperty* scale_property_{};
     uint64_t fsm_generation_{0};
     std::array<double, 4> thresholds_{5, 20, 1, 5};
     float elapsed_{0};

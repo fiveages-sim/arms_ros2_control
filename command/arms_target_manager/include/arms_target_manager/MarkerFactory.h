@@ -7,7 +7,6 @@
 #include <memory>
 #include <string>
 #include <vector>
-#include <set>
 #include <rclcpp/rclcpp.hpp>
 #include <geometry_msgs/msg/pose.hpp>
 #include <visualization_msgs/msg/interactive_marker.hpp>
@@ -72,15 +71,12 @@ namespace arms_ros2_control::command
          * @param name marker 名称
          * @param pose marker 的位姿
          * @param enable_interaction 是否启用交互功能
-         * @param available_joints 可用的头部关节名称集合（head_roll, head_pitch, head_yaw）
          * @return 创建好的 InteractiveMarker
          */
         visualization_msgs::msg::InteractiveMarker createHeadMarker(
             const std::string& name,
             const geometry_msgs::msg::Pose& pose,
             bool enable_interaction,
-            const std::set<std::string>& available_joints,
-            bool full_6d,
             MarkerState mode) const;
 
     private:
