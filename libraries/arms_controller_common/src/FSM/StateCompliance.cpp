@@ -108,6 +108,7 @@ namespace arms_controller_common
         updateParam();
         setupWrenchSubscriptions();
         setupZeroWrenchService();
+        setupSurfaceTrackingService();
     }
 
     FSMStateName StateCompliance::checkChange()
@@ -358,6 +359,38 @@ namespace arms_controller_common
         updateParam();
         const WrenchSnapshot snapshot = sampleAndPublishWrenches(time);
         updateZeroCalibration(snapshot, time, period);
+    }
+
+    void StateCompliance::setupSurfaceTrackingService()
+    {
+        if (!node_) return;
+        surface_tracking_service_ = node_->create_service<arms_ros2_control_msgs::srv::SetSurfaceTracking>(
+            "set_surface_tracking",
+            [this](const std::shared_ptr<arms_ros2_control_msgs::srv::SetSurfaceTracking::Request> request,
+                   std::shared_ptr<arms_ros2_control_msgs::srv::SetSurfaceTracking::Response> response)
+            {
+                if (!std::isfinite(request->max_bias_angle) || request->max_bias_angle < 0.0)
+                {
+                    response->success = false;
+                    response->message = "max_bias_angle must be finite and nonnegative (radians)";
+                    return;
+                }
+                try
+                {
+                    const auto result = node_->set_parameters_atomically({
+                        rclcpp::Parameter("compliance_align_enable", request->enable),
+                        rclcpp::Parameter("compliance_align_max", request->max_bias_angle)});
+                    response->success = result.successful;
+                    response->message = result.successful
+                        ? "Surface tracking configured; effective in COMPLIANCE with valid calibrated FT and position-controlled rotation axes"
+                        : result.reason;
+                }
+                catch (const std::exception& exception)
+                {
+                    response->success = false;
+                    response->message = exception.what();
+                }
+            });
     }
 
     void StateCompliance::setupZeroWrenchService()
