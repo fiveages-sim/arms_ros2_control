@@ -66,8 +66,7 @@ namespace ocs2::mobile_manipulator
                                AutoDeclareFunc auto_declare)
             : node_(node), ctrl_interfaces_(ctrl_interfaces)
         {
-            cached_ob_state_ = auto_declare("cached_ob_state", true);
-            joint_speed_threshold_ = auto_declare("joint_speed_threshold", 0.1);
+            closed_loop_ = auto_declare("closed_loop", true);
             hardware_latency_ = auto_declare("hardware_latency", 0.2);
             // Declare dir before enabled so both can be applied together from yaml/callback.
             traj_record_dir_ = auto_declare("traj_record_dir", std::string("/tmp/traj_record"));
@@ -145,7 +144,9 @@ namespace ocs2::mobile_manipulator
             }
             visualizer_->initialize();
             visualizer_->setPosePublishPeriod(dds_publish_period_sec_);
-            RCLCPP_INFO(node_->get_logger(), "Future time offset: %.2f seconds", future_time_offset_);
+            RCLCPP_INFO(node_->get_logger(), "Future time offset: %.2f control cycles (%.3f ms at %d Hz)",
+                        future_time_offset_, 1000.0 * future_time_offset_ / ctrl_interfaces_.frequency_,
+                        ctrl_interfaces_.frequency_);
 
             auto_declare("movel_trajectory_duration", 2.0);
             auto_declare("movel_duration", 2.0);
@@ -183,7 +184,6 @@ namespace ocs2::mobile_manipulator
             observation_.input = vector_t::Zero(interface_->getManipulatorModelInfo().inputDim);
             observation_.time = 0.0;
 
-            // Initialize cached state
             last_execute_time_ = node_->now();
             cached_last_action_ = observation_.state;
         }
@@ -324,13 +324,12 @@ namespace ocs2::mobile_manipulator
         std::string planning_urdf_path_; // xacro-generated URDF cache path
         std::vector<std::string> joint_names_;
         bool dual_arm_mode_;
-        double future_time_offset_; // Future time offset
-        /// cached MPC observation state (which is different from real observation on purpose) 
-        bool cached_ob_state_;
-        double joint_speed_threshold_;
+        double future_time_offset_; // Lookahead in controller cycles (seconds = offset / frequency).
+        /// Closed loop uses measured state; open loop uses cached commands during hardware latency.
+        std::atomic_bool closed_loop_{true};
+        std::atomic<double> hardware_latency_{0.2};
         rclcpp::Time last_execute_time_;
         vector_t cached_last_action_;
-        double hardware_latency_;
         std::string traj_record_dir_{"/tmp/traj_record"};
         rclcpp::node_interfaces::OnSetParametersCallbackHandle::SharedPtr parameter_callback_handle_;
         rcl_interfaces::msg::SetParametersResult on_parameter_change(

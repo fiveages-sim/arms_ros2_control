@@ -33,6 +33,38 @@ ros2 launch ocs2_arm_controller demo.launch.py robot:=cr5
 3. 设置 Fixed Frame 为配置的 frame_id
 4. 拖拽 marker 设置目标 pose
 
+## VR 双臂目标滤波配置
+
+在机器人 `config/ocs2/target_manager.yaml` 的 `ros__parameters` 下配置：
+
+```yaml
+/**:
+  ros__parameters:
+    vr_target_smoothing_order: 2
+    vr_target_smoothing_tau_s: 0.05
+```
+
+| `vr_target_smoothing_order` | 模式 | 每级时间常数 |
+|---|---|---|
+| `0` | 原始目标旁路，不滤波 | 不使用 `tau` |
+| `1` | 一阶低通 | `tau` |
+| `2`（默认） | 两级一阶低通串联 | `tau/2` |
+
+配置同时作用于左右臂目标位置和姿态；旁路仍保留 VR 映射、坐标转换和 200 Hz 发布。
+它不直接过滤 OCS2 输出的关节速度，也不作用于头部、腰部、底盘或夹爪指令。
+
+阶数是只读启动参数，修改配置后需重启节点。`vr_target_smoothing_tau_s` 默认 `0.05` 秒，
+可以在线调整（节点名按实际命名空间修改）：
+
+```bash
+ros2 param set /arms_target_manager vr_target_smoothing_tau_s 0.05
+```
+
+`tau=0.0` 也表示旁路，此时阶数不生效；切为旁路可能产生目标跳变。
+阶数只接受整数 `0/1/2`，`tau` 只接受有限、非负的浮点数。
+滤波会引入跟随延迟，不提供速度、加速度或 jerk 限制，也不保证 policy 切换连续。
+实现与历史对比见 [VR 输入说明](VR_INPUT_HANDLER_README.md#双臂目标滤波配置)。
+
 ## PoseBasedReferenceManager 入站话题（左臂；右臂对称）
 
 | Topic | 消息 | 行为 | 主要客户端 |
