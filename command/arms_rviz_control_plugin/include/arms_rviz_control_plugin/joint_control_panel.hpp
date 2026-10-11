@@ -56,6 +56,7 @@ namespace arms_rviz_control_plugin
         void onCategoryChanged();
         void onWaistLiftingSliderChanged(int value);
         void onWaistTurningSliderChanged(int value);
+        void onWaistPhiSliderChanged(int value);
         void onDisplayUnitChanged();
         void onPoseModeChanged();
 
@@ -66,10 +67,14 @@ namespace arms_rviz_control_plugin
         void onWaistDownReleased();
 
         void onWaistLeftPressed();
+        void onWaistForwardPressed();
         void onWaistLeftReleased();
+        void onWaistForwardReleased();
 
         void onWaistRightPressed();
+        void onWaistBackwardPressed();
         void onWaistRightReleased();
+        void onWaistBackwardReleased();
 
         void onWaistRepeatTimeout();
 
@@ -106,6 +111,7 @@ namespace arms_rviz_control_plugin
         void initializeJoints(const std::vector<std::string>& joint_names_source);
         void publishWaistLifting(double value);
         void publishWaistTurning(double value);
+        void publishWaistPhi(double value);
 
         // UI 单位成对：米+弧度 / 厘米+角度；内部与 ROS 始终为 m、rad
         // 末端位姿 XYZ/RPY 继续使用下列换算；普通关节使用类型感知接口
@@ -153,11 +159,13 @@ namespace arms_rviz_control_plugin
 
         double getWaistLiftingScale() const;
         double getWaistTurningScale() const;
+        double getWaistPhiScale() const;
         void updateWaistScaleLabels();
 
         void updateWaistRepeatTimerState();
         void stopWaistLifting();
         void stopWaistTurning();
+        void stopWaistPhi();
 
         void updateWaistControlsVisibility(bool visible);
 
@@ -194,6 +202,7 @@ namespace arms_rviz_control_plugin
         rclcpp::Subscription<arms_ros2_control_msgs::msg::WbcCurrentState>::SharedPtr wbc_current_state_subscriber_;
         rclcpp::Publisher<std_msgs::msg::Float64>::SharedPtr waist_lifting_publisher_;
         rclcpp::Publisher<std_msgs::msg::Float64>::SharedPtr waist_turning_publisher_;
+        rclcpp::Publisher<std_msgs::msg::Float64>::SharedPtr waist_phi_publisher_;
         rclcpp::Subscription<std_msgs::msg::Float64MultiArray>::SharedPtr body_current_target_subscriber_;
 
         // Frame IDs: base from current_target (or controller base_frame); EE / body from controller params
@@ -293,18 +302,26 @@ namespace arms_rviz_control_plugin
         std::unique_ptr<QLabel> waist_lifting_value_label_;
 
         std::unique_ptr<QVBoxLayout> waist_turning_layout_;
+        std::unique_ptr<QVBoxLayout> waist_phi_layout_;
         std::unique_ptr<QHBoxLayout> waist_turning_slider_layout_;
+        std::unique_ptr<QHBoxLayout> waist_phi_slider_layout_;
         std::unique_ptr<QLabel> waist_turning_label_;
+        std::unique_ptr<QLabel> waist_phi_label_;
         std::unique_ptr<QSlider> waist_turning_slider_;
+        std::unique_ptr<QSlider> waist_phi_slider_;
         std::unique_ptr<QLabel> waist_turning_value_label_;
+        std::unique_ptr<QLabel> waist_phi_value_label_;
 
         std::unique_ptr<QHBoxLayout> waist_button_layout_top_;
         std::unique_ptr<QHBoxLayout> waist_button_layout_bottom_;
+        std::unique_ptr<QHBoxLayout> waist_button_layout_phi_;
 
         std::unique_ptr<QPushButton> waist_up_button_;
         std::unique_ptr<QPushButton> waist_down_button_;
         std::unique_ptr<QPushButton> waist_left_button_;
+        std::unique_ptr<QPushButton> waist_forward_button_;
         std::unique_ptr<QPushButton> waist_right_button_;
+        std::unique_ptr<QPushButton> waist_backward_button_;
 
         std::unique_ptr<QTimer> waist_repeat_timer_;
 
@@ -315,7 +332,9 @@ namespace arms_rviz_control_plugin
         bool waist_up_pressed_ = false;
         bool waist_down_pressed_ = false;
         bool waist_left_pressed_ = false;
+        bool waist_forward_pressed_ = false;
         bool waist_right_pressed_ = false;
+        bool waist_backward_pressed_ = false;
         bool is_waist_enabled_ = false;
         bool waist_enabled_checked_ = false;
         bool shouldShowWaistControls() const;

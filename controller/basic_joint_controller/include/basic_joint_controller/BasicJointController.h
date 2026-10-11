@@ -122,7 +122,6 @@ namespace basic_joint_controller
 
         // body motion
         bool waist_lifting_enabled_{false};
-        rclcpp::Subscription<std_msgs::msg::Float64>::SharedPtr waist_lifting_subscription_;
         rclcpp::Subscription<std_msgs::msg::Float64MultiArray>::SharedPtr waist_lifting_pose_relative_subscription_;
         rclcpp::Subscription<std_msgs::msg::Float64MultiArray>::SharedPtr waist_lifting_pose_absolute_subscription_;
         std::shared_ptr<tf2_ros::Buffer> tf_buffer_;
@@ -132,5 +131,6 @@ namespace basic_joint_controller
 
         rclcpp::Subscription<std_msgs::msg::Float64>::SharedPtr waist_lifting_command_subscription_;
         rclcpp::Subscription<std_msgs::msg::Float64>::SharedPtr waist_turning_command_subscription_;
+        rclcpp::Subscription<std_msgs::msg::Float64>::SharedPtr waist_phi_command_subscription_;
     };
 }

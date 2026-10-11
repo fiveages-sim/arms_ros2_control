@@ -245,19 +245,7 @@ ros2 topic pub --once /left_hand_controller/target_percent \
   std_msgs/msg/Float64 "data: 0.6"   # 打开至 60%
 ```
 
-### 5.5 腰部升降 — 位置控制
-
-**话题：** `/{controller_name}/waist_lifting`  
-**消息类型：** `std_msgs/Float64`  
-**前提：** `waist_lifting_enabled: true`，当前状态 MOVEJ
-
-相对当前位置移动指定距离（米）。
-
-```bash
-ros2 topic pub --once /body_controller/waist_lifting std_msgs/msg/Float64 "data: 0.05"
-```
-
-### 5.6 腰部升降 — 局部 x/z/phi 相对移动
+### 5.5 腰部升降 — 局部 x/z/phi 相对移动
 
 **话题：** `/{controller_name}/waist_lifting_pose_relative`  
 **消息类型：** `std_msgs/Float64MultiArray`  
@@ -271,7 +259,7 @@ ros2 topic pub --once /body_controller/waist_lifting_pose_relative \
   std_msgs/msg/Float64MultiArray "{data: [0.02, 0.05, 0.10]}"
 ```
 
-### 5.7 腰部升降 — x/z/phi 绝对目标
+### 5.6 腰部升降 — x/z/phi 绝对目标
 
 **话题：** `/{controller_name}/waist_lifting_pose_absolute`  
 **消息类型：** `std_msgs/Float64MultiArray`  
@@ -288,14 +276,14 @@ ros2 topic pub --once /body_controller/waist_lifting_pose_relative \
 
 默认对齐 **FiveAges W2**（`base_footprint` / `body_base`）。没有这两个 link 的机型需覆盖，例如 ARX Lift / Lift2S：`base_link` / `lift_link`。
 
-仅高度类指令（`waist_lifting`、`waist_lifting_command`、`target_joint_position`）**不依赖**这两个坐标系。
+仅高度类指令（`waist_lifting_command`、`target_joint_position`）**不依赖**这两个坐标系。
 
 ```bash
 ros2 topic pub --once /body_controller/waist_lifting_pose_absolute \
   std_msgs/msg/Float64MultiArray "{data: [0.12, 0.45, 0.20]}"
 ```
 
-### 5.8 腰部升降 — 速度系数
+### 5.7 腰部升降 — 速度系数
 
 **话题：** `/{controller_name}/waist_lifting_command`  
 **消息类型：** `std_msgs/Float64`（系数范围：`[-1.0, 1.0]`）  
@@ -308,7 +296,7 @@ ros2 topic pub /body_controller/waist_lifting_command std_msgs/msg/Float64 "data
 ros2 topic pub --once /body_controller/waist_lifting_command std_msgs/msg/Float64 "data: 0.0"  # 停止
 ```
 
-### 5.9 腰部转向 — 速度系数
+### 5.8 腰部转向 — 速度系数
 
 **话题：** `/{controller_name}/waist_turning_command`  
 **消息类型：** `std_msgs/Float64`（系数范围：`[-1.0, 1.0]`）  
@@ -319,6 +307,24 @@ ros2 topic pub --once /body_controller/waist_lifting_command std_msgs/msg/Float6
 ```bash
 ros2 topic pub /body_controller/waist_turning_command std_msgs/msg/Float64 "data: -0.3"  # 左转
 ```
+
+### 5.9 腰部俯仰速度比例
+
+**话题：** `/{controller_name}/waist_phi_command`
+**消息类型：** `std_msgs/msg/Float64`，比例范围 `[-1, 1]`。
+
+要求控制器已激活、处于 MOVEJ、启用 `waist_lifting_enabled: true` 且已配置俯仰能力。正值前倾，负值后仰，`0.0` 减速停止。非零命令持续执行，直到停止或触及限位；仅停止发布消息不会发送停止指令。有限数值会限幅，NaN/Inf 被拒绝。
+
+`waist_phi_default_parameter: [0.25, 1.0, 5.0]` 依次为最大角速度（rad/s）、角加速度（rad/s²）、角 jerk（rad/s³），均须为正值，在开始一段新俯仰运动时读取；按实际机型关节限制调整。Basic、OCS2 Arm 和 WBC 提供相同接口。
+
+单关节腰部使用 `waist_single_joint_pitch_joint` 及其方向/偏置映射，保持升降位置；三关节腰部保持端点 x/z，通过现有逆解输出关节位置。升降、转向与俯仰互斥，退出状态或停用控制器会清除运动。无 lina 后端采用加速度限制，不提供 jerk 曲线整形。
+
+```bash
+ros2 topic pub --once /body_controller/waist_phi_command std_msgs/msg/Float64 "data: 0.3"
+ros2 topic pub --once /body_controller/waist_phi_command std_msgs/msg/Float64 "data: 0.0"
+```
+
+Python 在连接前手动配置 `waist_phi_command_topic`，即可复用 `send_waist_phi_velocity_scale()`；本次不增加自动检测。
 
 ---
 
@@ -333,11 +339,11 @@ ros2 topic pub /body_controller/waist_turning_command std_msgs/msg/Float64 "data
 | `/my_controller/target_joint_trajectory` | `JointTrajectory` | MOVEJ | 多路点轨迹 |
 | `/my_controller/target_command` | `Int32` (0/1) | MOVEJ | 灵巧手开关控制 |
 | `/my_controller/target_percent` | `Float64` (0~1) | MOVEJ | 灵巧手比例控制 |
-| `/my_controller/waist_lifting` | `Float64` | MOVEJ | 腰部升降距离 |
 | `/my_controller/waist_lifting_pose_relative` | `Float64MultiArray` | MOVEJ | 腰部局部相对位移 `[dx, dz, dphi]` |
 | `/my_controller/waist_lifting_pose_absolute` | `Float64MultiArray` | MOVEJ | 绝对目标 `[x, z, phi]`（TF 坐标系可配置） |
 | `/my_controller/waist_lifting_command` | `Float64` | MOVEJ | 腰部升降速度系数 |
 | `/my_controller/waist_turning_command` | `Float64` | MOVEJ | 腰部转向速度系数 |
+| `/my_controller/waist_phi_command` | `Float64` | MOVEJ | 腰部俯仰速度比例 |
 
 ---
 

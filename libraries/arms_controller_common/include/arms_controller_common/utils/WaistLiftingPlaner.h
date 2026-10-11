@@ -12,6 +12,11 @@
 
 namespace arms_controller_common
 {
+    // 升降与俯仰共用此规划器：两者都是腰部平面位姿 (x, z, phi) 的变化，
+    // 三关节结构下使用同一组腰部关节及同一套正逆运动学、关节限位。
+    // 速度模式下，升降保持 x/phi、规划 z；俯仰保持 x/z、规划 phi，
+    // 由 phi_speed_ 区分，复用速度规划、减速停止逻辑及当前关节状态，
+    // 避免独立俯仰规划器重复维护这些逻辑和状态。类名沿用原有升降命名。
     class WaistLiftingPlaner
     {
     public:
@@ -31,7 +36,14 @@ namespace arms_controller_common
                                     const double total_time,
                                     const double period = 0.01);
 
-        // 用缓存的升降位置/速度续接 speedj 规划（松手停升等，避免从关节角重算起点）
+        // 连续俯仰速度：保持 x/z，复用 speedj 与现有关节映射/逆解。
+        bool initTargetPhiSpeed(const Eigen::Vector3d& init_joint_angle,
+                                double target_speed, double max_acc, double max_jerk,
+                                double total_time, double period = 0.01);
+        bool isSpeedMode() const { return type_speed_; }
+        bool isPhiSpeedMode() const { return type_speed_ && phi_speed_; }
+
+        // 用当前模式缓存的位置/速度续接 speedj（升降、旋转或俯仰变速/停止）
         bool initTargetLiftingSpeedFromCache(double target_lifting_speed,
                                              double max_lifting_acc,
                                              double max_lifting_jerk,
@@ -120,6 +132,16 @@ namespace arms_controller_common
                                               Eigen::Vector3d& output_xz_phi);
 
     private:
+        bool initTargetSpeed(const Eigen::Vector3d& init_joint_angle,
+                             double target_speed, double max_acc, double max_jerk,
+                             double total_time, double period);
+        bool phi_speed_{false};
+        double phi_fixed_z_{0.0};
+        // Scalar range for the current speed mode; rebuilt on start, reused on updates.
+        bool speed_bounds_valid_{false};
+        double speed_lower_bound_{0.0};
+        double speed_upper_bound_{0.0};
+
         // 用给定位置/速度初始化 speedj 规划器
         bool initSpeedJPlannerFromState(double start_pos, double start_vel,
                                         double target_vel, double max_acc,

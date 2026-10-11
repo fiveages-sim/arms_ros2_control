@@ -162,6 +162,35 @@ namespace arms_rviz_control_plugin
         waist_turning_layout_->addLayout(waist_turning_slider_layout_.get());
         waist_control_layout_->addLayout(waist_turning_layout_.get());
 
+        // Phi scale
+        waist_phi_layout_ = std::make_unique<QVBoxLayout>();
+        waist_phi_layout_->setSpacing(4);
+
+        waist_phi_label_ = std::make_unique<QLabel>("腰部俯仰速度比例:", waist_group_box_.get());
+        waist_phi_label_->setStyleSheet("QLabel { font-weight: bold; }");
+        waist_phi_layout_->addWidget(waist_phi_label_.get());
+
+        waist_phi_slider_layout_ = std::make_unique<QHBoxLayout>();
+
+        waist_phi_slider_ = std::make_unique<QSlider>(Qt::Horizontal, waist_group_box_.get());
+        waist_phi_slider_->setRange(0, 100);
+        waist_phi_slider_->setValue(50);
+        waist_phi_slider_->setSingleStep(1);
+        waist_phi_slider_->setPageStep(5);
+
+        waist_phi_value_label_ = std::make_unique<QLabel>("0.50", waist_group_box_.get());
+        waist_phi_value_label_->setMinimumWidth(50);
+        waist_phi_value_label_->setAlignment(Qt::AlignRight | Qt::AlignVCenter);
+
+        connect(waist_phi_slider_.get(), &QSlider::valueChanged,
+                this, &JointControlPanel::onWaistPhiSliderChanged);
+
+        waist_phi_slider_layout_->addWidget(waist_phi_slider_.get());
+        waist_phi_slider_layout_->addWidget(waist_phi_value_label_.get());
+
+        waist_phi_layout_->addLayout(waist_phi_slider_layout_.get());
+        waist_control_layout_->addLayout(waist_phi_layout_.get());
+
         // Buttons
         waist_button_layout_top_ = std::make_unique<QHBoxLayout>();
         waist_button_layout_bottom_ = std::make_unique<QHBoxLayout>();
@@ -200,6 +229,20 @@ namespace arms_rviz_control_plugin
 
         waist_control_layout_->addLayout(waist_button_layout_top_.get());
         waist_control_layout_->addLayout(waist_button_layout_bottom_.get());
+
+        waist_button_layout_phi_ = std::make_unique<QHBoxLayout>();
+        waist_forward_button_ = std::make_unique<QPushButton>("前倾", waist_group_box_.get());
+        waist_backward_button_ = std::make_unique<QPushButton>("后仰", waist_group_box_.get());
+        for (auto* button : {waist_forward_button_.get(), waist_backward_button_.get()})
+            button->setStyleSheet("QPushButton { background-color: #f0ad4e; color: white; font-weight: bold; padding: 8px; }");
+        connect(waist_forward_button_.get(), &QPushButton::pressed, this, &JointControlPanel::onWaistForwardPressed);
+        connect(waist_forward_button_.get(), &QPushButton::released, this, &JointControlPanel::onWaistForwardReleased);
+        connect(waist_backward_button_.get(), &QPushButton::pressed, this, &JointControlPanel::onWaistBackwardPressed);
+        connect(waist_backward_button_.get(), &QPushButton::released, this, &JointControlPanel::onWaistBackwardReleased);
+        waist_button_layout_phi_->addWidget(waist_forward_button_.get());
+        waist_button_layout_phi_->addWidget(waist_backward_button_.get());
+        waist_control_layout_->addLayout(waist_button_layout_phi_.get());
+
 
         waist_repeat_timer_ = std::make_unique<QTimer>(this);
         waist_repeat_timer_->setInterval(100);
@@ -608,6 +651,9 @@ namespace arms_rviz_control_plugin
                 waist_turning_publisher_ = node_->create_publisher<std_msgs::msg::Float64>(
                     "/" + waist_controller + "/waist_turning_command", 10);
 
+                waist_phi_publisher_ = node_->create_publisher<std_msgs::msg::Float64>(
+                    "/" + waist_controller + "/waist_phi_command", 10);
+
                 body_current_target_subscriber_ = node_->create_subscription<std_msgs::msg::Float64MultiArray>(
                     "/" + waist_controller + "/current_target_joint", 10,
                     std::bind(&JointControlPanel::onBodyCurrentTargetReceived, this, std::placeholders::_1));
@@ -620,6 +666,7 @@ namespace arms_rviz_control_plugin
             {
                 waist_lifting_publisher_.reset();
                 waist_turning_publisher_.reset();
+                waist_phi_publisher_.reset();
                 body_current_target_subscriber_.reset();
 
                 if (!getWaistControllerName().empty())
@@ -789,6 +836,8 @@ namespace arms_rviz_control_plugin
             waist_down_pressed_ = false;
             waist_left_pressed_ = false;
             waist_right_pressed_ = false;
+            waist_forward_pressed_ = false;
+            waist_backward_pressed_ = false;
 
             if (waist_repeat_timer_ && waist_repeat_timer_->isActive())
             {
@@ -797,6 +846,7 @@ namespace arms_rviz_control_plugin
 
             stopWaistLifting();
             stopWaistTurning();
+            stopWaistPhi();
         }
     }
 
@@ -1386,6 +1436,11 @@ namespace arms_rviz_control_plugin
         updateWaistScaleLabels();
     }
 
+    void JointControlPanel::onWaistPhiSliderChanged(int)
+    {
+        updateWaistScaleLabels();
+    }
+
     double JointControlPanel::getWaistLiftingScale() const
     {
         if (!waist_lifting_slider_)
@@ -1404,6 +1459,15 @@ namespace arms_rviz_control_plugin
         return static_cast<double>(waist_turning_slider_->value()) / 100.0;
     }
 
+    double JointControlPanel::getWaistPhiScale() const
+    {
+        if (!waist_phi_slider_)
+        {
+            return 0.0;
+        }
+        return static_cast<double>(waist_phi_slider_->value()) / 100.0;
+    }
+
     void JointControlPanel::updateWaistScaleLabels()
     {
         if (waist_lifting_value_label_)
@@ -1413,6 +1477,10 @@ namespace arms_rviz_control_plugin
         if (waist_turning_value_label_)
         {
             waist_turning_value_label_->setText(QString::number(getWaistTurningScale(), 'f', 2));
+        }
+        if (waist_phi_value_label_)
+        {
+            waist_phi_value_label_->setText(QString::number(getWaistPhiScale(), 'f', 2));
         }
     }
 
@@ -1440,6 +1508,18 @@ namespace arms_rviz_control_plugin
         waist_turning_publisher_->publish(msg);
     }
 
+    void JointControlPanel::publishWaistPhi(double value)
+    {
+        if (!waist_phi_publisher_)
+        {
+            return;
+        }
+
+        std_msgs::msg::Float64 msg;
+        msg.data = value;
+        waist_phi_publisher_->publish(msg);
+    }
+
     void JointControlPanel::stopWaistLifting()
     {
         publishWaistLifting(0.0);
@@ -1450,10 +1530,16 @@ namespace arms_rviz_control_plugin
         publishWaistTurning(0.0);
     }
 
+    void JointControlPanel::stopWaistPhi()
+    {
+        publishWaistPhi(0.0);
+    }
+
     void JointControlPanel::updateWaistRepeatTimerState()
     {
         const bool any_pressed =
-            waist_up_pressed_ || waist_down_pressed_ || waist_left_pressed_ || waist_right_pressed_;
+            waist_up_pressed_ || waist_down_pressed_ || waist_left_pressed_ || waist_right_pressed_ ||
+            waist_forward_pressed_ || waist_backward_pressed_;
 
         if (any_pressed)
         {
@@ -1522,6 +1608,15 @@ namespace arms_rviz_control_plugin
         updateWaistRepeatTimerState();
     }
 
+    void JointControlPanel::onWaistForwardPressed()
+    {
+        waist_forward_pressed_ = true;
+        waist_backward_pressed_ = false;
+
+        publishWaistPhi(getWaistPhiScale());
+        updateWaistRepeatTimerState();
+    }
+
     void JointControlPanel::onWaistLeftReleased()
     {
         waist_left_pressed_ = false;
@@ -1529,6 +1624,18 @@ namespace arms_rviz_control_plugin
         if (!waist_right_pressed_)
         {
             stopWaistTurning();
+        }
+
+        updateWaistRepeatTimerState();
+    }
+
+    void JointControlPanel::onWaistForwardReleased()
+    {
+        waist_forward_pressed_ = false;
+
+        if (!waist_backward_pressed_)
+        {
+            stopWaistPhi();
         }
 
         updateWaistRepeatTimerState();
@@ -1543,6 +1650,15 @@ namespace arms_rviz_control_plugin
         updateWaistRepeatTimerState();
     }
 
+    void JointControlPanel::onWaistBackwardPressed()
+    {
+        waist_backward_pressed_ = true;
+        waist_forward_pressed_ = false;
+
+        publishWaistPhi(-getWaistPhiScale());
+        updateWaistRepeatTimerState();
+    }
+
     void JointControlPanel::onWaistRightReleased()
     {
         waist_right_pressed_ = false;
@@ -1550,6 +1666,18 @@ namespace arms_rviz_control_plugin
         if (!waist_left_pressed_)
         {
             stopWaistTurning();
+        }
+
+        updateWaistRepeatTimerState();
+    }
+
+    void JointControlPanel::onWaistBackwardReleased()
+    {
+        waist_backward_pressed_ = false;
+
+        if (!waist_forward_pressed_)
+        {
+            stopWaistPhi();
         }
 
         updateWaistRepeatTimerState();
@@ -1573,6 +1701,15 @@ namespace arms_rviz_control_plugin
         else if (waist_right_pressed_ && !waist_left_pressed_)
         {
             publishWaistTurning(-getWaistTurningScale());
+        }
+
+        if (waist_forward_pressed_ && !waist_backward_pressed_)
+        {
+            publishWaistPhi(getWaistPhiScale());
+        }
+        else if (waist_backward_pressed_ && !waist_forward_pressed_)
+        {
+            publishWaistPhi(-getWaistPhiScale());
         }
     }
 

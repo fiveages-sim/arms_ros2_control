@@ -245,19 +245,7 @@ ros2 topic pub --once /left_hand_controller/target_percent \
   std_msgs/msg/Float64 "data: 0.6"   # 60% open
 ```
 
-### 5.5 Waist lifting — position
-
-**Topic:** `/{controller_name}/waist_lifting`  
-**Type:** `std_msgs/Float64`  
-**Requires:** `waist_lifting_enabled: true`, active state: MOVEJ
-
-Moves the waist by the specified distance (meters) from its current position.
-
-```bash
-ros2 topic pub --once /body_controller/waist_lifting std_msgs/msg/Float64 "data: 0.05"
-```
-
-### 5.6 Waist lifting — local x/z/phi relative motion
+### 5.5 Waist lifting — local x/z/phi relative motion
 
 **Topic:** `/{controller_name}/waist_lifting_pose_relative`  
 **Type:** `std_msgs/Float64MultiArray`  
@@ -271,7 +259,7 @@ ros2 topic pub --once /body_controller/waist_lifting_pose_relative \
   std_msgs/msg/Float64MultiArray "{data: [0.02, 0.05, 0.10]}"
 ```
 
-### 5.7 Waist lifting — x/z/phi absolute target
+### 5.6 Waist lifting — x/z/phi absolute target
 
 **Topic:** `/{controller_name}/waist_lifting_pose_absolute`  
 **Type:** `std_msgs/Float64MultiArray`  
@@ -288,14 +276,14 @@ The controller looks up TF `source → target`, transforms `(x, z)` into the tar
 
 Defaults match **FiveAges W2** (`base_footprint` / `body_base`). Robots without those links must override the parameters, e.g. ARX Lift / Lift2S: `base_link` / `lift_link`.
 
-Height-only commands (`waist_lifting`, `waist_lifting_command`, `target_joint_position`) do **not** use these frames.
+Height-only commands (`waist_lifting_command`, `target_joint_position`) do **not** use these frames.
 
 ```bash
 ros2 topic pub --once /body_controller/waist_lifting_pose_absolute \
   std_msgs/msg/Float64MultiArray "{data: [0.12, 0.45, 0.20]}"
 ```
 
-### 5.8 Waist lifting — velocity factor
+### 5.7 Waist lifting — velocity factor
 
 **Topic:** `/{controller_name}/waist_lifting_command`  
 **Type:** `std_msgs/Float64` (factor range: `[-1.0, 1.0]`)  
@@ -309,7 +297,7 @@ ros2 topic pub /body_controller/waist_lifting_command std_msgs/msg/Float64 "data
 ros2 topic pub --once /body_controller/waist_lifting_command std_msgs/msg/Float64 "data: 0.0"  # stop
 ```
 
-### 5.9 Waist turning — velocity factor
+### 5.8 Waist turning — velocity factor
 
 **Topic:** `/{controller_name}/waist_turning_command`  
 **Type:** `std_msgs/Float64` (factor range: `[-1.0, 1.0]`)  
@@ -321,6 +309,24 @@ Send `0.0` to stop.
 ```bash
 ros2 topic pub /body_controller/waist_turning_command std_msgs/msg/Float64 "data: -0.3"  # turn left
 ```
+
+### 5.9 Waist pitch — velocity factor
+
+**Topic:** `/{controller_name}/waist_phi_command`
+**Type:** `std_msgs/msg/Float64`, factor in `[-1, 1]`.
+
+Requires an active controller in MOVEJ, `waist_lifting_enabled: true`, and a configured pitch capability. Positive values tilt forward; negative values tilt backward; `0.0` decelerates to a stop. A nonzero command continues until stopped or limited; stopping publication alone does not send a stop command. Finite inputs are clamped; NaN/Inf are rejected.
+
+`waist_phi_default_parameter: [0.25, 1.0, 5.0]` specifies maximum velocity (rad/s), acceleration (rad/s²), and jerk (rad/s³); all three must be positive. Parameters are read when a new pitch motion starts. Tune them for the robot's joint limits. The same interface is available in Basic, OCS2 Arm and WBC.
+
+Single-joint waist uses `waist_single_joint_pitch_joint` and its direction/offset mapping while holding lift position. Three-joint waist holds endpoint x/z and uses existing IK. Lifting, turning and pitch motions are mutually exclusive; state exit or controller deactivation clears motion. The fallback planner uses acceleration limiting without jerk shaping.
+
+```bash
+ros2 topic pub --once /body_controller/waist_phi_command std_msgs/msg/Float64 "data: 0.3"
+ros2 topic pub --once /body_controller/waist_phi_command std_msgs/msg/Float64 "data: 0.0"
+```
+
+Python can reuse `send_waist_phi_velocity_scale()` after explicitly setting `waist_phi_command_topic` before connecting; automatic detection is not added here.
 
 ---
 
@@ -335,11 +341,11 @@ Assuming controller name `my_controller`, joint name `j1`:
 | `/my_controller/target_joint_trajectory` | `JointTrajectory` | MOVEJ | Multi-waypoint trajectory |
 | `/my_controller/target_command` | `Int32` (0/1) | MOVEJ | Hand open/close switch |
 | `/my_controller/target_percent` | `Float64` (0~1) | MOVEJ | Hand proportional control |
-| `/my_controller/waist_lifting` | `Float64` | MOVEJ | Waist position delta |
 | `/my_controller/waist_lifting_pose_relative` | `Float64MultiArray` | MOVEJ | Waist local relative `[dx, dz, dphi]` |
 | `/my_controller/waist_lifting_pose_absolute` | `Float64MultiArray` | MOVEJ | Absolute `[x, z, phi]` (TF frames configurable) |
 | `/my_controller/waist_lifting_command` | `Float64` | MOVEJ | Waist velocity factor |
 | `/my_controller/waist_turning_command` | `Float64` | MOVEJ | Waist turning velocity factor |
+| `/my_controller/waist_phi_command` | `Float64` | MOVEJ | Waist pitch velocity factor |
 
 ---
 
