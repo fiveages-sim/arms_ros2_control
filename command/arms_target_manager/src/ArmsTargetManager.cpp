@@ -1646,6 +1646,29 @@ namespace arms_ros2_control::command
         return true;
     }
 
+    bool ArmsTargetManager::setBodyMarkerPose(const geometry_msgs::msg::Pose& pose)
+    {
+        if (!body_marker_ || !shouldShowBodyMarker())
+        {
+            return false;
+        }
+
+        body_marker_->setPose(pose);
+
+        if (server_)
+        {
+            setServerPose(body_marker_->getMarkerName(), pose);
+            markPendingChanges();
+        }
+
+        if (shouldStreamPoseCommands())
+        {
+            body_marker_->publishTargetPose();
+        }
+
+        return true;
+    }
+
     geometry_msgs::msg::Pose ArmsTargetManager::getMarkerPose(const std::string& armType) const
     {
         if (armType == "left" && left_arm_marker_ && shouldShowLeftArmMarker())

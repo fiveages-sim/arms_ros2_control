@@ -143,6 +143,21 @@ namespace arms_ros2_control::command
             [this](geometry_msgs::msg::PoseStamped::ConstSharedPtr msg) { robotHeadPoseCallback(msg); });
         pub_head_target_ = node_->create_publisher<geometry_msgs::msg::Pose>("head_target", 10);
 
+        // 全身骨骼关节订阅器（/teleop/body_<关节名>_pose 为动态话题：头显开启全身追踪后
+        // 才会出现发布者；此处常驻订阅，发布者出现/重建时由 DDS 自动重新匹配）
+        sub_body_pelvis_ = node_->create_subscription<geometry_msgs::msg::Pose>(
+            "/teleop/body_pelvis_pose", 10,
+            [this](const geometry_msgs::msg::Pose::SharedPtr msg) { this->bodyPelvisCallback(msg); });
+        sub_body_spine3_ = node_->create_subscription<geometry_msgs::msg::Pose>(
+            "/teleop/body_spine3_pose", 10,
+            [this](const geometry_msgs::msg::Pose::SharedPtr msg) { this->bodySpine3Callback(msg); });
+        sub_body_head_ = node_->create_subscription<geometry_msgs::msg::Pose>(
+            "/teleop/body_head_pose", 10,
+            [this](const geometry_msgs::msg::Pose::SharedPtr msg) { this->bodyHeadCallback(msg); });
+        sub_robot_body_ = node_->create_subscription<geometry_msgs::msg::PoseStamped>(
+            "body_current_pose", 10,
+            [this](geometry_msgs::msg::PoseStamped::ConstSharedPtr msg) { robotBodyPoseCallback(msg); });
+
         // 创建按钮事件订阅器（Int32类型）
         auto controllerStateCallback = [this](const std_msgs::msg::Int32::SharedPtr msg)
         {
@@ -834,6 +849,12 @@ namespace arms_ros2_control::command
         left_robot_base_valid_ = false;
         right_robot_base_valid_ = false;
         stopHeadTracking();
+        // 全身遥操随 VR 禁用一起退出（保留 last_body_target_ 作为下次接管基准）
+        if (full_body_teleop_active_.load())
+        {
+            full_body_teleop_active_.store(false);
+            full_body_teleop_bases_captured_ = false;
+        }
         left_grip_direction_suppressed_.store(false);
         body_mode_request_pending_.store(false);
         requested_body_state_.store(-1);
@@ -942,7 +963,8 @@ namespace arms_ros2_control::command
             resolvedFsmState() == 3 &&
             target_manager_->getCurrentHeadState() ==
                 arms_ros2_control_msgs::msg::WbcCurrentState::HEAD_TRACKING &&
-            has_vr_head_pose_ && has_robot_head_pose_;
+            (full_body_teleop_active_.load() ? has_body_head_pose_ : has_vr_head_pose_) &&
+            has_robot_head_pose_;
     }
 
     void VRInputHandler::stopHeadTracking()
@@ -962,6 +984,13 @@ namespace arms_ros2_control::command
             stopHeadTracking();
             return;
         }
+        // 数据源选择：全身遥操开启时用骨架头部数据（/teleop/body_head_pose），
+        // 否则维持原有的头显数据（/teleop/head_pose）。
+        const bool use_body_source = full_body_teleop_active_.load();
+        const Eigen::Vector3d vr_head_position =
+            use_body_source ? body_head_position_ : vr_head_position_;
+        const Eigen::Quaterniond vr_head_orientation =
+            use_body_source ? body_head_orientation_ : vr_head_orientation_;
         if (!head_tracking_active_)
         {
             const auto& base = last_head_target_ ? *last_head_target_ : robot_head_pose_;
@@ -973,15 +1002,15 @@ namespace arms_ros2_control::command
             {
                 return;
             }
-            vr_head_base_position_ = vr_head_position_;
-            vr_head_base_orientation_ = vr_head_orientation_;
+            vr_head_base_position_ = vr_head_position;
+            vr_head_base_orientation_ = vr_head_orientation;
         }
 
         // Both upstream wrappers already convert OpenXR axes to robot axes.
         // Align those axes with vr_follow_frame, independently of hand scale/mirror settings.
         const Eigen::Vector3d position = robot_head_base_position_ +
-            (vr_head_position_ - vr_head_base_position_);
-        const Eigen::Quaterniond orientation = (vr_head_orientation_ *
+            (vr_head_position - vr_head_base_position_);
+        const Eigen::Quaterniond orientation = (vr_head_orientation *
             vr_head_base_orientation_.inverse() * robot_head_base_orientation_).normalized();
         Eigen::Vector3d publishedPosition;
         Eigen::Quaterniond publishedOrientation;
@@ -1006,6 +1035,242 @@ namespace arms_ros2_control::command
         pub_head_target_->publish(target.pose);
         last_head_target_ = target;
         head_tracking_active_ = true;
+    }
+
+    // ================= 全身遥操（case 30）=================
+
+    void VRInputHandler::bodyPelvisCallback(const geometry_msgs::msg::Pose::SharedPtr msg)
+    {
+        const Eigen::Vector3d position(msg->position.x, msg->position.y, msg->position.z);
+        const Eigen::Quaterniond orientation(
+            msg->orientation.w, msg->orientation.x, msg->orientation.y, msg->orientation.z);
+        if (!position.allFinite() || !orientation.coeffs().allFinite() || orientation.norm() < 1e-9)
+        {
+            has_body_pelvis_pose_ = false;
+            return;
+        }
+        body_pelvis_position_ = position;
+        body_pelvis_orientation_ = orientation.normalized();
+        has_body_pelvis_pose_ = true;
+    }
+
+    void VRInputHandler::bodySpine3Callback(const geometry_msgs::msg::Pose::SharedPtr msg)
+    {
+        const Eigen::Vector3d position(msg->position.x, msg->position.y, msg->position.z);
+        const Eigen::Quaterniond orientation(
+            msg->orientation.w, msg->orientation.x, msg->orientation.y, msg->orientation.z);
+        if (!position.allFinite() || !orientation.coeffs().allFinite() || orientation.norm() < 1e-9)
+        {
+            has_body_spine3_pose_ = false;
+            return;
+        }
+        body_spine3_position_ = position;
+        body_spine3_orientation_ = orientation.normalized();
+        has_body_spine3_pose_ = true;
+        // 以脊柱帧作为身体目标的计算触发点（骨盆数据仅缓存）
+        publishBodyTarget();
+    }
+
+    void VRInputHandler::bodyHeadCallback(const geometry_msgs::msg::Pose::SharedPtr msg)
+    {
+        const Eigen::Vector3d position(msg->position.x, msg->position.y, msg->position.z);
+        const Eigen::Quaterniond orientation(
+            msg->orientation.w, msg->orientation.x, msg->orientation.y, msg->orientation.z);
+        if (!position.allFinite() || !orientation.coeffs().allFinite() || orientation.norm() < 1e-9)
+        {
+            has_body_head_pose_ = false;
+            return;
+        }
+        body_head_position_ = position;
+        body_head_orientation_ = orientation.normalized();
+        has_body_head_pose_ = true;
+        if (full_body_teleop_active_.load())
+        {
+            publishHeadTarget();
+        }
+    }
+
+    void VRInputHandler::robotBodyPoseCallback(
+        geometry_msgs::msg::PoseStamped::ConstSharedPtr msg)
+    {
+        const auto& p = msg->pose.position;
+        const auto& q = msg->pose.orientation;
+        const Eigen::Quaterniond orientation(q.w, q.x, q.y, q.z);
+        if (msg->header.frame_id.empty() || !Eigen::Vector3d(p.x, p.y, p.z).allFinite() ||
+            !orientation.coeffs().allFinite() || orientation.norm() < 1e-9)
+        {
+            has_robot_body_pose_ = false;
+            return;
+        }
+        robot_body_pose_ = *msg;
+        const auto normalized = orientation.normalized();
+        robot_body_pose_.pose.orientation.x = normalized.x();
+        robot_body_pose_.pose.orientation.y = normalized.y();
+        robot_body_pose_.pose.orientation.z = normalized.z();
+        robot_body_pose_.pose.orientation.w = normalized.w();
+        has_robot_body_pose_ = true;
+    }
+
+    bool VRInputHandler::fullBodyTeleopReady() const
+    {
+        // 与双臂末端跟随同步：仅在 UPDATE 模式下才下发躯干目标
+        return target_manager_ && isFullBodyMode() && enabled_.load() &&
+            is_update_mode_.load() &&
+            resolvedFsmState() == 3 &&
+            target_manager_->getCurrentBodyState() ==
+                arms_ros2_control_msgs::msg::WbcCurrentState::BODY_TRACKING &&
+            has_body_pelvis_pose_ && has_body_spine3_pose_;
+    }
+
+    bool VRInputHandler::captureFullBodyTeleopBases()
+    {
+        if (!has_body_pelvis_pose_ || !has_body_spine3_pose_)
+        {
+            return false;
+        }
+
+        // 机器人胸部基准：优先沿用最后一次实际发布的目标（避免柔顺控制的实际偏差
+        // 累积进目标），无历史目标时用机器人实际位姿（body_current_pose）。
+        geometry_msgs::msg::PoseStamped robot_base;
+        if (last_body_target_)
+        {
+            robot_base = *last_body_target_;
+        }
+        else if (has_robot_body_pose_)
+        {
+            robot_base = robot_body_pose_;
+        }
+        else
+        {
+            RCLCPP_WARN_THROTTLE(
+                node_->get_logger(), *node_->get_clock(), 2000,
+                "🕹️🦴 全身遥操作等待机器人胸部实际位姿（body_current_pose）以建立基准");
+            return false;
+        }
+
+        const auto& p = robot_base.pose.position;
+        const auto& q = robot_base.pose.orientation;
+        if (!transformPoseBetweenFrames(
+                "body", Eigen::Vector3d(p.x, p.y, p.z),
+                Eigen::Quaterniond(q.w, q.x, q.y, q.z), robot_base.header.frame_id,
+                vr_follow_frame_, robot_body_base_position_, robot_body_base_orientation_))
+        {
+            return false;
+        }
+
+        body_torso_base_orientation_ =
+            (body_pelvis_orientation_.conjugate() * body_spine3_orientation_).normalized();
+        body_torso_base_offset_ = body_spine3_position_ - body_pelvis_position_;
+        body_target_frame_ = robot_base.header.frame_id;
+        full_body_teleop_bases_captured_ = true;
+
+        RCLCPP_INFO(node_->get_logger(),
+                    "🕹️🦴 全身遥操作基准已建立：机器人胸部基准来源=%s（%s），人体躯干/骨盆基准已记录",
+                    last_body_target_ ? "上次目标" : "current_pose",
+                    body_target_frame_.c_str());
+        return true;
+    }
+
+    void VRInputHandler::publishBodyTarget()
+    {
+        if (!full_body_teleop_active_.load())
+        {
+            return;
+        }
+        if (!fullBodyTeleopReady())
+        {
+            return;
+        }
+        if (!full_body_teleop_bases_captured_ && !captureFullBodyTeleopBases())
+        {
+            return;
+        }
+
+        // 人体躯干姿态（相对骨盆，排除骨盆偏航，避免与未来底盘跟随双重计数）
+        const Eigen::Quaterniond torso_now =
+            (body_pelvis_orientation_.conjugate() * body_spine3_orientation_).normalized();
+        const Eigen::Quaterniond delta_orientation =
+            (torso_now * body_torso_base_orientation_.conjugate()).normalized();
+        // 位置：骨盆→spine3 偏移的变化量（1:1 映射，与头部跟踪的约定一致）
+        const Eigen::Vector3d position = robot_body_base_position_ +
+            (body_spine3_position_ - body_pelvis_position_ - body_torso_base_offset_);
+        const Eigen::Quaterniond orientation =
+            (delta_orientation * robot_body_base_orientation_).normalized();
+
+        Eigen::Vector3d published_position;
+        Eigen::Quaterniond published_orientation;
+        if (!transformPoseBetweenFrames(
+                "body", position, orientation, vr_follow_frame_, body_target_frame_,
+                published_position, published_orientation))
+        {
+            return;
+        }
+
+        geometry_msgs::msg::PoseStamped target;
+        target.header.frame_id = body_target_frame_;
+        target.header.stamp = node_->now();
+        target.pose.position.x = published_position.x();
+        target.pose.position.y = published_position.y();
+        target.pose.position.z = published_position.z();
+        target.pose.orientation.x = published_orientation.x();
+        target.pose.orientation.y = published_orientation.y();
+        target.pose.orientation.z = published_orientation.z();
+        target.pose.orientation.w = published_orientation.w();
+
+        if (!target_manager_->setBodyMarkerPose(target.pose))
+        {
+            return;
+        }
+        last_body_target_ = target;
+    }
+
+    void VRInputHandler::toggleFullBodyTeleop()
+    {
+        if (!enabled_.load() || !isFullBodyMode() || current_fsm_state_.load() != 3)
+        {
+            RCLCPP_WARN(node_->get_logger(),
+                        "🔘 [case 30] 忽略全身遥操作开关：要求 VR enabled、FULL_BODY、OCS2");
+            return;
+        }
+
+        if (full_body_teleop_active_.load())
+        {
+            stopFullBodyTeleop();
+        }
+        else
+        {
+            startFullBodyTeleop();
+        }
+    }
+
+    void VRInputHandler::startFullBodyTeleop()
+    {
+        full_body_teleop_active_.store(true);
+        full_body_teleop_bases_captured_ = false;
+        // 头部数据源切换为骨架：清掉本轮跟踪状态，下一帧用骨架数据重新建立基准
+        stopHeadTracking();
+
+        // 身体模式改为「跟随」、头部模式改为「跟踪」；目标随后由 /teleop/body_* 计算
+        requestBodyMode(30, "左右握把+右摇杆按下", "跟随", "BODY_TRACKING",
+                        arms_ros2_control_msgs::msg::WbcCurrentState::BODY_TRACKING);
+        publishHumanoidModeCommand("HEAD_TRACKING");
+
+        RCLCPP_INFO(node_->get_logger(),
+                    "🕹️🦴 [case 30] 全身遥操作已开启：身体=跟随（BODY_TRACKING）、"
+                    "头部=跟踪（HEAD_TRACKING）；按下右摇杆进入 UPDATE 后开始跟随"
+                    "（与双臂同步），目标位姿由 /teleop/body_* 骨骼数据计算；"
+                    "再次按左右握把+右摇杆按下关闭");
+    }
+
+    void VRInputHandler::stopFullBodyTeleop()
+    {
+        full_body_teleop_active_.store(false);
+        full_body_teleop_bases_captured_ = false;
+        // 头部数据源切回头显：清掉跟踪状态，让后续用头显数据重新建立基准
+        stopHeadTracking();
+        RCLCPP_INFO(node_->get_logger(),
+                    "🕹️🦴 [case 30] 全身遥操作已关闭（WBC 身体/头部模式保持当前状态，"
+                    "可用原有组合键切换）");
     }
 
     void VRInputHandler::vrLeftCallback(const geometry_msgs::msg::Pose::SharedPtr msg)
@@ -1952,7 +2217,11 @@ namespace arms_ros2_control::command
         // 跟随模式已确认：左摇杆改为控制腰部 marker，右摇杆保持右臂
         if (isBodyTrackingActive())
         {
-            processBodyThumbstickAxes();
+            // 全身遥操开启时腰部目标由骨架驱动，不再接受摇杆增量，避免两个数据源互相打架
+            if (!full_body_teleop_active_.load())
+            {
+                processBodyThumbstickAxes();
+            }
             processRightThumbstickAxes();
             return;
         }
@@ -2249,7 +2518,7 @@ namespace arms_ros2_control::command
 
         RCLCPP_INFO(
             node_->get_logger(),
-            "🔘 [case %d] 左握把+左摇杆%s：已请求%s（%s），等待 WBC 确认和左摇杆回中",
+            "🔘 [case %d] %s：已请求%s（%s），等待 WBC 确认和左摇杆回中",
             eventCase, direction, modeName, command);
     }
 
@@ -3429,6 +3698,11 @@ namespace arms_ros2_control::command
                     is_update_mode_.store(true);
                     // 目标流在此中断/重启，清空斜坡，避免用陈旧输出量缺口
                     resetStaleCatchUpRamp();
+                    // 全身遥操与双臂同步：进入 UPDATE 后重新建立躯干/头部基准
+                    if (full_body_teleop_active_.load())
+                    {
+                        full_body_teleop_bases_captured_ = false;
+                    }
                     RCLCPP_INFO(node_->get_logger(), "🔘 [右摇杆按钮] 按下 - 功能: 切换UPDATE/STORAGE模式 - 操作: 切换到UPDATE模式（已存储基准位姿，重置摇杆偏移）");
                     RCLCPP_DEBUG(node_->get_logger(),
                                 "   VR Base Positions: Left [%.3f, %.3f, %.3f], Right [%.3f, %.3f, %.3f]",
@@ -3778,26 +4052,50 @@ namespace arms_ros2_control::command
             }
             case 21: // 左握把 + 左摇杆向上：竖直
                 markGripComboConsumed(true, false);
+                if (full_body_teleop_active_.load())
+                {
+                    RCLCPP_WARN(node_->get_logger(),
+                                "🔘 [case 21] 全身遥操作已开启，忽略原有身体模式组合键（竖直）");
+                    break;
+                }
                 requestBodyMode(
-                    21, "向上", "竖直", "BODY_RELATIVE",
+                    21, "左握把+左摇杆向上", "竖直", "BODY_RELATIVE",
                     arms_ros2_control_msgs::msg::WbcCurrentState::BODY_VERTICAL);
                 break;
             case 22: // 左握把 + 左摇杆向下：锁定
                 markGripComboConsumed(true, false);
+                if (full_body_teleop_active_.load())
+                {
+                    RCLCPP_WARN(node_->get_logger(),
+                                "🔘 [case 22] 全身遥操作已开启，忽略原有身体模式组合键（锁定）");
+                    break;
+                }
                 requestBodyMode(
-                    22, "向下", "锁定", "BODY_LOCK",
+                    22, "左握把+左摇杆向下", "锁定", "BODY_LOCK",
                     arms_ros2_control_msgs::msg::WbcCurrentState::BODY_LOCKED);
                 break;
             case 23: // 左握把 + 左摇杆向左：跟随
                 markGripComboConsumed(true, false);
+                if (full_body_teleop_active_.load())
+                {
+                    RCLCPP_WARN(node_->get_logger(),
+                                "🔘 [case 23] 全身遥操作已开启，忽略原有身体模式组合键（跟随）");
+                    break;
+                }
                 requestBodyMode(
-                    23, "向左", "跟随", "BODY_TRACKING",
+                    23, "左握把+左摇杆向左", "跟随", "BODY_TRACKING",
                     arms_ros2_control_msgs::msg::WbcCurrentState::BODY_TRACKING);
                 break;
             case 24: // 左握把 + 左摇杆向右：自定义
                 markGripComboConsumed(true, false);
+                if (full_body_teleop_active_.load())
+                {
+                    RCLCPP_WARN(node_->get_logger(),
+                                "🔘 [case 24] 全身遥操作已开启，忽略原有身体模式组合键（自定义）");
+                    break;
+                }
                 requestBodyMode(
-                    24, "向右", "自定义", "BODY_CUSTOM_LOCK",
+                    24, "左握把+左摇杆向右", "自定义", "BODY_CUSTOM_LOCK",
                     arms_ros2_control_msgs::msg::WbcCurrentState::BODY_CUSTOM_LOCKED);
                 break;
             case 25: // 右握把 + 右摇杆向上：双臂耦合
@@ -3817,6 +4115,10 @@ namespace arms_ros2_control::command
                 markGripComboConsumed(false, true);
                 requestWbcToggle(
                     28, "右握把+右摇杆向右", WbcToggleTarget::HOME_JOINT);
+                break;
+            case 30: // 左右握把 + 右摇杆按下：开关全身遥操作（骨架驱动身体/头部）
+                markGripComboConsumed(true, true);
+                toggleFullBodyTeleop();
                 break;
             case 0:  // 无事件
             default:
@@ -3890,6 +4192,13 @@ namespace arms_ros2_control::command
                         if (next != ControlTopology::FULL_BODY)
                         {
                             resetYbModeLatchAndConversions();
+                            // 全身遥操只在 FULL_BODY 下有效：拓扑变化时退出，避免状态残留
+                            if (full_body_teleop_active_.load())
+                            {
+                                full_body_teleop_active_.store(false);
+                                full_body_teleop_bases_captured_ = false;
+                                stopHeadTracking();
+                            }
                         }
                         const char* name =
                             next == ControlTopology::FULL_BODY ? "FULL_BODY" :

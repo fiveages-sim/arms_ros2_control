@@ -135,6 +135,14 @@ namespace arms_ros2_control::command
         }
 
         /**
+         * 检查全身骨架遥操作是否已开启（case 30 组合键开关）。
+         */
+        bool isFullBodyTeleopActive() const
+        {
+            return full_body_teleop_active_.load();
+        }
+
+        /**
          * FSM命令回调函数（用于跟踪FSM状态）
          * 由外部统一订阅后调用，避免重复订阅
          * @param msg FSM命令消息
@@ -193,6 +201,30 @@ namespace arms_ros2_control::command
         bool headTrackingReady() const;
         void stopHeadTracking();
         void publishHeadTarget();
+
+        // ---- 全身遥操（case 30）：由 /teleop/body_* 骨架数据驱动身体与头部目标 ----
+
+        /** 骨架关节回调：只存储缓存，脊柱触发身体目标计算，头部触发头部目标计算 */
+        void bodyPelvisCallback(geometry_msgs::msg::Pose::SharedPtr msg);
+        void bodySpine3Callback(geometry_msgs::msg::Pose::SharedPtr msg);
+        void bodyHeadCallback(geometry_msgs::msg::Pose::SharedPtr msg);
+
+        /** 机器人胸部实际位姿回调（body_current_pose，用作开启时的基准） */
+        void robotBodyPoseCallback(geometry_msgs::msg::PoseStamped::ConstSharedPtr msg);
+
+        /** 全身遥操作前置条件：VR enabled + FULL_BODY + FSM=OCS2 + WBC 已确认 BODY_TRACKING + 骨架数据可用 */
+        bool fullBodyTeleopReady() const;
+
+        /** 开启时建立基准：人体躯干相对骨盆姿态、骨盆→spine3 偏移、机器人胸部基准 */
+        bool captureFullBodyTeleopBases();
+
+        /** 由骨架数据计算并下发胸部绝对目标（挂在 BodyMarker 上发布 body_target） */
+        void publishBodyTarget();
+
+        /** case 30：开关全身遥操作 */
+        void toggleFullBodyTeleop();
+        void startFullBodyTeleop();
+        void stopFullBodyTeleop();
 
         /**
          * 摇杆轴值回调函数（合并处理左右摇杆）
@@ -562,6 +594,12 @@ namespace arms_ros2_control::command
         rclcpp::Subscription<geometry_msgs::msg::Pose>::SharedPtr sub_left_;
         rclcpp::Subscription<geometry_msgs::msg::Pose>::SharedPtr sub_right_;
         rclcpp::Subscription<geometry_msgs::msg::Pose>::SharedPtr sub_head_;
+        // 全身骨骼关节订阅器（/teleop/body_<关节名>_pose；话题动态增删，出现后自动匹配）
+        rclcpp::Subscription<geometry_msgs::msg::Pose>::SharedPtr sub_body_pelvis_;
+        rclcpp::Subscription<geometry_msgs::msg::Pose>::SharedPtr sub_body_spine3_;
+        rclcpp::Subscription<geometry_msgs::msg::Pose>::SharedPtr sub_body_head_;
+        // 机器人胸部实际位姿订阅器（全身遥操作基准）
+        rclcpp::Subscription<geometry_msgs::msg::PoseStamped>::SharedPtr sub_robot_body_;
         // 按钮事件订阅器（Int32类型）
         rclcpp::Subscription<std_msgs::msg::Int32>::SharedPtr sub_controller_state_;
         // 摇杆轴值订阅器（合并订阅左右摇杆，使用 Twist 消息）
@@ -612,6 +650,32 @@ namespace arms_ros2_control::command
         Eigen::Quaterniond robot_head_base_orientation_ = Eigen::Quaterniond::Identity();
         // Last published command with its current-pose frame, not measured pose.
         std::optional<geometry_msgs::msg::PoseStamped> last_head_target_;
+
+        // ---- 全身遥操（case 30）状态 ----
+        std::atomic<bool> full_body_teleop_active_{false};
+        bool full_body_teleop_bases_captured_{false};
+        // 骨架缓存（机器人世界坐标系，与 head/controller 同原点）
+        Eigen::Vector3d body_pelvis_position_ = Eigen::Vector3d::Zero();
+        Eigen::Quaterniond body_pelvis_orientation_ = Eigen::Quaterniond::Identity();
+        Eigen::Vector3d body_spine3_position_ = Eigen::Vector3d::Zero();
+        Eigen::Quaterniond body_spine3_orientation_ = Eigen::Quaterniond::Identity();
+        Eigen::Vector3d body_head_position_ = Eigen::Vector3d::Zero();
+        Eigen::Quaterniond body_head_orientation_ = Eigen::Quaterniond::Identity();
+        bool has_body_pelvis_pose_{false};
+        bool has_body_spine3_pose_{false};
+        bool has_body_head_pose_{false};
+        // 机器人胸部实际位姿（body_current_pose）
+        geometry_msgs::msg::PoseStamped robot_body_pose_;
+        bool has_robot_body_pose_{false};
+        // 开启时基准：人体躯干相对骨盆姿态、骨盆→spine3 偏移、机器人胸部基准（vr_follow_frame_ 中）
+        Eigen::Quaterniond body_torso_base_orientation_ = Eigen::Quaterniond::Identity();
+        Eigen::Vector3d body_torso_base_offset_ = Eigen::Vector3d::Zero();
+        Eigen::Vector3d robot_body_base_position_ = Eigen::Vector3d::Zero();
+        Eigen::Quaterniond robot_body_base_orientation_ = Eigen::Quaterniond::Identity();
+        // body_target 发布坐标系（开启时从基准位姿的 header 记录）
+        std::string body_target_frame_;
+        // 最后一次实际发布的胸部目标（跨暂停/退出保留，作为重新接管的优先基准）
+        std::optional<geometry_msgs::msg::PoseStamped> last_body_target_;
 
         // 最后实际发布 frame（ee_frame_id_）的 Pose，仅用于变化检测
         Eigen::Vector3d prev_calculated_left_position_ = Eigen::Vector3d::Zero();
