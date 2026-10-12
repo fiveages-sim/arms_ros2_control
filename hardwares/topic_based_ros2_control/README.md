@@ -10,6 +10,22 @@ A ROS2 control hardware interface that communicates with hardware through ROS2 t
 
 ## Configuration
 
+Plugin type: `topic_based_ros2_control/TopicBasedSystem`.
+
+These are URDF `<ros2_control>` `<param>` values (`info_.hardware_parameters` / per-joint `joint.parameters`), read in `on_init`. They are **not** ROS 2 node parameters: there is no `declare_parameter` and no `add_on_set_parameters_callback`. Changing any of them requires restarting the hardware / controller_manager (**Startup only**). Other packages under `hardwares/` are private submodules and were not readable here.
+
+| Parameter | Default | When | Notes |
+|---|---|---|---|
+| `joint_commands_topic` | `/robot_joint_commands` | Startup only | Command `JointState` topic |
+| `joint_states_topic` | `/robot_joint_states` | Startup only | State `JointState` topic |
+| `initialize_commands_from_state` | `true` | Startup only | Seed commands from the first received state |
+| `trigger_joint_command_threshold` | `1e-5` | Startup only | Skip publish when command≈state; `-1` always send |
+| `sum_wrapped_joint_states` | `false` | Startup only | Unwrap ±2π joint states (Isaac Sim) |
+| `joint_name_prefix` | `""` | Startup only | Strip this prefix when matching topic joint names |
+| `initial_value` | (per state interface) | Startup only | Used when `initialize_commands_from_state` is `false` |
+| `mimic` | (per joint) | Startup only | Name of the joint to mimic |
+| `multiplier` | `1` | Startup only | Mimic scale |
+
 ### Basic Configuration
 
 ```xml

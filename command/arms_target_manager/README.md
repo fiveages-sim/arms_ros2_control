@@ -72,52 +72,52 @@ ros2 launch ocs2_arm_controller demo.launch.py robot:=cr5
 
 ### 控制器 frame 参数（加载时一次生效）
 
-`ocs2_arm_controller` / `ocs2_wbc_controller`：
+这些参数属于 `ocs2_arm_controller` / `ocs2_wbc_controller`（**仅启动**），不是本节点参数。`ocs2_wbc_controller` 为私有子模块，此处仅转述已有说明。
 
-| 参数 | 默认 | 含义 |
-|------|------|------|
-| `base_frame` | task.info `baseFrame` | 模型/参考基座（可被 YAML 覆盖） |
-| `left_ee_frame` | task.info `eeFrame` | 左末端 tip（YAML 可改为 `left_tcp` 等） |
-| `right_ee_frame` | task.info `eeFrame1` | 右末端 tip |
-| `body_frame`（仅 WBC） | `bodyRelative.bodyLinkName` | 身体 link |
+| 参数 | 默认 | 生效时机 | 含义 |
+|------|------|------|------|
+| `base_frame` | task.info `baseFrame` | 仅启动 | 模型/参考基座（可被 YAML 覆盖） |
+| `left_ee_frame` | task.info `eeFrame` | 仅启动 | 左末端 tip（YAML 可改为 `left_tcp` 等） |
+| `right_ee_frame` | task.info `eeFrame1` | 仅启动 | 右末端 tip |
+| `body_frame`（仅 WBC） | `bodyRelative.bodyLinkName` | 仅启动 | 身体 link |
 
 - YAML 已配 → 用配置；未配 → 用 info，并写入 param 供外界读取。
 - 覆盖在 **Interface 构造时内存注入** `createManipulatorModelInfo`（不写临时 info），MPC 真正跟踪新 tip。
-- **不支持**像 `movel_duration` 那样运行时热改；改 tip 需重启控制器。
+- **不支持**像 `movel_duration` 那样运行时热改；改 tip 需重启控制器。`movel_*` 由控制器在下一次插值 / stamped 命令时 `get_parameter` 重读（**运行时**）。MOVEJ 侧 `cartesian_defaults.*` 同样在下一条 MOVEJ 命令时重读（**运行时**）。
 
 RViz Joint Panel：绝对 / 相对基座 / 相对末端（手臂）或相对身体（Body TRACKING）；相对基座填 `current_target`/`base_frame`；相对末端填 `left/right_ee_frame`；相对身体填 `body_frame`。
 
 ### Full-body WBC Head 6D Marker
 
-旧关节 Marker 与 WBC 6D Marker 使用独立开关：
+`enable_wbc_head_tracking_marker`（本节点参数，**仅启动**，默认 `false`）打开 WBC Head XYZ+RPY 六轴 Marker。共享 YAML 中保持关闭；`full_body.launch.py` 只在实际选择 `ocs2_wbc_controller` 时覆盖，`split_body` 不覆盖。Marker 还受运行态门控：只有 FSM=OCS2 且 `WbcCurrentState.head_state=HEAD_TRACKING` 时插入，离开模式立即移除并停止发布。头部相机注视双手中点激活时（`head_midpoint_gaze_active=true`）`head_state` 会随之变为 `HEAD_GAZE`，Marker 走同一门控自动隐藏，VR 头部输入同样停止，无需单独处理。
 
-| 参数 | 用途 | 默认 |
-|---|---|---|
-| `enable_head_control` | 旧头部 RPY-to-joint Marker，发布 `/head_joint_controller/target_joint_position` | `false` |
-| `enable_wbc_head_tracking_marker` | WBC Head XYZ+RPY 六轴 Marker | `false` |
-
-共享 YAML 中两个开关均保持关闭；`full_body.launch.py` 只在实际选择 `ocs2_wbc_controller` 时覆盖第二个开关，`split_body` 不覆盖。WBC Marker 还受运行态门控：只有 FSM=OCS2 且 `WbcCurrentState.head_state=HEAD_TRACKING` 时插入，离开模式立即移除并停止发布。头部相机注视双手中点激活时（`head_midpoint_gaze_active=true`）`head_state` 会随之变为 `HEAD_GAZE`，Marker 走同一门控自动隐藏，VR 头部输入同样停止，无需单独处理。
-
-每次进入该模式，Marker 先从 `marker_fixed_frame -> head_link_name` TF 同步当前完整位姿；模式内 Marker 表示最终目标，不持续跟随实际 Head 或 MPC 中间轨迹。自身发布后的短暂回显冷却避免 `head_target -> head_current_target -> Marker` 抖动，其他最终目标随后可通过 `head_current_target` 回写 Marker。旧 `/head_joint_controller/current_target_joint` 是关节数组，不接入 WBC 6D 回写链路。
+每次进入该模式，Marker 先从 `marker_fixed_frame -> head_link_name` TF 同步当前完整位姿；模式内 Marker 表示最终目标，不持续跟随实际 Head 或 MPC 中间轨迹。自身发布后的短暂回显冷却避免 `head_target -> head_current_target -> Marker` 抖动，其他最终目标随后可通过 `head_current_target` 回写 Marker。
 
 ## 参数说明
 
+本节点在 `main` 里 `declare_parameter` 后把值传入构造函数，**没有** `add_on_set_parameters_callback`，之后也不再 `get_parameter`。下表全部为 **仅启动**（改参数需重启节点）。无 **运行时** / **未核实** 项。
+
 ### 节点参数
-- `dual_arm_mode`、`control_base_frame`、`hand_controllers`：由 launch / task.info 自动配置
-- `marker_fixed_frame`：Marker 固定坐标系，默认 `base_link`
-- `enable_movej_cartesian_markers`：MOVEJ 下是否显示可拖手臂 marker（发 stamped → IK MoveL）。有 `lina_planning` 时默认 `true`；`full_body.launch.py` 在 `ocs2_wbc_controller` 下设为 `false`
-- `enable_wbc_head_tracking_marker`：是否具备 full-body WBC Head 6D Marker 启动能力；仍需 OCS2 + `HEAD_TRACKING`，默认 `false`
+
+| 参数 | 含义 | 默认 | 生效时机 |
+|------|------|------|------|
+| `dual_arm_mode` | 双臂模式；由 launch / task.info 自动配置 | `false` | 仅启动 |
+| `control_base_frame` | 控制基座坐标系 | `"world"` | 仅启动 |
+| `hand_controllers` | 手部控制器名列表（用于检测/校验） | `[]` | 仅启动 |
+| `marker_fixed_frame` | Marker 固定坐标系 | `"base_link"` | 仅启动 |
+| `enable_movej_cartesian_markers` | MOVEJ 下是否显示可拖手臂 marker（发 stamped → IK MoveL）。`full_body.launch.py` 在 `ocs2_wbc_controller` 下设为 `false` | 有 `lina_planning` 时 `true`，否则 `false` | 仅启动 |
+| `enable_wbc_head_tracking_marker` | 是否具备 full-body WBC Head 6D Marker 启动能力；仍需 OCS2 + `HEAD_TRACKING` | `false` | 仅启动 |
 
 ### YAML 配置（`config/default.yaml` 或 task 旁 `target_manager.yaml`）
 
-| 参数 | 含义 | 默认 |
-|------|------|------|
-| `linear_scale` | 映射到 `*/twist` 的线速度上限 **m/s**（满杆） | `0.1` |
-| `angular_scale` | 映射到 `*/twist` 的角速度上限 **rad/s**（满杆） | `0.25` |
-| `control_input_rate` | 上游 `control_input` 典型频率 Hz（仅手感估算，不参与实时换算） | `50.0` |
-| `vr_thumbstick_linear_scale` | VR 摇杆线位移步进 m/step | `0.005` |
-| `vr_thumbstick_angular_scale` | VR 摇杆角位移步进 rad/step | `0.05` |
-| `enable_vr` | 是否启用 VR | `false` |
+| 参数 | 含义 | 默认 | 生效时机 |
+|------|------|------|------|
+| `linear_scale` | 映射到 `*/twist` 的线速度上限 **m/s**（满杆） | `0.1` | 仅启动 |
+| `angular_scale` | 映射到 `*/twist` 的角速度上限 **rad/s**（满杆） | `0.25` | 仅启动 |
+| `control_input_rate` | 上游 `control_input` 典型频率 Hz（仅手感估算，不参与实时换算） | `50.0` | 仅启动 |
+| `vr_thumbstick_linear_scale` | VR 摇杆线位移步进 m/step | `0.005` | 仅启动 |
+| `vr_thumbstick_angular_scale` | VR 摇杆角位移步进 rad/step | `0.05` | 仅启动 |
+| `enable_vr` | 是否启用 VR | `false` | 仅启动 |
 
 ### 手柄 / 键盘 scale（速度，不是每帧位移）
 

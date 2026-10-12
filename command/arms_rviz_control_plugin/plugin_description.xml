@@ -23,4 +23,9 @@
     base_class_type="rviz_common::Panel">
     <description>WBC capability status panel</description>
   </class>
+  <class name="arms_rviz_control_plugin/TargetErrorDisplay"
+         type="arms_rviz_control_plugin::TargetErrorDisplay"
+         base_class_type="rviz_common::Display">
+    <description>Tracking error dashboard over the RViz 3D viewport.</description>
+  </class>
 </library>

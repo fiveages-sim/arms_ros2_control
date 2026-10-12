@@ -81,6 +81,7 @@ namespace basic_joint_controller
             mode_ = FSMMode::NORMAL;
         }
 
+        ctrl_interfaces_.recordCommandMotion(period.seconds());
         return controller_interface::return_type::OK;
     }
 
@@ -175,6 +176,7 @@ namespace basic_joint_controller
                 auto_declare<std::vector<double>>("waist_lifting_default_parameter", {0.25, 1.0, 5.0});
                 auto_declare<std::vector<double>>("waist_turning_default_parameter", {0.25, 1.0, 5.0});
                 auto_declare<double>("waist_turning_direction", 1.0);
+                auto_declare<std::vector<double>>("waist_phi_default_parameter", {0.25, 1.0, 5.0});
                 std::string waist_lifting_type_ = auto_declare<std::string>("waist_lifting_type", "three_joint");
                 if (waist_lifting_type_ == "three_joint")
                 {
@@ -241,6 +243,7 @@ namespace basic_joint_controller
             "/robot_description", rclcpp::QoS(rclcpp::KeepLast(1)).transient_local(),
             [this](const std_msgs::msg::String::SharedPtr msg)
             {
+                state_list_.home->updateJointLimitsFromURDF(msg->data, joint_names_);
                 state_list_.movej->updateJointLimitsFromURDF(msg->data);
             });
         state_list_.movej->setupJointTrajectoryService("joint_trajectory_with_para");
@@ -257,38 +260,6 @@ namespace basic_joint_controller
                 state_list_.movej->setupWaistLiftingPoseAction("waist_lifting_pose");
             }
 
-            // 订阅腰部升降话题
-            std::string waist_lifting_topic = "/" + controller_name_ + "/waist_lifting";
-
-            waist_lifting_subscription_ = get_node()->create_subscription<std_msgs::msg::Float64>(
-                waist_lifting_topic, 10,
-                [this](const std_msgs::msg::Float64::SharedPtr msg)
-                {
-                    // 只有在 MOVEJ 状态时才处理
-                    if (!current_state_ || current_state_->state_name != FSMStateName::MOVEJ)
-                    {
-                        return;
-                    }
-
-                    // 通过 StateMoveJ 启动腰部升降
-                    if (state_list_.movej)
-                    {
-                        bool success = state_list_.movej->moveWaistLifting(
-                            Eigen::Vector3d(0.0, msg->data, 0.0)); //兼容旧接口：仅dz
-
-                        if (success)
-                        {
-                            RCLCPP_INFO(get_node()->get_logger(),
-                                        "Waist lifting command received: distance=%.3f",
-                                        msg->data);
-                        }
-                        else
-                        {
-                            RCLCPP_WARN(get_node()->get_logger(),
-                                        "waist lifting command failed");
-                        }
-                    }
-                });
             std::string waist_lifting_pose_relative_topic =
                 "/" + controller_name_ + "/waist_lifting_pose_relative";
             waist_lifting_pose_relative_subscription_ =
@@ -436,6 +407,28 @@ namespace basic_joint_controller
                         {
                             RCLCPP_WARN(get_node()->get_logger(),
                                         "waist turning command failed");
+                        }
+                    }
+                });
+
+            std::string waist_phi_command_topic = "/" + controller_name_ + "/waist_phi_command";
+            waist_phi_command_subscription_ = get_node()->create_subscription<std_msgs::msg::Float64>(
+                waist_phi_command_topic, 10,
+                [this](const std_msgs::msg::Float64::SharedPtr msg)
+                {
+                    if (get_node()->get_current_state().label() != "active") return;
+                    if (!current_state_ || current_state_->state_name != FSMStateName::MOVEJ)
+                    {
+                        return;
+                    }
+
+                    if (state_list_.movej)
+                    {
+                        bool success = state_list_.movej->setWaistPhiFactor(msg->data);
+                        if (!success)
+                        {
+                            RCLCPP_WARN(get_node()->get_logger(),
+                                        "waist phi command failed");
                         }
                     }
                 });
@@ -629,6 +622,7 @@ namespace basic_joint_controller
     controller_interface::CallbackReturn BasicJointController::on_deactivate(
         const rclcpp_lifecycle::State& /*previous_state*/)
     {
+        if (state_list_.movej) state_list_.movej->exit();
         release_interfaces();
         return CallbackReturn::SUCCESS;
     }
@@ -636,6 +630,7 @@ namespace basic_joint_controller
     controller_interface::CallbackReturn BasicJointController::on_cleanup(
         const rclcpp_lifecycle::State& /*previous_state*/)
     {
+        waist_phi_command_subscription_.reset();
         return CallbackReturn::SUCCESS;
     }
 

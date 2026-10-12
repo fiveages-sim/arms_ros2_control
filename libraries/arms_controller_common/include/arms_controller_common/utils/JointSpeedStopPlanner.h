@@ -1,53 +1,54 @@
 #pragma once
-
-#include <memory>
 #include <vector>
-
-#ifdef HAS_LINA_PLANNING
-#include "lina_planning/planning/path_planner/speedj.h"
-#endif
+#include <string>
+#include <cstddef>
+#include <memory>
 
 namespace arms_controller_common
 {
-    /**
-     * @brief Full-joint SpeedJ planner that decelerates all joints to zero velocity.
-     */
+    // Common progress preserves joint velocity ratios during braking. If the
+    // initial accelerations are incompatible, first release them over a shared
+    // interval. A position-bound truncation stops the entire group together.
     class JointSpeedStopPlanner
     {
     public:
-        JointSpeedStopPlanner() = default;
-
-        bool init(
-            const std::vector<double>& joint_pos,
-            const std::vector<double>& joint_vel,
-            double period,
-            double max_acc = 2.0,
-            double max_jerk = 10.0);
-
-        std::vector<double> run();
-
+        bool init(const std::vector<double>& positions,
+                  const std::vector<double>& velocities,
+                  const std::vector<double>& accelerations,
+                  double max_velocity, double max_acceleration, double max_jerk,
+                  const std::vector<double>& lower, const std::vector<double>& upper,
+                  bool truncate_at_limits);
+        std::vector<double> run(double dt);
+        const std::vector<double>& velocities() const { return velocities_; }
+        const std::vector<double>& accelerations() const { return accelerations_; }
         bool isMotionOver() const;
-
         bool isActive() const { return active_; }
-
+        bool wasTruncated() const { return truncated_; }
+        const std::string& error() const { return error_; }
         void reset();
 
     private:
-        bool active_{false};
-        double period_{0.002};
-        double max_acc_{2.0};
-        double max_jerk_{10.0};
-        std::vector<double> joint_pos_cache_;
-
-#ifdef HAS_LINA_PLANNING
-        std::unique_ptr<planning::SpeedJ> speedj_planner_;
-#else
-        struct FallbackState
+        bool initScalar(const std::vector<double>& positions,
+                        const std::vector<double>& velocities,
+                        const std::vector<double>& accelerations,
+                        double max_velocity, double max_acceleration, double max_jerk,
+                        const std::vector<double>& lower, const std::vector<double>& upper,
+                        bool truncate_at_limits);
+        bool synchronized_{false};
+        std::unique_ptr<JointSpeedStopPlanner> scalar_stop_;
+        std::vector<double> initial_positions_, initial_velocities_, initial_accelerations_;
+        std::vector<double> base_positions_, directions_;
+        double transition_duration_{0}, transition_elapsed_{0}, release_duration_{0};
+        struct Segment { double q, v, a, jerk, duration; };
+        struct Joint
         {
-            std::vector<double> joint_vel;
-            bool motion_over{true};
+            std::vector<Segment> segments;
+            size_t index{0};
+            double elapsed{0}, final_position{0};
         };
-        FallbackState fallback_state_;
-#endif
+        std::vector<Joint> joints_;
+        std::vector<double> positions_, velocities_, accelerations_, lower_, upper_;
+        bool active_{false}, truncated_{false};
+        std::string error_;
     };
-} // namespace arms_controller_common
+}

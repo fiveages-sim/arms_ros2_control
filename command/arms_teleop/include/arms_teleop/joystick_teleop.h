@@ -9,6 +9,7 @@
 #include <sensor_msgs/msg/joy.hpp>
 #include <arms_ros2_control_msgs/msg/inputs.hpp>
 #include <arms_ros2_control_msgs/msg/teleop_mode.hpp>
+#include <arms_ros2_control_msgs/msg/wbc_current_state.hpp>
 #include <std_msgs/msg/int32.hpp>
 #include <std_msgs/msg/float64.hpp>
 #include <geometry_msgs/msg/twist.hpp>
@@ -37,6 +38,8 @@ private:
     void loadParameters();
     void printButtonMapping();
     void publishTeleopMode();
+    void publishChassisCommand();
+    [[nodiscard]] bool wbcOwnsChassisVelocity() const;
 
     arms_ros2_control_msgs::msg::Inputs inputs_;
     rclcpp::Publisher<arms_ros2_control_msgs::msg::Inputs>::SharedPtr publisher_;
@@ -47,6 +50,9 @@ private:
 
     rclcpp::Publisher<std_msgs::msg::Float64>::SharedPtr waist_lifting_publisher_;
     rclcpp::Publisher<std_msgs::msg::Float64>::SharedPtr waist_turning_publisher_;
+    rclcpp::Subscription<std_msgs::msg::Int32>::SharedPtr fsm_state_subscription_;
+    rclcpp::Subscription<arms_ros2_control_msgs::msg::WbcCurrentState>::SharedPtr
+        wbc_state_subscription_;
 
     // Control parameters
     double updateRate_;
@@ -137,6 +143,10 @@ private:
     
     // Last FSM command sent (to detect transition to 0)
     int32_t last_fsm_command_;
+
+    // 默认 HOLD + 底盘锁定：没有 WBC 时不让路
+    int32_t fsm_state_{2};
+    int32_t base_state_{arms_ros2_control_msgs::msg::WbcCurrentState::BASE_LOCKED};
 };
 
 #endif //JOYSTICK_TELEOP_H 

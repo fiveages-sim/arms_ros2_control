@@ -128,6 +128,7 @@ namespace ocs2::mobile_manipulator
             ctrl_comp_->maybeRequestVisualizationUpdate(time);
         }
         ctrl_comp_->endRtCycle(current_state_ ? current_state_->state_name_string : fsm);
+        ctrl_interfaces_.recordCommandMotion(period.seconds());
         return controller_interface::return_type::OK;
     }
 
@@ -356,6 +357,7 @@ namespace ocs2::mobile_manipulator
             "/robot_description", rclcpp::QoS(rclcpp::KeepLast(1)).transient_local(),
             [this](const std_msgs::msg::String::SharedPtr msg)
             {
+                state_list_.home->updateJointLimitsFromURDF(msg->data, joint_names_);
                 state_list_.movej->updateJointLimitsFromURDF(msg->data);
             });
         state_list_.movej->setupJointTrajectoryAction("joint_trajectory_with_para");
@@ -388,38 +390,7 @@ namespace ocs2::mobile_manipulator
         // ===== Waist-related subscriptions copied from BasicJointController =====
         if (waist_lifting_enabled_)
         {
-            // 1) absolute lifting distance command
-            std::string waist_lifting_topic = "/" + controller_name_ + "/waist_lifting";
-            waist_lifting_subscription_ = get_node()->create_subscription<std_msgs::msg::Float64>(
-                waist_lifting_topic, 10,
-                [this](const std_msgs::msg::Float64::SharedPtr msg)
-                {
-                    // Only process in MOVEJ state
-                    if (!current_state_ || current_state_->state_name != FSMStateName::MOVEJ)
-                    {
-                        return;
-                    }
-
-                    if (state_list_.movej)
-                    {
-                        bool success = state_list_.movej->moveWaistLifting(
-                            Eigen::Vector3d(0.0, msg->data, 0.0));
-
-                        if (success)
-                        {
-                            RCLCPP_INFO(get_node()->get_logger(),
-                                        "Waist lifting command received: distance=%.3f",
-                                        msg->data);
-                        }
-                        else
-                        {
-                            RCLCPP_WARN(get_node()->get_logger(),
-                                        "waist lifting command failed");
-                        }
-                    }
-                });
-
-            // 2) speedj-like lifting factor command
+            // speedj-like lifting factor command
             std::string waist_lifting_command_topic = "/" + controller_name_ + "/waist_lifting_command";
             waist_lifting_command_subscription_ = get_node()->create_subscription<std_msgs::msg::Float64>(
                 waist_lifting_command_topic, 10,
@@ -443,7 +414,7 @@ namespace ocs2::mobile_manipulator
                     }
                 });
 
-            // 3) waist turning factor command
+            // waist turning factor command
             std::string waist_turning_command_topic = "/" + controller_name_ + "/waist_turning_command";
             waist_turning_command_subscription_ = get_node()->create_subscription<std_msgs::msg::Float64>(
                 waist_turning_command_topic, 10,

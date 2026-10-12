@@ -11,6 +11,8 @@ set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 find_package(ament_cmake REQUIRED)
 find_package(rclcpp REQUIRED)
 find_package(rviz_common REQUIRED)
+find_package(rviz_ogre_vendor REQUIRED)
+find_package(rviz_rendering REQUIRED)
 find_package(arms_controller_common REQUIRED)
 find_package(sensor_msgs REQUIRED)
 find_package(std_msgs REQUIRED)
@@ -35,6 +37,7 @@ cmake_language(CALL qt${QT_VERSION_MAJOR}_wrap_cpp MOC_FILES
         include/arms_rviz_control_plugin/gripper_control_panel.hpp
         include/arms_rviz_control_plugin/joint_control_panel.hpp
         include/arms_rviz_control_plugin/wbc_capability_panel.hpp
+        include/arms_rviz_control_plugin/target_error_display.hpp
         include/arms_rviz_control_plugin/switch_button.hpp
 )
 
@@ -44,6 +47,7 @@ set(SRC_FILES
         src/gripper_control_panel.cpp
         src/joint_control_panel.cpp
         src/wbc_capability_panel.cpp
+        src/target_error_display.cpp
         src/switch_button.cpp
 )
 
@@ -57,6 +61,8 @@ target_link_libraries(${PROJECT_NAME} PUBLIC
   Qt${QT_VERSION_MAJOR}::Widgets
   ${rclcpp_TARGETS}
   rviz_common::rviz_common
+  rviz_ogre_vendor::OgreOverlay
+  rviz_rendering::rviz_rendering
   arms_controller_common::arms_controller_common
   ${sensor_msgs_TARGETS}
   ${std_msgs_TARGETS}

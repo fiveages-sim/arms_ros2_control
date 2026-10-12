@@ -56,6 +56,51 @@ arms_controller_common/
 
 ---
 
+## ROS 2 参数
+
+`basic_joint_controller` 与 `ocs2_arm_controller` 共用本库的 Home / Hold / MoveJ 参数。各控制器 README 只补充包专有项；此处给出共享项及**生效时机**。
+
+**ros2_control 公共参数**（`joints`、`update_rate`、`command_interfaces`、`state_interfaces`，以及可选的 `command_prefix`）属于 `controller_interface::ControllerInterface` / `controller_manager`，在控制器加载时读取（**仅启动**）。修改它们需要卸载并重新加载控制器，不必在每个控制器 README 里完整复述。详见 [ros2_control ControllerInterface](https://control.ros.org/jazzy/doc/ros2_control/controller_interface/doc/userdoc.html)。
+
+**生效时机**
+
+| 标记 | 含义 |
+|---|---|
+| **运行时** | `ros2 param set` 后无需重启控制器。本库通过 `StateHome::updateParam` / `StateMoveJ::updateParam` 在**下一次进入该状态或下一条匹配命令**时 `get_parameter` 重读；不是 `add_on_set_parameters_callback` 的即时回调。 |
+| **仅启动** | 在 `on_init` / 构造 / 首次创建规划器时写入成员，之后不再读取。 |
+| **未核实** | 已声明，但没有回调也没有清晰的重读路径（不要按动态参数使用）。 |
+
+### Home（`StateHome::updateParam`，进入 HOME 或切换构型时重读）
+
+| 参数 | 默认值 | 生效时机 | 说明 |
+|---|---|---|---|
+| `home_1` … `home_10` | （YAML 提供） | 仅启动 | 预设构型；`init()` 从参数覆盖加载，之后不再重读 |
+| `home_duration` | `3.0` | 运行时 | 插值时长（秒） |
+| `home_interpolation_type` | `"linear"`（`auto_declare`） | 运行时 | `"tanh"` / `"linear"` / `"doubles"` / `"none"` |
+| `home_tanh_scale` | `3.0` | 运行时 | tanh 曲线尺度 |
+| `home_max_velocity` | `2.0` | 运行时 | 速度上限 |
+| `home_max_acceleration` | `4.0` | 运行时 | 加速度上限 |
+| `home_max_jerk` | `20.0` | 运行时 | jerk 上限 |
+| `switch_command_base` | `100` | 仅启动 | HOME 内切换构型的 FSM 命令基值（构造时读取一次） |
+
+### MoveJ（`StateMoveJ::updateParam`，进入 MOVEJ 或下一条关节目标/轨迹时重读）
+
+| 参数 | 默认值 | 生效时机 | 说明 |
+|---|---|---|---|
+| `movej_duration` | `3.0` | 运行时 | 单目标时长下限（秒）；`none` / `servo` 不按此时长插值 |
+| `movej_interpolation_type` | `"linear"`（`auto_declare`） | 运行时 | `"tanh"` / `"linear"` / `"doubles"` / `"none"` / `"servo"` |
+| `movej_tanh_scale` | `3.0` | 运行时 | tanh 曲线尺度 |
+| `movej_trajectory_duration` | `3.0` | 运行时 | 多路点轨迹默认总时长 |
+| `movej_trajectory_blend_ratio` | `0.0`（basic）/ `0.2`（ocs2） | 运行时 | 路点融合比例 |
+| `movej_max_velocity` | `2.0` | 运行时 | 速度上限 |
+| `movej_max_acceleration` | `4.0` | 运行时 | 加速度上限（doubles / servo） |
+| `movej_max_jerk` | `20.0` | 运行时 | jerk 上限（doubles / servo） |
+| `movej_auto_extend_duration` | `true` | 运行时 | 超限时是否自动拉长 duration |
+
+腰部运动中，仅 `waist_lifting_duration` 在每次腰部位置规划时重读（**运行时**）。`waist_lifting_type`、默认速度三元组、杆长/方向等在 `setWaistLiftingPlaner()` **首次创建规划器**时读取，之后不再更新（**仅启动**）。`waist_lifting_enabled` 与绝对 TF 坐标系由各控制器在 `on_init` 读取（**仅启动**）。
+
+---
+
 ## StateHome
 
 StateHome 支持最多 10 个预设构型（`home_1`、`home_2`、…），通过 FSM 命令动态切换。
@@ -290,3 +335,71 @@ auto state_hold = std::make_shared<StateHold>(ctrl_interfaces_, gravity_comp, no
 cd ~/ros2_ws
 colcon build --packages-select arms_controller_common
 ```
+
+
+## 运动中的目标替换与同步停车
+
+HOME 配置切换和 MOVEJ 关节目标替换先校验新目标。以下停车流程针对非 servo 模式。数量错误、非有限值、缺失限位或超出
+URDF 位置范围的目标直接拒绝，不改变当前运动及已有待执行目标。MOVEJ 关节目标不再自动
+裁剪到边界。减速期间收到新的有效目标，只更新待执行目标，不重新启动停车；所有关节停止
+后执行最新目标。
+
+`JointSpeedStopPlanner` 使用公共分段常 jerk 减速进度，按初始速度比例映射各关节，
+同时停止，避免腰部等耦合关节各自减速导致姿态变化。继承命令侧位置、速度、加速度；
+当初始加速度与速度方向成比例时直接接入公共曲线。比例不兼容时，先以统一时长将
+各关节加速度平滑降为零，再按过渡后的速度比例同步停车。这一过渡保持初始速度、
+加速度均满足的线性关节约束，但不能保证任意非线性笛卡尔路径不变。
+doubleS 输出优先使用解析速度和加速度；其他输出使用控制周期的命令差分估计。
+
+普通单目标运动的限制按控制器配置，默认值如下（旋转关节分别为 rad/s、rad/s²、rad/s³）：
+
+```yaml
+ros__parameters:
+  home_max_velocity: 2.0
+  home_max_acceleration: 4.0
+  home_max_jerk: 20.0
+  movej_max_velocity: 2.0
+  movej_max_acceleration: 4.0
+  movej_max_jerk: 20.0
+```
+
+停车使用当前轨迹保存的限制，不会因接收新目标时读取参数而改变旧轨迹的停车限制。
+HOME 的 doubleS 自动延长过短时长以满足这些限制；MOVEJ 的 doubleS 若关闭
+`movej_auto_extend_duration` 且时长不足，会拒绝规划，不再通过压缩时间突破限制。
+
+停车方案准备成功后才清除原轨迹。doubleS 停车若不满足位置/运动约束，则拒绝此次切换并
+保留原运动。linear 等非 doubleS 路径按允许的最大 jerk 制动；若先触及位置限位，则在
+首次触限时整组一起截停，并将所有关节内部速度、加速度置零，避免单关节停止后其他关节
+继续运动破坏配合关系。初始加速度已超出制动限制时，会先以
+最大 jerk 恢复到允许范围。触限截断允许命令导数不连续，只保证命令位置受限，不保证机械
+关节没有跟踪误差或惯性超调。停车规划不再依赖是否编译了 lina_planning。
+
+### MoveJ `servo` 实时关节跟随
+
+设置控制器参数 `movej_interpolation_type: servo`，通过已有
+`target_joint_position`（或 `/left`、`/right`、`/body`、`/head` 分组话题）持续发送关节位置。
+此模式使用移植自 `rokae_ros2_control::DoubleSFilter` 的三阶状态反馈滤波器，
+不依赖 lina_planning，也不为每条目标启动新的点到点轨迹。
+
+```yaml
+movej_interpolation_type: servo
+movej_max_velocity: 2.0       # rad/s
+movej_max_acceleration: 4.0   # rad/s²
+movej_max_jerk: 20.0          # rad/s³
+```
+
+- 进入 MOVEJ 时，以最后下发的位置及命令侧速度、加速度初始化。
+  在 MOVEJ 内修改插值模式后，下一条位置目标触发模式更新；切入 servo 的首个控制周期
+  从最后下发的位置及命令侧速度、加速度初始化。限幅参数在初始化时载入，修改后重新进入模式生效。
+- 同一 servo 会话中，新目标只覆盖目标位置，保留滤波器的 `q/dq/ddq`，不触发先减速再重规划。
+  分组消息只更新对应关节，其他关节继续追踪各自最后的目标；初次进入时未指定的关节目标为进入位置。
+- 现有位置消息不提供目标速度和加速度，因此两者均为 0，不做数值微分或预测。
+  `movej_duration` 和 `movej_auto_extend_duration` 不用于 servo；到位后滤波状态继续保留。
+- 使用实际控制周期，内部拆分为不超过 1 ms 的积分步长。非正、非有限或超过 100 ms 的周期不推进滤波状态。
+  内部子步不会提高硬件命令下发频率。
+- 退出 MOVEJ 或被其他运动抢占后，下次 servo 初始化会重新建立状态。
+  定时单段、多路点轨迹不能选择 servo；HOME 也不能使用 servo。
+- 保留原算法的离散切换律和梯形积分：速度、加速度可能有离散超限，到位附近可能有微小抖动，
+  不能视为严格运动约束保证。无效或超限目标直接拒绝，保留原目标。每个积分子步裁剪输出到位置限位，
+  触限时清零该关节滤波速度和加速度；这是位置截断，不保证触限时导数连续，也不保证实机关节无超调。
+  此模式不增加遥操作消息超时机制；停止发送后会继续追踪最后目标。

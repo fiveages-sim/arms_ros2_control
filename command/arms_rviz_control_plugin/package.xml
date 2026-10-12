@@ -10,6 +10,8 @@
 
   <depend>rclcpp</depend>
   <depend>rviz_common</depend>
+  <depend>rviz_ogre_vendor</depend>
+  <depend>rviz_rendering</depend>
   <depend>arms_controller_common</depend>
   <depend>arms_ros2_control_msgs</depend>
   <depend>sensor_msgs</depend>

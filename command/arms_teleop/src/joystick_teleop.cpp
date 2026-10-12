@@ -44,6 +44,25 @@ JoystickTeleop::JoystickTeleop() : Node("joystick_teleop_node") {
     }
     fsm_command_publisher_ = create_publisher<std_msgs::msg::Int32>("/fsm_command", 10);
     chassis_publisher_ = create_publisher<geometry_msgs::msg::Twist>("/cmd_vel", 10);
+    fsm_state_subscription_ = create_subscription<std_msgs::msg::Int32>(
+        "/fsm_state", rclcpp::QoS(1).transient_local(),
+        [this](const std_msgs::msg::Int32::SharedPtr msg)
+        {
+            if (msg)
+            {
+                fsm_state_ = msg->data;
+            }
+        });
+    wbc_state_subscription_ =
+        create_subscription<arms_ros2_control_msgs::msg::WbcCurrentState>(
+            "/ocs2_wbc_controller/current_state", 10,
+            [this](const arms_ros2_control_msgs::msg::WbcCurrentState::SharedPtr msg)
+            {
+                if (msg)
+                {
+                    base_state_ = msg->base_state;
+                }
+            });
     subscription_ = create_subscription<
         sensor_msgs::msg::Joy>("joy", 10, std::bind(&JoystickTeleop::joy_callback, this, _1));
     waist_lifting_publisher_ = create_publisher<std_msgs::msg::Float64>("/body_joint_controller/waist_lifting_command", 10);
@@ -247,9 +266,7 @@ void JoystickTeleop::joy_callback(sensor_msgs::msg::Joy::SharedPtr msg) {
         } else {
             // Chassis control mode
             processChassisAxes(msg);
-            
-            // Publish chassis velocity command
-            chassis_publisher_->publish(chassis_cmd_);
+            publishChassisCommand();
         }
     }
 }
@@ -311,7 +328,7 @@ void JoystickTeleop::processButtons(const sensor_msgs::msg::Joy::SharedPtr msg) 
                 chassis_cmd_.linear.x = 0.0;
                 chassis_cmd_.linear.y = 0.0;
                 chassis_cmd_.angular.z = 0.0;
-                chassis_publisher_->publish(chassis_cmd_);
+                publishChassisCommand();
             }
         }
         publishTeleopMode();
@@ -328,7 +345,7 @@ void JoystickTeleop::processButtons(const sensor_msgs::msg::Joy::SharedPtr msg) 
             chassis_cmd_.linear.x = 0.0;
             chassis_cmd_.linear.y = 0.0;
             chassis_cmd_.angular.z = 0.0;
-            chassis_publisher_->publish(chassis_cmd_);
+            publishChassisCommand();
         } else {
             inputs_.x = 0.0;
             inputs_.y = 0.0;
@@ -637,6 +654,21 @@ void JoystickTeleop::processChassisAxes(const sensor_msgs::msg::Joy::SharedPtr m
     chassis_cmd_.angular.x = 0.0;                                                 // No roll
     chassis_cmd_.angular.y = 0.0;                                                 // No pitch
     chassis_cmd_.angular.z = right_stick_x * chassis_angular_scale_ * speed_scale; // Rotation
+}
+
+bool JoystickTeleop::wbcOwnsChassisVelocity() const
+{
+    return fsm_state_ == 3 &&
+           base_state_ == arms_ros2_control_msgs::msg::WbcCurrentState::BASE_UNLOCKED;
+}
+
+void JoystickTeleop::publishChassisCommand()
+{
+    if (wbcOwnsChassisVelocity())
+    {
+        return;
+    }
+    chassis_publisher_->publish(chassis_cmd_);
 }
 
 // sendGripperCommand, left_target_command_callback, and right_target_command_callback

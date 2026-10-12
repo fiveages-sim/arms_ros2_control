@@ -43,6 +43,8 @@ namespace arms_controller_common
 
         /**
          * @brief Initialize single-node trajectory
+         * NONE is immediately complete; getNextPoint returns the target with zero
+         * command derivatives, independently of duration and physical arrival.
          * @param start_pos Starting joint positions
          * @param target_pos Target joint positions
          * @param duration Trajectory duration in seconds
@@ -120,6 +122,12 @@ namespace arms_controller_common
          * Clears all internal state and prepares for a new trajectory initialization.
          */
         void reset();
+        const std::vector<double>& lastVelocities() const { return last_velocities_; }
+        const std::vector<double>& lastAccelerations() const { return last_accelerations_; }
+        bool isDoubles() const { return interpolation_type_ == InterpolationType::DOUBLES; }
+        double stopMaxVelocity() const { return active_max_velocity_; }
+        double stopMaxAcceleration() const { return active_max_acceleration_; }
+        double stopMaxJerk() const { return active_max_jerk_; }
 
         /**
          * @brief Get current progress [0.0, 1.0]
@@ -132,6 +140,7 @@ namespace arms_controller_common
          * @return True if a trajectory has been initialized
          */
         bool isInitialized() const;
+        bool isSingleNode() const { return mode_ == TrajectoryMode::SINGLE_NODE; }
 
         /**
          * @brief Set trajectory duration for multi-node trajectories
@@ -187,6 +196,8 @@ namespace arms_controller_common
         double getPlanningTime() const;
 
     private:
+        std::vector<double> last_velocities_, last_accelerations_;
+        double active_max_velocity_{2.0}, active_max_acceleration_{4.0}, active_max_jerk_{20.0};
         // Trajectory mode
         enum class TrajectoryMode
         {

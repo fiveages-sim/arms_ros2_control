@@ -19,14 +19,20 @@ colcon build --packages-select adaptive_gripper_controller
 
 ## 配置参数
 
+插件类型：`adaptive_gripper_controller/AdaptiveGripperController`。
+
+`update_rate` 以及 `command_interfaces` / `state_interfaces` 由 controller_manager / ControllerInterface 在加载时处理（**仅启动**）。本控制器用单个 `joint`（不是 `joints` 列表）声明受控关节。没有 `add_on_set_parameters_callback`，也没有在 `update()` 中重读参数。
+
+**生效时机：** **仅启动** — `on_init` 写入成员后一直使用；`ros2 param set` 不会改变力反馈行为。修改参数后需卸载并重新加载控制器。本表无 **运行时** / **未核实** 项。
+
 在控制器的 `ros__parameters` 下声明：
 
-| 参数 | 类型 | 默认值 | 说明 |
-|---|---|---|---|
-| `joint` | string | `"gripper_joint"` | 受控关节名称 |
-| `use_effort_interface` | bool | `true` | 是否启用力/力矩状态接口用于力反馈 |
-| `force_threshold` | double | `0.1` | 触发力反馈的力/力矩阈值（单位与硬件一致） |
-| `force_feedback_ratio` | double | `0.5` | 力反馈触发后继续推进的比例（0.0=停在当前位置，1.0=继续到原始目标） |
+| 参数 | 类型 | 默认值 | 生效时机 | 说明 |
+|---|---|---|---|---|
+| `joint` | string | `"gripper_joint"` | 仅启动 | 受控关节名称 |
+| `use_effort_interface` | bool | `true` | 仅启动 | 是否启用力/力矩状态接口用于力反馈（影响接口声明） |
+| `force_threshold` | double | `0.1` | 仅启动 | 触发力反馈的力/力矩阈值（单位与硬件一致） |
+| `force_feedback_ratio` | double | `0.5` | 仅启动 | 力反馈触发后继续推进的比例（0.0=停在当前位置，1.0=继续到原始目标） |
 
 ### 配置示例
 
