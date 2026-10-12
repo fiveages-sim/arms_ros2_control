@@ -74,6 +74,14 @@ namespace arms_ros2_control::command
             const std::array<double, 3>& positionDelta,
             const std::array<double, 3>& rpyDelta);
 
+        /**
+         * 直接设置身体 marker 的绝对目标位姿（全身遥操骨架驱动用）。
+         * 前置条件与 updateBodyMarkerPoseIncremental 相同（身体 marker 存在且可见），
+         * 设置后按当前 marker 发布模式（连续/单次）更新可视化与身体目标。
+         * @return true 表示已应用；false 表示身体 marker 不可用
+         */
+        bool setBodyMarkerPose(const geometry_msgs::msg::Pose& pose);
+
         geometry_msgs::msg::Pose getMarkerPose(const std::string& armType) const;
 
         void togglePublishMode();
