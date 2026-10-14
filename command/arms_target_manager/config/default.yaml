@@ -25,5 +25,87 @@
     # VR 末端目标保持所在的机器人跟随坐标系（FULL_BODY / SPLIT_BODY 均生效）
     vr_follow_frame: base_footprint
 
+    # ================= 全身骨架绝对位姿映射 =================
+    # 以下参数只在「全身遥操作模式」（左右握把+右摇杆按下开启）内部生效：
+    #   短按右摇杆 = 开/关「全部跟踪」（胸/头/双臂末端改为 /teleop/body_* 绝对位姿映射）
+    #   长按右摇杆 = 开/关「底盘跟踪」（骨盆水平位姿 → 位置外环 → /cmd_vel）
+    # 非全身模式下的一切既有行为（UPDATE/STORAGE、摇杆微调、镜像、case 20 底盘模式）不受影响。
+
+    # 双臂末端数据源：hand / wrist（对应 /teleop/body_{left,right}_<源>_pose）
+    body_ee_source: wrist
+
+    # ===== 骨架分段尺度（在人体根坐标系里对「段向量」缩放；只改位置，姿态完全不变）=====
+    # 1.0 = 与人体等比；>1 表示机器人的对应尺寸比人体大。
+    # 实现：沿骨架链逐段缩放后重新累加（段向量之和 = 链端点之差）：
+    #   身长 body_length_scale     : pelvis → spine3（并同样作用于 spine3 → head）
+    #   肩宽 shoulder_width_scale  : spine3 → shoulder(L/R)
+    #   臂长 arm_length_scale      : shoulder → 末端(hand/wrist)
+    # 效果举例：胳膊向前伸直时，人手间距 = 人体肩宽 → 机器人末端间距 = 机器人肩宽（调肩宽）；
+    #           人臂完全伸直时机器人臂也完全伸直（调臂长 = 机器人臂长/人体臂长）。
+    # 注意：胸部锚点 λ=1 时胸部位置取骨盆，所以“身长”不影响胸目标，只影响头与手臂根。
+    body_length_scale: 1.0
+    shoulder_width_scale: 1.2
+    arm_length_scale: 1.4
+
+    # 注：人体根坐标系本身就是「人体系」（x 前 / y 左 / z 上），各部位先表达在该系里，
+    # 因此人体朝向即机器人机头朝向——这是构造成立的，不需要人工偏航常数。
+    # （早期有一个 absolute_map_yaw_deg 做“人体根轴向 → 底座轴向”的手工补偿，已删除。）
+
+    # 「数据源坐标系 → 机器人目标坐标系」的固定旋转偏置（固定轴 RPY，度，R = Rz·Ry·Rx）。
+    # 手柄面朝上时：人手 x 轴上、左手 z 轴左 / 右手 z 轴右；而 tcp x 轴上、z 轴前，
+    # 所以需要绕手部 x 轴 ∓90°。换 ee_source=wrist、换机型（eeFrame 为 *_eef 等）时必须重调。
+    # 现场校准：人体保持标准姿态，看 RViz 里末端目标 axes 与人体朝向的偏差，调这三个角。
+    hand_to_ee_rpy_deg_left: [-90.0, 0.0, 0.0]
+    hand_to_ee_rpy_deg_right: [90.0, 0.0, 0.0]
+    body_src_to_ee_rpy_deg: [0.0, 0.0, 0.0]
+    head_src_to_ee_rpy_deg: [0.0, 0.0, 0.0]
+
+    # 绝对目标一阶低通系数：0=不滤波（噪声最大），越大跟随越紧
+    absolute_filter_alpha: 0.3
+
+    # 标定前等待姿态稳定的时长 (ms)：先取机器人当前实际位姿与骨架对准，稳定后才锁定
+    capture_settle_ms: 200.0
+
+    # 骨架单关节数据看门狗 (s)：超时只冻结对应任务，其余正常
+    skeleton_timeout: 0.2
+
+    # 人体根 H（由下肢骨架构造）：
+    #   xy  = 两**踝** xy 均值（踝比脚尖更接近人的站立点）
+    #   z   = 两**足** z 的较低者（行走时支撑脚即地面，天然屏蔽摆动脚）
+    #   朝向 = 两**踝** x 轴在地平面投影的平均（直立、非内八外八时即人体前向）
+    human_root_filter_alpha: 0.1
+
+    # 人体根原点的固定偏置 [x, y, z]（m），在**人体根自身坐标系**里施加：
+    #   x 前 / y 左 / z 上（与 base_footprint 同向），因此会随人体朝向一起转。
+    # 根已由踝（xy/偏航）+ 足（z）直接给出，一般保持 0；
+    # 各部位相对人体根的位置 = 原值 − 该三点，即机器人目标整体反向平移该量。
+    human_root_offset: [0.0, 0.0, 0.0]
+
+    # 胸部位置沿「脊柱轴」（spine3 → pelvis）的锚点比例：
+    #   0 = 取 spine3 位置，1 = 取 pelvis 位置（机器人的 body_link4 比人体 spine3 偏下、
+    #   大致在骨盆高度）。姿态始终由 spine3 决定，不受本参数影响。
+    body_anchor_lambda: 1.0
+
+    # 骨架几何一致性容差（手–脊柱距离相对参考臂长的允许偏差比例）
+    # <=0 表示关闭该过滤
+    skeleton_geometry_tolerance: 0.2
+
+    # ================= 底盘跟踪（位置外环 → /cmd_vel） =================
+    # 软参考「跑步机」：p_ref 以 tau 追赶人体骨盆位置，稳态速度增益 ≈ kp * tau
+    base_follow_enable: true
+    base_follow_rate: 50.0          # 外环频率 (Hz)
+    base_follow_tau: 2.0            # 软参考时间常数 (s)
+    base_follow_tau_yaw: 2.0        # 预留（当前偏航为绝对跟踪，不使用软参考）
+    base_follow_kp: 0.5             # 位置增益（0.5 * 2.0 = 1.0 稳态 1:1）
+    base_follow_kpsi: 1.0           # 偏航增益（人体转身 1:1 映射为机头转向）
+    base_follow_deadband: 0.02      # 位置死区 (m)
+    base_follow_yaw_deadband: 0.05  # 偏航死区 (rad)
+    base_vmax: 0.4                  # 线速度上限 (m/s)
+    base_wmax: 0.8                  # 角速度上限 (rad/s)
+    base_acc_max: 1.0               # 线加速度上限 (m/s^2)
+    base_alpha_max: 2.0             # 角加速度上限 (rad/s^2)
+    base_cmd_tau: 0.2               # 指令一阶低通时间常数 (s)
+    base_follow_data_timeout: 0.2   # 骨盆数据看门狗 (s)
+
     # 是否启用VR输入处理
     enable_vr: false

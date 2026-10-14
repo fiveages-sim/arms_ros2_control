@@ -38,10 +38,18 @@ VRInputHandler是基于VRMarkerWrapper功能开发的VR输入处理器，专门�
 - `/teleop/controller_state` (`std_msgs/msg/Int32`): 按钮/组合键事件码（单帧）
 - `/teleop/thumbstick_axes` (`geometry_msgs/msg/Twist`): 左右摇杆轴值；`linear.z` / `angular.z` 携带左右握把按下状态
 - `/teleop/trigger_values` (`geometry_msgs/msg/Twist`): 左右扳机模拟量
+- `/teleop/body_pelvis_pose` (`geometry_msgs/msg/Pose`): 骨架骨盆（全身模式骨盆底盘跟随）
+- `/teleop/body_spine3_pose` (`geometry_msgs/msg/Pose`): 骨架胸椎上段（胸部绝对目标）
+- `/teleop/body_head_pose` (`geometry_msgs/msg/Pose`): 骨架头部（头部绝对目标）
+- `/teleop/body_left_hand_pose` / `body_right_hand_pose` (`geometry_msgs/msg/Pose`):
+  骨架手部，双臂末端绝对目标（`body_ee_source=wrist` 时订阅 `*_wrist_pose`）
+
+> 所有 `/teleop/body_*` 都是**动态话题**（头显开启全身追踪后才出现），此处常驻订阅。
 
 ### 机器人状态
 - `left_current_pose` (`geometry_msgs/msg/PoseStamped`): 机器人左臂当前pose
 - `right_current_pose` (`geometry_msgs/msg/PoseStamped`): 机器人右臂当前pose
+- `head_current_pose` (`geometry_msgs/msg/PoseStamped`): 机器人头部当前pose（头部跟踪的门控条件）
 
 ## 参数配置
 
@@ -54,6 +62,8 @@ VRInputHandler是基于VRMarkerWrapper功能开发的VR输入处理器，专门�
 - `enable_vr`: 是否启用VR控制，默认true
 - `vr_update_rate`: VR更新频率，默认500.0Hz
 - `vr_follow_frame`: VR 增量参考轴系，恢复时冻结 F → C 旋转，FULL_BODY / SPLIT_BODY 均生效，默认 `base_footprint`
+- 全身绝对映射 / 底盘跟踪参数（`body_ee_source`、`absolute_*`、`capture_settle_ms`、`skeleton_*`、
+  `base_follow_*`）见 `README.md` 的参数表，均只影响全身遥操作模式内部行为
 
 ### VR 目标坐标系
 
@@ -90,10 +100,12 @@ R_target_C = R_C_F * delta_R_F * inverse(R_C_F) * R_anchor_C
 
 1. 启动全身控制器（`ocs2_wbc_controller`）和 `arms_target_manager`（`enable_vr:=true`），并确认 `xr_target_node` 在线。
 2. 用 **右 A** 把 FSM 推到 OCS2（HOME → HOLD → OCS2）；**左 X** 后退。
-3. 把双手柄放到期望起始姿态，点 **右摇杆** 进入 UPDATE，双臂开始跟随。
-4. 用 **左握把 + 左摇杆四方向** 切换身体模式；用 **右握把 + 右摇杆上/下/右** 切换双臂耦合 / 底盘锁 / 参考关节。单臂启用默认用左 Y / 右 B；**左右握把 + 左 Y + 右 B**（事件 16）可把 Y/B 切到 VR 暂停语义。
-5. 进入 **跟随（BODY_TRACKING）** 后，左摇杆改控腰部，右摇杆仍控右臂。
-6. 需要底盘遥控时，再同时按下左右摇杆进入 CHASSIS 模式。
+3. **（相对增量路径）**把双手柄放到期望起始姿态，点 **右摇杆** 进入 UPDATE，双臂开始跟随。
+4. **（全身绝对映射路径）**按 **左右握把 + 右摇杆按下** 进入全身遥操作模式，再 **短按右摇杆** 开启「全部跟踪」（骨架绝对位姿驱动胸/头/双臂）；
+   需要底盘跟随时再 **长按右摇杆** 开关「底盘跟踪」。
+5. 用 **左握把 + 左摇杆四方向** 切换身体模式；用 **右握把 + 右摇杆上/下/右** 切换双臂耦合 / 底盘锁 / 参考关节。单臂启用默认用左 Y / 右 B；**左右握把 + 左 Y + 右 B**（事件 16）可把 Y/B 切到 VR 暂停语义。
+6. 进入 **跟随（BODY_TRACKING）** 后，左摇杆改控腰部，右摇杆仍控右臂。
+7. 需要底盘遥控时，再同时按下左右摇杆进入 CHASSIS 模式（全身模式内开启底盘跟踪时让路给骨盆跟随）。
 
 ### 身体模式（左握把 + 左摇杆）
 
@@ -194,11 +206,13 @@ FULL_BODY 下右握把+右摇杆方向组合仍会锁存并清零右轴（含预
 右握把 + 右摇杆上/下        →  双臂耦合 / 底盘锁（左/右预留）
 左 Y / 右 B                 →  默认对应臂 ENABLE/DISABLE；事件 16 后为 VR 暂停/恢复
 左右握把 + 左 Y + 右 B      →  切换 Y/B 禁用 ↔ 暂停语义（SPLIT_BODY 忽略）
-左右握把 + 右摇杆按下       →  全身遥操作开关（骨架驱动身体/头部；开启后屏蔽 21–24）
-左右摇杆同时按下            →  底盘遥控 ↔ 末端控制
+左右握把 + 右摇杆按下       →  全身遥操作模式开关（开启后屏蔽 21–24）
+全身模式内短按右摇杆          →  开/关「全部跟踪」（胸/头/双臂 = /teleop/body_* 绝对映射）
+全身模式内长按右摇杆(≥500ms)  →  开/关「底盘跟踪」（骨盆 → 位置外环 → /cmd_vel）
+左右摇杆同时按下            →  底盘遥控 ↔ 末端控制（全身模式内与底盘跟踪互斥）
 跟随模式下短按左握把      →  腰部摇杆 XY ↔ Z+Yaw
 短按左/右握把              →  对应臂摇杆 XY ↔ Z+Yaw（长按或组合键不切换）
-右摇杆点击                  →  STORAGE ↔ UPDATE（需 OCS2）
+右摇杆点击                  →  STORAGE ↔ UPDATE（需 OCS2；全身模式内改为「全部跟踪」开关）
 右 A / 左 X                 →  FSM 前进 / 后退
 ```
 
@@ -206,23 +220,172 @@ FULL_BODY 下右握把+右摇杆方向组合仍会锁存并清零右轴（含预
 
 **组合键：左右握把 + 右摇杆按下**（事件码 30）。在 VR enabled + FULL_BODY（`ocs2_wbc_controller` active）+ FSM=OCS2 下开关：
 
-- **开启**：自动请求身体模式「跟随」（`BODY_TRACKING`）与头部模式「跟踪」（`HEAD_TRACKING`）；
-  **按下右摇杆进入 UPDATE 后开始跟随（与双臂末端同步）**，退出 UPDATE 即冻结，
-  目标位姿由 `/teleop/body_*` 全身骨骼数据计算；
-- **关闭**：停止骨骼驱动（WBC 身体/头部模式保持当前状态，可用原有组合键切换）。
+- **开启（进入模式）**：自动请求身体模式「跟随」（`BODY_TRACKING`）与头部模式「跟踪」（`HEAD_TRACKING`）；
+  此时**尚未下发胸/头/双臂目标**，需再短按右摇杆开启「全部跟踪」；
+- **关闭**：退出模式，同时关掉「全部跟踪」与「底盘跟踪」（WBC 保持当前目标）。
 
-行为细节：
+### 模式内开关：全部跟踪（短按右摇杆，事件 4）
 
-- **身体目标**：人体躯干姿态（`body_spine3` 相对 `body_pelvis` 的旋转增量，排除骨盆偏航）
-  叠加到机器人胸部（`body_link4`）基准上；位置取骨盆→spine3 偏移的变化量 1:1。
-  基准在首次进入 UPDATE（或重新进入 UPDATE）时建立：机器人基准优先沿用上次目标
-  （无历史时用 `body_current_pose` 实际位姿）。
-- **头部目标**：数据源从 `/teleop/head_pose` 切换为 `/teleop/body_head_pose`，
-  其余沿用原头部跟踪流程（同样需要进入 UPDATE 才开始跟随）。
+短按右摇杆（按下不到 500 ms 就松开，上游发事件 `4`）在全身模式内改为 **开/关「全部跟踪」**
+（toggle，与双臂末端同步启动）：
+
+> ⚠️ **该模式内只有绝对映射，没有“相对运动模式”**。早期版本在这里还留着一套
+> “开启时记录基准 → 跟踪相对变化量（冻结转态 / 冻结旋转 / 骨盆→spine3 偏移变化量）”
+> 的分支，现**已删除**：按下右摇杆开跟踪后，胸/头/双臂直接采当前人体位姿映射，
+> 不再依据按下那一刻的快照。未开跟踪时不下发任何目标（WBC 保持当前目标）。
+> （底座上的相对增量（冻结基准）只保留给**非全身模式**：手柄驱动双臂、头显驱动 WBC 头部目标。）
+
+### 目标独占（谁在跟踪期间会让路）
+
+「全部跟踪」开启后，**只对"运行期输入"让路**——RViz 交互 marker 是调试通道，**不门控**。
+
+| 输入路径 | 是否让路 | 说明 |
+|---|---|---|
+| 手柄/键盘 **`control_input`** | ✅ 让路 | `ControlInputHandler::processControlInput` 按 `isArmVrActive` 跳过 `*/twist` 发布与 marker 增量（夹爪命令仍处理）。它的 `*/twist` 会被参考管理器持续积分，与 VR 抢同一目标 |
+| **左右摇杆微调** | ✅ 让路 | `thumbstickAxesCallback` 在全身模式下直接早退（见上文） |
+| RViz **交互 marker 拖拽** | ❌ **不门控** | 调试通道：随时可手工干预。跟踪中拖拽会被 VR 下一帧覆盖（不影响 VR 控制） |
+| marker 右键菜单 **「发送目标」/「发送双臂」** | ❌ **不门控** | 同上；跟踪中发送即被覆盖 |
+| marker **增量更新**（`updateMarkerPoseIncremental` / `updateBodyMarkerPoseIncremental`） | ❌ **不门控** | 手柄走 `control_input` 的入口已在上游让路，这里不再重复拦 |
+| RViz **joint_control_panel「发送姿态」** | ❌ **不门控** | 面板是调试工具 |
+| **头部 marker 拖拽/菜单**（`head_vr_active_`） | ✅ 让路 | **既有设计、与本次无关**：头显驱动头部目标期间，头部 marker 保留目标显示但**拖动与菜单发送均被禁用**，释放后恢复交互（见本文档"头显驱动 WBC Head 6D 目标"） |
+
+- 让路标志在 `ArmsTargetManager` 内部（`setArmVrActive`，仅左/右臂），不额外发话题。
+- 退出跟踪 / 失能 / 退出全身模式 → 自动交还。
+- **完全不受门控**：RViz marker/面板、`ros2 topic pub`、`ros2_robot_interface` 的 Python API、
+  `record/record_playback.py` 回放等直接向 `left/right/body/head_target[*]` 发布的外部脚本。
+
+- **开启时不做任何“按下瞬间的快照”**，而是逐帧按下面三步求值：
+
+  ```
+  ① 人体根 H（由**下肢骨架**构造）：
+       位置 xy = 两**踝** xy 的均值（踝比脚尖更接近人的站立点）
+       位置 z  = 两**足** z 的较低者（行走时支撑脚即地面，天然屏蔽摆动脚）
+       朝向   = 两**踝** x 轴在地平面投影的平均（直立、非内八外八时即人体前向）
+       俯仰/滚转恒为 0， 即 H 永远是竖直系（与 base_footprint 同构）
+       最后加一个人体根自身坐标系下的三轴原点偏置 `human_root_offset`（默认 [0,0,0] m）
+       （位置 xy/z 均一阶低通，避免行走时下肢交替的抖动进入目标）
+  ② 各部位换算到 H： p_H = Rz(ψ_H)ᵀ·(p − p_H)，R_H = Rz(ψ_H)ᵀ·R
+  ③ **骨架分段尺度**（在 H 里只缩放「段向量」，姿态完全不变）：
+       p'spine3   = p_pelvis   + s_body    ·(p_spine3  − p_pelvis)
+       p'head     = p'spine3   + s_body    ·(p_head    − p_spine3)
+       p'shoulder = p'spine3   + s_shoulder·(p_shoulder− p_spine3)
+       p'hand     = p'shoulder + s_arm     ·(p_hand    − p_shoulder)
+  ④ 直接作为机器人对应部位「相对底座」的目标：
+       位置_base = R_align · p'
+       姿态_base = R_align · R_H · C_src→ee
+     再乘底座位姿 → world：T_world = T_base_world · T_base
+  ```
+
+  胸部位置另有一个**锚点比例**：`p_H` 取「沿脊柱轴从 spine3 退到解剖对应点」，
+  `body_anchor_lambda`（0 = spine3 位置，1 = 骨盆位置，默认 1）；**姿态始终由 spine3 决定**。
+
+  三条关键语义：
+
+  - **人体自身的行走与整体转身被 H 完全吸收**，只用来驱动底盘速度指令：
+    底盘锁定时人走动 / 整体转身都不会拖动手臂、腰、头的目标；
+  - **姿态与位置都是“当前值”而不是“相对按下时刻的增量”**：机器人头摆正、人体头侧向 30° 时，
+    按下右摇杆开启跟踪后头目标**立即**就是侧向 30°；
+  - **方向由“人自己的坐标系”给出**：人体手沿人体前向前伸→末端目标沿**底盘前向**移动，
+    与机器人腕部当前姿态无关。
+  （H 的原点在地面、轴向与 `base_footprint` 一致，所以人与机器人的目标可直接对应，位移偏置默认 0。）
+
+- **骨架分段尺度（代替早期的单一绝对映射尺度）**：只对「段向量」缩放，
+  **关节姿态完全不变、人体根与地面不动**。三个参数：
+
+  | 参数 | 缩放对象 | >1 的含义与效果 |
+  |---|---|---|
+  | `body_length_scale` | `pelvis → spine3`（并同尺度推 `spine3 → head`） | 机器人更高/躯干更长。注意 **λ=1 时胸部位置取骨盆，所以它不影响胸目标**，只把头部与手臂根抬高/降低 |
+  | `shoulder_width_scale` | `spine3 → shoulder(L/R)` | 机器人肩更宽。人双手前伸（臂向量只有前后分量）时，**末端间距 = s_shoulder × 人体肩宽** |
+  | `arm_length_scale` | `shoulder → 末端(hand/wrist)` | 机器人臂更长。人臂完全伸直时机器人臂也完全伸直（取 机器人臂长/人体臂长） |
+
+  段向量必须用**原始**端点作差、再挂到**变形后**的父节点上；
+  变形顺序为 pelvis → spine3/head → shoulder → hand。
+  某段数据缺失时该段尺度退回 1.0（节流告警），不影响其它段。
+  肩部话题 `/teleop/body_{left,right}_shoulder_pose` 是标定的必要条件。
+
+- **人体根为什么用踝 + 足**：VR 世界系原点是头显启动时的**头部**（z=0 在头高、地面在负侧），
+  而又需要一个「永远竖直、在地面」的参考系才能与 `base_footprint` 对应。
+  两踝提供水平位置与朝向（踝比脚尖更接近人的站立点/朝向），两足提供地面高度（取较低者）。
+  副作用：**行走时下肢交替会让均值摆动**，已用 `human_root_filter_alpha` 一阶低通抑制。
+  下肢数据断流 → **冻结上一帧 H**（不打回 z=0），从未建立过则不开始下发目标。
+
+- **`T_base_world`（底座位姿）怎么来**：优先查 TF `vr_follow_frame → ee_frame_id`
+  （移动底盘下即 `base_footprint → world`）；无 TF 时回退到**对自己下发 `/cmd_vel` 的积分估计**。
+  回退路径下会打印节流告警；此时若底盘被打滑或外部（导航 / 手柄）驱动，手臂会有偏差。
+  为什么需要它：底盘跟随前进时，目标必须跟着底座一起走，否则手臂会被向后拖长。
+
+- 数据源（全部来自 `/teleop/body_*`）：
+
+  | 机器人目标 | 人体数据源（默认） | 固定偏置参数 |
+  |---|---|---|
+  | `left_tcp` / `right_tcp` | `body_left_hand_pose` / `body_right_hand_pose`（`body_ee_source=wrist` 时用 `*_wrist_pose`） | `hand_to_ee_rpy_deg_left` / `_right` |
+  | `body_link4`（胸） | `body_spine3_pose` | `body_src_to_ee_rpy_deg` |
+  | `head_link2` | `body_head_pose` | `head_src_to_ee_rpy_deg` |
+  | （人体根 H） | `body_pelvis_pose`（位置，作胸部 λ 锚点） | — |
+  | （人体根 H 的 xy/偏航） | `body_{left,right}_ankle_pose` | — |
+  | （人体根 H 的 z / 地面） | `body_{left,right}_foot_pose` 的较低者 | — |
+
+- **`C_src→ee` 为什么必需**：人体骨架坐标系与机器人目标坐标系（tcp/body_link4/head_link2）
+  的轴向定义不同。例如手柄面朝上时，人手 x 轴向上、左手 z 轴向左 / 右手 z 轴向右；
+  而 `left/right_tcp` 是 x 轴向上、z 轴向前（见 `m6_ccs_description/xacro/arm.xacro` 的
+  `tcp_joint rpy="π/2 -π/2 0"`）。因此需要绕手部 x 轴 ∓90°：
+  `hand_to_ee_rpy_deg_left=[-90,0,0]`、`hand_to_ee_rpy_deg_right=[90,0,0]`（默认值）。
+  **换 `body_ee_source=wrist`、换机型（`eeFrame` 为 `*_eef` 等）时必须重调这三个角。**
+  现场校准办法：人体保持标准姿态，看 RViz 里末端目标的坐标轴与人体朝向差多少，
+  把差值填进对应的 `*_rpy_deg`（固定轴 RPY，度，`R = Rz(yaw)·Ry(pitch)·Rx(roll)`）。
+- **无需偏航对齐参数**（早期 `absolute_map_yaw_deg` 已删除）：映射把人体各量先表达在人体根
+  自身坐标系里，所以「人体朝向 ≡ 机器人机头朝向」是**构造成立**的——人在模式内转身只会
+  去驱动底盘偏航，不会给上肢目标叠加固定角度偏差。
+
+- **人体上半身姿态直接映射为机器人姿态**：胸转时手/头自动跟随（骨架绝对位姿已包含胸的运动），
+  不需要额外的「胸转手补」处理；非全身模式的相对增量（冻结基准）路径完全不受影响；
+- **接管瞬间姿态会跳变**到人体姿态（这是「直接映射」的必然结果）：若人体姿态与机器人当前姿态
+  差别很大，WBC 会一次性大范围跟踪。建议开启跟踪前把人体摆成与机器人接近的姿态；- 可达自由度投影：胸部/头部目标按 ZYX 分解**丢弃 roll**（W2 腰部 3×pitch + 1×yaw、无 roll；
+  头部仅 yaw/pitch）；
+- 摇杆微调（左/右摇杆增量）叠加在**绝对映射结果之后**，语义与原来一致；
+- 数据质量：逐关节看门狗（`skeleton_timeout`）只冻结对应任务；一阶低通（`absolute_filter_alpha`）
+  抑制骨架抖动；手–脊柱距离超出 `skeleton_geometry_tolerance` 的帧丢弃（冻结该臂）；
+- 标定需要全部 5 个数据源就位（3 个机器人位姿 + pelvis/spine3/head/hand×2），
+  未就位时按 2 s 节流日志列出缺失项；标定完成后才真正下发目标。
+
+### 模式内开关：底盘跟踪（长按右摇杆，事件 31）
+
+长按右摇杆（按住 ≥500 ms，上游发事件 `31`）在全身模式内 **开/关「底盘跟踪」**，
+**独立于「全部跟踪」**（不要求后者已开）：
+
+- 数据源：`/teleop/body_pelvis_pose` 的水平位置 + 偏航；
+- 外环（默认 50 Hz）：
+
+  ```
+  Δp_human → R_z(-ψ_pelvis0) · Δp_human            # 转到接管时刻的机器人本体系 F
+  p_ref    += (p_F - p_ref) · dt/τ                 # 软参考「跑步机」
+  e        = p_F - p_ref
+  v_F      = |e| > deadband ? clamp(kp·e, vmax) : 0
+  ψ_err    = wrap(Δyaw_human - ψ_offset)           # 绝对偏航跟踪，ψ_offset 由自下发 ω 积分
+  ω        = |ψ_err| > deadband ? clamp(kpsi·ψ_err, wmax) : 0
+  → 一阶低通 + 速率限幅 → v_B = R_z(-ψ_offset)·v_F
+  ```
+
+- 稳态速度增益 ≈ `base_follow_kp * base_follow_tau`（默认 0.5×2.0 = 1:1）；
+- 输出全向 `/cmd_vel`：`linear.x`、`linear.y`、`angular.z`；
+- 零速退出：关闭开关、骨盆数据超时（`base_follow_data_timeout`）、离开 OCS2 / FULL_BODY、
+  `disable()` 各发一次零 Twist；
+- 与 case 20 手动底盘遥控互斥（底盘跟踪开启时 `processChassisAxes()` 直接返回）；
+- **`BASE_UNLOCKED` 时让路给 WBC**：不发 `/cmd_vel`，但把 `p_ref` 与人体同步，
+  回到 `BASE_LOCKED` 时不产生冲击。
+
+> 已知限制：`ψ_offset` 靠积分自己下发的 ω，打滑或限速饱和时会漂移；
+> 底盘跟踪关闭时**上肢目标仍然以底座为基准**，所以人走动不会再拖动手臂；但若底盘被锁定且人走得
+> 太远，手的目标仍会超出机械臂工作空间（此时应开启底盘跟踪）。
+
+### 其余行为
+
 - 全身遥操开启期间：
   - **屏蔽原有身体模式组合键（事件 21–24）**；
-  - 左摇杆不再叠加腰部增量（腰部由骨架目标驱动），右摇杆仍控制右臂；
-  - FSM 切换（右 A / 左 X）、夹爪、镜像、底盘、WBC 开关等其余按键逻辑不变。
+  - **左右摇杆都不再微调末端/腰部**（thumbstickAxesCallback 在全身模式下直接早退）：
+    本模式下双臂末端与腰部目标全部由骨架绝对映射给出，若容许摇杆累加偏移，
+    会表现为“拨右摇杆就推着右臂走”。进入模式时会把已有摇杆偏移清零；
+  - FSM 切换（右 A / 左 X）、夹爪、镜像、WBC 开关、底盘（case 20）等其余按键逻辑不变。
 - 数据失效（骨架断流/关节非法）时目标保持不动（冻结，不清零）；
   离开 OCS2 或拓扑变为 SPLIT_BODY 时骨骼驱动自动暂停/退出，回到 OCS2 后再次按组合键恢复。
 - 依赖头显端开启全身追踪（Whole Body Motion Tracking + 足部追踪器）：
