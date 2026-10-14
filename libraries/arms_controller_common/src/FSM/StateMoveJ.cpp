@@ -3849,16 +3849,99 @@ namespace arms_controller_common
             }
         }
 
-        // 5. 获取当前关节位置
-        std::vector<double> current_positions = getCurrentJointPositions(request_joint_names);
+        // All planners use controller joint order and full command dimension.
+        // Keep a single snapshot for all unspecified joints across every waypoint.
+        const bool use_doubles = trajectory_manager_.isDoublesAvailable() &&
+                                 interpolation_type_ == InterpolationType::DOUBLES;
+        std::vector<double> current_positions;
+        std::vector<arms_ros2_control_msgs::msg::JointWaypoint> full_waypoints;
+        const auto joint_indices = mapJointNames(request_joint_names);
+        current_positions = getCurrentJointPositions(joint_names_);
+        if (joint_indices.size() != num_joints ||
+            current_positions.size() != ctrl_interfaces_.joint_position_command_interface_.size())
+        {
+            message = "Cannot map trajectory to controller joint interfaces";
+            planned_duration = 0.0;
+            return false;
+        }
+
+        // Validate the real start for every planner; never replace it with a
+        // clamped position, which would introduce a discontinuity at execution.
+        for (size_t i = 0; i < current_positions.size(); ++i)
+        {
+            const auto feedback = ctrl_interfaces_.joint_position_state_interface_[i].get().get_optional();
+            if (!feedback || !std::isfinite(current_positions[i]))
+            {
+                message = "Invalid start position for joint '" + joint_names_[i] + "'";
+                planned_duration = 0.0;
+                return false;
+            }
+        }
+        if (joint_limit_checker_)
+        {
+            const auto limited_positions = joint_limit_checker_(current_positions);
+            if (limited_positions.size() != current_positions.size())
+            {
+                message = "Invalid start position limit check result";
+                planned_duration = 0.0;
+                return false;
+            }
+            for (size_t i = 0; i < current_positions.size(); ++i)
+            {
+                if (!std::isfinite(limited_positions[i]) ||
+                    std::abs(current_positions[i] - limited_positions[i]) > TARGET_EPSILON)
+                {
+                    message = "Start position outside joint limits for '" + joint_names_[i] +
+                        "': position=" + std::to_string(current_positions[i]) +
+                        ", limit boundary=" + std::to_string(limited_positions[i]);
+                    planned_duration = 0.0;
+                    return false;
+                }
+            }
+        }
+
+        full_waypoints = request_waypoints;
+        const auto map_array = [&](const std::vector<double>& values, double default_value)
+        {
+            if (values.empty())
+                return std::vector<double>{};
+            std::vector<double> full(joint_names_.size(), default_value);
+            for (size_t i = 0; i < joint_indices.size(); ++i)
+                full[joint_indices[i]] = values[i];
+            return full;
+        };
+        for (auto& wp : full_waypoints)
+        {
+            // Match the planner's existing fallback for absent/malformed limits.
+            const auto map_limit = [&](const std::vector<double>& values, double default_value)
+            {
+                return values.size() == num_joints
+                    ? map_array(values, default_value) : std::vector<double>{};
+            };
+            auto full_positions = current_positions;
+            for (size_t i = 0; i < joint_indices.size(); ++i)
+                full_positions[joint_indices[i]] = wp.position[i];
+            wp.position = applyJointLimits(full_positions, "joint trajectory waypoint");
+            wp.velocity = map_array(wp.velocity, 0.0);
+            wp.max_velocity = map_limit(wp.max_velocity, movej_max_velocity_);
+            wp.max_acceleration = map_limit(wp.max_acceleration, movej_max_acceleration_);
+            wp.max_jerk = map_limit(wp.max_jerk, movej_max_jerk_);
+        }
+
+        refreshHoldPositions();
+        use_prefix_filter_ = true;
+        joint_mask_.assign(joint_names_.size(), false);
+        for (size_t idx : joint_indices)
+            joint_mask_[idx] = true;
+        start_pos_ = current_positions;
 
         // 6. 根据waypoints数量处理
         if (num_waypoints == 1)
         {
             // ========== 单点目标运动 ==========
-            if (trajectory_manager_.isDoublesAvailable() && interpolation_type_ == InterpolationType::DOUBLES)
+            if (use_doubles)
             {
-                if (!trajectory_manager_.planSingleTarget(current_positions, request_waypoints[0]))
+                if (!trajectory_manager_.planSingleTarget(current_positions, full_waypoints[0]))
                 {
                     message = "Failed to plan single target trajectory";
                     planned_duration = 0.0;
@@ -3867,38 +3950,6 @@ namespace arms_controller_common
             }
             else
             {
-                std::vector<size_t> joint_indices = mapJointNames(request_joint_names);
-                if (joint_indices.empty())
-                {
-                    message = "Cannot map joint names to controller joints";
-                    planned_duration = 0.0;
-                    return false;
-                }
-
-                use_prefix_filter_ = true;
-                joint_mask_.assign(joint_names_.size(), false);
-                refreshHoldPositions();
-                for (size_t idx : joint_indices)
-                {
-                    if (idx < joint_mask_.size())
-                    {
-                        joint_mask_[idx] = true;
-                    }
-                }
-
-                start_pos_.clear();
-                start_pos_.reserve(ctrl_interfaces_.joint_position_state_interface_.size());
-                for (auto i : ctrl_interfaces_.joint_position_state_interface_)
-                {
-                    auto value = i.get().get_optional();
-                    start_pos_.push_back(value.value_or(0.0));
-                }
-
-                target_pos_ = mapToFullJointPositions(request_joint_names, request_waypoints[0].position);
-                target_pos_ = applyJointLimits(target_pos_, "joint trajectory single target");
-                has_target_ = true;
-                publishCurrentTargetJoint(target_pos_);
-
                 double requested_duration = duration_;
                 if (request_waypoints[0].time_mode && request_waypoints[0].total_time > 1.0e-6)
                 {
@@ -3907,7 +3958,7 @@ namespace arms_controller_common
 
                 if (!trajectory_manager_.initSingleNode(
                     start_pos_,
-                    target_pos_,
+                    full_waypoints[0].position,
                     requested_duration,
                     interpolation_type_,
                     ctrl_interfaces_.frequency_,
@@ -3917,9 +3968,11 @@ namespace arms_controller_common
                     planned_duration = 0.0;
                     return false;
                 }
-
-                interpolation_active_ = true;
             }
+            target_pos_ = full_waypoints[0].position;
+            has_target_ = true;
+            interpolation_active_ = true;
+            publishCurrentTargetJoint(target_pos_);
 
             message = "Single target motion accepted";
             planned_duration = trajectory_manager_.getPlanningTime();
@@ -3930,35 +3983,39 @@ namespace arms_controller_common
         else if (num_waypoints >= 2)
         {
             // ========== 多点轨迹规划 ==========
-            std::vector<arms_ros2_control_msgs::msg::JointWaypoint> wps;
-            wps.reserve(num_waypoints);
-            for (size_t i = 0; i < num_waypoints; i++)
+            if (use_doubles)
             {
-                wps.push_back(request_waypoints[i]);
-            }
-            if (trajectory_manager_.isDoublesAvailable() && interpolation_type_ == InterpolationType::DOUBLES)
-            {
-                trajectory_manager_.planMultiTrajectory(current_positions, wps);
+                if (!trajectory_manager_.planMultiTrajectory(current_positions, full_waypoints))
+                {
+                    message = "Failed to plan multi-point trajectory";
+                    planned_duration = 0.0;
+                    return false;
+                }
             }
             else
             {
-                //如果没有linaplanning就用普通的
-                // 创建JointTrajectory消息（ROS2标准消息）
-                trajectory_msgs::msg::JointTrajectory trajectory_msg;
-                trajectory_msg.joint_names = request_joint_names;
-
-                // 转换路点到标准消息格式
-                for (const auto& wp : request_waypoints)
+                // Positions are already mapped; do not re-enter setTrajectory(),
+                // which would remap joints and replace the subset hold mask.
+                std::vector<std::vector<double>> positions;
+                positions.reserve(full_waypoints.size() + 1);
+                positions.push_back(current_positions);
+                for (const auto& wp : full_waypoints)
+                    positions.push_back(wp.position);
+                const auto durations = calculateSegmentDurations(
+                    positions, trajectory_manager_.getTrajectoryDuration());
+                if (!trajectory_manager_.initMultiNode(
+                    positions, {}, durations, interpolation_type_,
+                    ctrl_interfaces_.frequency_, tanh_scale_))
                 {
-                    trajectory_msgs::msg::JointTrajectoryPoint point;
-                    // 设置位置
-                    point.positions = wp.position;
-                    trajectory_msg.points.push_back(point);
+                    message = "Failed to initialize multi-point trajectory";
+                    planned_duration = 0.0;
+                    return false;
                 }
-
-                // 调用现有的setTrajectory方法
-                setTrajectory(trajectory_msg);
             }
+            target_pos_ = full_waypoints.back().position;
+            has_target_ = true;
+            interpolation_active_ = true;
+            publishCurrentTargetJoint(target_pos_);
             message = "Multi-point trajectory accepted";
             planned_duration = trajectory_manager_.getPlanningTime();
 
