@@ -108,7 +108,22 @@ RViz Joint Panel：绝对 / 相对基座 / 相对末端（手臂）或相对身�
 | `enable_movej_cartesian_markers` | MOVEJ 下是否显示可拖手臂 marker（发 stamped → IK MoveL）。`full_body.launch.py` 在 `ocs2_wbc_controller` 下设为 `false` | 有 `lina_planning` 时 `true`，否则 `false` | 仅启动 |
 | `enable_wbc_head_tracking_marker` | 是否具备 full-body WBC Head 6D Marker 启动能力；仍需 OCS2 + `HEAD_TRACKING` | `false` | 仅启动 |
 
-### YAML 配置（`config/default.yaml` 或 task 旁 `target_manager.yaml`）
+### YAML 配置（`config/default.yaml` 打底 + task 旁 `target_manager.yaml` 覆盖）
+
+启动参数由 `robot_common_launch` 的 `prepare_arms_target_manager_parameters()` 组装，
+**按以下顺序**（ROS 2 后加载的覆盖先加载的）：
+
+1. `arms_target_manager/config/default.yaml` —— **基底**，所有可调项的默认值都写在这里；
+2. task `.info` 同目录下的 `target_manager.yaml`（如 `w2_description/config/ocs2/target_manager.yaml`）
+   —— 只写该机型要改的项；也可用 `config_file_path` 显式指定替代它；
+3. launch 侧强制覆盖的字典（`dual_arm_mode` / `control_base_frame` / `marker_fixed_frame` /
+   `hand_controllers` / `enable_movej_cartesian_markers` / `enable_wbc_head_tracking_marker` / `use_sim_time`）。
+
+> ⚠️ 因此：
+> - 改**所有机型通用**的默认值 → 改 `config/default.yaml`；
+> - 改**某个机型**的值 → 改该机型的 `target_manager.yaml`（它会覆盖基底）；
+> - 如果某机型**没有** task 旁的 `target_manager.yaml`，则只用基底文件。
+> - 用 `ros2 param get /arms_target_manager <name>` 可以确认实际生效值（避免改错文件）。
 
 | 参数 | 含义 | 默认 | 生效时机 |
 |------|------|------|------|
@@ -117,7 +132,48 @@ RViz Joint Panel：绝对 / 相对基座 / 相对末端（手臂）或相对身�
 | `control_input_rate` | 上游 `control_input` 典型频率 Hz（仅手感估算，不参与实时换算） | `50.0` | 仅启动 |
 | `vr_thumbstick_linear_scale` | VR 摇杆线位移步进 m/step | `0.005` | 仅启动 |
 | `vr_thumbstick_angular_scale` | VR 摇杆角位移步进 rad/step | `0.05` | 仅启动 |
+| `vr_pose_scale` | VR 手柄位姿缩放（可由组合键 15 校准） | `1.0` | 仅启动 |
+| `vr_follow_frame` | 相对增量路径冻结旋转所用的跟随系 | `"base_footprint"` | 仅启动 |
+| `body_ee_source` | 全身绝对跟踪的末端数据源：`hand` / `wrist` | `"hand"` | 仅启动 |
+| `body_length_scale` | 身长尺度：`pelvis→spine3`（并同尺度推 `spine3→head`） | `1.0` | 仅启动 |
+| `shoulder_width_scale` | 肩宽尺度：`spine3→shoulder(L/R)` | `1.0` | 仅启动 |
+| `arm_length_scale` | 臂长尺度：`shoulder→末端(hand/wrist)` | `1.0` | 仅启动 |
+| ~~`absolute_map_yaw_deg`~~ | **已删除**：映射按「人体系」锚定——人体各量先表达在人体根自身坐标系里，人体朝向 ≡ 机器人机头朝向，无需人工偏航常数 | — | — |
+| `hand_to_ee_rpy_deg_left` / `_right` | 手部坐标系 → 末端坐标系的固定偏置（固定轴 RPY，度） | `[-90,0,0]` / `[90,0,0]` | 仅启动 |
+| `body_src_to_ee_rpy_deg` / `head_src_to_ee_rpy_deg` | 胸部/头部数据源 → 目标坐标系的固定偏置（度） | `[0,0,0]` | 仅启动 |
+| `absolute_filter_alpha` | 绝对目标一阶低通系数（0=不滤波） | `0.3` | 仅启动 |
+| `capture_settle_ms` | 标定前等待姿态稳定时长 (ms) | `200.0` | 仅启动 |
+| `skeleton_timeout` | 骨架单关节数据看门狗 (s)，超时只冻结对应任务 | `0.2` | 仅启动 |
+| `human_root_filter_alpha` | 人体根 H（由下肢骨架构造）位置 xy/z 估计的一阶低通系数 | `0.1` | 仅启动 |
+| `human_root_offset` | 人体根原点偏置 [x,y,z]（m，人体根自身坐标系） | `[0,0,0]` | 仅启动 |
+| `body_length_scale` | 身长尺度：`pelvis→spine3`（并同尺度推 `spine3→head`） | `1.0` | 仅启动 |
+| `shoulder_width_scale` | 肩宽尺度：`spine3→shoulder(L/R)` | `1.0` | 仅启动 |
+| `arm_length_scale` | 臂长尺度：`shoulder→末端(hand/wrist)` | `1.0` | 仅启动 |
+| `skeleton_geometry_tolerance` | 手–脊柱距离相对参考臂长的允许偏差；`<=0` 关闭 | `0.2` | 仅启动 |
+| `base_follow_enable` | 底盘跟踪总开关（长按右摇杆仍需在全身模式内） | `true` | 仅启动 |
+| `base_follow_rate` | 底盘位置外环频率 (Hz) | `50.0` | 仅启动 |
+| `base_follow_tau` | 软参考「跑步机」时间常数 (s)；稳态增益 ≈ `kp*tau` | `2.0` | 仅启动 |
+| `base_follow_kp` | 位置增益（默认 0.5×2.0 = 稳态 1:1） | `0.5` | 仅启动 |
+| `base_follow_kpsi` | 偏航增益（人体转身 1:1） | `1.0` | 仅启动 |
+| `base_follow_deadband` / `base_follow_yaw_deadband` | 位置死区 (m) / 偏航死区 (rad) | `0.02` / `0.05` | 仅启动 |
+| `base_vmax` / `base_wmax` | 线速度上限 (m/s) / 角速度上限 (rad/s) | `0.4` / `0.8` | 仅启动 |
+| `base_acc_max` / `base_alpha_max` | 线加速度上限 (m/s²) / 角加速度上限 (rad/s²) | `1.0` / `2.0` | 仅启动 |
+| `base_cmd_tau` | 底盘指令一阶低通 (s) | `0.2` | 仅启动 |
+| `base_follow_data_timeout` | 骨盆数据看门狗 (s) | `0.2` | 仅启动 |
 | `enable_vr` | 是否启用 VR | `false` | 仅启动 |
+
+> `base_follow_tau_yaw` 目前为预留参数（偏航采用绝对跟踪，不使用软参考）。
+
+### 全身遥操作模式（组合键 30）内的两个开关
+
+| 操作 | 事件 | 行为 |
+|------|------|------|
+| 左右握把 + 右摇杆按下 | `30` | 进入/退出全身遥操作模式（发 `BODY_TRACKING` + `HEAD_TRACKING`） |
+| 短按右摇杆（<500 ms） | `4` | 开/关「全部跟踪」：胸/头/双臂末端改为 `/teleop/body_*` 绝对位姿映射 |
+| 长按右摇杆（≥500 ms） | `31` | 开/关「底盘跟踪」：骨盆水平位姿 → 位置外环 → `/cmd_vel` |
+
+非全身模式下 `4` 仍是 UPDATE/STORAGE 切换；`31` 在非全身模式下忽略。
+「底盘跟踪」独立于「全部跟踪」，`BASE_UNLOCKED` 时冻结跟随并把 `/cmd_vel` 让给 WBC。
 
 ### 手柄 / 键盘 scale（速度，不是每帧位移）
 

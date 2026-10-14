@@ -66,6 +66,18 @@ namespace arms_ros2_control::command
         twist.angular.z = yaw_input * angular_scale_;
 
         const bool is_left = msg->target != 2;
+
+        // 全身遥操作正在控制该臂（绝对映射）时，让路：
+        // 否则手动/手柄的 twist 速度流会被参考管理器持续积分，与 VR 抢同一目标。
+        if (target_manager_ && target_manager_->isArmVrActive(is_left))
+        {
+            RCLCPP_DEBUG_THROTTLE(node_->get_logger(), *node_->get_clock(), 3000,
+                                  "🎮 全身遥操作正在控制%s臂，忽略 control_input 的目标改写",
+                                  is_left ? "左" : "右");
+            processHandCommand(msg->target, msg->hand_command);
+            return;
+        }
+
         if (is_left)
         {
             left_twist_publisher_->publish(twist);

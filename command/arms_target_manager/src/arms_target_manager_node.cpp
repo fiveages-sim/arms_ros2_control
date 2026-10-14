@@ -43,6 +43,68 @@ int main(int argc, char** argv)
     }
 
     bool enable_vr = node->declare_parameter("enable_vr", true);
+
+    // ---- 全身骨架绝对位姿映射 / 底盘跟踪（仅全身遥操作模式内生效） ----
+    AbsoluteTeleopOptions absolute_options;
+    absolute_options.ee_source = node->declare_parameter("body_ee_source", std::string("hand"));
+    if (absolute_options.ee_source != "hand" && absolute_options.ee_source != "wrist")
+    {
+        RCLCPP_WARN(node->get_logger(),
+                    "body_ee_source='%s' 非法（可选 hand/wrist），回退到 hand",
+                    absolute_options.ee_source.c_str());
+        absolute_options.ee_source = "hand";
+    }
+    absolute_options.body_length_scale = node->declare_parameter("body_length_scale", 1.0);
+    absolute_options.shoulder_width_scale = node->declare_parameter("shoulder_width_scale", 1.0);
+    absolute_options.arm_length_scale = node->declare_parameter("arm_length_scale", 1.0);
+    absolute_options.hand_to_ee_rpy_deg_left = node->declare_parameter(
+        "hand_to_ee_rpy_deg_left", std::vector<double>{-90.0, 0.0, 0.0});
+    absolute_options.hand_to_ee_rpy_deg_right = node->declare_parameter(
+        "hand_to_ee_rpy_deg_right", std::vector<double>{90.0, 0.0, 0.0});
+    absolute_options.body_src_to_ee_rpy_deg = node->declare_parameter(
+        "body_src_to_ee_rpy_deg", std::vector<double>{0.0, 0.0, 0.0});
+    absolute_options.head_src_to_ee_rpy_deg = node->declare_parameter(
+        "head_src_to_ee_rpy_deg", std::vector<double>{0.0, 0.0, 0.0});
+    auto warn_bad_rpy = [&node](const char* name, const std::vector<double>& rpy) {
+        if (rpy.size() != 3)
+        {
+            RCLCPP_WARN(node->get_logger(),
+                        "%s 需要 3 个元素 [roll,pitch,yaw]（度），当前 %zu 个 → 按单位旋转处理",
+                        name, rpy.size());
+        }
+    };
+    warn_bad_rpy("hand_to_ee_rpy_deg_left", absolute_options.hand_to_ee_rpy_deg_left);
+    warn_bad_rpy("hand_to_ee_rpy_deg_right", absolute_options.hand_to_ee_rpy_deg_right);
+    warn_bad_rpy("body_src_to_ee_rpy_deg", absolute_options.body_src_to_ee_rpy_deg);
+    warn_bad_rpy("head_src_to_ee_rpy_deg", absolute_options.head_src_to_ee_rpy_deg);
+    absolute_options.filter_alpha = node->declare_parameter("absolute_filter_alpha", 0.3);
+    absolute_options.capture_settle_sec = node->declare_parameter("capture_settle_ms", 200.0) / 1000.0;
+    absolute_options.skeleton_timeout_sec = node->declare_parameter("skeleton_timeout", 0.2);
+    absolute_options.human_root_filter_alpha = node->declare_parameter("human_root_filter_alpha", 0.1);
+    absolute_options.human_root_offset = node->declare_parameter(
+        "human_root_offset", std::vector<double>{0.0, 0.0, 0.0});
+    if (absolute_options.human_root_offset.size() != 3)
+    {
+        RCLCPP_WARN(node->get_logger(),
+                    "human_root_offset 需要 3 个元素 [x,y,z]（m，人体根自身坐标系），当前 %zu 个 → 按 0 处理",
+                    absolute_options.human_root_offset.size());
+    }
+    absolute_options.body_anchor_lambda = node->declare_parameter("body_anchor_lambda", 1.0);
+    absolute_options.geometry_tolerance = node->declare_parameter("skeleton_geometry_tolerance", 0.2);
+    absolute_options.base_follow_enable = node->declare_parameter("base_follow_enable", true);
+    absolute_options.base_follow_rate_hz = node->declare_parameter("base_follow_rate", 50.0);
+    absolute_options.base_follow_tau = node->declare_parameter("base_follow_tau", 2.0);
+    absolute_options.base_follow_tau_yaw = node->declare_parameter("base_follow_tau_yaw", 2.0);
+    absolute_options.base_follow_kp = node->declare_parameter("base_follow_kp", 0.5);
+    absolute_options.base_follow_kpsi = node->declare_parameter("base_follow_kpsi", 1.0);
+    absolute_options.base_follow_deadband = node->declare_parameter("base_follow_deadband", 0.02);
+    absolute_options.base_follow_yaw_deadband = node->declare_parameter("base_follow_yaw_deadband", 0.05);
+    absolute_options.base_vmax = node->declare_parameter("base_vmax", 0.4);
+    absolute_options.base_wmax = node->declare_parameter("base_wmax", 0.8);
+    absolute_options.base_acc_max = node->declare_parameter("base_acc_max", 1.0);
+    absolute_options.base_alpha_max = node->declare_parameter("base_alpha_max", 2.0);
+    absolute_options.base_cmd_tau = node->declare_parameter("base_cmd_tau", 0.2);
+    absolute_options.base_follow_data_timeout = node->declare_parameter("base_follow_data_timeout", 0.2);
     bool enable_movej_cartesian_markers = node->declare_parameter(
         "enable_movej_cartesian_markers",
 #ifdef HAS_LINA_PLANNING
@@ -186,7 +248,7 @@ int main(int argc, char** argv)
             vr_handler = std::make_unique<VRInputHandler>(
                 node, target_manager.get(), pub_left_target, pub_right_target, hand_controllers,
                 vr_thumbstick_linear_scale, vr_thumbstick_angular_scale,
-                vr_pose_scale, reference_link, vr_follow_frame);
+                vr_pose_scale, reference_link, vr_follow_frame, absolute_options);
         }
 
         // 创建 control input 订阅器（用于增量控制）

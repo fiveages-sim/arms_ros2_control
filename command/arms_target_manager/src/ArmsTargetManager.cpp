@@ -182,6 +182,16 @@ namespace arms_ros2_control::command
         updateHeadMarkerVisibility();
     }
 
+    void ArmsTargetManager::setArmVrActive(bool is_left, bool active)
+    {
+        bool& flag = is_left ? left_arm_vr_active_ : right_arm_vr_active_;
+        if (flag == active)
+        {
+            return;
+        }
+        flag = active;
+    }
+
     void ArmsTargetManager::updateHeadMarkerVisibility()
     {
         if (!server_ || !head_marker_)
