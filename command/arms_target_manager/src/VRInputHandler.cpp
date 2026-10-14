@@ -30,6 +30,41 @@ namespace arms_ros2_control::command
     const double VRInputHandler::ORIENTATION_THRESHOLD = 0.005; // threshold for orientation changes (quaternion angle)
     const int VRInputHandler::STALE_MIN_FROZEN_FRAMES = 2; // 连续 >=2 帧逐位相同即判定上游冻结
 
+    namespace
+    {
+        // 固定轴 RPY（度）→ 旋转矩阵，与 URDF rpy 一致：R = Rz(yaw)·Ry(pitch)·Rx(roll)。
+        // 用于「数据源坐标系 → 机器人目标坐标系」的固定旋转偏置（启动时求一次）。
+        Eigen::Matrix3d rpyDegToMatrix(const std::vector<double>& rpy_deg)
+        {
+            if (rpy_deg.size() != 3)
+            {
+                return Eigen::Matrix3d::Identity();
+            }
+            return (Eigen::AngleAxisd(rpy_deg[2] * M_PI / 180.0, Eigen::Vector3d::UnitZ()) *
+                    Eigen::AngleAxisd(rpy_deg[1] * M_PI / 180.0, Eigen::Vector3d::UnitY()) *
+                    Eigen::AngleAxisd(rpy_deg[0] * M_PI / 180.0, Eigen::Vector3d::UnitX()))
+                .toRotationMatrix();
+        }
+
+        // 取坐标系 x 轴在地平面上的投影方向（已归一化）。
+        // 用于由双足 x 轴求人体朝向（直立、非内八/外八时即人体前向）。
+        Eigen::Vector2d forwardXyOf(const Eigen::Quaterniond& q)
+        {
+            if (!q.coeffs().allFinite() || q.norm() < 1e-9)
+            {
+                return Eigen::Vector2d::Zero();
+            }
+            const Eigen::Vector3d x_axis =
+                q.normalized() * Eigen::Vector3d::UnitX();
+            Eigen::Vector2d xy(x_axis.x(), x_axis.y());
+            if (xy.norm() > 1e-6)
+            {
+                xy.normalize();
+            }
+            return xy;
+        }
+    } // namespace
+
     VRInputHandler::VRInputHandler(
         rclcpp::Node::SharedPtr node,
         ArmsTargetManager* targetManager,
@@ -40,7 +75,8 @@ namespace arms_ros2_control::command
         double vr_thumbstick_angular_scale,
         double vr_pose_scale,
         const std::string& reference_link,
-        const std::string& vr_follow_frame)
+        const std::string& vr_follow_frame,
+        const AbsoluteTeleopOptions& absolute_options)
         : node_(std::move(node))
           , target_manager_(targetManager)
           , pub_left_target_(std::move(pub_left_target))
@@ -71,6 +107,14 @@ namespace arms_ros2_control::command
           , reference_link_(reference_link)
           , vr_follow_frame_(vr_follow_frame)
     {
+        absolute_options_ = absolute_options;
+
+        // 数据源坐标系 → 目标坐标系的固定旋转偏置（启动时定值，逐帧不重算）
+        abs_hand_to_ee_left_ = rpyDegToMatrix(absolute_options_.hand_to_ee_rpy_deg_left);
+        abs_hand_to_ee_right_ = rpyDegToMatrix(absolute_options_.hand_to_ee_rpy_deg_right);
+        abs_body_src_to_ee_ = rpyDegToMatrix(absolute_options_.body_src_to_ee_rpy_deg);
+        abs_head_src_to_ee_ = rpyDegToMatrix(absolute_options_.head_src_to_ee_rpy_deg);
+
         // 创建 controller topology 检测 client 和启动期重试 timer
         list_controllers_client_ =
             node_->create_client<ListControllers>(
@@ -79,6 +123,16 @@ namespace arms_ros2_control::command
         control_topology_timer_ = node_->create_wall_timer(
             std::chrono::seconds(1),
             [this]() { detectControlTopology(); });
+
+        // 底盘跟踪位置外环：常驻低频定时器，只在 base_tracking_enabled_ 时真正发布。
+        // 骨盆骨架帧率低于此频率时靠缓存补齐（updateBaseFollow 内做看门狗）。
+        {
+            const double rate = std::max(1.0, absolute_options_.base_follow_rate_hz);
+            base_follow_timer_ = node_->create_wall_timer(
+                std::chrono::duration_cast<std::chrono::nanoseconds>(
+                    std::chrono::duration<double>(1.0 / rate)),
+                [this]() { updateBaseFollow(); });
+        }
 
         // 初始化 TF 组件（用于在 reference_link 与末端 frame 之间进行坐标变换）
         tf_buffer_ = std::make_shared<tf2_ros::Buffer>(node_->get_clock());
@@ -154,9 +208,42 @@ namespace arms_ros2_control::command
         sub_body_head_ = node_->create_subscription<geometry_msgs::msg::Pose>(
             "/teleop/body_head_pose", 10,
             [this](const geometry_msgs::msg::Pose::SharedPtr msg) { this->bodyHeadCallback(msg); });
-        sub_robot_body_ = node_->create_subscription<geometry_msgs::msg::PoseStamped>(
-            "body_current_pose", 10,
-            [this](geometry_msgs::msg::PoseStamped::ConstSharedPtr msg) { robotBodyPoseCallback(msg); });
+        // 骨架手部话题：全身绝对映射的末端数据源（hand / wrist 由 body_ee_source 选择）
+        const std::string body_ee_joint =
+            (absolute_options_.ee_source == "wrist") ? "wrist" : "hand";
+        sub_body_left_hand_ = node_->create_subscription<geometry_msgs::msg::Pose>(
+            "/teleop/body_left_" + body_ee_joint + "_pose", 10,
+            [this](const geometry_msgs::msg::Pose::SharedPtr msg) { this->bodyHandCallback(true, msg); });
+        sub_body_right_hand_ = node_->create_subscription<geometry_msgs::msg::Pose>(
+            "/teleop/body_right_" + body_ee_joint + "_pose", 10,
+            [this](const geometry_msgs::msg::Pose::SharedPtr msg) { this->bodyHandCallback(false, msg); });
+        // 人体根 H 的下肢来源：踝提供 xy/偏航（比脚尖更接近人的站立点），足提供 z（地面）
+        sub_body_left_ankle_ = node_->create_subscription<geometry_msgs::msg::Pose>(
+            "/teleop/body_left_ankle_pose", 10,
+            [this](const geometry_msgs::msg::Pose::SharedPtr msg) { this->bodyPointCallback(true, true, msg); });
+        sub_body_right_ankle_ = node_->create_subscription<geometry_msgs::msg::Pose>(
+            "/teleop/body_right_ankle_pose", 10,
+            [this](const geometry_msgs::msg::Pose::SharedPtr msg) { this->bodyPointCallback(false, true, msg); });
+        // 肩部：肩宽 / 臂长尺度链的起点
+        sub_body_left_shoulder_ = node_->create_subscription<geometry_msgs::msg::Pose>(
+            "/teleop/body_left_shoulder_pose", 10,
+            [this](const geometry_msgs::msg::Pose::SharedPtr msg) { this->bodyShoulderCallback(true, msg); });
+        sub_body_right_shoulder_ = node_->create_subscription<geometry_msgs::msg::Pose>(
+            "/teleop/body_right_shoulder_pose", 10,
+            [this](const geometry_msgs::msg::Pose::SharedPtr msg) { this->bodyShoulderCallback(false, msg); });
+        sub_body_left_foot_ = node_->create_subscription<geometry_msgs::msg::Pose>(
+            "/teleop/body_left_foot_pose", 10,
+            [this](const geometry_msgs::msg::Pose::SharedPtr msg) { this->bodyPointCallback(true, false, msg); });
+        sub_body_right_foot_ = node_->create_subscription<geometry_msgs::msg::Pose>(
+            "/teleop/body_right_foot_pose", 10,
+            [this](const geometry_msgs::msg::Pose::SharedPtr msg) { this->bodyPointCallback(false, false, msg); });
+        RCLCPP_INFO(node_->get_logger(),
+                    "🕹️🦴 Subscribed to full-body absolute tracking topics: "
+                    "/teleop/body_left_%s_pose, /teleop/body_right_%s_pose, "
+                    "/teleop/body_pelvis_pose, /teleop/body_spine3_pose, /teleop/body_head_pose, "
+                    "/teleop/body_{left,right}_ankle_pose（人体根 xy/偏航）, "
+                    "/teleop/body_{left,right}_foot_pose（人体根 z）",
+                    body_ee_joint.c_str(), body_ee_joint.c_str());
 
         // 创建按钮事件订阅器（Int32类型）
         auto controllerStateCallback = [this](const std_msgs::msg::Int32::SharedPtr msg)
@@ -849,12 +936,16 @@ namespace arms_ros2_control::command
         left_robot_base_valid_ = false;
         right_robot_base_valid_ = false;
         stopHeadTracking();
-        // 全身遥操随 VR 禁用一起退出（保留 last_body_target_ 作为下次接管基准）
-        if (full_body_teleop_active_.load())
+        // 全身遥操随 VR 禁用一起退出
+        if (whole_body_teleop_active_.load())
         {
-            full_body_teleop_active_.store(false);
-            full_body_teleop_bases_captured_ = false;
+            whole_body_teleop_active_.store(false);
         }
+        // 绝对位姿映射与底盘跟踪随 VR 禁用一起退出
+        absolute_tracking_active_.store(false);
+        resetAbsoluteTracking();
+        base_tracking_enabled_.store(false);
+        resetBaseFollow();
         left_grip_direction_suppressed_.store(false);
         body_mode_request_pending_.store(false);
         requested_body_state_.store(-1);
@@ -963,7 +1054,7 @@ namespace arms_ros2_control::command
             resolvedFsmState() == 3 &&
             target_manager_->getCurrentHeadState() ==
                 arms_ros2_control_msgs::msg::WbcCurrentState::HEAD_TRACKING &&
-            (full_body_teleop_active_.load() ? has_body_head_pose_ : has_vr_head_pose_) &&
+            (whole_body_teleop_active_.load() ? has_body_head_pose_ : has_vr_head_pose_) &&
             has_robot_head_pose_;
     }
 
@@ -984,13 +1075,94 @@ namespace arms_ros2_control::command
             stopHeadTracking();
             return;
         }
-        // 数据源选择：全身遥操开启时用骨架头部数据（/teleop/body_head_pose），
-        // 否则维持原有的头显数据（/teleop/head_pose）。
-        const bool use_body_source = full_body_teleop_active_.load();
-        const Eigen::Vector3d vr_head_position =
-            use_body_source ? body_head_position_ : vr_head_position_;
-        const Eigen::Quaterniond vr_head_orientation =
-            use_body_source ? body_head_orientation_ : vr_head_orientation_;
+
+        // 全身遥操作模式**只有绝对映射**（body_head 骨架位姿 → head_link2）：
+        // 按下右摇杆开「全部跟踪」后直接采当前骨架位姿，不存在相对模式。
+        if (whole_body_teleop_active_.load())
+        {
+            if (!absolute_tracking_active_.load())
+            {
+                return;  // 跟踪未开：不下发头部目标，由 WBC 保持当前目标
+            }
+            if (!absolute_maps_captured_)
+            {
+                if (settle_pending_ &&
+                    std::chrono::duration<double>(
+                        std::chrono::steady_clock::now() - settle_started_at_).count() <
+                        std::max(0.0, absolute_options_.capture_settle_sec))
+                {
+                    return;
+                }
+                if (!captureAbsoluteTrackingMaps())
+                {
+                    return;
+                }
+            }
+            if (!skeletonJointFresh(body_head_stamp_))
+            {
+                return;  // 数据失效：冻结头部任务
+            }
+
+            // 人体根 H：把人体行走/整体转身剥离出去（只去驱动底盘）
+            Eigen::Isometry3d T_H_world;
+            if (!humanRootTransform(T_H_world))
+            {
+                return;
+            }
+            // 分段尺度变形（只改位置，姿态不变）；头部挂在 spine3 上，随身长尺度一起抬高/降低
+            DeformedSkeleton skeleton;
+            buildDeformedSkeleton(T_H_world, skeleton);
+            const Eigen::Matrix3d R_world_to_H = T_H_world.linear().transpose();
+            const Eigen::Vector3d head_in_H = skeleton.head;
+            const Eigen::Matrix3d head_rot_in_H =
+                R_world_to_H * body_head_orientation_.toRotationMatrix();
+
+            const Eigen::Vector3d position_base = head_in_H;
+            const Eigen::Quaterniond orientation_base = dropRoll(
+                Eigen::Quaterniond(
+                    head_rot_in_H * abs_head_src_to_ee_)
+                    .normalized());
+
+            const Eigen::Isometry3d T_base_world = currentBaseToWorld();
+            const Eigen::Vector3d position =
+                T_base_world.linear() * position_base + T_base_world.translation();
+            const Eigen::Quaterniond orientation(
+                T_base_world.linear() * orientation_base.toRotationMatrix());
+
+            const double alpha = std::clamp(absolute_options_.filter_alpha, 0.0, 1.0);
+            if (!abs_head_filter_primed_)
+            {
+                abs_head_pos_lp_ = position;
+                abs_head_ori_lp_ = orientation;
+                abs_head_filter_primed_ = true;
+            }
+            else
+            {
+                abs_head_pos_lp_ += alpha * (position - abs_head_pos_lp_);
+                abs_head_ori_lp_ = abs_head_ori_lp_.slerp(alpha, orientation).normalized();
+            }
+
+            geometry_msgs::msg::PoseStamped target;
+            target.header.frame_id = ee_frame_id_;
+            target.header.stamp = node_->now();
+            target.pose.position.x = abs_head_pos_lp_.x();
+            target.pose.position.y = abs_head_pos_lp_.y();
+            target.pose.position.z = abs_head_pos_lp_.z();
+            target.pose.orientation.x = abs_head_ori_lp_.x();
+            target.pose.orientation.y = abs_head_ori_lp_.y();
+            target.pose.orientation.z = abs_head_ori_lp_.z();
+            target.pose.orientation.w = abs_head_ori_lp_.w();
+
+            target_manager_->setHeadVrActive(true);
+            pub_head_target_->publish(target.pose);
+            last_head_target_ = target;
+            head_tracking_active_ = true;
+            return;
+        }
+
+        // 非全身遥操作：头显（/teleop/head_pose）驱动 WBC 头部目标的相对增量路径（保留）
+        const Eigen::Vector3d vr_head_position = vr_head_position_;
+        const Eigen::Quaterniond vr_head_orientation = vr_head_orientation_;
         if (!head_tracking_active_)
         {
             const auto& base = last_head_target_ ? *last_head_target_ : robot_head_pose_;
@@ -1052,6 +1224,7 @@ namespace arms_ros2_control::command
         body_pelvis_position_ = position;
         body_pelvis_orientation_ = orientation.normalized();
         has_body_pelvis_pose_ = true;
+        body_pelvis_stamp_ = std::chrono::steady_clock::now();
     }
 
     void VRInputHandler::bodySpine3Callback(const geometry_msgs::msg::Pose::SharedPtr msg)
@@ -1067,6 +1240,7 @@ namespace arms_ros2_control::command
         body_spine3_position_ = position;
         body_spine3_orientation_ = orientation.normalized();
         has_body_spine3_pose_ = true;
+        body_spine3_stamp_ = std::chrono::steady_clock::now();
         // 以脊柱帧作为身体目标的计算触发点（骨盆数据仅缓存）
         publishBodyTarget();
     }
@@ -1084,36 +1258,16 @@ namespace arms_ros2_control::command
         body_head_position_ = position;
         body_head_orientation_ = orientation.normalized();
         has_body_head_pose_ = true;
-        if (full_body_teleop_active_.load())
+        body_head_stamp_ = std::chrono::steady_clock::now();
+        if (whole_body_teleop_active_.load())
         {
             publishHeadTarget();
         }
     }
 
-    void VRInputHandler::robotBodyPoseCallback(
-        geometry_msgs::msg::PoseStamped::ConstSharedPtr msg)
+    bool VRInputHandler::wholeBodyTeleopReady() const
     {
-        const auto& p = msg->pose.position;
-        const auto& q = msg->pose.orientation;
-        const Eigen::Quaterniond orientation(q.w, q.x, q.y, q.z);
-        if (msg->header.frame_id.empty() || !Eigen::Vector3d(p.x, p.y, p.z).allFinite() ||
-            !orientation.coeffs().allFinite() || orientation.norm() < 1e-9)
-        {
-            has_robot_body_pose_ = false;
-            return;
-        }
-        robot_body_pose_ = *msg;
-        const auto normalized = orientation.normalized();
-        robot_body_pose_.pose.orientation.x = normalized.x();
-        robot_body_pose_.pose.orientation.y = normalized.y();
-        robot_body_pose_.pose.orientation.z = normalized.z();
-        robot_body_pose_.pose.orientation.w = normalized.w();
-        has_robot_body_pose_ = true;
-    }
-
-    bool VRInputHandler::fullBodyTeleopReady() const
-    {
-        // 与双臂末端跟随同步：仅在 UPDATE 模式下才下发躯干目标
+        // 与双臂末端跟随同步：只有「全部跟踪」开着才下发躯干目标
         return target_manager_ && isFullBodyMode() && enabled_.load() &&
             is_update_mode_.load() &&
             resolvedFsmState() == 3 &&
@@ -1122,109 +1276,113 @@ namespace arms_ros2_control::command
             has_body_pelvis_pose_ && has_body_spine3_pose_;
     }
 
-    bool VRInputHandler::captureFullBodyTeleopBases()
-    {
-        if (!has_body_pelvis_pose_ || !has_body_spine3_pose_)
-        {
-            return false;
-        }
-
-        // 机器人胸部基准：优先沿用最后一次实际发布的目标（避免柔顺控制的实际偏差
-        // 累积进目标），无历史目标时用机器人实际位姿（body_current_pose）。
-        geometry_msgs::msg::PoseStamped robot_base;
-        if (last_body_target_)
-        {
-            robot_base = *last_body_target_;
-        }
-        else if (has_robot_body_pose_)
-        {
-            robot_base = robot_body_pose_;
-        }
-        else
-        {
-            RCLCPP_WARN_THROTTLE(
-                node_->get_logger(), *node_->get_clock(), 2000,
-                "🕹️🦴 全身遥操作等待机器人胸部实际位姿（body_current_pose）以建立基准");
-            return false;
-        }
-
-        const auto& p = robot_base.pose.position;
-        const auto& q = robot_base.pose.orientation;
-        if (!transformPoseBetweenFrames(
-                "body", Eigen::Vector3d(p.x, p.y, p.z),
-                Eigen::Quaterniond(q.w, q.x, q.y, q.z), robot_base.header.frame_id,
-                vr_follow_frame_, robot_body_base_position_, robot_body_base_orientation_))
-        {
-            return false;
-        }
-
-        body_torso_base_orientation_ =
-            (body_pelvis_orientation_.conjugate() * body_spine3_orientation_).normalized();
-        body_torso_base_offset_ = body_spine3_position_ - body_pelvis_position_;
-        body_target_frame_ = robot_base.header.frame_id;
-        full_body_teleop_bases_captured_ = true;
-
-        RCLCPP_INFO(node_->get_logger(),
-                    "🕹️🦴 全身遥操作基准已建立：机器人胸部基准来源=%s（%s），人体躯干/骨盆基准已记录",
-                    last_body_target_ ? "上次目标" : "current_pose",
-                    body_target_frame_.c_str());
-        return true;
-    }
-
     void VRInputHandler::publishBodyTarget()
     {
-        if (!full_body_teleop_active_.load())
+        if (!whole_body_teleop_active_.load())
         {
             return;
         }
-        if (!fullBodyTeleopReady())
-        {
-            return;
-        }
-        if (!full_body_teleop_bases_captured_ && !captureFullBodyTeleopBases())
+        if (!wholeBodyTeleopReady())
         {
             return;
         }
 
-        // 人体躯干姿态（相对骨盆，排除骨盆偏航，避免与未来底盘跟随双重计数）
-        const Eigen::Quaterniond torso_now =
-            (body_pelvis_orientation_.conjugate() * body_spine3_orientation_).normalized();
-        const Eigen::Quaterniond delta_orientation =
-            (torso_now * body_torso_base_orientation_.conjugate()).normalized();
-        // 位置：骨盆→spine3 偏移的变化量（1:1 映射，与头部跟踪的约定一致）
-        const Eigen::Vector3d position = robot_body_base_position_ +
-            (body_spine3_position_ - body_pelvis_position_ - body_torso_base_offset_);
-        const Eigen::Quaterniond orientation =
-            (delta_orientation * robot_body_base_orientation_).normalized();
-
-        Eigen::Vector3d published_position;
-        Eigen::Quaterniond published_orientation;
-        if (!transformPoseBetweenFrames(
-                "body", position, orientation, vr_follow_frame_, body_target_frame_,
-                published_position, published_orientation))
+        // 全身遥操作模式**只有绝对映射**：按下右摇杆开「全部跟踪」后直接采当前骨架位姿，
+        // 不存在「按下时记录基准 + 跟踪相对变化量」的相对模式；
+        // 跟踪未开（is_update_mode_ 为 false）时不下发任何目标，由 WBC 保持当前目标。
+        if (!absolute_tracking_active_.load())
         {
             return;
         }
 
-        geometry_msgs::msg::PoseStamped target;
-        target.header.frame_id = body_target_frame_;
-        target.header.stamp = node_->now();
-        target.pose.position.x = published_position.x();
-        target.pose.position.y = published_position.y();
-        target.pose.position.z = published_position.z();
-        target.pose.orientation.x = published_orientation.x();
-        target.pose.orientation.y = published_orientation.y();
-        target.pose.orientation.z = published_orientation.z();
-        target.pose.orientation.w = published_orientation.w();
-
-        if (!target_manager_->setBodyMarkerPose(target.pose))
         {
-            return;
+            if (!absolute_maps_captured_)
+            {
+                if (settle_pending_ &&
+                    std::chrono::duration<double>(
+                        std::chrono::steady_clock::now() - settle_started_at_).count() <
+                        std::max(0.0, absolute_options_.capture_settle_sec))
+                {
+                    return;
+                }
+                if (!captureAbsoluteTrackingMaps())
+                {
+                    return;
+                }
+            }
+            // 数据失效：冻结该任务（保持 WBC 当前目标）
+            if (!skeletonJointFresh(body_spine3_stamp_) ||
+                !skeletonJointFresh(body_pelvis_stamp_))
+            {
+                return;
+            }
+
+            Eigen::Isometry3d T_H_world;
+            if (!humanRootTransform(T_H_world))
+            {
+                return;
+            }
+            // 分段尺度变形（只改位置，姿态不变），然后取骨盆/脊柱点
+            DeformedSkeleton skeleton;
+            buildDeformedSkeleton(T_H_world, skeleton);
+            const Eigen::Matrix3d R_world_to_H = T_H_world.linear().transpose();
+            const Eigen::Matrix3d spine_rot_in_H =
+                R_world_to_H * body_spine3_orientation_.toRotationMatrix();
+
+            // 位置：沿「躯干轴」（spine3 → pelvis）向下退到解剖对应点。
+            // 机器人 body_link4 比人体 spine3 偏下、大致在骨盆高度，所以 λ 默认为 1
+            // （即直接取骨盆位置）；λ=0 时取 spine3 位置，中间值为插值。
+            // 姿态仍完全由 spine3 决定。
+            const double lambda = std::clamp(absolute_options_.body_anchor_lambda, 0.0, 1.0);
+            const Eigen::Vector3d anchor_in_H =
+                skeleton.spine3 + lambda * (skeleton.pelvis - skeleton.spine3);
+
+            const Eigen::Vector3d position_base = anchor_in_H;
+            // 再右乘源→目标固定偏置，最后按可达自由度（ZYX 分解）丢弃 roll
+            const Eigen::Quaterniond orientation_base = dropRoll(
+                Eigen::Quaterniond(
+                    spine_rot_in_H * abs_body_src_to_ee_)
+                    .normalized());
+
+            const Eigen::Isometry3d T_base_world = currentBaseToWorld();
+            const Eigen::Vector3d position =
+                T_base_world.linear() * position_base + T_base_world.translation();
+            const Eigen::Quaterniond orientation(
+                T_base_world.linear() * orientation_base.toRotationMatrix());
+
+            const double alpha = std::clamp(absolute_options_.filter_alpha, 0.0, 1.0);
+            if (!abs_body_filter_primed_)
+            {
+                abs_body_pos_lp_ = position;
+                abs_body_ori_lp_ = orientation;
+                abs_body_filter_primed_ = true;
+            }
+            else
+            {
+                abs_body_pos_lp_ += alpha * (position - abs_body_pos_lp_);
+                abs_body_ori_lp_ = abs_body_ori_lp_.slerp(alpha, orientation).normalized();
+            }
+
+            geometry_msgs::msg::PoseStamped target;
+            target.header.frame_id = ee_frame_id_;
+            target.header.stamp = node_->now();
+            target.pose.position.x = abs_body_pos_lp_.x();
+            target.pose.position.y = abs_body_pos_lp_.y();
+            target.pose.position.z = abs_body_pos_lp_.z();
+            target.pose.orientation.x = abs_body_ori_lp_.x();
+            target.pose.orientation.y = abs_body_ori_lp_.y();
+            target.pose.orientation.z = abs_body_ori_lp_.z();
+            target.pose.orientation.w = abs_body_ori_lp_.w();
+
+            if (!target_manager_->setBodyMarkerPose(target.pose))
+            {
+                return;
+            }
+            // 注：RViz marker 拖拽/菜单不门控（调试通道，允许随时手工干预）
         }
-        last_body_target_ = target;
     }
 
-    void VRInputHandler::toggleFullBodyTeleop()
+    void VRInputHandler::toggleWholeBodyTeleop()
     {
         if (!enabled_.load() || !isFullBodyMode() || current_fsm_state_.load() != 3)
         {
@@ -1233,22 +1391,37 @@ namespace arms_ros2_control::command
             return;
         }
 
-        if (full_body_teleop_active_.load())
+        if (whole_body_teleop_active_.load())
         {
-            stopFullBodyTeleop();
+            stopWholeBodyTeleop();
         }
         else
         {
-            startFullBodyTeleop();
+            startWholeBodyTeleop();
         }
     }
 
-    void VRInputHandler::startFullBodyTeleop()
+    void VRInputHandler::startWholeBodyTeleop()
     {
-        full_body_teleop_active_.store(true);
-        full_body_teleop_bases_captured_ = false;
+        whole_body_teleop_active_.store(true);
+        // 进入模式只开通“允许跟踪”；绝对位姿映射需再短按右摇杆才开启
+        absolute_tracking_active_.store(false);
+        is_update_mode_.store(false);
+        resetAbsoluteTracking();
+        base_tracking_enabled_.store(false);
+        resetBaseFollow();
         // 头部数据源切换为骨架：清掉本轮跟踪状态，下一帧用骨架数据重新建立基准
         stopHeadTracking();
+
+        // 清掉可能残留的身体模式请求与摇杆累积偏移：
+        // 本模式下摇杆不再给末端/腰部做微调（见 thumbstickAxesCallback 的早退），
+        // 因此不能带着旧偏移进入绝对映射。
+        body_mode_request_pending_.store(false);
+        requested_body_state_.store(-1);
+        left_thumbstick_offset_.setZero();
+        right_thumbstick_offset_.setZero();
+        left_thumbstick_yaw_offset_ = 0.0;
+        right_thumbstick_yaw_offset_ = 0.0;
 
         // 身体模式改为「跟随」、头部模式改为「跟踪」；目标随后由 /teleop/body_* 计算
         requestBodyMode(30, "左右握把+右摇杆按下", "跟随", "BODY_TRACKING",
@@ -1259,18 +1432,912 @@ namespace arms_ros2_control::command
                     "🕹️🦴 [case 30] 全身遥操作已开启：身体=跟随（BODY_TRACKING）、"
                     "头部=跟踪（HEAD_TRACKING）；按下右摇杆进入 UPDATE 后开始跟随"
                     "（与双臂同步），目标位姿由 /teleop/body_* 骨骼数据计算；"
+                    "该模式下左右摇杆不再微调末端/腰部；"
                     "再次按左右握把+右摇杆按下关闭");
     }
 
-    void VRInputHandler::stopFullBodyTeleop()
+    void VRInputHandler::stopWholeBodyTeleop()
     {
-        full_body_teleop_active_.store(false);
-        full_body_teleop_bases_captured_ = false;
+        whole_body_teleop_active_.store(false);
+        // 绝对跟踪与底盘跟踪随全身模式一起退出
+        absolute_tracking_active_.store(false);
+        is_update_mode_.store(false);
+        resetAbsoluteTracking();
+        base_tracking_enabled_.store(false);
+        resetBaseFollow();
         // 头部数据源切回头显：清掉跟踪状态，让后续用头显数据重新建立基准
         stopHeadTracking();
         RCLCPP_INFO(node_->get_logger(),
                     "🕹️🦴 [case 30] 全身遥操作已关闭（WBC 身体/头部模式保持当前状态，"
                     "可用原有组合键切换）");
+    }
+
+    // ================= 全身骨架绝对位姿映射（全部跟踪） =================
+    //
+    // 语义：全身模式（case 30）内短按右摇杆开/关「全部跟踪」，之后胸 / 头 / 双臂末端
+    // 目标全部由 /teleop/body_* 的**当前**位姿给出，不含任何「按下时记录状态」：
+    //   1) 人体根 H = 下肢骨架（xy/偏航取两踝、z 取两足较低者）+ 固定原点偏置；
+    //      它只用来驱动底盘速度指令，人体的行走/整体转身因此不会漏进上肢目标；
+    //   2) 骨架分段尺度（身长/肩宽/臂长）在 H 里缩放「段向量」（姿态不变）；
+    //   3) 直接作为机器人对应部位「相对底座」的目标：
+    //        位置 = R_align · p'                （p' 的 z 即离地高度）
+    //        姿态 = R_align · R_H · C_src→ee
+    //   4) 再乘底座位姿得到 world 下的目标：优先 TF(vr_follow_frame→ee_frame_id)，
+    //      无 TF 时回退到「对自己下发 /cmd_vel 的积分」。
+    // 该模式下摇杆不参与微调（见 thumbstickAxesCallback 的早退）。
+    // 效果：底盘锁定时人走动不拖手臂；底盘跟随时手臂保持相对机体的姿态；
+    //       人伸手/转腰/转头则立即反映到目标上。
+
+    namespace
+    {
+        double wrapPi(double angle)
+        {
+            while (angle > M_PI) angle -= 2.0 * M_PI;
+            while (angle < -M_PI) angle += 2.0 * M_PI;
+            return angle;
+        }
+
+        double yawOfQuaternion(const Eigen::Quaterniond& q)
+        {
+            const Eigen::Matrix3d m = q.normalized().toRotationMatrix();
+            return std::atan2(m(1, 0), m(0, 0));
+        }
+
+        Eigen::Matrix2d yawRotation2d(double yaw)
+        {
+            const double c = std::cos(yaw);
+            const double s = std::sin(yaw);
+            Eigen::Matrix2d r;
+            r << c, -s,
+                 s, c;
+            return r;
+        }
+
+        Eigen::Vector2d stepTowards(const Eigen::Vector2d& current,
+                                    const Eigen::Vector2d& target,
+                                    double max_step)
+        {
+            const Eigen::Vector2d delta = target - current;
+            const double norm = delta.norm();
+            if (norm <= max_step || norm < 1e-12)
+            {
+                return target;
+            }
+            return current + delta * (max_step / norm);
+        }
+
+        double stepTowards(double current, double target, double max_step)
+        {
+            const double delta = target - current;
+            if (std::abs(delta) <= max_step)
+            {
+                return target;
+            }
+            return current + (delta > 0.0 ? max_step : -max_step);
+        }
+    } // namespace
+
+    bool VRInputHandler::humanRootTransform(Eigen::Isometry3d& T_H_world)
+    {
+        // xy / 偏航来自两踝（踝比脚尖更接近人的站立点与朝向）；
+        // z 来自两足较低者（行走时支撑脚即地面，天然屏蔽摆动脚）。
+        const bool ankles_ok =
+            body_left_ankle_.valid && body_right_ankle_.valid &&
+            skeletonJointFresh(body_left_ankle_.stamp) &&
+            skeletonJointFresh(body_right_ankle_.stamp);
+        const bool feet_ok =
+            body_left_foot_.valid && body_right_foot_.valid &&
+            skeletonJointFresh(body_left_foot_.stamp) &&
+            skeletonJointFresh(body_right_foot_.stamp);
+
+        if (ankles_ok && feet_ok)
+        {
+            const Eigen::Vector2d xy =
+                0.5 * (body_left_ankle_.xy + body_right_ankle_.xy);
+            const double raw_z = std::min(body_left_foot_.z, body_right_foot_.z);
+
+            if (!human_root_initialized_)
+            {
+                human_root_xy_ = xy;
+                ground_z_ = raw_z;
+                human_root_initialized_ = true;
+            }
+            else
+            {
+                // 行走时下肢交替会让均值抖动，低通抑制后再生效，避免抖动进入各部位目标
+                const double alpha =
+                    std::clamp(absolute_options_.human_root_filter_alpha, 0.0, 1.0);
+                human_root_xy_ += alpha * (xy - human_root_xy_);
+                ground_z_ += alpha * (raw_z - ground_z_);
+            }
+
+            // 朝向：两踝 x 轴在地平面投影的平均（直立、非内八外八时即人体前向）
+            const Eigen::Vector2d xl = forwardXyOf(body_left_ankle_.orientation);
+            const Eigen::Vector2d xr = forwardXyOf(body_right_ankle_.orientation);
+            const Eigen::Vector2d sum = xl + xr;
+            if (sum.squaredNorm() > 1e-6)
+            {
+                human_root_yaw_ = std::atan2(sum.y(), sum.x());
+                human_root_yaw_valid_ = true;
+            }
+            else if (!human_root_yaw_valid_)
+            {
+                RCLCPP_WARN_THROTTLE(
+                    node_->get_logger(), *node_->get_clock(), 3000,
+                    "🕹️🦴 两踝 x 轴在地平面投影退化（朝向相反？），人体朝向暂不可用");
+            }
+        }
+        else if (human_root_initialized_)
+        {
+            // 断流：冻结上一帧人体根，避免各部位目标突变
+            RCLCPP_WARN_THROTTLE(
+                node_->get_logger(), *node_->get_clock(), 3000,
+                "🕹️🦴 下肢骨架数据不完整（踝%s / 足%s），冻结上一帧人体根（请检查腿部/脚部追踪器）",
+                ankles_ok ? "正常" : "超时", feet_ok ? "正常" : "超时");
+        }
+        else
+        {
+            RCLCPP_WARN_THROTTLE(
+                node_->get_logger(), *node_->get_clock(), 3000,
+                "🕹️🦴 等待下肢骨架数据以建立人体根：踝（xy/偏航）%s，足（z）%s",
+                ankles_ok ? "正常" : "未就位", feet_ok ? "正常" : "未就位");
+            return false;
+        }
+
+        // H 恒为竖直系：只有偏航，俯仰/滚转恒为 0
+        T_H_world.setIdentity();
+        T_H_world.linear() =
+            Eigen::AngleAxisd(human_root_yaw_, Eigen::Vector3d::UnitZ()).toRotationMatrix();
+
+        // 人体根原点的固定偏置：在**人体根自身坐标系**里施加（x 前 / y 左 / z 上），
+        // 因此会随人体朝向一起转。默认 [0,0,0]（根已由踝/足直接给出）。
+        Eigen::Vector3d offset_xyz = Eigen::Vector3d::Zero();
+        if (absolute_options_.human_root_offset.size() == 3)
+        {
+            const auto& o = absolute_options_.human_root_offset;
+            offset_xyz = Eigen::Vector3d(o[0], o[1], o[2]);
+        }
+        else
+        {
+            RCLCPP_WARN_THROTTLE(
+                node_->get_logger(), *node_->get_clock(), 3000,
+                "🕹️🦴 human_root_offset 需要 3 个元素 [x,y,z]（m），当前 %zu 个 → 按 0 处理",
+                absolute_options_.human_root_offset.size());
+        }
+        T_H_world.translation() =
+            Eigen::Vector3d(human_root_xy_.x(), human_root_xy_.y(), ground_z_) +
+            T_H_world.linear() * offset_xyz;
+        return true;
+    }
+
+    Eigen::Isometry3d VRInputHandler::currentBaseToWorld()
+    {
+        Eigen::Vector3d position;
+        Eigen::Quaterniond rotation;
+        if (ee_frame_id_initialized_ && !vr_follow_frame_.empty() &&
+            transformPoseBetweenFrames(
+                "chassis", Eigen::Vector3d::Zero(), Eigen::Quaterniond::Identity(),
+                vr_follow_frame_, ee_frame_id_, position, rotation))
+        {
+            Eigen::Isometry3d transform = Eigen::Isometry3d::Identity();
+            transform.linear() = rotation.toRotationMatrix();
+            transform.translation() = position;
+            return transform;
+        }
+
+        RCLCPP_WARN_THROTTLE(
+            node_->get_logger(), *node_->get_clock(), 5000,
+            "🕹️🚗 无 %s → %s TF，改用「自下发 /cmd_vel 积分」估计底座位姿；"
+            "打滑、限速饱和或被外部（导航/手柄）驱动时会有偏差",
+            vr_follow_frame_.c_str(), ee_frame_id_.c_str());
+
+        Eigen::Isometry3d transform = Eigen::Isometry3d::Identity();
+        transform.linear() =
+            Eigen::AngleAxisd(base_est_yaw_, Eigen::Vector3d::UnitZ()).toRotationMatrix();
+        transform.translation() =
+            Eigen::Vector3d(base_est_pos_.x(), base_est_pos_.y(), 0.0);
+        return transform;
+    }
+
+    void VRInputHandler::integrateBaseOdometry(const geometry_msgs::msg::Twist& velocity)
+    {
+        const auto now = std::chrono::steady_clock::now();
+        if (base_odom_valid_)
+        {
+            const double dt = std::clamp(
+                std::chrono::duration<double>(now - base_odom_last_tick_).count(),
+                0.0, 0.1);
+            base_est_yaw_ += velocity.angular.z * dt;
+            const Eigen::Vector2d v_body(velocity.linear.x, velocity.linear.y);
+            if (v_body.squaredNorm() > 0.0)
+            {
+                base_est_pos_ += yawRotation2d(base_est_yaw_) * v_body * dt;
+            }
+        }
+        base_odom_valid_ = true;
+        base_odom_last_tick_ = now;
+    }
+
+    void VRInputHandler::bodyHandCallback(
+        bool is_left, const geometry_msgs::msg::Pose::SharedPtr msg)
+    {
+        const Eigen::Vector3d position(msg->position.x, msg->position.y, msg->position.z);
+        const Eigen::Quaterniond orientation(
+            msg->orientation.w, msg->orientation.x, msg->orientation.y, msg->orientation.z);
+        if (!position.allFinite() || !orientation.coeffs().allFinite() || orientation.norm() < 1e-9)
+        {
+            if (is_left)
+            {
+                has_body_left_hand_pose_ = false;
+            }
+            else
+            {
+                has_body_right_hand_pose_ = false;
+            }
+            return;
+        }
+
+        if (is_left)
+        {
+            body_left_hand_position_ = position;
+            body_left_hand_orientation_ = orientation.normalized();
+            has_body_left_hand_pose_ = true;
+            body_left_hand_stamp_ = std::chrono::steady_clock::now();
+        }
+        else
+        {
+            body_right_hand_position_ = position;
+            body_right_hand_orientation_ = orientation.normalized();
+            has_body_right_hand_pose_ = true;
+            body_right_hand_stamp_ = std::chrono::steady_clock::now();
+        }
+
+        // 只重算本次更新的那一侧，避免另一侧被无谓重发（会干扰冻结追赶斜坡判定）
+        publishAbsoluteArmTarget(is_left);
+    }
+
+    void VRInputHandler::bodyPointCallback(
+        bool is_left, bool is_ankle, const geometry_msgs::msg::Pose::SharedPtr msg)
+    {
+        SkeletonPoint& point = is_ankle
+                                   ? (is_left ? body_left_ankle_ : body_right_ankle_)
+                                   : (is_left ? body_left_foot_ : body_right_foot_);
+        const Eigen::Vector3d position(msg->position.x, msg->position.y, msg->position.z);
+        const Eigen::Quaterniond orientation(
+            msg->orientation.w, msg->orientation.x, msg->orientation.y, msg->orientation.z);
+        if (!position.allFinite() || !orientation.coeffs().allFinite() || orientation.norm() < 1e-9)
+        {
+            point.valid = false;
+            return;
+        }
+        point.xy = Eigen::Vector2d(position.x(), position.y());
+        point.z = position.z();
+        point.orientation = orientation.normalized();
+        point.valid = true;
+        point.stamp = std::chrono::steady_clock::now();
+    }
+
+    void VRInputHandler::bodyShoulderCallback(
+        bool is_left, const geometry_msgs::msg::Pose::SharedPtr msg)
+    {
+        SkeletonPoint& point = is_left ? body_left_shoulder_ : body_right_shoulder_;
+        const Eigen::Vector3d position(msg->position.x, msg->position.y, msg->position.z);
+        if (!position.allFinite())
+        {
+            point.valid = false;
+            return;
+        }
+        point.xy = Eigen::Vector2d(position.x(), position.y());
+        point.z = position.z();
+        point.valid = true;
+        point.stamp = std::chrono::steady_clock::now();
+    }
+
+    void VRInputHandler::buildDeformedSkeleton(
+        const Eigen::Isometry3d& T_H_world, DeformedSkeleton& out)
+    {
+        const Eigen::Matrix3d R_world_to_H = T_H_world.linear().transpose();
+        const Eigen::Vector3d root = T_H_world.translation();
+        auto in_H = [&](const Eigen::Vector3d& p) { return R_world_to_H * (p - root); };
+        auto point_in_H = [&](const SkeletonPoint& pt) {
+            return Eigen::Vector3d(pt.xy.x(), pt.xy.y(), pt.z);
+        };
+
+        // 原始（未缩放）位置，均在人体根系下
+        const Eigen::Vector3d pelvis = in_H(body_pelvis_position_);
+        const Eigen::Vector3d spine3_raw = in_H(body_spine3_position_);
+        const Eigen::Vector3d head_raw = in_H(body_head_position_);
+        const Eigen::Vector3d hand_l_raw = in_H(body_left_hand_position_);
+        const Eigen::Vector3d hand_r_raw = in_H(body_right_hand_position_);
+        const Eigen::Vector3d shoulder_l_raw = in_H(point_in_H(body_left_shoulder_));
+        const Eigen::Vector3d shoulder_r_raw = in_H(point_in_H(body_right_shoulder_));
+
+        const double s_body = std::clamp(absolute_options_.body_length_scale, 0.1, 5.0);
+        const double s_shoulder = std::clamp(absolute_options_.shoulder_width_scale, 0.1, 5.0);
+        const double s_arm = std::clamp(absolute_options_.arm_length_scale, 0.1, 5.0);
+
+        // ① 身长：pelvis → spine3，并以同样尺度推 spine3 → head。
+        //    只缩放「段向量」，因此各关节姿态完全不变、人体根不动。
+        const bool body_ok = pelvis.allFinite() && spine3_raw.allFinite();
+        if (!body_ok)
+        {
+            RCLCPP_WARN_THROTTLE(
+                node_->get_logger(), *node_->get_clock(), 5000,
+                "🕹️🦴 骨盆/脊柱数据不可用，身长尺度暂按 1.0");
+        }
+        out.pelvis = pelvis;
+        out.spine3 = body_ok ? (pelvis + s_body * (spine3_raw - pelvis)) : spine3_raw;
+        out.head = (body_ok && head_raw.allFinite())
+                       ? (out.spine3 + s_body * (head_raw - spine3_raw))
+                       : head_raw;
+
+        // ② 肩宽：spine3 → shoulder，绕**变形后**的 spine3 缩放
+        const auto scale_shoulder = [&](const Eigen::Vector3d& shoulder,
+                                        const char* side) -> Eigen::Vector3d {
+            if (!body_ok || !shoulder.allFinite())
+            {
+                RCLCPP_WARN_THROTTLE(
+                    node_->get_logger(), *node_->get_clock(), 5000,
+                    "🕹️🦴 %s肩数据不可用，肩宽尺度暂按 1.0", side);
+                return shoulder;
+            }
+            return Eigen::Vector3d(out.spine3 + s_shoulder * (shoulder - spine3_raw));
+        };
+        out.shoulder_left = scale_shoulder(shoulder_l_raw, "左");
+        out.shoulder_right = scale_shoulder(shoulder_r_raw, "右");
+
+        // ③ 臂长：把「原始肩→原始的段向量」缩放 s_arm 后，挂到**变形后**的肩上。
+        //    注意不能用变形后的肩去作差，否则肩的变形量会污染手臂向量。
+        const auto scale_arm = [&](const Eigen::Vector3d& shoulder_deformed,
+                                   const Eigen::Vector3d& shoulder_raw,
+                                   const Eigen::Vector3d& hand,
+                                   const char* side) -> Eigen::Vector3d {
+            if (!shoulder_raw.allFinite() || !hand.allFinite())
+            {
+                RCLCPP_WARN_THROTTLE(
+                    node_->get_logger(), *node_->get_clock(), 5000,
+                    "🕹️🦴 %s侧肩/末端数据不可用，臂长尺度暂按 1.0", side);
+                return hand;
+            }
+            return Eigen::Vector3d(shoulder_deformed + s_arm * (hand - shoulder_raw));
+        };
+        out.hand_left = scale_arm(out.shoulder_left, shoulder_l_raw, hand_l_raw, "左");
+        out.hand_right = scale_arm(out.shoulder_right, shoulder_r_raw, hand_r_raw, "右");
+    }
+
+    bool VRInputHandler::skeletonJointFresh(
+        const std::chrono::steady_clock::time_point& stamp) const
+    {
+        if (stamp == std::chrono::steady_clock::time_point{})
+        {
+            return false;
+        }
+        const double age =
+            std::chrono::duration<double>(std::chrono::steady_clock::now() - stamp).count();
+        return age <= std::max(0.0, absolute_options_.skeleton_timeout_sec);
+    }
+
+    void VRInputHandler::toggleAbsoluteTracking()
+    {
+        if (!enabled_.load() || !isFullBodyMode() || resolvedFsmState() != 3)
+        {
+            RCLCPP_WARN(node_->get_logger(),
+                        "🔘 [case 4] 忽略全身全部跟踪开关：要求 VR enabled、FULL_BODY、OCS2");
+            return;
+        }
+
+        if (absolute_tracking_active_.load())
+        {
+            stopAbsoluteTracking();
+        }
+        else
+        {
+            startAbsoluteTracking();
+        }
+    }
+
+    void VRInputHandler::startAbsoluteTracking()
+    {
+        absolute_tracking_active_.store(true);
+        absolute_maps_captured_ = false;
+        settle_pending_ = true;
+        settle_started_at_ = std::chrono::steady_clock::now();
+
+        abs_left_filter_primed_ = false;
+        abs_right_filter_primed_ = false;
+        abs_body_filter_primed_ = false;
+        abs_head_filter_primed_ = false;
+
+        // 复用 is_update_mode_：非全身模式下的既有语义（UPDATE/STORAGE）不变；
+        // 全身模式下它就是「全部跟踪开关」。
+        is_update_mode_.store(true);
+        if (target_manager_ && target_manager_->getCurrentMode() != MarkerState::CONTINUOUS)
+        {
+            target_manager_->togglePublishMode();
+        }
+
+        // 目标来源切换，清掉摇杆累积与追赶斜坡，避免切换瞬间跳变
+        left_thumbstick_offset_.setZero();
+        right_thumbstick_offset_.setZero();
+        left_thumbstick_yaw_offset_ = 0.0;
+        right_thumbstick_yaw_offset_ = 0.0;
+        resetStaleCatchUpRamp();
+
+        // 取得目标所有权（双臂/胸/头均由本模式独占）
+        // 具体置位在各任务首次真正下发目标时完成（绝对映射已下发 ⇒ 拥有目标）。
+        resetStaleCatchUpRamp();
+
+        RCLCPP_INFO(
+            node_->get_logger(),
+            "🕹️🦴 [case 4] 全身「全部跟踪」已开启：胸/头/双臂末端改为 /teleop/body_* 绝对位姿映射"
+            "（等待机器人当前位姿与骨架稳定后标定）；再次短按右摇杆关闭");
+    }
+
+    void VRInputHandler::stopAbsoluteTracking()
+    {
+        absolute_tracking_active_.store(false);
+        is_update_mode_.store(false);
+        resetAbsoluteTracking();
+        RCLCPP_INFO(node_->get_logger(),
+                    "🕹️🦴 [case 4] 全身「全部跟踪」已关闭：停止下发胸/头/双臂目标"
+                    "（WBC 保持当前目标，长按右摇杆的底盘跟踪开关独立不受影响）");
+    }
+
+    Eigen::Quaterniond VRInputHandler::dropRoll(const Eigen::Quaterniond& q)
+    {
+        // ZYX 分解 R = Rz(yaw)·Ry(pitch)·Rx(roll)，丢弃 roll。
+        // W2 腰部为 3×pitch + 1×yaw、无 roll；头部仅 yaw/pitch，超出的分量不可达。
+        const Eigen::Matrix3d m = q.normalized().toRotationMatrix();
+        const double yaw = std::atan2(m(1, 0), m(0, 0));
+        const double pitch =
+            std::atan2(-m(2, 0), std::hypot(m(2, 1), m(2, 2)));
+        return Eigen::Quaterniond(
+                   Eigen::AngleAxisd(yaw, Eigen::Vector3d::UnitZ()) *
+                   Eigen::AngleAxisd(pitch, Eigen::Vector3d::UnitY()))
+            .normalized();
+    }
+
+    bool VRInputHandler::geometryToleranceOk(
+        bool is_left, const Eigen::Vector3d& hand_position) const
+    {
+        const double tolerance = absolute_options_.geometry_tolerance;
+        if (tolerance <= 0.0 || !has_body_spine3_pose_ || !settle_pending_)
+        {
+            return true;
+        }
+        const double ref_len =
+            is_left ? abs_left_arm_ref_len_ : abs_right_arm_ref_len_;
+        if (ref_len <= 1e-6)
+        {
+            return true;
+        }
+        const double current_len =
+            (hand_position - body_spine3_position_).norm();
+        return std::abs(current_len - ref_len) <= tolerance * ref_len;
+    }
+
+    bool VRInputHandler::captureAbsoluteTrackingMaps()
+    {
+        if (!ee_frame_id_initialized_)
+        {
+            RCLCPP_WARN_THROTTLE(
+                node_->get_logger(), *node_->get_clock(), 2000,
+                "🕹️🦴 全身绝对跟踪等待末端参考坐标系（left_current_pose）初始化");
+            return false;
+        }
+
+        // 目标不再以机器人当前姿态为基准，因此标定只需要人体骨架数据
+        std::vector<const char*> missing;
+        if (!has_body_pelvis_pose_) missing.push_back("/teleop/body_pelvis_pose");
+        if (!has_body_spine3_pose_) missing.push_back("/teleop/body_spine3_pose");
+        if (!has_body_head_pose_) missing.push_back("/teleop/body_head_pose");
+        if (!has_body_left_hand_pose_) missing.push_back("左侧骨架手部话题");
+        if (!has_body_right_hand_pose_) missing.push_back("右侧骨架手部话题");
+        // 人体根必须能由下肢推出（踝给 xy/偏航、足给 z），否则所有目标位置都无意义
+        if (!body_left_ankle_.valid) missing.push_back("/teleop/body_left_ankle_pose（人体根 xy/偏航）");
+        if (!body_right_ankle_.valid) missing.push_back("/teleop/body_right_ankle_pose（人体根 xy/偏航）");
+        if (!body_left_foot_.valid) missing.push_back("/teleop/body_left_foot_pose（人体根 z）");
+        if (!body_right_foot_.valid) missing.push_back("/teleop/body_right_foot_pose（人体根 z）");
+        // 肩部是「肩宽 / 臂长」两条尺度链的起点
+        if (!body_left_shoulder_.valid) missing.push_back("/teleop/body_left_shoulder_pose（肩宽/臂长尺度）");
+        if (!body_right_shoulder_.valid) missing.push_back("/teleop/body_right_shoulder_pose（肩宽/臂长尺度）");
+        if (!missing.empty())
+        {
+            std::string joined;
+            for (const auto* name : missing)
+            {
+                if (!joined.empty()) joined += ", ";
+                joined += name;
+            }
+            RCLCPP_WARN_THROTTLE(
+                node_->get_logger(), *node_->get_clock(), 2000,
+                "🕹️🦴 全身绝对跟踪等待骨架数据：%s", joined.c_str());
+            return false;
+        }
+
+        // 人体参考臂长（手–脊柱距离），供几何一致性过滤使用
+        abs_left_arm_ref_len_ =
+            (body_left_hand_position_ - body_spine3_position_).norm();
+        abs_right_arm_ref_len_ =
+            (body_right_hand_position_ - body_spine3_position_).norm();
+
+        settle_pending_ = false;
+        absolute_maps_captured_ = true;
+        Eigen::Vector3d root_offset = Eigen::Vector3d::Zero();
+        if (absolute_options_.human_root_offset.size() == 3)
+        {
+            root_offset = Eigen::Vector3d(absolute_options_.human_root_offset[0],
+                                          absolute_options_.human_root_offset[1],
+                                          absolute_options_.human_root_offset[2]);
+        }
+        RCLCPP_INFO(
+            node_->get_logger(),
+            "🕹️🦴 全身绝对跟踪已生效：人体根 H = 下肢骨架（xy 取两踝均值 / 朝向取两踝 x 轴"
+            "地平面投影均值 / z 取两足较低者，俯仰滚转恒为 0，再加原点偏置 [%.3f, %.3f, %.3f] m），"
+            "发布系=%s，尺度[身长/肩宽/臂长]=%.2f/%.2f/%.2f，末端源=body_%s，胸部锚点 λ=%.2f；"
+            "人体参考臂长 L/R=%.3f/%.3f m。"
+            "映射按「人体系」锚定：人体各量先表达在人体根自身坐标系里，故人体朝向 ≡ 机器人机头朝向"
+            "（无需人工偏航常数）；人体各部位相对人体根的当前位姿即为机器人对应部位相对底座的目标",
+            root_offset.x(), root_offset.y(), root_offset.z(),
+            ee_frame_id_.c_str(),
+            absolute_options_.body_length_scale,
+            absolute_options_.shoulder_width_scale,
+            absolute_options_.arm_length_scale,
+            absolute_options_.ee_source.c_str(),
+            absolute_options_.body_anchor_lambda,
+            abs_left_arm_ref_len_, abs_right_arm_ref_len_);
+        return true;
+    }
+
+    void VRInputHandler::publishAbsoluteArmTarget(bool is_left)
+    {
+        if (!absolute_tracking_active_.load() || !whole_body_teleop_active_.load())
+        {
+            return;
+        }
+        if (!enabled_.load() || !isFullBodyMode() || resolvedFsmState() != 3)
+        {
+            return;
+        }
+
+        const bool has_hand = is_left ? has_body_left_hand_pose_ : has_body_right_hand_pose_;
+        const bool fresh = skeletonJointFresh(
+            is_left ? body_left_hand_stamp_ : body_right_hand_stamp_);
+        if (!has_hand || !fresh)
+        {
+            // 数据失效：冻结该臂，不回退到旧目标
+            RCLCPP_WARN_THROTTLE(
+                node_->get_logger(), *node_->get_clock(), 3000,
+                "🕹️🦴 骨架%s手数据%s，冻结该臂目标（检查头显全身追踪是否开启）",
+                is_left ? "左" : "右", has_hand ? "超时" : "缺失");
+            return;
+        }
+
+        if (!absolute_maps_captured_)
+        {
+            if (settle_pending_ &&
+                std::chrono::duration<double>(
+                    std::chrono::steady_clock::now() - settle_started_at_).count() <
+                    std::max(0.0, absolute_options_.capture_settle_sec))
+            {
+                return;  // 仍在稳定窗口内
+            }
+            if (!captureAbsoluteTrackingMaps())
+            {
+                return;
+            }
+        }
+
+        const WbcToggleTarget target =
+            is_left ? WbcToggleTarget::LEFT_ARM : WbcToggleTarget::RIGHT_ARM;
+        if (isArmVrInputSuppressed(target))
+        {
+            return;
+        }
+
+        const Eigen::Vector3d hand_pos =
+            is_left ? body_left_hand_position_ : body_right_hand_position_;
+        const Eigen::Quaterniond hand_ori =
+            is_left ? body_left_hand_orientation_ : body_right_hand_orientation_;
+        if (!geometryToleranceOk(is_left, hand_pos))
+        {
+            RCLCPP_WARN_THROTTLE(
+                node_->get_logger(), *node_->get_clock(), 2000,
+                "🕹️🦴 骨架%s手几何一致性超差，冻结该臂目标", is_left ? "左" : "右");
+            return;
+        }
+
+        // 人体根 H：把「人在走 / 人在整体转身」完全剥离出去（只去驱动底盘）
+        Eigen::Isometry3d T_H_world;
+        if (!humanRootTransform(T_H_world))
+        {
+            return;
+        }
+        // 骨架分段尺度（身长/肩宽/臂长）在人体根系里对「段向量」缩放，只改位置不改姿态
+        DeformedSkeleton skeleton;
+        buildDeformedSkeleton(T_H_world, skeleton);
+        const Eigen::Vector3d hand_in_H = is_left ? skeleton.hand_left : skeleton.hand_right;
+        const Eigen::Matrix3d R_world_to_H = T_H_world.linear().transpose();
+        const Eigen::Matrix3d hand_rot_in_H =
+            R_world_to_H * hand_ori.toRotationMatrix();
+
+        // 机器人「底座系」里的目标 = 人体手相对人体根的当前位姿（固定映射，无按下时基准）
+        const Eigen::Matrix3d& hand_to_ee =
+            is_left ? abs_hand_to_ee_left_ : abs_hand_to_ee_right_;
+        Eigen::Vector3d position_base = hand_in_H;
+        Eigen::Matrix3d rot_base = hand_rot_in_H * hand_to_ee;
+
+        // 摇杆微调（在底座系里叠加）
+        const Eigen::Vector3d stick_offset =
+            is_left ? left_thumbstick_offset_ : right_thumbstick_offset_;
+        const double stick_yaw =
+            is_left ? left_thumbstick_yaw_offset_ : right_thumbstick_yaw_offset_;
+        if (!stick_offset.isZero(1e-9))
+        {
+            position_base += stick_offset;
+        }
+        if (std::abs(stick_yaw) > 1e-9)
+        {
+            rot_base = Eigen::AngleAxisd(stick_yaw, Eigen::Vector3d::UnitZ())
+                           .toRotationMatrix() * rot_base;
+        }
+
+        // 底座 → world（优先 TF；无 TF 时用自下发 /cmd_vel 的积分估计）
+        const Eigen::Isometry3d T_base_world = currentBaseToWorld();
+        Eigen::Vector3d position =
+            T_base_world.linear() * position_base + T_base_world.translation();
+        Eigen::Quaterniond orientation(
+            T_base_world.linear() * rot_base);
+
+        // 一阶低通：绝对映射会把骨架抖动直接送进高增益末端约束，必须滤波
+        const double alpha = std::clamp(absolute_options_.filter_alpha, 0.0, 1.0);
+        bool& primed = is_left ? abs_left_filter_primed_ : abs_right_filter_primed_;
+        Eigen::Vector3d& lp_pos = is_left ? abs_left_pos_lp_ : abs_right_pos_lp_;
+        Eigen::Quaterniond& lp_ori = is_left ? abs_left_ori_lp_ : abs_right_ori_lp_;
+        if (!primed)
+        {
+            lp_pos = position;
+            lp_ori = orientation.normalized();
+            primed = true;
+        }
+        else
+        {
+            lp_pos += alpha * (position - lp_pos);
+            lp_ori = lp_ori.slerp(alpha, orientation.normalized()).normalized();
+        }
+
+        publishTargetPoseDirect(is_left ? "left" : "right", lp_pos, lp_ori);
+        if (target_manager_)
+        {
+            // 本模式下该臂目标由全身遥操作独占：
+            // 禁掉 RViz 交互 marker 拖拽/菜单 与手柄/键盘 control_input 增量的改写。
+            target_manager_->setArmVrActive(is_left, true);
+        }
+    }
+
+    void VRInputHandler::resetAbsoluteTracking()
+    {
+        absolute_maps_captured_ = false;
+        settle_pending_ = false;
+        abs_left_filter_primed_ = false;
+        abs_right_filter_primed_ = false;
+        abs_body_filter_primed_ = false;
+        abs_head_filter_primed_ = false;
+        abs_left_arm_ref_len_ = 0.0;
+        abs_right_arm_ref_len_ = 0.0;
+        resetStaleCatchUpRamp();
+        // 交还臂目标独占标志（唯一消费者是手柄/键盘 control_input 的 twist 改写）
+        if (target_manager_)
+        {
+            target_manager_->setArmVrActive(true, false);
+            target_manager_->setArmVrActive(false, false);
+        }
+    }
+
+    // ================= 底盘跟踪（位置外环 → /cmd_vel） =================
+
+    void VRInputHandler::toggleBaseTracking()
+    {
+        if (!absolute_options_.base_follow_enable)
+        {
+            RCLCPP_WARN(node_->get_logger(),
+                        "🔘 [case 31] 忽略底盘跟踪开关：base_follow_enable=false");
+            return;
+        }
+        if (!enabled_.load() || !isFullBodyMode() || resolvedFsmState() != 3)
+        {
+            RCLCPP_WARN(node_->get_logger(),
+                        "🔘 [case 31] 忽略底盘跟踪开关：要求 VR enabled、FULL_BODY、OCS2");
+            return;
+        }
+        if (!whole_body_teleop_active_.load())
+        {
+            RCLCPP_WARN(node_->get_logger(),
+                        "🔘 [case 31] 忽略底盘跟踪开关：请先用「左右握把+右摇杆按下」进入全身遥操作模式");
+            return;
+        }
+
+        if (base_tracking_enabled_.load())
+        {
+            base_tracking_enabled_.store(false);
+            resetBaseFollow();
+            RCLCPP_INFO(node_->get_logger(),
+                        "🔘 [case 31] 底盘跟踪已关闭（已发一次零速）");
+        }
+        else
+        {
+            base_tracking_enabled_.store(true);
+            RCLCPP_INFO(node_->get_logger(),
+                        "🔘 [case 31] 底盘跟踪已开启：骨盆水平位姿 → 位置外环 → /cmd_vel"
+                        "（BASE_UNLOCKED 时冻结跟随并让路给 WBC）");
+        }
+    }
+
+    bool VRInputHandler::baseFollowReady() const
+    {
+        if (!absolute_options_.base_follow_enable || !base_tracking_enabled_.load())
+        {
+            return false;
+        }
+        if (!whole_body_teleop_active_.load() || !enabled_.load() || !isFullBodyMode())
+        {
+            return false;
+        }
+        if (resolvedFsmState() != 3)
+        {
+            return false;
+        }
+        if (!has_body_pelvis_pose_ ||
+            body_pelvis_stamp_ == std::chrono::steady_clock::time_point{})
+        {
+            return false;
+        }
+        const double age =
+            std::chrono::duration<double>(
+                std::chrono::steady_clock::now() - body_pelvis_stamp_).count();
+        return age <= std::max(0.0, absolute_options_.base_follow_data_timeout);
+    }
+
+    void VRInputHandler::captureBaseFollowBase()
+    {
+        base_follow_pelvis_ref_ = body_pelvis_position_;
+        base_follow_yaw_ref_ = yawOfQuaternion(body_pelvis_orientation_);
+        base_follow_yaw_offset_ = 0.0;
+        base_follow_p_ref_.setZero();
+        base_follow_v_cmd_.setZero();
+        base_follow_w_cmd_ = 0.0;
+        base_follow_v_out_.setZero();
+        base_follow_w_out_ = 0.0;
+        base_follow_last_tick_ = std::chrono::steady_clock::now();
+        RCLCPP_INFO(node_->get_logger(),
+                    "🕹️🚗 底盘跟踪基准已建立（人体骨盆 yaw=%.1f°）",
+                    base_follow_yaw_ref_ * 180.0 / M_PI);
+    }
+
+    void VRInputHandler::resetBaseFollow()
+    {
+        const bool was_active = base_follow_active_;
+        base_follow_active_ = false;
+        base_follow_p_ref_.setZero();
+        base_follow_v_cmd_.setZero();
+        base_follow_w_cmd_ = 0.0;
+        base_follow_v_out_.setZero();
+        base_follow_w_out_ = 0.0;
+        base_follow_yaw_offset_ = 0.0;
+        if (was_active)
+        {
+            // 只在真正跟过的时候补一次零速，避免无关场景向 /cmd_vel 发零
+            publishChassisVelocity(geometry_msgs::msg::Twist());
+        }
+    }
+
+    void VRInputHandler::updateBaseFollow()
+    {
+        if (!base_tracking_enabled_.load())
+        {
+            return;
+        }
+
+        if (!baseFollowReady())
+        {
+            if (base_follow_active_)
+            {
+                resetBaseFollow();
+            }
+            return;
+        }
+
+        const auto now = std::chrono::steady_clock::now();
+        if (!base_follow_active_)
+        {
+            captureBaseFollowBase();
+            base_follow_active_ = true;
+            return;
+        }
+
+        double dt = std::chrono::duration<double>(now - base_follow_last_tick_).count();
+        base_follow_last_tick_ = now;
+        dt = std::clamp(dt, 1e-3, 0.1);
+
+        // yaw 补偿：用自己下发的 ω 积分出机器人自身的转向量，
+        // 使 VR「人体前方」始终对应机头前方（不依赖外部 TF）
+        base_follow_yaw_offset_ += base_follow_w_out_ * dt;
+
+        // 人体骨盆位移：转到「接管时刻机器人本体系」F（人体 yaw 在接管时与机头对齐）
+        const Eigen::Vector3d pelvis_delta = body_pelvis_position_ - base_follow_pelvis_ref_;
+        const Eigen::Vector2d delta_F =
+            yawRotation2d(-base_follow_yaw_ref_) * pelvis_delta.head<2>();
+
+        // 软参考「跑步机」：p_ref 以 τ 追赶人体位置，避免人走出追踪区
+        const double tau = std::max(1e-3, absolute_options_.base_follow_tau);
+        base_follow_p_ref_ += (delta_F - base_follow_p_ref_) * std::min(1.0, dt / tau);
+        const Eigen::Vector2d error_F = delta_F - base_follow_p_ref_;
+
+        // 水平速度：死区内为零；稳态增益 ≈ Kp·τ
+        const double deadband = std::max(0.0, absolute_options_.base_follow_deadband);
+        Eigen::Vector2d v_des_F = Eigen::Vector2d::Zero();
+        if (error_F.norm() > deadband)
+        {
+            v_des_F = absolute_options_.base_follow_kp * error_F;
+            const double vmax = std::max(0.0, absolute_options_.base_vmax);
+            if (v_des_F.norm() > vmax)
+            {
+                v_des_F *= vmax / v_des_F.norm();
+            }
+        }
+
+        // 偏航：绝对跟踪（人体转身多少，机头转多少），死区 + 限幅
+        const double delta_yaw =
+            wrapPi(yawOfQuaternion(body_pelvis_orientation_) - base_follow_yaw_ref_);
+        const double error_yaw = wrapPi(delta_yaw - base_follow_yaw_offset_);
+        double w_des = 0.0;
+        if (std::abs(error_yaw) > std::max(0.0, absolute_options_.base_follow_yaw_deadband))
+        {
+            w_des = absolute_options_.base_follow_kpsi * error_yaw;
+            const double wmax = std::max(0.0, absolute_options_.base_wmax);
+            w_des = std::clamp(w_des, -wmax, wmax);
+        }
+
+        // 一阶低通 + 速率限幅
+        const double cmd_tau = std::max(1e-3, absolute_options_.base_cmd_tau);
+        const double lp_alpha = std::min(1.0, dt / cmd_tau);
+        base_follow_v_cmd_ += lp_alpha * (v_des_F - base_follow_v_cmd_);
+        base_follow_w_cmd_ += lp_alpha * (w_des - base_follow_w_cmd_);
+        base_follow_v_out_ = stepTowards(
+            base_follow_v_out_, base_follow_v_cmd_,
+            std::max(0.0, absolute_options_.base_acc_max) * dt);
+        base_follow_w_out_ = stepTowards(
+            base_follow_w_out_, base_follow_w_cmd_,
+            std::max(0.0, absolute_options_.base_alpha_max) * dt);
+
+        // F 系速度 → 机体系速度
+        const Eigen::Vector2d v_B =
+            yawRotation2d(-base_follow_yaw_offset_) * base_follow_v_out_;
+
+        geometry_msgs::msg::Twist cmd_vel;
+        cmd_vel.linear.x = v_B.x();
+        cmd_vel.linear.y = v_B.y();
+        cmd_vel.linear.z = 0.0;
+        cmd_vel.angular.x = 0.0;
+        cmd_vel.angular.y = 0.0;
+        cmd_vel.angular.z = base_follow_w_out_;
+
+        if (wbcOwnsChassisVelocity())
+        {
+            // 让路给 WBC：不发指令，但把软参考与人体同步，回到 BASE_LOCK 时不产生冲击
+            base_follow_p_ref_ = delta_F;
+            base_follow_v_cmd_.setZero();
+            base_follow_v_out_.setZero();
+            base_follow_w_cmd_ = 0.0;
+            base_follow_w_out_ = 0.0;
+            base_follow_yaw_offset_ = delta_yaw;
+            RCLCPP_DEBUG_THROTTLE(
+                node_->get_logger(), *node_->get_clock(), 2000,
+                "🕹️🚗 底盘跟踪让路给 WBC（BASE_UNLOCKED），保持软参考同步");
+            return;
+        }
+
+        publishChassisVelocity(cmd_vel);
     }
 
     void VRInputHandler::vrLeftCallback(const geometry_msgs::msg::Pose::SharedPtr msg)
@@ -1307,7 +2374,9 @@ namespace arms_ros2_control::command
             bool is_mirror = mirror_mode_.load();
             bool arm_paused = is_mirror ? right_arm_paused_.load() : left_arm_paused_.load();
 
-            if (is_update_mode_.load())
+            // 全身「全部跟踪」开启时目标改由骨架绝对位姿发布，
+            // 禁用基于手柄的相对增量路径，避免两个来源争抢 left/right_target。
+            if (is_update_mode_.load() && !absolute_tracking_active_.load())
             {
                 // 更新模式：基于差值计算pose并更新marker
                 Eigen::Vector3d calculatedPos;
@@ -1420,7 +2489,9 @@ namespace arms_ros2_control::command
             bool is_mirror = mirror_mode_.load();
             bool arm_paused = is_mirror ? left_arm_paused_.load() : right_arm_paused_.load();
 
-            if (is_update_mode_.load())
+            // 全身「全部跟踪」开启时目标改由骨架绝对位姿发布，
+            // 禁用基于手柄的相对增量路径，避免两个来源争抢 left/right_target。
+            if (is_update_mode_.load() && !absolute_tracking_active_.load())
             {
                 // 更新模式：基于差值计算pose并更新marker
                 Eigen::Vector3d calculatedPos;
@@ -2207,6 +3278,17 @@ namespace arms_ros2_control::command
             return;
         }
 
+        // 全身遥操作模式：双臂末端与腰部目标全部由骨架绝对映射给出，
+        // 因此**左右摇杆都不得再产生末端/腰部微调** ——
+        // 否则拨右摇杆会累加 right_thumbstick_offset_，而绝对映射会把该偏移叠加到右臂目标上，
+        // 表现为"拨右摇杆就推着右臂走"。
+        // 注意：底盘跟踪用长按右摇杆（事件 31）开关、不读摇杆轴值；握把+摇杆方向组合键
+        // （21–28）由事件链消费且轴值已被抑制清零，因此这里直接返回是安全的。
+        if (whole_body_teleop_active_.load())
+        {
+            return;
+        }
+
         // 身体模式请求未确认或摇杆未回中时，左摇杆既不给腰部也不给左臂
         if (updateBodyModeRequestState())
         {
@@ -2217,11 +3299,7 @@ namespace arms_ros2_control::command
         // 跟随模式已确认：左摇杆改为控制腰部 marker，右摇杆保持右臂
         if (isBodyTrackingActive())
         {
-            // 全身遥操开启时腰部目标由骨架驱动，不再接受摇杆增量，避免两个数据源互相打架
-            if (!full_body_teleop_active_.load())
-            {
-                processBodyThumbstickAxes();
-            }
+            processBodyThumbstickAxes();
             processRightThumbstickAxes();
             return;
         }
@@ -3267,6 +4345,13 @@ namespace arms_ros2_control::command
 
     void VRInputHandler::processChassisAxes()
     {
+        // 全身模式下底盘跟踪（长按右摇杆）开启时，case 20 手动底盘遥控让路，
+        // 避免两个来源同时往 /cmd_vel 发指令。
+        if (whole_body_teleop_active_.load() && base_tracking_enabled_.load())
+        {
+            return;
+        }
+
         // VR 手柄轴值约定（Pico）：Y 轴往前推是负数，与机器人"正数=向前/向右"相反，
         // 因此 chassis 模式下对四个轴值统一取负，使方向语义与 joystick_teleop.cpp 对齐。
         // 非 FULL_BODY 下按住右握把可作为腰部控制修饰符；
@@ -3275,7 +4360,6 @@ namespace arms_ros2_control::command
         const double left_y = -left_thumbstick_axes_.y();
         const double right_x = -right_thumbstick_axes_.x();
         const double right_y = -right_thumbstick_axes_.y();
-
         // 底盘平移：左摇杆 Y → linear.x（前后），左摇杆 X → linear.y（左右，全向底盘）
         auto cmd_vel = geometry_msgs::msg::Twist();
         cmd_vel.linear.x  = left_y * chassis_linear_scale_;
@@ -3359,6 +4443,8 @@ namespace arms_ros2_control::command
         }
 
         pub_cmd_vel_->publish(velocity);
+        // 无 TF 时用这条积分当作底座位姿估计（绝对映射的手臂目标要转到 world 系）
+        integrateBaseOdometry(velocity);
     }
 
     void VRInputHandler::resetChassisAndWaistCommands()
@@ -3620,8 +4706,17 @@ namespace arms_ros2_control::command
                 }
                 break;
             }
-            case 4:  // 右摇杆按钮
+            case 4:  // 右摇杆按钮（短按松开沿）
             {
+                // 全身遥操作模式内：短按右摇杆改为开/关「全部跟踪」
+                // （胸/头/双臂末端改为 /teleop/body_* 绝对位姿映射）；
+                // 非全身模式保持原有 UPDATE/STORAGE 语义不变。
+                if (whole_body_teleop_active_.load())
+                {
+                    toggleAbsoluteTracking();
+                    break;
+                }
+
                 // 只在OCS2状态下执行（状态值为3）
                 if (current_fsm_state_.load() != 3)
                 {
@@ -3698,11 +4793,6 @@ namespace arms_ros2_control::command
                     is_update_mode_.store(true);
                     // 目标流在此中断/重启，清空斜坡，避免用陈旧输出量缺口
                     resetStaleCatchUpRamp();
-                    // 全身遥操与双臂同步：进入 UPDATE 后重新建立躯干/头部基准
-                    if (full_body_teleop_active_.load())
-                    {
-                        full_body_teleop_bases_captured_ = false;
-                    }
                     RCLCPP_INFO(node_->get_logger(), "🔘 [右摇杆按钮] 按下 - 功能: 切换UPDATE/STORAGE模式 - 操作: 切换到UPDATE模式（已存储基准位姿，重置摇杆偏移）");
                     RCLCPP_DEBUG(node_->get_logger(),
                                 "   VR Base Positions: Left [%.3f, %.3f, %.3f], Right [%.3f, %.3f, %.3f]",
@@ -4052,7 +5142,7 @@ namespace arms_ros2_control::command
             }
             case 21: // 左握把 + 左摇杆向上：竖直
                 markGripComboConsumed(true, false);
-                if (full_body_teleop_active_.load())
+                if (whole_body_teleop_active_.load())
                 {
                     RCLCPP_WARN(node_->get_logger(),
                                 "🔘 [case 21] 全身遥操作已开启，忽略原有身体模式组合键（竖直）");
@@ -4064,7 +5154,7 @@ namespace arms_ros2_control::command
                 break;
             case 22: // 左握把 + 左摇杆向下：锁定
                 markGripComboConsumed(true, false);
-                if (full_body_teleop_active_.load())
+                if (whole_body_teleop_active_.load())
                 {
                     RCLCPP_WARN(node_->get_logger(),
                                 "🔘 [case 22] 全身遥操作已开启，忽略原有身体模式组合键（锁定）");
@@ -4076,7 +5166,7 @@ namespace arms_ros2_control::command
                 break;
             case 23: // 左握把 + 左摇杆向左：跟随
                 markGripComboConsumed(true, false);
-                if (full_body_teleop_active_.load())
+                if (whole_body_teleop_active_.load())
                 {
                     RCLCPP_WARN(node_->get_logger(),
                                 "🔘 [case 23] 全身遥操作已开启，忽略原有身体模式组合键（跟随）");
@@ -4088,7 +5178,7 @@ namespace arms_ros2_control::command
                 break;
             case 24: // 左握把 + 左摇杆向右：自定义
                 markGripComboConsumed(true, false);
-                if (full_body_teleop_active_.load())
+                if (whole_body_teleop_active_.load())
                 {
                     RCLCPP_WARN(node_->get_logger(),
                                 "🔘 [case 24] 全身遥操作已开启，忽略原有身体模式组合键（自定义）");
@@ -4118,7 +5208,10 @@ namespace arms_ros2_control::command
                 break;
             case 30: // 左右握把 + 右摇杆按下：开关全身遥操作（骨架驱动身体/头部）
                 markGripComboConsumed(true, true);
-                toggleFullBodyTeleop();
+                toggleWholeBodyTeleop();
+                break;
+            case 31: // 右摇杆长按：全身模式内开关底盘跟踪（骨盆 → /cmd_vel）
+                toggleBaseTracking();
                 break;
             case 0:  // 无事件
             default:
@@ -4193,10 +5286,9 @@ namespace arms_ros2_control::command
                         {
                             resetYbModeLatchAndConversions();
                             // 全身遥操只在 FULL_BODY 下有效：拓扑变化时退出，避免状态残留
-                            if (full_body_teleop_active_.load())
+                            if (whole_body_teleop_active_.load())
                             {
-                                full_body_teleop_active_.store(false);
-                                full_body_teleop_bases_captured_ = false;
+                                whole_body_teleop_active_.store(false);
                                 stopHeadTracking();
                             }
                         }

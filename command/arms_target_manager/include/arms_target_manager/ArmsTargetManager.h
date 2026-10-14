@@ -104,6 +104,16 @@ namespace arms_ros2_control::command
         bool shouldShowWbcHeadMarker() const;
         bool shouldShowHeadMarker() const;
         void setHeadVrActive(bool active);
+
+        /**
+         * 「VR 独占臂目标」标志：全身遥操作的绝对映射正在下发某臂目标时置位。
+         * 当前唯一消费者是 `ControlInputHandler` 的**手柄/键盘 `control_input`**：
+         * 置位期间它不再改写该臂目标（避免 twist 速度流与 VR 绝对映射抢同一目标）。
+         * 注意：**RViz 交互 marker 的拖拽/菜单不再门控**——它们是调试通道，
+         * 允许随时手工干预（跟踪中拖拽会被 VR 下一帧覆盖）。
+         */
+        void setArmVrActive(bool is_left, bool active);
+        [[nodiscard]] bool isArmVrActive(bool is_left) const { return is_left ? left_arm_vr_active_ : right_arm_vr_active_; }
         int getCurrentBodyState() const;
         int getCurrentHeadState() const { return head_state_; }
         int getCurrentBaseState() const;
@@ -246,6 +256,8 @@ namespace arms_ros2_control::command
             arms_ros2_control_msgs::msg::WbcCurrentState::BASE_LOCKED};
         bool wbc_head_marker_visible_{false};
         bool head_vr_active_{false};
+        bool left_arm_vr_active_{false};
+        bool right_arm_vr_active_{false};
 
         rclcpp::Time last_marker_update_time_;
         double marker_update_interval_;
