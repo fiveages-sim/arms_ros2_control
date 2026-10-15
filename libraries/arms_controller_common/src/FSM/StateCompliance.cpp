@@ -328,7 +328,11 @@ namespace arms_controller_common
                                                  ? kFtFrame[s] : snapshot.frame_id[s];
             Eigen::Matrix<double, 6, 1> gravity_wrench =
                 Eigen::Matrix<double, 6, 1>::Zero();
-            if (computeToolGravityWrenchInSensorFrame(s, sensor_frame, gravity_wrench))
+            geometry_msgs::msg::TransformStamped gravity_tf;
+            std::string gravity_status;
+            const bool gravity_ok = computeToolGravityWrenchInSensorFrame(
+                s, sensor_frame, gravity_wrench, gravity_tf, gravity_status);
+            if (gravity_ok)
             {
                 for (int i = 0; i < 6; ++i)
                     snapshot.net[s][i] -= gravity_wrench(i);
@@ -337,6 +341,60 @@ namespace arms_controller_common
             if (!arms_[s].filtered_wrench_pub) continue;
             std::array<double, 6> tared = snapshot.net[s];
             for (int i = 0; i < 6; ++i) tared[i] -= arms_[s].wrench_bias[i];
+
+            auto& a = arms_[s];
+            double force_step = 0.0, force_peak = 0.0;
+            for (int i = 0; i < 3; ++i)
+            {
+                force_peak = std::max(force_peak, std::abs(tared[i]));
+                if (a.wrench_diag_valid)
+                    force_step = std::max(force_step, std::abs(tared[i] - a.wrench_diag_output[i]));
+            }
+            const bool gravity_changed = a.wrench_diag_valid &&
+                (gravity_ok != a.wrench_diag_gravity_ok ||
+                 gravity_tf.header.frame_id != a.wrench_diag_reference);
+            const bool payload_enabled = a.dyn_param.size() >= 4 && a.dyn_param[0] >= 1e-6;
+            const bool tf_lookup_failed = gravity_status.find("TF ") != std::string::npos;
+            const auto now = std::chrono::steady_clock::now();
+            if (((!gravity_ok && (payload_enabled || !a.wrench_diag_valid)) ||
+                 tf_lookup_failed || gravity_changed || force_step >= 10.0 || force_peak >= 50.0) &&
+                now - a.wrench_diag_last_log >= std::chrono::seconds(1))
+            {
+                a.wrench_diag_last_log = now;
+                auto format = [](const auto& wrench) {
+                    std::ostringstream out;
+                    out << '[';
+                    for (int i = 0; i < 6; ++i) out << (i ? "," : "") << wrench[i];
+                    out << ']';
+                    return out.str();
+                };
+                const auto& q = gravity_tf.transform.rotation;
+                RCLCPP_WARN(node_->get_logger(),
+                    "COMPLIANCE wrench diagnostic %s: stamp=%.9f sensor=%s "
+                    "gravity_ok=%d previous_ok=%d previous_valid=%d status={%s} "
+                    "reference=%s previous_reference=%s tf_stamp=%.9f q_xyzw=[%.6f %.6f %.6f %.6f] "
+                    "mass=%.6f g=%.6f force_step=%.6f "
+                    "raw=%s gravity=%s bias=%s output=%s "
+                    "previous_raw=%s previous_gravity=%s previous_bias=%s previous_output=%s "
+                    "zero_cal=[pending=%d running=%d done=%d samples=%ld]",
+                    kArmName[s], ft_stamp[s].seconds(), sensor_frame.c_str(),
+                    gravity_ok, a.wrench_diag_gravity_ok, a.wrench_diag_valid, gravity_status.c_str(),
+                    gravity_tf.header.frame_id.c_str(), a.wrench_diag_reference.c_str(),
+                    rclcpp::Time(gravity_tf.header.stamp).seconds(), q.x, q.y, q.z, q.w,
+                    a.dyn_param.empty() ? 0.0 : a.dyn_param[0], gravity_accel_, force_step,
+                    format(raw[s]).c_str(), format(gravity_wrench).c_str(),
+                    format(a.wrench_bias).c_str(), format(tared).c_str(),
+                    format(a.wrench_diag_raw).c_str(), format(a.wrench_diag_gravity).c_str(),
+                    format(a.wrench_diag_bias).c_str(), format(a.wrench_diag_output).c_str(),
+                    zero_cal_pending_, zero_cal_running_, zero_cal_done_, a.zero_cal_samples);
+            }
+            a.wrench_diag_valid = true;
+            a.wrench_diag_gravity_ok = gravity_ok;
+            a.wrench_diag_reference = gravity_tf.header.frame_id;
+            a.wrench_diag_raw = raw[s];
+            a.wrench_diag_bias = a.wrench_bias;
+            a.wrench_diag_output = tared;
+            for (int i = 0; i < 6; ++i) a.wrench_diag_gravity[i] = gravity_wrench[i];
 
             geometry_msgs::msg::WrenchStamped msg;
             msg.header.stamp = ft_stamp[s].nanoseconds() == 0 ? time : ft_stamp[s];
@@ -705,9 +763,18 @@ namespace arms_controller_common
                             }
                             continue;
                         }
+                        const auto old_bias = arms_[s].wrench_bias;
                         for (int i = 0; i < 6; ++i)
                             arms_[s].wrench_bias[i] = arms_[s].zero_cal_sum[i] /
                                 static_cast<double>(arms_[s].zero_cal_samples);
+                        const auto& bias = arms_[s].wrench_bias;
+                        RCLCPP_INFO(node_->get_logger(),
+                            "COMPLIANCE tare updated %s: time=%.9f samples=%ld "
+                            "old_bias=[%.6f %.6f %.6f %.6f %.6f %.6f] "
+                            "new_bias=[%.6f %.6f %.6f %.6f %.6f %.6f]",
+                            kArmName[s], time.seconds(), arms_[s].zero_cal_samples,
+                            old_bias[0], old_bias[1], old_bias[2], old_bias[3], old_bias[4], old_bias[5],
+                            bias[0], bias[1], bias[2], bias[3], bias[4], bias[5]);
                         any_calibrated = true;
                     }
                     zero_cal_running_ = false;
@@ -2067,14 +2134,22 @@ namespace arms_controller_common
 
     bool StateCompliance::computeToolGravityWrenchInSensorFrame(
         int side_index, const std::string& sensor_frame,
-        Eigen::Matrix<double, 6, 1>& wrench_sensor) const
+        Eigen::Matrix<double, 6, 1>& wrench_sensor,
+        geometry_msgs::msg::TransformStamped& gravity_tf, std::string& status) const
     {
         wrench_sensor.setZero();
         if (!tf_buffer_ || sensor_frame.empty() || side_index < 0 || side_index > 1)
+        {
+            status = "TF buffer or sensor frame unavailable";
             return false;
+        }
 
         const auto& dyn = arms_[side_index].dyn_param;
-        if (dyn.size() < 4 || dyn[0] < 1e-6) return false;
+        if (dyn.size() < 4 || dyn[0] < 1e-6)
+        {
+            status = "payload missing/disabled: dyn_param needs mass and CoM";
+            return false;
+        }
 
         const double mass = dyn[0];
         const Eigen::Vector3d com_tcp(dyn[1] * 1e-3, dyn[2] * 1e-3, dyn[3] * 1e-3);
@@ -2097,7 +2172,10 @@ namespace arms_controller_common
                     have_tool_tf = true;
                     break;
                 }
-                catch (const tf2::TransformException&) {}
+                catch (const tf2::TransformException& error)
+                {
+                    status += "tool TF " + sensor_frame + " <- " + tool_frame + ": " + error.what() + "; ";
+                }
             }
             if (!have_tool_tf) return false;
 
@@ -2107,17 +2185,23 @@ namespace arms_controller_common
                     tf_buffer_->lookupTransform(gravity_frame_, sensor_frame,
                                                 tf2::TimePointZero);
             }
-            catch (const tf2::TransformException&)
+            catch (const tf2::TransformException& error)
             {
+                status += "reference TF " + gravity_frame_ + " <- " + sensor_frame +
+                    ": " + error.what() + "; trying base_link; ";
                 tf_world_from_sensor =
                     tf_buffer_->lookupTransform("base_link", sensor_frame,
                                                 tf2::TimePointZero);
             }
         }
-        catch (const tf2::TransformException&)
+        catch (const tf2::TransformException& error)
         {
+            status += "reference TF base_link <- " + sensor_frame + ": " + error.what();
             return false;
         }
+        gravity_tf = tf_world_from_sensor;
+        status += "using tool=" + tf_sensor_from_tcp.child_frame_id +
+            " reference=" + tf_world_from_sensor.header.frame_id;
 
         const auto& q_st = tf_sensor_from_tcp.transform.rotation;
         Eigen::Matrix3d R_st =

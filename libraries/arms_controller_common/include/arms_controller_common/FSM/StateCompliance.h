@@ -30,6 +30,7 @@
 #include <geometry_msgs/msg/pose.hpp>
 #include <geometry_msgs/msg/pose_stamped.hpp>
 #include <geometry_msgs/msg/wrench_stamped.hpp>
+#include <geometry_msgs/msg/transform_stamped.hpp>
 #include <rclcpp_lifecycle/lifecycle_node.hpp>
 #include <std_srvs/srv/trigger.hpp>
 #include <tf2_ros/buffer.h>
@@ -110,6 +111,14 @@ namespace arms_controller_common
             long zero_cal_samples{0};
             std::array<double, 6> wrench_bias{};
 
+            // FT diagnostics persist across FSM changes; throttle each arm independently.
+            bool wrench_diag_valid{false};
+            bool wrench_diag_gravity_ok{false};
+            std::array<double, 6> wrench_diag_raw{}, wrench_diag_gravity{},
+                wrench_diag_bias{}, wrench_diag_output{};
+            std::string wrench_diag_reference;
+            std::chrono::steady_clock::time_point wrench_diag_last_log{};
+
             std::array<double, 6> wrench{};
             bool ft_active{false};
             rclcpp::Time ft_stamp{0, 0, RCL_ROS_TIME};
@@ -183,7 +192,8 @@ namespace arms_controller_common
 
         bool computeToolGravityWrenchInSensorFrame(
             int side_index, const std::string& sensor_frame,
-            Eigen::Matrix<double, 6, 1>& wrench_sensor) const;
+            Eigen::Matrix<double, 6, 1>& wrench_sensor,
+            geometry_msgs::msg::TransformStamped& gravity_tf, std::string& status) const;
         Eigen::Matrix<double, 6, 1> wrenchToBase(int side_index,
                                                   const std::string& sensor_frame,
                                                   const std::array<double, 6>& wrench_ee) const;
