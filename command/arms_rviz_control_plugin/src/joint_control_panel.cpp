@@ -15,6 +15,8 @@
 #include <QFontDatabase>
 #include <QFrame>
 #include <QToolButton>
+#include <QSignalBlocker>
+#include <arms_controller_common/utils/Interpolation.h>
 #include <map>
 #include <set>
 #include <arms_controller_common/utils/FSMStateTransitionValidator.h>
@@ -438,6 +440,11 @@ namespace arms_rviz_control_plugin
             node_->create_subscription<arms_ros2_control_msgs::msg::WbcCurrentState>(
                 "/ocs2_wbc_controller/current_state", 10,
                 std::bind(&JointControlPanel::onWbcCurrentStateReceived, this, std::placeholders::_1));
+
+        head_coupling_timer_ = std::make_unique<QTimer>(this);
+        connect(head_coupling_timer_.get(), &QTimer::timeout, this,
+                [this]() { refreshHeadCouplingParameters(); });
+        head_coupling_timer_->start(250);
 
         // Initialize publisher (will be updated when category changes)
         updatePublisher();
@@ -1179,6 +1186,7 @@ namespace arms_rviz_control_plugin
         {
             category_combo_->setCurrentIndex(0);
             current_category_ = category_combo_->currentData().toString().toStdString();
+        refreshHeadCouplingParameters();
         }
     }
 
@@ -1344,6 +1352,11 @@ namespace arms_rviz_control_plugin
             status_label_->setText("关节类型尚未加载，禁止发送");
             return;
         }
+        if (current_command_ == 4 && (current_category_ == "head" || current_category_ == "all"))
+        {
+            refreshHeadCouplingParameters(true);
+            return;
+        }
         publishJointPositions();
     }
 
@@ -1378,6 +1391,9 @@ namespace arms_rviz_control_plugin
 
         std::vector<double> target_positions;
         std::vector<std::string> target_joint_names;
+
+        // Reapply the latest controller rule before reading the outgoing values.
+        updateSpinboxRanges();
 
         // Collect target positions and joint names
         if (current_category_ == "all")
@@ -1887,6 +1903,155 @@ namespace arms_rviz_control_plugin
         return result;
     }
 
+    void JointControlPanel::refreshHeadCouplingParameters(bool send_after_refresh)
+    {
+        if (!node_) return;
+        const bool relevant = current_command_ == 4 &&
+                              (current_category_ == "head" || current_category_ == "all");
+        const auto topic = relevant ? getControllerNameForCategory(current_category_) : std::string{};
+        const auto separator = topic.find("/target_joint_position");
+        const std::string remote = separator == std::string::npos ? std::string{} : topic.substr(0, separator);
+        const std::string context = remote + "|" + current_category_ + "|" + std::to_string(current_command_);
+        if (context != head_parameter_context_)
+        {
+            head_parameter_context_ = context;
+            head_parameter_future_ = {};
+            head_parameter_client_.reset();
+            head_panel_config_.reset();
+            head_send_pending_ = false;
+            updateSpinboxRanges();
+        }
+        if (!relevant || remote.empty()) return;
+        if (send_after_refresh)
+        {
+            // A click obtains a fresh mode/config; never publish with another node's cache.
+            head_parameter_future_ = {};
+            head_send_pending_ = true;
+        }
+
+        const auto finish_send = [this]() {
+            if (head_send_pending_)
+            {
+                head_send_pending_ = false;
+                publishJointPositions();
+            }
+        };
+        try
+        {
+            if (!head_parameter_client_)
+                head_parameter_client_ = std::make_shared<rclcpp::AsyncParametersClient>(node_, remote);
+            if (head_parameter_future_.valid())
+            {
+                if (head_parameter_future_.wait_for(std::chrono::seconds(0)) != std::future_status::ready)
+                {
+                    if (std::chrono::steady_clock::now() - head_parameter_requested_at_ < std::chrono::seconds(2))
+                        return;
+                    head_parameter_client_.reset();
+                    throw std::runtime_error("parameter request timed out");
+                }
+                const auto parameters = head_parameter_future_.get();
+                head_parameter_future_ = {};
+                head_panel_config_.reset();
+                if (parameters.size() != 4)
+                    throw std::runtime_error("unexpected parameter response");
+                using rclcpp::ParameterType;
+                if (parameters[0].get_type() == ParameterType::PARAMETER_NOT_SET ||
+                    (parameters[0].get_type() == ParameterType::PARAMETER_BOOL && !parameters[0].as_bool()))
+                {
+                    // No enabled configuration: retain the original static limits.
+                }
+                else
+                {
+                    if (parameters[0].get_type() != ParameterType::PARAMETER_BOOL ||
+                        parameters[1].get_type() != ParameterType::PARAMETER_STRING ||
+                        parameters[2].get_type() != ParameterType::PARAMETER_STRING ||
+                        parameters[3].get_type() != ParameterType::PARAMETER_STRING)
+                        throw std::runtime_error("invalid coupling parameter types");
+                    const auto type = arms_controller_common::parseInterpolationType(parameters[3].as_string());
+                    if (type == arms_controller_common::InterpolationType::SERVO ||
+                        type == arms_controller_common::InterpolationType::NONE)
+                    {
+                        // SERVO/NONE keep their original behavior.
+                    }
+                    else
+                    {
+                        arms_controller_common::HeadCouplingConfig config;
+                        config.enabled = true;
+                        config.yaw_joint = parameters[1].as_string();
+                        config.pitch_joint = parameters[2].as_string();
+                        arms_controller_common::validateHeadCouplingConfig(config);
+                        head_panel_config_ = config;
+                    }
+                }
+                updateSpinboxRanges();
+                finish_send();
+                return;
+            }
+            if (!head_parameter_client_->service_is_ready())
+                throw std::runtime_error("parameter service unavailable");
+            head_parameter_requested_at_ = std::chrono::steady_clock::now();
+            head_parameter_future_ = head_parameter_client_->get_parameters(
+                {"head_coupling.enabled", "head_coupling.yaw_joint", "head_coupling.pitch_joint",
+                 "movej_interpolation_type"});
+        }
+        catch (const std::exception& error)
+        {
+            head_parameter_future_ = {};
+            head_panel_config_.reset();
+            RCLCPP_WARN_THROTTLE(node_->get_logger(), *node_->get_clock(), 5000,
+                                 "Head coupling parameters unavailable; using static UI limits: %s", error.what());
+            updateSpinboxRanges();
+            finish_send();
+        }
+    }
+
+    void JointControlPanel::applyHeadCouplingRanges()
+    {
+        if (head_range_updates_suspended_ || !head_panel_config_ || current_command_ != 4 ||
+            (current_category_ != "head" && current_category_ != "all") ||
+            !joint_types_ready_ || !joint_limits_manager_) return;
+        try
+        {
+            const auto indices = arms_controller_common::findHeadJointIndices(*head_panel_config_, joint_names_).value();
+            if (indices.yaw >= joint_spinboxes_.size() || indices.pitch >= joint_spinboxes_.size())
+                throw std::runtime_error("head input fields unavailable");
+            const auto yaw = joint_limits_manager_->getJointLimits(head_panel_config_->yaw_joint);
+            const auto pitch = joint_limits_manager_->getJointLimits(head_panel_config_->pitch_joint);
+            if (!yaw.initialized || !pitch.initialized)
+                throw std::runtime_error("head URDF limits unavailable");
+            const arms_controller_common::HeadCouplingLimits limits(
+                *head_panel_config_, {yaw.lower, yaw.upper}, {pitch.lower, pitch.upper});
+            const QSignalBlocker yaw_blocker(joint_spinboxes_[indices.yaw].get());
+            const QSignalBlocker pitch_blocker(joint_spinboxes_[indices.pitch].get());
+            const auto yaw_range = limits.yawRange();
+            const auto display_range = [this](const arms_controller_common::HeadAngleRange& range,
+                                               const QDoubleSpinBox* spinbox) {
+                const double factor = std::pow(10.0, spinbox->decimals());
+                return std::pair<double, double>{
+                    std::ceil(toDisplayAngle(range.lower) * factor - 1e-9) / factor,
+                    std::floor(toDisplayAngle(range.upper) * factor + 1e-9) / factor};
+            };
+            const auto yaw_display = display_range(yaw_range, joint_spinboxes_[indices.yaw].get());
+            joint_spinboxes_[indices.yaw]->setRange(yaw_display.first, yaw_display.second);
+            const double requested = getJointSpinboxSiValue(indices.pitch);
+            const auto range = limits.pitchRange(getJointSpinboxSiValue(indices.yaw));
+            const auto clipped = limits.clipPitch({getJointSpinboxSiValue(indices.yaw), requested});
+            const auto pitch_display = display_range(range, joint_spinboxes_[indices.pitch].get());
+            joint_spinboxes_[indices.pitch]->setRange(pitch_display.first, pitch_display.second);
+            setJointSpinboxFromSiValue(indices.pitch, clipped.value);
+            if (clipped.clipped)
+            {
+                RCLCPP_INFO(node_->get_logger(), "Head pitch input clipped from %.9f to %.9f rad",
+                            requested, clipped.value);
+            }
+        }
+        catch (const std::exception& error)
+        {
+            RCLCPP_WARN_THROTTLE(node_->get_logger(), *node_->get_clock(), 5000,
+                                 "Head coupling UI range update failed: %s", error.what());
+        }
+    }
+
     void JointControlPanel::updateSpinboxRanges()
     {
         if (!joint_limits_manager_ || !joints_initialized_ || joint_spinboxes_.empty() ||
@@ -1926,6 +2091,7 @@ namespace arms_rviz_control_plugin
                 upper_si = M_PI * 2;
             }
 
+            const QSignalBlocker blocker(joint_spinboxes_[i].get());
             joint_spinboxes_[i]->setRange(
                 toDisplayJointValue(i, lower_si),
                 toDisplayJointValue(i, upper_si));
@@ -1936,6 +2102,7 @@ namespace arms_rviz_control_plugin
                          toDisplayJointValue(i, upper_si),
                          jointUnitSuffix(i).trimmed().toStdString().c_str());
         }
+        applyHeadCouplingRanges();
     }
 
     double JointControlPanel::toDisplayAngle(double radians) const
@@ -2094,6 +2261,7 @@ namespace arms_rviz_control_plugin
         const PoseXyzRpy right_rel = getArmRelativeSpinboxesRadians(right_arm_spinboxes_);
         const PoseXyzRpy body_rel = getArmRelativeSpinboxesRadians(body_pose_spinboxes_);
 
+        head_range_updates_suspended_ = true;
         use_cm_deg_ = new_use_cm_deg;
         applyDisplayUnitToJointSpinboxes();
 
@@ -2125,6 +2293,8 @@ namespace arms_rviz_control_plugin
             setArmPoseSpinboxesFromPose(body_pose_spinboxes_, body_abs);
         }
         updateJointVisibility();
+        head_range_updates_suspended_ = false;
+        updateSpinboxRanges();
     }
 
     void JointControlPanel::setArmPoseSpinboxesFromPose(
@@ -3031,6 +3201,8 @@ namespace arms_rviz_control_plugin
             spinbox->setSuffix("");
             spinbox->setValue(0.0);
             row_layout->addWidget(spinbox.get());
+            connect(spinbox.get(), QOverload<double>::of(&QDoubleSpinBox::valueChanged), this,
+                    [this](double) { updateSpinboxRanges(); });
             joint_spinboxes_.push_back(std::move(spinbox));
 
             joint_layout_->addLayout(row_layout.get());

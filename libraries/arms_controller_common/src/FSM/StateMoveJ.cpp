@@ -126,9 +126,14 @@ namespace arms_controller_common
             if (!node_->has_parameter(name)) node_->declare_parameter(name, value);
             node_->get_parameter(name, value);
         };
-        read("enabled", c.enabled);
         read("yaw_joint", c.yaw_joint);
         read("pitch_joint", c.pitch_joint);
+
+        // Enable by default only when this controller owns both configured head joints.
+        // An explicit parameter override still takes precedence over this default.
+        c.enabled = std::find(joint_names_.begin(), joint_names_.end(), c.yaw_joint) != joint_names_.end() &&
+                    std::find(joint_names_.begin(), joint_names_.end(), c.pitch_joint) != joint_names_.end();
+        read("enabled", c.enabled);
         head_joint_indices_ = findHeadJointIndices(c, joint_names_);
         if (c.enabled)
             RCLCPP_INFO(node_->get_logger(),
