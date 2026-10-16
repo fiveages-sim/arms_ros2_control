@@ -228,9 +228,9 @@ namespace arms_rviz_control_plugin
 
         align_enable_cb_ = new QCheckBox("启用贴合外环", align_group);
         align_enable_cb_->setToolTip(
-            "compliance_align_enable：力矩误差经导纳生成有界轴角偏置，绕接触点旋转\n"
-            "虚拟目标位姿，由位控轴(S=0)跟踪。环境给增益则贴合收敛；\n"
-            "不给增益也只是有界地错，不会 windup，松手/失去接触后自动回中。");
+            "compliance_align_enable：唯一选中的平移力控轴作为贴合法向。\n"
+            "选 Z 时只绕 X/Y 修正姿态，由旋转位控轴(S=0)跟踪。\n"
+            "未选或选择多个平移力控轴时暂停贴合；失去接触后自动回中。");
 
         align_rcc_cb_ = new QCheckBox("绕接触点旋转 (RCC)", align_group);
         align_rcc_cb_->setChecked(true);   // 与控制器默认一致

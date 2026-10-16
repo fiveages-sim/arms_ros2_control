@@ -23,6 +23,26 @@ inline Eigen::Matrix<double, 6, 1> transformWrench(
     return result;
 }
 
+// A unique translational force axis defines the alignment normal in the control
+// frame. Multiple selected axes do not define a unique surface normal.
+inline int alignmentNormalAxis(const Eigen::Vector3d& selection)
+{
+    int axis = -1;
+    for (int k = 0; k < 3; ++k)
+    {
+        if (selection(k) <= 0.5) continue;
+        if (axis >= 0) return -1;
+        axis = k;
+    }
+    return axis;
+}
+
+inline void constrainAlignment(Eigen::Vector3d& value, int normal_axis)
+{
+    if (normal_axis >= 0 && normal_axis < 3) value(normal_axis) = 0.0;
+    else value.setZero();
+}
+
 // Alignment owns its integral; it must never borrow the force-axis integrator.
 struct AlignmentState
 {

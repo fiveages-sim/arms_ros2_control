@@ -344,11 +344,18 @@ namespace arms_controller_common
 
             auto& a = arms_[s];
             double force_step = 0.0, force_peak = 0.0;
+            double raw_step = 0.0, gravity_step = 0.0, bias_step = 0.0;
             for (int i = 0; i < 3; ++i)
             {
                 force_peak = std::max(force_peak, std::abs(tared[i]));
                 if (a.wrench_diag_valid)
+                {
                     force_step = std::max(force_step, std::abs(tared[i] - a.wrench_diag_output[i]));
+                    raw_step = std::max(raw_step, std::abs(raw[s][i] - a.wrench_diag_raw[i]));
+                    gravity_step = std::max(gravity_step,
+                        std::abs(gravity_wrench[i] - a.wrench_diag_gravity[i]));
+                    bias_step = std::max(bias_step, std::abs(a.wrench_bias[i] - a.wrench_diag_bias[i]));
+                }
             }
             const bool gravity_changed = a.wrench_diag_valid &&
                 (gravity_ok != a.wrench_diag_gravity_ok ||
@@ -356,11 +363,22 @@ namespace arms_controller_common
             const bool payload_enabled = a.dyn_param.size() >= 4 && a.dyn_param[0] >= 1e-6;
             const bool tf_lookup_failed = gravity_status.find("TF ") != std::string::npos;
             const auto now = std::chrono::steady_clock::now();
-            if (((!gravity_ok && (payload_enabled || !a.wrench_diag_valid)) ||
-                 tf_lookup_failed || gravity_changed || force_step >= 10.0 || force_peak >= 50.0) &&
-                now - a.wrench_diag_last_log >= std::chrono::seconds(1))
+            const bool force_event = force_step >= 10.0 || force_peak >= 50.0;
+            const bool log_force = force_event &&
+                now - a.wrench_diag_last_force_log >= std::chrono::seconds(1);
+            const bool force_recovered = a.wrench_diag_force_alarm && !force_event;
+            const bool log_tf = ((!gravity_ok && (payload_enabled || !a.wrench_diag_valid)) ||
+                tf_lookup_failed || gravity_changed) &&
+                now - a.wrench_diag_last_log >= std::chrono::seconds(1);
+            if (log_force || force_recovered || log_tf)
             {
-                a.wrench_diag_last_log = now;
+                if (log_tf) a.wrench_diag_last_log = now;
+                if (log_force)
+                {
+                    a.wrench_diag_last_force_log = now;
+                    a.wrench_diag_force_alarm = true;
+                }
+                if (force_recovered) a.wrench_diag_force_alarm = false;
                 auto format = [](const auto& wrench) {
                     std::ostringstream out;
                     out << '[';
@@ -370,18 +388,20 @@ namespace arms_controller_common
                 };
                 const auto& q = gravity_tf.transform.rotation;
                 RCLCPP_WARN(node_->get_logger(),
-                    "COMPLIANCE wrench diagnostic %s: stamp=%.9f sensor=%s "
+                    "COMPLIANCE wrench diagnostic %s: event=%s stamp=%.9f sensor=%s "
                     "gravity_ok=%d previous_ok=%d previous_valid=%d status={%s} "
                     "reference=%s previous_reference=%s tf_stamp=%.9f q_xyzw=[%.6f %.6f %.6f %.6f] "
-                    "mass=%.6f g=%.6f force_step=%.6f "
+                    "mass=%.6f g=%.6f force_step=%.6f steps_raw_gravity_bias=[%.6f %.6f %.6f] "
                     "raw=%s gravity=%s bias=%s output=%s "
                     "previous_raw=%s previous_gravity=%s previous_bias=%s previous_output=%s "
                     "zero_cal=[pending=%d running=%d done=%d samples=%ld]",
-                    kArmName[s], ft_stamp[s].seconds(), sensor_frame.c_str(),
+                    kArmName[s], log_force ? "force-spike" : (force_recovered ? "force-recovered" : "tf"),
+                    ft_stamp[s].seconds(), sensor_frame.c_str(),
                     gravity_ok, a.wrench_diag_gravity_ok, a.wrench_diag_valid, gravity_status.c_str(),
                     gravity_tf.header.frame_id.c_str(), a.wrench_diag_reference.c_str(),
                     rclcpp::Time(gravity_tf.header.stamp).seconds(), q.x, q.y, q.z, q.w,
                     a.dyn_param.empty() ? 0.0 : a.dyn_param[0], gravity_accel_, force_step,
+                    raw_step, gravity_step, bias_step,
                     format(raw[s]).c_str(), format(gravity_wrench).c_str(),
                     format(a.wrench_bias).c_str(), format(tared).c_str(),
                     format(a.wrench_diag_raw).c_str(), format(a.wrench_diag_gravity).c_str(),
@@ -1209,9 +1229,14 @@ namespace arms_controller_common
                     "position axis tracks. Set compliance_task_selection[3..5]=0.",
                     kArmName[is_left ? 0 : 1]);
             }
-            const Eigen::Vector3d f_f = a.wrench_filt.head<3>();
-            const double f_norm = f_f.norm();
-            if (!(zero_cal_done_ && ft_active) || f_norm < kAlignMinForce)
+            const int normal_axis = compliance_detail::alignmentNormalAxis(Eigen::Vector3d(S(0), S(1), S(2)));
+            // Constrain stored state too: switching force axes must not retain
+            // a previous bias or integral around the newly selected normal.
+            compliance_detail::constrainAlignment(a.alignment.bias, normal_axis);
+            compliance_detail::constrainAlignment(a.alignment.integral, normal_axis);
+            const double normal_force = normal_axis >= 0
+                ? std::abs(a.wrench_filt(normal_axis)) : 0.0;
+            if (!(zero_cal_done_ && ft_active) || normal_force < kAlignMinForce)
             {
                 // 未标定/无接触：偏置按回中速率衰减（弹簧卸力后自然回位）。
                 a.alignment.release(align_release_, dt);
@@ -1236,9 +1261,10 @@ namespace arms_controller_common
                         a.alignment.integral(k), -hybrid_force_ki_max_, hybrid_force_ki_max_);
                     w_align(k) = (t_eff + a.alignment.integral(k)) / D;
                 }
-                // 去掉沿力方向的分量：那是摩擦扭转/噪声，不是倾角（纯力接触下 τ·f≡0）。
-                const Eigen::Vector3d f_hat = f_f / f_norm;
-                w_align -= f_hat * f_hat.dot(w_align);
+                // The configured force axis, rather than the measured force
+                // direction or flange orientation, defines the alignment normal.
+                compliance_detail::constrainAlignment(w_align, normal_axis);
+                compliance_detail::constrainAlignment(a.alignment.integral, normal_axis);
                 // 不加回弹项：偏置本身就是"该姿态需要的让位量"，加弹簧会跟积分
                 // 抢权限（bias_max ≈ ki_max/(D·K)，K=1 时只能纠正 ~2°）。
                 // 有界 + 无接触时回中，已经够稳。

@@ -118,6 +118,9 @@ namespace arms_controller_common
                 wrench_diag_bias{}, wrench_diag_output{};
             std::string wrench_diag_reference;
             std::chrono::steady_clock::time_point wrench_diag_last_log{};
+            // TF warnings must not suppress a later single-cycle force spike.
+            std::chrono::steady_clock::time_point wrench_diag_last_force_log{};
+            bool wrench_diag_force_alarm{false};
 
             std::array<double, 6> wrench{};
             bool ft_active{false};
