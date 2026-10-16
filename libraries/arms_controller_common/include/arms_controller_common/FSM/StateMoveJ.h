@@ -268,6 +268,21 @@ namespace arms_controller_common
 
     private:
         void loadHeadCouplingConfig();
+        bool headCouplingApplies() const;
+        HeadCouplingLimits headCouplingLimits() const;
+        HeadPose measuredHeadPose() const;
+        bool submitHeadTarget(const std::vector<double>& requested, const std::vector<bool>& mask);
+        bool prepareHeadTarget(const std::vector<double>& requested, const std::vector<bool>& mask,
+                               std::vector<double>& effective,
+                               std::vector<std::unique_ptr<JointTrajectoryManager>>& segments) const;
+        void clearHeadExecution();
+        bool runHeadWait(const rclcpp::Duration& period);
+        void failHeadExecution(const std::string& reason);
+        bool head_execution_active_{false};
+        bool head_waiting_{false};
+        double head_wait_elapsed_{0.0};
+        HeadPose head_stage_endpoint_{};
+        std::vector<std::unique_ptr<JointTrajectoryManager>> head_pending_segments_;
         HeadCouplingConfig head_coupling_config_;
         std::optional<HeadJointIndices> head_joint_indices_;
         void updateParam();
