@@ -1452,6 +1452,34 @@ namespace arms_ros2_control::command
                     "可用原有组合键切换）");
     }
 
+    bool VRInputHandler::exitWholeBodyTeleopIfFsmNotOcs2()
+    {
+        if (!whole_body_teleop_active_.load())
+        {
+            return false;
+        }
+        const int32_t fsm_state = resolvedFsmState();
+        if (fsm_state == 3)  // 3 = OCS2
+        {
+            return false;
+        }
+
+        // 先同步本地 FSM 缓存：stopWholeBodyTeleop() → resetBaseFollow() 的零速会经过
+        // wbcOwnsChassisVelocity()，而它读的是 current_fsm_state_。缓存落后于权威状态时
+        // 会被判成「OCS2 + BASE_UNLOCKED 让路给 WBC」，把退出时该发的那一次零速吞掉。
+        if (fsm_state != current_fsm_state_.load())
+        {
+            current_fsm_state_.store(fsm_state);
+        }
+        stopWholeBodyTeleop();
+        RCLCPP_INFO(node_->get_logger(),
+                    "🕹️🦴 FSM 已离开 OCS2（状态=%d）：全身遥操作自动退出"
+                    "（「全部跟踪」与「底盘跟踪」一并关闭，WBC 保持当前目标）；"
+                    "回到 OCS2 后需重新按「左右握把+右摇杆按下」开启",
+                    fsm_state);
+        return true;
+    }
+
     // ================= 全身骨架绝对位姿映射（全部跟踪） =================
     //
     // 语义：全身模式（case 30）内短按右摇杆开/关「全部跟踪」，之后胸 / 头 / 双臂末端
@@ -5285,11 +5313,13 @@ namespace arms_ros2_control::command
                         if (next != ControlTopology::FULL_BODY)
                         {
                             resetYbModeLatchAndConversions();
-                            // 全身遥操只在 FULL_BODY 下有效：拓扑变化时退出，避免状态残留
+                            // 全身遥操只在 FULL_BODY 下有效：拓扑变化时退出整个模式
+                            // （连带关掉「全部跟踪」与「底盘跟踪」），避免状态残留
                             if (whole_body_teleop_active_.load())
                             {
-                                whole_body_teleop_active_.store(false);
-                                stopHeadTracking();
+                                stopWholeBodyTeleop();
+                                RCLCPP_INFO(node_->get_logger(),
+                                            "🔘 控制拓扑不再是 FULL_BODY：全身遥操作已自动退出");
                             }
                         }
                         const char* name =
@@ -5399,6 +5429,9 @@ namespace arms_ros2_control::command
             RCLCPP_DEBUG(node_->get_logger(),
                          "🕹️🕶️🕹️ Ignore invalid FSM transition: %s + command=%d",
                          current_name.c_str(), command);
+            // 本地缓存与权威状态分歧时这条命令会被丢弃，但全身遥操作的退出判定必须
+            // 依据权威状态走（否则模式会一直残留），这里兜底一次。
+            exitWholeBodyTeleopIfFsmNotOcs2();
             return;
         }
 
@@ -5453,5 +5486,9 @@ namespace arms_ros2_control::command
                 }
             }
         }
+
+        // 全身遥操作只在 OCS2 内有效：权威 FSM 一离开 OCS2（HOLD / HOME / MOVEJ，含控制器
+        // 异常自动回退）就退出整个模式，与上面普通遥操作自动回 STORAGE 保持一致。
+        exitWholeBodyTeleopIfFsmNotOcs2();
     }
 } // namespace arms_ros2_control::command
