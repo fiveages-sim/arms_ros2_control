@@ -316,6 +316,16 @@ namespace arms_ros2_control::command
         void stopWholeBodyTeleop();
 
         /**
+         * 全身遥操作是「OCS2 会话级」开关：权威 FSM 状态（ArmsTargetManager）一旦离开 OCS2
+         * 就退出整个模式（连带关掉「全部跟踪」与「底盘跟踪」），与普通遥操作离开 OCS2 时
+         * 自动回 STORAGE 的语义保持一致。
+         * 在 FSM 命令回调里判定，因此 FSM 由任何来源切换（VR 按键、RViz 面板、手柄、
+         * 控制器异常自动回退）都能退出。
+         * @return true 表示本次调用真正退出了全身遥操作
+         */
+        bool exitWholeBodyTeleopIfFsmNotOcs2();
+
+        /**
          * 摇杆轴值回调函数（合并处理左右摇杆）
          * @param msg Twist消息，linear.x/y 表示左摇杆，angular.x/y 表示右摇杆
          */
