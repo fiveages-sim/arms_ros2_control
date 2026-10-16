@@ -128,6 +128,45 @@ namespace arms_controller_common
         return p.pitch >= range.lower && p.pitch <= range.upper;
     }
 
+    bool HeadCouplingLimits::containsSegment(HeadPose start, HeadPose target) const
+    {
+        if (!contains(start) || !contains(target))
+        {
+            return false;
+        }
+
+        std::vector<double> phases{0.0, 1.0};
+        const double delta_yaw = target.yaw - start.yaw;
+        if (delta_yaw != 0.0)
+        {
+            for (double boundary : {-config_.yaw_boundary, config_.yaw_boundary})
+            {
+                const double phase = (boundary - start.yaw) / delta_yaw;
+                if (phase > 0.0 && phase < 1.0)
+                {
+                    phases.push_back(phase);
+                }
+            }
+        }
+        std::sort(phases.begin(), phases.end());
+        for (size_t i = 1; i < phases.size(); ++i)
+        {
+            const double begin = phases[i - 1];
+            const double end = phases[i];
+            const double middle_yaw = start.yaw + (begin + end) * 0.5 * delta_yaw;
+            const auto range = pitchRange(middle_yaw);
+            const double first = start.pitch + begin * (target.pitch - start.pitch);
+            const double last = start.pitch + end * (target.pitch - start.pitch);
+            // Include one-sided boundary limits: an unsafe open interval cannot
+            // be accepted merely because its boundary point belongs to center.
+            if (std::min(first, last) < range.lower || std::max(first, last) > range.upper)
+            {
+                return false;
+            }
+        }
+        return true;
+    }
+
     HeadPitchTarget HeadCouplingLimits::clipPitch(HeadPose p) const
     {
         require(std::isfinite(p.pitch), "Head pitch must be finite");

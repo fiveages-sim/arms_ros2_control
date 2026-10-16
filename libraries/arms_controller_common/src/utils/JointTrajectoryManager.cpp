@@ -5,6 +5,7 @@
 #include <algorithm>
 #include <cmath>
 #include <utility>
+#include <stdexcept>
 
 namespace
 {
@@ -44,6 +45,105 @@ namespace arms_controller_common
 #else
         return false;
 #endif
+    }
+
+    bool JointTrajectoryManager::buildHeadCandidate(
+        const std::vector<double>& start, const std::vector<double>& target,
+        HeadJointIndices indices, const HeadCouplingLimits& limits,
+        bool allow_yaw, bool allow_pitch, const HeadCandidateOptions& options,
+        std::vector<std::unique_ptr<JointTrajectoryManager>>& segments,
+        std::string& error) const
+    {
+        segments.clear();
+        error.clear();
+        try
+        {
+            if (options.type != InterpolationType::DOUBLES &&
+                options.type != InterpolationType::LINEAR && options.type != InterpolationType::TANH)
+                throw std::invalid_argument("Head candidate supports doubles, linear and tanh only");
+            if (start.empty() || start.size() != target.size() || indices.yaw == indices.pitch ||
+                indices.yaw >= start.size() || indices.pitch >= start.size())
+                throw std::invalid_argument("Invalid head candidate dimensions or indices");
+            for (const auto* values : {&start, &target})
+                for (double value : *values)
+                    if (!std::isfinite(value)) throw std::invalid_argument("Non-finite candidate position");
+            for (double value : {options.duration, options.frequency, options.tanh_scale,
+                                 options.max_velocity, options.max_acceleration, options.max_jerk})
+                if (!std::isfinite(value) || value <= 0.0)
+                    throw std::invalid_argument("Invalid head candidate timing or motion limits");
+
+            const HeadPose from{start[indices.yaw], start[indices.pitch]};
+            const HeadPose to{target[indices.yaw], target[indices.pitch]};
+            if (!limits.contains(from) || !limits.contains(to))
+                throw std::invalid_argument("Candidate endpoints must satisfy effective head limits");
+            if ((!allow_yaw && from.yaw != to.yaw) || (!allow_pitch && from.pitch != to.pitch))
+                throw std::invalid_argument("Candidate moves an unauthorized head joint");
+            if (start == target) return true; // No motion; no zero-length doubles planner.
+
+            std::vector<std::vector<double>> points{start};
+            if (!limits.containsSegment(from, to))
+            {
+                const auto waypoint = limits.transition(from, to, allow_yaw, allow_pitch);
+                if (!waypoint) throw std::invalid_argument("No legal head transition available");
+                const double total = std::abs(to.yaw-from.yaw) + std::abs(to.pitch-from.pitch);
+                const double first = std::abs(waypoint->yaw-from.yaw) + std::abs(waypoint->pitch-from.pitch);
+                const double fraction = std::clamp(first / total, 0.0, 1.0);
+                std::vector<double> middle(start.size());
+                for (size_t i = 0; i < middle.size(); ++i)
+                    middle[i] = start[i] + fraction * (target[i]-start[i]);
+                middle[indices.yaw] = waypoint->yaw;
+                middle[indices.pitch] = waypoint->pitch;
+                points.push_back(std::move(middle));
+            }
+            points.push_back(target);
+
+            // Split the requested total duration in proportion to full-vector
+            // infinity-norm segment lengths, rather than assigning T to each segment.
+            std::vector<double> distances;
+            double distance_sum = 0.0;
+            for (size_t segment = 1; segment < points.size(); ++segment)
+            {
+                double distance = 0.0;
+                for (size_t i = 0; i < start.size(); ++i)
+                    distance = std::max(distance, std::abs(points[segment][i]-points[segment-1][i]));
+                distances.push_back(distance);
+                distance_sum += distance;
+            }
+            for (size_t segment = 1; segment < points.size(); ++segment)
+            {
+                const auto& a = points[segment-1];
+                const auto& b = points[segment];
+                if (!limits.containsSegment({a[indices.yaw], a[indices.pitch]},
+                                            {b[indices.yaw], b[indices.pitch]}))
+                    throw std::invalid_argument("Transition segment leaves head coupling region");
+                if (distances[segment-1] == 0.0) continue;
+                double duration = options.duration * distances[segment-1] / distance_sum;
+                if (options.type != InterpolationType::DOUBLES || !isDoublesAvailable())
+                {
+                    // Same basic-mode speed bound as StateMoveJ's duration resolver.
+                    // Linear/tanh retain existing endpoint jumps; this is not a
+                    // claim of finite acceleration/jerk at those endpoints.
+                    const double scale = options.type == InterpolationType::TANH ? options.tanh_scale : 1.0;
+                    const double minimum = scale * distances[segment-1] / options.max_velocity;
+                    if (duration < minimum && !options.auto_extend_duration)
+                        throw std::invalid_argument("Head candidate duration violates basic velocity limit");
+                    if (options.auto_extend_duration) duration = std::max(duration, minimum);
+                }
+                auto candidate = std::make_unique<JointTrajectoryManager>(logger_);
+                if (!candidate->initSingleNode(a, b, duration, options.type, options.frequency,
+                                               options.tanh_scale, options.auto_extend_duration,
+                                               options.max_velocity, options.max_acceleration, options.max_jerk))
+                    throw std::invalid_argument("Failed to initialize head candidate segment");
+                segments.push_back(std::move(candidate));
+            }
+            return true;
+        }
+        catch (const std::exception& exception)
+        {
+            segments.clear();
+            error = exception.what();
+            return false;
+        }
     }
 
     bool JointTrajectoryManager::initSingleNode(

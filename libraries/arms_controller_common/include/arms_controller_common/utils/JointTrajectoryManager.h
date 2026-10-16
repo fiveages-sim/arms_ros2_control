@@ -1,6 +1,7 @@
 #pragma once
 
 #include "arms_controller_common/utils/Interpolation.h"
+#include "arms_controller_common/utils/HeadCouplingLimits.h"
 #include <vector>
 #include <memory>
 #include <rclcpp/rclcpp.hpp>
@@ -40,6 +41,26 @@ namespace arms_controller_common
          * @return True if DOUBLES interpolation can be used
          */
         static bool isDoublesAvailable();
+
+        struct HeadCandidateOptions
+        {
+            double duration{3.0};
+            InterpolationType type{InterpolationType::DOUBLES};
+            double frequency{100.0};
+            double tanh_scale{3.0};
+            bool auto_extend_duration{true};
+            double max_velocity{2.0}, max_acceleration{4.0}, max_jerk{20.0};
+        };
+
+        // Builds independent, initialized segments; never advances this manager.
+        // Target must already be clipped. On failure, segments is empty and error explains why.
+        // Basic interpolation retains its existing endpoint derivative semantics.
+        bool buildHeadCandidate(
+            const std::vector<double>& start, const std::vector<double>& target,
+            HeadJointIndices indices, const HeadCouplingLimits& limits,
+            bool allow_yaw, bool allow_pitch, const HeadCandidateOptions& options,
+            std::vector<std::unique_ptr<JointTrajectoryManager>>& segments,
+            std::string& error) const;
 
         /**
          * @brief Initialize single-node trajectory

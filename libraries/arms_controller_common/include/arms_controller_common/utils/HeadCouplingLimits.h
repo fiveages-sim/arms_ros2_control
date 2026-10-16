@@ -45,6 +45,8 @@ public:
     HeadAngleRange yawRange() const { return yaw_; }
     HeadAngleRange pitchRange(double yaw) const;
     bool contains(HeadPose pose) const;
+    // Exact geometric check for a common monotone scalar phase in [0, 1].
+    bool containsSegment(HeadPose start, HeadPose target) const;
     HeadPitchTarget clipPitch(HeadPose target) const;
     // Conservative rectangle check, not a trajectory validator. nullopt means no
     // extra waypoint is needed by this check; the actual trajectory still needs validation.
