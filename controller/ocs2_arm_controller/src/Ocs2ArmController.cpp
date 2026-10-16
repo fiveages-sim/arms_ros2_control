@@ -66,6 +66,11 @@ namespace ocs2::mobile_manipulator
             ctrl_comp_->updateObservation(time);
         }
 
+        // 腰部【精确】重力前馈（分体模式专有；参数没注入时是空操作）。
+        // 放在这里 = 无论 HOLD / MOVEJ / OCS2 都在发 ⇒ 腰部进电流环后任何状态都有重力补偿。
+        // 全身模式由 ocs2_wbc_controller 发同一个话题（两者不会同时跑）。
+        ctrl_comp_->publishWaistGravityFeedforward();
+
         if (mode_ == FSMMode::NORMAL)
         {
             current_state_->run(time, period);

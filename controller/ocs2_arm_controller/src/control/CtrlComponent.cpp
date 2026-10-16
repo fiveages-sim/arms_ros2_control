@@ -68,6 +68,8 @@ namespace ocs2::mobile_manipulator
                             "drag markers 20s / HOLD. Collect [rt_timing] and Overrun detected.",
                             param.as_bool() ? "true" : "false");
             }
+            // left/right_dyn_param、waist_payload_frames 等由共用模块
+            // （arms_controller_common::WaistGravityFeedforward）自己的参数回调处理。
         }
         if (traj_record_enabled_update.has_value())
         {
@@ -554,15 +556,27 @@ namespace ocs2::mobile_manipulator
 
     vector_t CtrlComponent::calculateStaticTorques() const
     {
+        // 实现见 arms_controller_common::WaistGravityFeedforward::rneaStaticTorques
+        //（原来与 ocs2_wbc_controller 各写一份同样的 rnea 调用）。
         const auto& pinocchio_model = interface_->getPinocchioInterface().getModel();
         if (!rnea_data_)
         {
             rnea_data_.emplace(pinocchio_model);
         }
-        Eigen::VectorXd q = observation_.state;
-        return pinocchio::rnea(pinocchio_model, *rnea_data_, q,
-                               Eigen::VectorXd::Zero(pinocchio_model.nv),
-                               Eigen::VectorXd::Zero(pinocchio_model.nv));
+        return arms_controller_common::WaistGravityFeedforward::rneaStaticTorques(
+            pinocchio_model, *rnea_data_, observation_.state);
+    }
+
+    void CtrlComponent::publishWaistGravityFeedforward()
+    {
+        // 全部逻辑（模型/末端负载快照/RNEA/降频/mA 换算/best_effort 发布）都在
+        // arms_controller_common::WaistGravityFeedforward 里 —— **与 ocs2_wbc_controller 共用**。
+        // 本控制器只是"喂 q"：模型是注入的全机 planning URDF，q 里的腰/头角由模块自己从
+        // /joint_states 攒（我们只 claim 手臂）。参数没注入 = 空操作。
+        if (waist_ff_ != nullptr)
+        {
+            waist_ff_->publish();
+        }
     }
 
     bool CtrlComponent::shouldPublishDds(const rclcpp::Time& time)

@@ -88,11 +88,28 @@ namespace basic_joint_controller
         FSMMode mode_{FSMMode::NORMAL};
 
         // Interface mapping
+        // ⚠️ command_interface_map_[name] 用的是 operator[] ⇒ yaml 的 `command_interfaces`
+        //    里写了某类口、而这里没有对应项时，会插入 nullptr 再被解引用（段错误）。
+        //    两边必须同步改。
         std::unordered_map<std::string, std::vector<std::reference_wrapper<hardware_interface::LoanedCommandInterface>>
                            *>
         command_interface_map_ = {
-            {"position", &ctrl_interfaces_.joint_position_command_interface_}
+            {"position", &ctrl_interfaces_.joint_position_command_interface_},
+            {"velocity", &ctrl_interfaces_.joint_velocity_command_interface_}
         };
+
+        // ── 参考速度输出（可选）：给驱动内部阻抗层（电流环 / CSV）当 q̇_d 用 ─────────
+        // 用**位置命令的差分**当参考速度写进 <joint>/velocity 命令口。
+        // 只有在 yaml 的 command_interfaces 里含 velocity（真的 claim 到了该口）时才写；
+        // 不含就完全不碰，行为与从前逐位一致。
+        // 为什么要它：分体模式（split_body）下腰部/头部归 body_joint_controller /
+        //   head_joint_controller，**没有 ocs2_wbc_controller** 去写 <joint>/velocity，
+        //   而驱动内部阻抗律的 Kd·(q̇_d−q̇) 与摩擦前馈都要 q̇_d。
+        //   没有 q̇_d 时 Kd 项退化成纯阻尼 ⇒ 跟轨迹时有 (Kd/Kp)·q̇ 的稳态滞后
+        //   （本机 Kd/Kp=15000/60000 ⇒ 0.2 rad/s 时约 2.9°）。
+        void publishReferenceVelocities(const rclcpp::Duration& period);
+        std::vector<double> prev_position_command_;
+        double velocity_command_max_rad_s_{2.0};
 
         std::unordered_map<std::string, std::vector<std::reference_wrapper<hardware_interface::LoanedStateInterface>>*>
         state_interface_map_ = {

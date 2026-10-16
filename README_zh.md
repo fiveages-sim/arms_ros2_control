@@ -10,6 +10,7 @@
 - [快速开始](#快速开始)
 - [组件](#组件)
 - [配置](#配置)
+- [腰部电流环与两层重力补偿](#腰部电流环与两层重力补偿)
 - [开发](#开发)
 - [故障排除](#故障排除)
 - [许可证](#许可证)
@@ -281,6 +282,130 @@ colcon build --packages-up-to ocs2_arm_controller cr5_description arms_teleop ad
 
 - `ocs2_arm_controller/config/` - OCS2控制器配置
 - 硬件特定配置在硬件接口包中
+
+## 腰部电流环与两层重力补偿
+
+### 为什么需要它（2026-10-13 真机事故）
+
+手臂 `M6_CCS` 报错 → `controller_manager` 把 M6_CCS **和** `juxie_body` 一起停掉 →
+`ocs2_wbc_controller` 需要 claim 全部 20 个关节，**激活失败** →
+腰部 1/2/3 已经在电流环里，但**没有任何人在补重力** → `body_joint2` 下沉 8.1°。
+
+根因：重力补偿只存在于控制器里，而控制器**可以整个消失**。
+
+### 架构：两层，取其一不叠加
+
+| 层级 | 实现位置 | 输入 | 依赖 | 精度 |
+| --- | --- | --- | --- | --- |
+| ① **保命层** | `juxie_ros2_control` 驱动内部 | 实测 `(q1,q2,q3)` 查 13³ 表 | **无**（只需文件 + CAN 反馈） | ≤ 0.86°(手臂姿态) + 0.86°(忽略 q4) + 0.32°(插值) |
+| ② **精度层** | 全身 = `ocs2_wbc_controller`、分体 = `ocs2_arm_controller` 代发同一话题 | 真实 20 关节 RNEA | 控制器存活 | ≈ 0 |
+
+- 驱动**优先用话题值**；话题超过 `gravity_ff_topic_timeout_s` 没更新就**退回查表**。
+- **取其一，不叠加** —— 叠加会重复补偿。
+- **精度层零配置**：两个控制器共用的 `arms_controller_common::WaistGravityFeedforward` 从 xacro
+  产物 `/robot_description` 里自己派生关节/电机名单（读 `current_motor_ids`）、话题
+  （`gravity_ff_topic`）与 τ→电流系数（`gravity_ff_ma_per_nm`），并用同一份 URDF 建模型
+  （WBC 用自己的全机模型，分体用 `robot_description` 的全机模型）⇒ **launch / profile 都不用写**，
+  仿真里没有 juxie 段则自动关闭。
+- ⚠️ **不能用 `/joint_states` 当保命层**：`joint_state_broadcaster` 要 claim 20 个关节，
+  M6_CCS 一挂它自己也挂。
+
+### 接口：上层只写位置 + 速度，电流全在驱动内部
+
+上层（OCS2/WBC）**照旧只写两个普通命令口**，与其它关节完全同构，**没有 effort / 电流口**：
+
+| 命令口 | 值 |
+| --- | --- |
+| `<joint>/position` | 目标 $q_d$ |
+| `<joint>/velocity` | 目标 $\dot q_d$ |
+
+电流是**驱动内部**算出来的：驱动拿 $(q_d, \dot q_d)$ 和实测 $(q, \dot q)$ 按下面的阻抗律算出 $I$，
+再用 0x05 帧把电流下发给电机。**上层不碰电流。**
+
+⚠️ 不要给这些关节导出 `effort` 命令口：`CtrlInterfaces` 的 MIX 自动检测会把整机切到
+`position + velocity + effort + kp + kd` 分支，反而改变上层行为。
+
+唯一的差别只是驱动**怎么消费** `velocity` 口：CSV 关节直接转发给电机速度环；
+电流环关节不转发，而是代进阻抗律当速度参考。
+
+### 阻抗律与下发节奏（驱动内的 2 ms 控制线程）
+
+> 电流换算跑在驱动自己的控制线程 `JxHardware::controlLoop()` 里，周期 = `control_period_ms`
+> （xacro 里配 **2 ms = 500 Hz**），**与 CM 的 `update_rate` 无关**。
+> 不在 `write()` 里算的原因：CM 的 `read()/write()` 用 `pthread_mutex_trylock` 抢 RM 的锁，
+> 别的组件做生命周期切换时会**整拍跳过** `write()`（实测 M6_CCS 激活占 1.78 s）——
+> 电流下发不能停，所以它必须有自己的固定节拍；`write()` 只做校验 + 更新快照。
+> ⚠️ 下面的增益全部按 **2 ms** 标定 ⇒ 改 `control_period_ms` 必须重新标定。
+
+```
+I = Kp·(q_d − q) + Kd·(q̇_d − q̇) + g_ff + g_auto + f_off
+  + (|v_ff| < v_eps ? 0 : sign(v_ff)·min(f_c + f_v·|v_ff|, ff_max))
+```
+
+- `Kp/Kd/f_*` 单位都含 mA，**不需要 Kt**（mA 域直接标定）。
+- `friction_ff_velocity: reference` ⇒ `|q̇_d| ≥ v_eps` 时前馈符号取**参考速度**（换向抢先一步）。
+- 输出按 `max_current_ma` 限幅，`current_slew_rate_ma_s` 变化率限制。
+
+### 关键配置
+
+数值默认值的**唯一来源** = 描述包里的 `config/ros2_control/juxie_joint_impedance.yaml`
+（`xacro/ros2_control/robot.xacro` 用 `xacro.load_yaml` **直接读**它 ⇒ launch / Python 不参与）；
+`config/robot.local.yaml` 的 `hardware:` 段只写**这台机器的接法与开关**，需要改某项时写同名键即覆盖默认值。
+
+| 参数 | 作用 |
+| --- | --- |
+| `body_current_motor_ids` | 哪些电机进电流环（1~4 = 腰）；也是精度层名单的来源 |
+| `impedance_kp_ma_rad` / `impedance_kd_ma_s_rad` | 阻抗增益（顺序 = `motor_ids`） |
+| `max_current_ma` | 全局电流限幅 |
+| `gravity_ff_table` | ① 保命层：离线生成的 13³ 重力表 |
+| `gravity_ff_ma_per_nm` | ② 精度层的 τ→电流系数（与查表标定同源，驱动不读，只随 URDF 传给控制器） |
+| `gravity_ff_topic` / `gravity_ff_topic_timeout_s` | ② 精度层：话题名与新鲜度阈值 |
+| `feedback_timeout_cycles` | 反馈丢失多少拍后锁存（见下） |
+
+⚠️ `body_current_motor_ids` 必须与 `control.patch.ocs2_wbc_controller.torque_command_joints`
+**同名同名单**，否则那些关节的 `position` 口会被改写成实测位置 ⇒ `Kp(q_d−q) ≡ 0`，弹簧项死掉。
+（不一致时会在 configure 阶段直接报错，不会静默失败。）
+
+生成重力表：
+
+```bash
+python3 scripts/identify_juxie_friction_gravity.py table   # 自动找 planning URDF，输出 config/waist_gravity_ff_table.txt
+```
+
+### 反馈丢失保护（逐电机）
+
+`readMotorStates()` 每拍对每个电机计数：收到正常帧清零，**没回帧**或**电机自称未使能**则累加。
+连续超过 `feedback_timeout_cycles` 就把该电机**锁存为 CSP 保持最后一帧位置**，并忽略上层命令；
+全部电机都被锁存时 `read()` 返回 `ERROR`，由 `controller_manager` 停掉硬件，
+`on_deactivate()` 会把所有电机切回 CSP 再关 CAN。
+
+三条硬规则：
+
+1. ⚠️ **绝不对重力关节下发 0 电流** —— 那是自由落体，比"慢慢下沉"危险得多。
+   所以非有限命令路径**刻意不清零** `raw_current_commands_`，只上报错误。
+2. 一旦不信任某条反馈通道就**不自动恢复**，让模块自己抱住，直到重启驱动。
+3. `feedback_timeout_cycles` 不能设 1~2：反馈是模块收到控制帧后才回的，与 CM 的 `read()` 天然异步，
+   单拍缺失是正常现象。只有"**使能且无错**"的帧才把计数清零（异常帧持续累计，否则永远到不了阈值）。
+
+锁存会把 `motor_control_modes_[i]` 改成 CSP（运行模式），所以 `on_deactivate()` **不做任何模式判断**：
+
+1. 先 `join()` 控制线程，然后**无条件**把全部电机切回 CSP（target = 当前位置）并 `resetPositionTarget()`；
+2. 发 **3 帧**（模式切换是异步的，实测滞后 2~3 帧），每帧间隔 10 ms，并**检查返回值** ——
+   3 帧全提交失败就返回 `ERROR`，不宣称“已进入位置保持”；
+3. 最后恢复 `motor_control_modes_`（已被锁存的保持 CSP，其余还原）。
+
+⚠️ 为什么不能“只给配了 CSV/电流环的电机切”：锁存会把模式改成 CSP，用模式去判断就会**漏切**，
+而模块其实还停在电流环上执行最后一条电流命令（2026-10-13 事故的形态）。
+对本来就是 CSP 的配置，多切一次是零成本空操作。
+
+### 首次上电验收标准
+
+整套两层重力 + 阻抗栈**尚未在真机上跑过**。第一次上电时：
+
+- ✅ **腰部应当完全不动**（`on_activate` 用实测位置初始化快照 ⇒ 首帧 `q_d == q` ⇒ 弹簧项为 0，重力全部前馈）。
+- ❌ 如果腰部朝**一个方向漂 8~15° 后停住** ⇒ `ma` 符号反了 ⇒ 取反
+  `juxie_joint_impedance.yaml` 里的 `gravity_ff_ma_per_nm`（精度层）与那张查表的标定（保命层），
+  并重新生成重力表。
 
 ## 开发
 
