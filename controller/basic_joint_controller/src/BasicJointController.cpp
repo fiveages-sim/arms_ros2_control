@@ -605,6 +605,17 @@ namespace basic_joint_controller
             state_interface_map_[interface.get_interface_name()]->push_back(interface);
         }
 
+        try
+        {
+            state_list_.movej->validateHeadCouplingSetup();
+        }
+        catch (const std::exception& error)
+        {
+            RCLCPP_ERROR(get_node()->get_logger(), "Head coupling setup failed: %s", error.what());
+            ctrl_interfaces_.clear();
+            return CallbackReturn::ERROR;
+        }
+
         // Initialize last sent joint positions from current state
         // This ensures we have a baseline for smooth transitions to HOLD state
         ctrl_interfaces_.initializeLastSentPositions();

@@ -108,6 +108,7 @@ namespace arms_controller_common
         last_waist_turning_factor_ = 0.0;
         if (node_)
         {
+            loadHeadCouplingConfig();
             declareCartesianDefaultParameters();
             declareMoveJVelocityParameters();
             current_target_joint_publisher_ =
@@ -115,6 +116,45 @@ namespace arms_controller_common
             fsm_command_publisher_ = node_->create_publisher<std_msgs::msg::Int32>(
                 "/fsm_command", 1);
         }
+    }
+
+    void StateMoveJ::loadHeadCouplingConfig()
+    {
+        auto& c = head_coupling_config_;
+        const auto read = [this](const std::string& field, auto& value) {
+            const std::string name = "head_coupling." + field;
+            if (!node_->has_parameter(name)) node_->declare_parameter(name, value);
+            node_->get_parameter(name, value);
+        };
+        read("enabled", c.enabled);
+        read("yaw_joint", c.yaw_joint);
+        read("pitch_joint", c.pitch_joint);
+        head_joint_indices_ = findHeadJointIndices(c, joint_names_);
+        if (c.enabled)
+            RCLCPP_WARN(node_->get_logger(),
+                "Head coupling configuration loaded; trajectory enforcement is not implemented yet");
+    }
+
+    void StateMoveJ::validateHeadCouplingSetup() const
+    {
+        if (!head_coupling_config_.enabled) return;
+        const auto indices = findHeadJointIndices(head_coupling_config_, joint_names_).value();
+        for (size_t index : {indices.yaw, indices.pitch})
+        {
+            if (index >= ctrl_interfaces_.joint_position_state_interface_.size() ||
+                ctrl_interfaces_.joint_position_state_interface_[index].get().get_prefix_name() != joint_names_[index])
+                throw std::invalid_argument("Head coupling position interfaces missing or out of order");
+            const auto value = ctrl_interfaces_.joint_position_state_interface_[index].get().get_optional();
+            if (!value || !std::isfinite(*value))
+                throw std::invalid_argument("Head coupling position feedback unavailable");
+        }
+        const auto yaw = joint_limits_manager_->getJointLimits(head_coupling_config_.yaw_joint);
+        const auto pitch = joint_limits_manager_->getJointLimits(head_coupling_config_.pitch_joint);
+        if (!yaw.initialized || !pitch.initialized)
+            throw std::invalid_argument("Head coupling requires URDF position limits before activation");
+        const HeadCouplingLimits limits(head_coupling_config_, {yaw.lower, yaw.upper},
+                                        {pitch.lower, pitch.upper});
+        (void)limits;
     }
 
     void StateMoveJ::publishFsmCommand(int32_t command)
@@ -1715,7 +1755,9 @@ namespace arms_controller_common
 
     void StateMoveJ::setJointNames(const std::vector<std::string>& joint_names)
     {
+        const auto head_indices = findHeadJointIndices(head_coupling_config_, joint_names);
         joint_names_ = joint_names;
+        head_joint_indices_ = head_indices;
 
         // Update joint limits manager if it exists
         if (joint_limits_manager_)

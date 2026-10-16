@@ -10,6 +10,7 @@
 #include "arms_controller_common/utils/JointTrajectoryManager.h"
 #include "arms_controller_common/utils/JointSpeedStopPlanner.h"
 #include "arms_controller_common/utils/JointLimitsManager.h"
+#include "arms_controller_common/utils/HeadCouplingLimits.h"
 #include <vector>
 #include <memory>
 #include <mutex>
@@ -66,6 +67,8 @@ namespace arms_controller_common
                             const std::vector<std::string>& joint_names = {},
                             const std::shared_ptr<GravityCompensation>& gravity_compensation = nullptr);
 
+        // Call after URDF and loaned position interfaces are available; throws on invalid enabled setup.
+        void validateHeadCouplingSetup() const;
         void enter() override;
         void run(const rclcpp::Time& time, const rclcpp::Duration& period) override;
         void exit() override;
@@ -264,6 +267,9 @@ namespace arms_controller_common
         void setupCircleTrajectoryAction(const std::string& action_name = "execute_circle_use_ik");
 
     private:
+        void loadHeadCouplingConfig();
+        HeadCouplingConfig head_coupling_config_;
+        std::optional<HeadJointIndices> head_joint_indices_;
         void updateParam();
         void declareMoveJVelocityParameters();
         void updateMoveJVelocityParameters();
