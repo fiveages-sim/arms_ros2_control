@@ -22,6 +22,8 @@ struct HeadCouplingConfig
     static constexpr double pitch_margin{2.0 * 3.14159265358979323846 / 180.0};
     // Stage handoff checks position and coupling bounds, not measured velocity.
     static constexpr double position_tolerance{0.5 * 3.14159265358979323846 / 180.0};
+    // Feedback-only tolerance; never applied to target or path limits.
+    static constexpr double measurement_tolerance{0.05 * 3.14159265358979323846 / 180.0};
     // Seconds after the first planned segment completes.
     static constexpr double transition_timeout{2.0};
 };
@@ -45,6 +47,9 @@ public:
     HeadAngleRange yawRange() const { return yaw_; }
     HeadAngleRange pitchRange(double yaw) const;
     bool contains(HeadPose pose) const;
+    bool containsMeasured(HeadPose pose) const;
+    // Only corrects tolerance-sized initial command errors; other starts are rejected.
+    HeadPose normalizedStart(HeadPose pose) const;
     // Exact geometric check for a common monotone scalar phase in [0, 1].
     bool containsSegment(HeadPose start, HeadPose target) const;
     HeadPitchTarget clipPitch(HeadPose target) const;
@@ -53,6 +58,7 @@ public:
     std::optional<HeadPose> transition(HeadPose start, HeadPose target,
                                       bool allow_yaw, bool allow_pitch) const;
 private:
+    HeadAngleRange pitchBounds(double yaw) const;
     HeadCouplingConfig config_;
     HeadAngleRange yaw_, pitch_;
 };

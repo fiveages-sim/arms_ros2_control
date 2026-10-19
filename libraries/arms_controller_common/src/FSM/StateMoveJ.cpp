@@ -215,7 +215,7 @@ namespace arms_controller_common
             validateHeadCouplingSetup();
             const auto limits = headCouplingLimits();
             const auto indices = head_joint_indices_.value();
-            const auto& start = ctrl_interfaces_.last_sent_joint_positions_;
+            auto start = ctrl_interfaces_.last_sent_joint_positions_;
 
             if (requested.size() != joint_names_.size() ||
                 start.size() != requested.size() ||
@@ -224,10 +224,24 @@ namespace arms_controller_common
                 throw std::invalid_argument("Head target dimensions do not match controller");
             }
 
-            if (!limits.contains(measuredHeadPose()))
+            const auto measured = measuredHeadPose();
+            if (!limits.containsMeasured(measured))
             {
-                throw std::invalid_argument("Actual head pose is outside coupling limits; recovery required");
+                throw std::invalid_argument(
+                    "Head feedback outside measured tolerance: yaw=" + std::to_string(measured.yaw) +
+                    ", pitch=" + std::to_string(measured.pitch) + " rad");
             }
+
+            // Initial commands may originate from encoder feedback just outside a boundary.
+            // Normalize only this local candidate start, not the stored command or target limits.
+            const auto normalized = limits.normalizedStart({start[indices.yaw], start[indices.pitch]});
+            if ((!mask[indices.yaw] && normalized.yaw != start[indices.yaw]) ||
+                (!mask[indices.pitch] && normalized.pitch != start[indices.pitch]))
+            {
+                throw std::invalid_argument("Head start correction requires both affected joints to be authorized");
+            }
+            start[indices.yaw] = normalized.yaw;
+            start[indices.pitch] = normalized.pitch;
 
             // 应用原有限位；未选中的关节保持最后下发位置。
             effective = joint_limit_checker_ ? joint_limit_checker_(requested) : requested;
@@ -360,8 +374,12 @@ namespace arms_controller_common
         {
             const auto limits = headCouplingLimits();
             const auto measured = measuredHeadPose();
-            if (!limits.contains(measured))
-                throw std::invalid_argument("Actual head pose left coupling range");
+            if (!limits.containsMeasured(measured))
+            {
+                throw std::invalid_argument(
+                    "Head feedback outside measured tolerance: yaw=" + std::to_string(measured.yaw) +
+                    ", pitch=" + std::to_string(measured.pitch) + " rad");
+            }
             if (!head_waiting_) return false;
             const bool arrived = std::abs(measured.yaw - head_stage_endpoint_.yaw) <=
                                      HeadCouplingConfig::position_tolerance &&
@@ -1702,8 +1720,15 @@ namespace arms_controller_common
                 const auto limits = headCouplingLimits();
                 const auto indices = head_joint_indices_.value();
                 const HeadPose commanded{command.positions[indices.yaw], command.positions[indices.pitch]};
-                if (!limits.contains(commanded) || !limits.contains(measuredHeadPose()))
-                    throw std::invalid_argument("Head stop begins outside coupling range");
+                const auto measured = measuredHeadPose();
+                if (!limits.containsMeasured(measured))
+                {
+                    throw std::invalid_argument(
+                        "Head stop feedback outside measured tolerance: yaw=" + std::to_string(measured.yaw) +
+                        ", pitch=" + std::to_string(measured.pitch) + " rad");
+                }
+                if (!limits.contains(commanded))
+                    throw std::invalid_argument("Head stop command begins outside coupling range");
                 const auto yaw = limits.yawRange();
                 lower[indices.yaw] = std::max(lower[indices.yaw], yaw.lower);
                 upper[indices.yaw] = std::min(upper[indices.yaw], yaw.upper);

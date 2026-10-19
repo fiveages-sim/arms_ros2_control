@@ -110,11 +110,9 @@ namespace arms_controller_common
     {
         require(std::isfinite(y) && y >= yaw_.lower && y <= yaw_.upper,
                 "Head yaw outside effective range");
-        HeadAngleRange p{std::max(pitch_.lower, config_.pitch_lower),
-            std::min(pitch_.upper, std::abs(y) <= config_.yaw_boundary ?
-                     config_.pitch_center_upper : config_.pitch_side_upper)};
-        validateRange(p);
-        return p;
+        const auto range = pitchBounds(y);
+        validateRange(range);
+        return range;
     }
 
     bool HeadCouplingLimits::contains(HeadPose p) const
@@ -126,6 +124,36 @@ namespace arms_controller_common
         }
         const auto range = pitchRange(p.yaw);
         return p.pitch >= range.lower && p.pitch <= range.upper;
+    }
+
+    HeadAngleRange HeadCouplingLimits::pitchBounds(double yaw) const
+    {
+        return {std::max(pitch_.lower, config_.pitch_lower),
+                std::min(pitch_.upper, std::abs(yaw) <= config_.yaw_boundary ?
+                         config_.pitch_center_upper : config_.pitch_side_upper)};
+    }
+
+    bool HeadCouplingLimits::containsMeasured(HeadPose pose) const
+    {
+        const double tolerance = HeadCouplingConfig::measurement_tolerance;
+        if (!std::isfinite(pose.yaw) || !std::isfinite(pose.pitch) ||
+            pose.yaw < yaw_.lower - tolerance || pose.yaw > yaw_.upper + tolerance)
+        {
+            return false;
+        }
+        // Select the region using the actual yaw, without expanding the center region.
+        const auto range = pitchBounds(pose.yaw);
+        return range.lower <= range.upper && pose.pitch >= range.lower - tolerance &&
+               pose.pitch <= range.upper + tolerance;
+    }
+
+    HeadPose HeadCouplingLimits::normalizedStart(HeadPose pose) const
+    {
+        require(containsMeasured(pose), "Head start is outside measured tolerance");
+        pose.yaw = std::clamp(pose.yaw, yaw_.lower, yaw_.upper);
+        const auto range = pitchRange(pose.yaw);
+        pose.pitch = std::clamp(pose.pitch, range.lower, range.upper);
+        return pose;
     }
 
     bool HeadCouplingLimits::containsSegment(HeadPose start, HeadPose target) const
