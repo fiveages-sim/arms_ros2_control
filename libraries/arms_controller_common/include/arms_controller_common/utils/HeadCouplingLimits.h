@@ -23,7 +23,7 @@ struct HeadCouplingConfig
     // Stage handoff checks position and coupling bounds, not measured velocity.
     static constexpr double position_tolerance{0.5 * 3.14159265358979323846 / 180.0};
     // Feedback-only tolerance; never applied to target or path limits.
-    static constexpr double measurement_tolerance{0.05 * 3.14159265358979323846 / 180.0};
+    static constexpr double measurement_tolerance{0.1 * 3.14159265358979323846 / 180.0};
     // Seconds after the first planned segment completes.
     static constexpr double transition_timeout{2.0};
 };
