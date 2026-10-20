@@ -42,6 +42,18 @@ namespace arms_controller_common
          */
         static bool isDoublesAvailable();
 
+        struct TimedPoint
+        {
+            std::vector<double> positions, velocities, accelerations;
+        };
+
+        // Single targets initialized with initSingleNode only. Does not advance execution.
+        // Invalid time or unsupported/uninitialized plans throw std::invalid_argument.
+        // At/after the end, returns the exact target with zero derivatives.
+        TimedPoint evaluateAt(double elapsed_seconds) const;
+        double singleNodeDuration() const;
+        InterpolationType interpolationType() const { return interpolation_type_; }
+
         struct HeadCandidateOptions
         {
             double duration{3.0};
@@ -299,11 +311,14 @@ namespace arms_controller_common
                                     planning::TrajectoryParameter& res);
 #endif
         double planningTime_{0.0};
+        bool timed_evaluation_ready_{false};
 
         // Advanced mode (lina_planning) - conditionally compiled
 #ifdef HAS_LINA_PLANNING
         // Single-node DOUBLES planner
         std::unique_ptr<planning::moveJ> movej_planner_;
+        // Random-access calls mutate planner completion state; isolate them from run().
+        std::unique_ptr<planning::moveJ> evaluation_planner_;
 
         // Multi-node DOUBLES planner
         std::unique_ptr<planning::SmoothCurveOfMultiJointsUsingBlending> multi_node_planner_;

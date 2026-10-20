@@ -260,6 +260,12 @@ namespace arms_controller_common
                             return false;
                         }
 
+                        evaluation_planner_ = std::make_unique<planning::moveJ>();
+                        if (!evaluation_planner_->init(movej_init_para))
+                        {
+                            return false;
+                        }
+                        evaluation_planner_->setRealStartTime(0.0);
                         movej_planner_->setRealStartTime(0.0);
                         return true;
                     }
@@ -337,6 +343,7 @@ namespace arms_controller_common
         // another HOME request can mistake home_duration for an active trajectory
         // and start stop-to-zero. getNextPoint() supplies the target with zero
         // command derivatives; the physical device handles its own motion.
+        timed_evaluation_ready_ = true;
         completed_ = (type == InterpolationType::NONE);
         percent_ = completed_ ? 1.0 : 0.0;
 
@@ -613,6 +620,11 @@ namespace arms_controller_common
 
     void JointTrajectoryManager::reset()
     {
+        timed_evaluation_ready_ = false;
+#ifdef HAS_LINA_PLANNING
+        evaluation_planner_.reset();
+#endif
+
         mode_ = TrajectoryMode::NONE;
         initialized_ = false;
         completed_ = false;
@@ -691,6 +703,61 @@ namespace arms_controller_common
         default_max_velocity_ = std::max(max_velocity, 1e-6);
         default_max_acceleration_ = std::max(max_acceleration, 1e-6);
         default_max_jerk_ = std::max(max_jerk, 1e-6);
+    }
+
+    double JointTrajectoryManager::singleNodeDuration() const
+    {
+        if (!initialized_ || !timed_evaluation_ready_ || !isSingleNode())
+        {
+            throw std::invalid_argument("Timed evaluation requires initSingleNode");
+        }
+        return interpolation_type_ == InterpolationType::NONE ? 0.0 : duration_;
+    }
+
+    JointTrajectoryManager::TimedPoint JointTrajectoryManager::evaluateAt(double elapsed_seconds) const
+    {
+        const double duration = singleNodeDuration();
+        if (!std::isfinite(elapsed_seconds) || elapsed_seconds < 0.0)
+        {
+            throw std::invalid_argument("Trajectory time must be finite and nonnegative");
+        }
+        TimedPoint result{target_pos_, std::vector<double>(target_pos_.size(), 0.0),
+                          std::vector<double>(target_pos_.size(), 0.0)};
+        if (elapsed_seconds >= duration)
+        {
+            return result;
+        }
+#ifdef HAS_LINA_PLANNING
+        if (interpolation_type_ == InterpolationType::DOUBLES)
+        {
+            const auto point = evaluation_planner_->calculatePointAtTInRealTime(elapsed_seconds);
+            for (size_t i = 0; i < target_pos_.size(); ++i)
+            {
+                result.positions[i] = point.joint_pos(i);
+                result.velocities[i] = point.joint_vel(i);
+                result.accelerations[i] = point.joint_acc(i);
+            }
+            return result;
+        }
+#endif
+        const double percent = elapsed_seconds / duration;
+        const double phase = calculatePhase(interpolation_type_, percent);
+        double velocity = 1.0 / duration;
+        double acceleration = 0.0;
+        if (interpolation_type_ == InterpolationType::TANH)
+        {
+            const double rate = (tanh_scale_ > 0.0 ? tanh_scale_ : 3.0) / duration;
+            velocity = rate * (1.0 - phase * phase);
+            acceleration = -2.0 * rate * rate * phase * (1.0 - phase * phase);
+        }
+        for (size_t i = 0; i < target_pos_.size(); ++i)
+        {
+            const double distance = target_pos_[i] - start_pos_[i];
+            result.positions[i] = start_pos_[i] + phase * distance;
+            result.velocities[i] = velocity * distance;
+            result.accelerations[i] = acceleration * distance;
+        }
+        return result;
     }
 
     std::vector<double> JointTrajectoryManager::computeSingleNodePoint(double step_seconds)
@@ -1243,6 +1310,7 @@ namespace arms_controller_common
 
     void JointTrajectoryManager::clearPlan()
     {
+        timed_evaluation_ready_ = false;
 #ifdef HAS_LINA_PLANNING
         movej_planner_.reset();
         multi_node_planner_.reset();
