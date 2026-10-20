@@ -200,14 +200,15 @@ namespace arms_controller_common
         head_execution_active_ = false;
         head_waiting_ = false;
         head_wait_elapsed_ = 0.0;
-        head_pending_segments_.clear();
+        head_candidate_.reset();
+        head_elapsed_ = 0.0;
     }
 
     bool StateMoveJ::prepareHeadTarget(
         const std::vector<double>& requested,
         const std::vector<bool>& mask,
         std::vector<double>& effective,
-        std::vector<std::unique_ptr<JointTrajectoryManager>>& segments) const
+        std::unique_ptr<JointTrajectoryManager::HeadTimedCandidate>& candidate) const
     {
         try
         {
@@ -279,9 +280,9 @@ namespace arms_controller_common
 
             // 生成独立候选，不替换或推进当前执行中的轨迹。
             std::string error;
-            if (!trajectory_manager_.buildHeadCandidate(
+            if (!trajectory_manager_.buildHeadTimedCandidate(
                     start, effective, indices, limits,
-                    mask[indices.yaw], mask[indices.pitch], options, segments, error))
+                    mask[indices.yaw], mask[indices.pitch], options, candidate, error))
             {
                 throw std::invalid_argument(error);
             }
@@ -300,8 +301,8 @@ namespace arms_controller_common
         const auto indices = head_joint_indices_.value();
         if (!mask[indices.yaw] && !mask[indices.pitch]) return false;
         std::vector<double> effective;
-        std::vector<std::unique_ptr<JointTrajectoryManager>> segments;
-        if (!prepareHeadTarget(requested, mask, effective, segments)) return true;
+        std::unique_ptr<JointTrajectoryManager::HeadTimedCandidate> candidate;
+        if (!prepareHeadTarget(requested, mask, effective, candidate)) return true;
         if (head_execution_active_ && !stop_to_zero_active_ && joint_mask_ == mask &&
             areJointPositionsSame(target_pos_, effective)) return true;
 
@@ -309,7 +310,7 @@ namespace arms_controller_common
         requestMotionOrDefer([this, requested, mask]() {
             // 起点可能因停止而改变，必须从最后下发位置重新规划。
             std::vector<double> final_target;
-            std::vector<std::unique_ptr<JointTrajectoryManager>> planned;
+            std::unique_ptr<JointTrajectoryManager::HeadTimedCandidate> planned;
             if (!headCouplingApplies() ||
                 !prepareHeadTarget(requested, mask, final_target, planned))
             {
@@ -328,8 +329,8 @@ namespace arms_controller_common
             active_prefix_.clear();
             refreshHoldPositions();
 
-            // 起终点相同时候选为空，无需启动运动。
-            has_target_ = !planned.empty();
+            // 相同目标无需启动新的计时运动。
+            has_target_ = !areJointPositionsSame(start_pos_, target_pos_);
             interpolation_active_ = has_target_;
             head_execution_active_ = has_target_;
 
@@ -341,15 +342,11 @@ namespace arms_controller_common
                             requested[head_joint_indices_->pitch], target_pos_[head_joint_indices_->pitch]);
             }
 
-            // 第一段交给当前管理器，后续段等待位置到位后再执行。
-            if (!planned.empty())
+            if (has_target_)
             {
-                trajectory_manager_ = std::move(*planned.front());
-                for (size_t i = 1; i < planned.size(); ++i)
-                {
-                    head_pending_segments_.push_back(std::move(planned[i]));
-                }
+                head_candidate_ = std::move(planned);
             }
+
         });
         return true;
     }
@@ -381,20 +378,14 @@ namespace arms_controller_common
                     ", pitch=" + std::to_string(measured.pitch) + " rad");
             }
             if (!head_waiting_) return false;
-            const bool arrived = std::abs(measured.yaw - head_stage_endpoint_.yaw) <=
+            const bool arrived = std::abs(measured.yaw - head_final_endpoint_.yaw) <=
                                      HeadCouplingConfig::position_tolerance &&
-                                 std::abs(measured.pitch - head_stage_endpoint_.pitch) <=
+                                 std::abs(measured.pitch - head_final_endpoint_.pitch) <=
                                      HeadCouplingConfig::position_tolerance;
             if (arrived)
             {
                 head_waiting_ = false;
                 head_wait_elapsed_ = 0.0;
-                if (!head_pending_segments_.empty())
-                {
-                    trajectory_manager_ = std::move(*head_pending_segments_.front());
-                    head_pending_segments_.erase(head_pending_segments_.begin());
-                    return false;
-                }
                 clearHeadExecution();
                 interpolation_active_ = false;
                 has_target_ = false;
@@ -406,7 +397,7 @@ namespace arms_controller_common
                 if (head_wait_elapsed_ >= HeadCouplingConfig::transition_timeout)
                     throw std::invalid_argument("Head position arrival timeout");
             }
-            // Keep the exact stage command; no velocity-feedback condition.
+            // Keep the final command; arrival uses position feedback only.
             refreshHoldPositions();
             for (size_t i = 0; i < hold_positions_.size(); ++i)
             {
@@ -837,7 +828,7 @@ namespace arms_controller_common
     {
         std::lock_guard lock(target_mutex_);
 
-        if (trajectory_manager_.isInitialized() || move_cartesian_active_ ||
+        if (head_execution_active_ || trajectory_manager_.isInitialized() || move_cartesian_active_ ||
             waist_lifting_active_ || waist_turning_active_ || stop_to_zero_active_)
             servo_initialized_ = false;
 
@@ -1289,8 +1280,29 @@ namespace arms_controller_common
         double runtime_step = period.seconds();
         const bool servo_step = interpolation_type_ == InterpolationType::SERVO &&
                                 !trajectory_manager_.isInitialized();
-        std::vector<double> next_positions = servo_step
-            ? advanceServo(runtime_step) : trajectory_manager_.getNextPoint(runtime_step);
+        JointTrajectoryManager::TimedPoint head_point;
+        std::vector<double> next_positions;
+        if (head_execution_active_)
+        {
+            try
+            {
+                if (!head_candidate_ || !std::isfinite(runtime_step) || runtime_step <= 0.0)
+                    throw std::invalid_argument("Invalid head execution candidate or control period");
+                head_elapsed_ = std::min(head_elapsed_ + runtime_step, head_candidate_->duration());
+                head_point = head_candidate_->evaluateAt(head_elapsed_);
+                next_positions = head_point.positions;
+            }
+            catch (const std::exception& error)
+            {
+                failHeadExecution(error.what());
+                return;
+            }
+        }
+        else
+        {
+            next_positions = servo_step ? advanceServo(runtime_step)
+                                        : trajectory_manager_.getNextPoint(runtime_step);
+        }
 
         if (next_positions.empty())
         {
@@ -1403,6 +1415,12 @@ namespace arms_controller_common
             {
                 ctrl_interfaces_.setCommandDerivatives(i, servo_filters_[i].qd, servo_filters_[i].qdd);
             }
+            else if (head_execution_active_)
+            {
+                const bool held = use_prefix_filter_ && i < joint_mask_.size() && !joint_mask_[i];
+                ctrl_interfaces_.setCommandDerivatives(i, held ? 0.0 : head_point.velocities[i],
+                                                      held ? 0.0 : head_point.accelerations[i]);
+            }
             else if (trajectory_manager_.lastVelocities().size() == next_positions.size())
             {
                 const bool held = use_prefix_filter_ && i < joint_mask_.size() && !joint_mask_[i];
@@ -1424,10 +1442,10 @@ namespace arms_controller_common
                 finishJointTrajectoryAction(true, false, "Joint trajectory completed successfully");
             }
         }
-        else if (!servo_step && trajectory_manager_.isCompleted() && head_execution_active_)
+        else if (head_execution_active_ && head_elapsed_ >= head_candidate_->duration())
         {
             const auto indices = head_joint_indices_.value();
-            head_stage_endpoint_ = {ctrl_interfaces_.last_sent_joint_positions_[indices.yaw],
+            head_final_endpoint_ = {ctrl_interfaces_.last_sent_joint_positions_[indices.yaw],
                                     ctrl_interfaces_.last_sent_joint_positions_[indices.pitch]};
             head_waiting_ = true;
             head_wait_elapsed_ = 0.0;
@@ -1752,17 +1770,18 @@ namespace arms_controller_common
             }
         }
         double vmax, amax, jmax;
-        if (trajectory_manager_.isInitialized())
+        const auto& stop_trajectory = head_candidate_ ? *head_candidate_->base : trajectory_manager_;
+        if (stop_trajectory.isInitialized())
         {
-            vmax = trajectory_manager_.stopMaxVelocity();
-            amax = trajectory_manager_.stopMaxAcceleration();
-            jmax = trajectory_manager_.stopMaxJerk();
+            vmax = stop_trajectory.stopMaxVelocity();
+            amax = stop_trajectory.stopMaxAcceleration();
+            jmax = stop_trajectory.stopMaxJerk();
         }
         else
         {
             std::tie(vmax, amax, jmax) = std::make_tuple(movej_max_velocity_, movej_max_acceleration_, movej_max_jerk_);
         }
-        const bool truncate = !trajectory_manager_.isInitialized() || !trajectory_manager_.isDoubles();
+        const bool truncate = !stop_trajectory.isInitialized() || !stop_trajectory.isDoubles();
         if (!speed_stop_planner_.init(command.positions, command.velocities, command.accelerations,
                                       vmax, amax, jmax, lower, upper, truncate))
         {
@@ -5588,6 +5607,7 @@ namespace arms_controller_common
                 ctrl_interfaces_.setJointPositionCommand(i, hold_positions_[i]);
             }
 
+            clearHeadExecution();
             interpolation_active_ = false;
             has_target_ = false;
             move_cartesian_active_ = false;

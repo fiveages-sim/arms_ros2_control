@@ -89,16 +89,6 @@ namespace arms_controller_common
             std::unique_ptr<HeadTimedCandidate>& candidate,
             std::string& error) const;
 
-        // Builds independent, initialized segments; never advances this manager.
-        // Target must already be clipped. On failure, segments is empty and error explains why.
-        // Basic interpolation retains its existing endpoint derivative semantics.
-        bool buildHeadCandidate(
-            const std::vector<double>& start, const std::vector<double>& target,
-            HeadJointIndices indices, const HeadCouplingLimits& limits,
-            bool allow_yaw, bool allow_pitch, const HeadCandidateOptions& options,
-            std::vector<std::unique_ptr<JointTrajectoryManager>>& segments,
-            std::string& error) const;
-
         /**
          * @brief Initialize single-node trajectory
          * NONE is immediately complete; getNextPoint returns the target with zero
