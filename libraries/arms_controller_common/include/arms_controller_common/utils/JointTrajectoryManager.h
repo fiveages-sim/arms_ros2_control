@@ -64,6 +64,31 @@ namespace arms_controller_common
             double max_velocity{2.0}, max_acceleration{4.0}, max_jerk{20.0};
         };
 
+        struct HeadTimedCandidate
+        {
+            HeadJointIndices indices{};
+            double yaw_start_delay{0.0};
+            double pitch_start_delay{0.0};
+            std::unique_ptr<JointTrajectoryManager> base;
+            std::unique_ptr<JointTrajectoryManager> yaw;
+            std::unique_ptr<JointTrajectoryManager> pitch;
+            TimedPoint evaluateAt(double elapsed_seconds) const;
+            double duration() const;
+        };
+
+        // Target is already clipped. Failure clears candidate and supplies a reason.
+        // Axis start delays coordinate boundary crossings; other joints retain the base trajectory.
+        bool buildHeadTimedCandidate(
+            const std::vector<double>& start,
+            const std::vector<double>& target,
+            HeadJointIndices indices,
+            const HeadCouplingLimits& limits,
+            bool allow_yaw,
+            bool allow_pitch,
+            const HeadCandidateOptions& options,
+            std::unique_ptr<HeadTimedCandidate>& candidate,
+            std::string& error) const;
+
         // Builds independent, initialized segments; never advances this manager.
         // Target must already be clipped. On failure, segments is empty and error explains why.
         // Basic interpolation retains its existing endpoint derivative semantics.
