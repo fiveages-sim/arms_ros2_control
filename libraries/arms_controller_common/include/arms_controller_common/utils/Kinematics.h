@@ -315,6 +315,15 @@ namespace arms_controller_common
 
         Eigen::MatrixXd getJacobian(std::string armType);
 
+        /**
+         * @brief 设置非手臂关节（腰部/头部等）在模型里的位置。
+         *
+         * 全身模型（如 ocs2_wbc_controller 的 20 关节模型）里腰部关节排在手
+         * 关节之前，模型配置向量必须带这些值才能算出正确 FK/Jacobian。
+         * 未设置时用零位；只有模型里存在的关节名会被采纳。
+         */
+        void setAuxJointPositions(const std::vector<std::pair<std::string, double>>& values);
+
     private:
         // Pinocchio模型和数据
         pinocchio::Model model_;
@@ -337,6 +346,16 @@ namespace arms_controller_common
         size_t leftArmJointCount_ = 7;
         size_t rightArmJointCount_ = 7;
 
+        // 手臂关节在 Pinocchio 模型里的下标。模型顺序不一定与参数顺序一致：
+        // 全身模型里腰/头关节排在手之前，所以 FK 配置与 Jacobian 列都要按
+        // 名字查出来的下标取，不能假设手臂在前 14 维。
+        std::vector<int> leftArmQIndices_;
+        std::vector<int> rightArmQIndices_;
+        std::vector<int> leftArmVIndices_;
+        std::vector<int> rightArmVIndices_;
+        // 非手臂关节的模型配置值（腰部/头部…），缺省零位
+        Eigen::VectorXd aux_positions_;
+
         // 关节限位
         Eigen::VectorXd leftLowerLimits_;
         Eigen::VectorXd leftUpperLimits_;
@@ -351,6 +370,8 @@ namespace arms_controller_common
         void buildMappings();
         void extractJointLimits();
         void updateKinematics(const Eigen::VectorXd& jointPositions);
+        /** RobotState → 模型完整配置向量（尺寸 = model.nq，含腰部/头部等）。 */
+        Eigen::VectorXd stateToModelConfiguration(const RobotState& state) const;
 
         int getFrameId(const std::string& frameName) const;
         int getJointId(const std::string& jointName) const;

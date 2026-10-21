@@ -56,6 +56,7 @@ private Q_SLOTS:
   void onComplianceSoft();
   void onComplianceMedium();
   void onComplianceHard();
+  void onComplianceCustom();
 
   // WBC control slots
   void onBaseToggled();
@@ -71,7 +72,10 @@ private:
   {
     Soft = 0,
     Medium = 1,
-    Hard = 2
+    Hard = 2,
+    // 自定义：不向控制器写任何参数，完全用 compliance.yaml（或 ros2 param set 在线调过的）
+    // 的值。进入 COMPLIANCE 时也不会覆盖。
+    Custom = 3
   };
 
   // FSM related methods
@@ -167,10 +171,11 @@ private:
   std::unique_ptr<QPushButton> compliance_soft_btn_;
   std::unique_ptr<QPushButton> compliance_medium_btn_;
   std::unique_ptr<QPushButton> compliance_hard_btn_;
+  std::unique_ptr<QPushButton> compliance_custom_btn_;
   std::unique_ptr<QPushButton> switch_pose_btn_;
   std::unique_ptr<QLabel> current_state_label_;
 
-  ComplianceStiffnessPreset compliance_preset_ = ComplianceStiffnessPreset::Medium;
+  ComplianceStiffnessPreset compliance_preset_ = ComplianceStiffnessPreset::Custom;
   bool compliance_preset_applied_ = false;
   rclcpp::AsyncParametersClient::SharedPtr ocs2_param_client_;
 

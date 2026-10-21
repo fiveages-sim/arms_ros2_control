@@ -10,6 +10,9 @@ OCS2 控制器 **COMPLIANCE** 状态：6 自由度笛卡尔混合控制，每位
 **进入**：HOLD 下 `fsm_command=5`（RViz **COMPLIANCE** 按钮）  
 **退出**：`fsm_command=2`（**HOLD** 按钮）
 
+> 同一实现也部署在 `ocs2_wbc_controller`（全身模式，`joints` 含腰部）；
+> 参数分别写在 `compliance.yaml` 的 `ocs2_arm_controller:` / `ocs2_wbc_controller:` 段。
+
 ---
 
 ## 快速上手

@@ -234,6 +234,20 @@ namespace arms_controller_common
         ft_timeout_sec_ = get_double("compliance_ft_timeout_sec", ft_timeout_sec_);
         get_string("compliance_gravity_frame", gravity_frame_);
 
+        // ── 腰部（同一控制器的关节，直接写 joint command）──
+        waist_enabled_ = get_bool("compliance_waist_enable", waist_enabled_) && waist_index_ >= 0;
+        get_string("compliance_waist_joint", waist_joint_);
+        get_string("compliance_waist_target_topic", waist_target_topic_);
+        waist_soft_limit_ = std::abs(get_double("compliance_waist_soft_limit", waist_soft_limit_));
+        waist_rate_ = std::abs(get_double("compliance_waist_rate", waist_rate_));
+        waist_gain_ = get_double("compliance_waist_gain", waist_gain_);
+        waist_deadband_ = std::abs(get_double("compliance_waist_deadband", waist_deadband_));
+        get_string("compliance_waist_mode", waist_mode_);
+        if (waist_mode_ != "follow_target") waist_mode_ = "manual";
+        waist_comfort_ = std::abs(get_double("compliance_waist_comfort", waist_comfort_));
+        waist_cond_max_ = get_double("compliance_waist_cond_max", waist_cond_max_);
+        waist_filter_tau_ = std::max(0.0, get_double("compliance_waist_filter_tau", waist_filter_tau_));
+
         // 力控→位置控边沿检测（面板取消勾选柔顺轴）：置 pending_retarget_，
         // 由 run() 用当前实测位姿重捕获 target，避免位置轴全速拉回旧目标。
         if (task_selection_prev_.size() == task_selection_.size())
@@ -531,6 +545,268 @@ namespace arms_controller_common
             "compliance_force_status", 10);
     }
 
+    void StateCompliance::setupWaistChannel()
+    {
+        if (!node_) return;
+
+        waist_target_sub_.reset();
+        {
+            std::lock_guard<std::mutex> lk(waist_mutex_);
+            waist_position_valid_ = false;
+            waist_target_valid_ = false;
+            waist_command_valid_ = false;
+        }
+        waist_follow_engaged_ = false;
+        arm_cond_badness_ = 0.0;
+        cond_update_counter_ = 0;
+        waist_azimuth_filt_ = 0.0;
+        waist_azimuth_filt_valid_ = false;
+
+        if (!waist_enabled_) return;
+
+        // manual 模式的操作者设定值（绝对角）。follow_target 模式不使用它。
+        waist_target_sub_ = node_->create_subscription<std_msgs::msg::Float64>(
+            waist_target_topic_, 10,
+            [this](const std_msgs::msg::Float64::SharedPtr msg)
+            {
+                if (!std::isfinite(msg->data))
+                {
+                    RCLCPP_WARN_THROTTLE(node_->get_logger(), *node_->get_clock(), 2000,
+                                         "COMPLIANCE waist: ignoring non-finite target %.3f",
+                                         msg->data);
+                    return;
+                }
+                std::lock_guard<std::mutex> lk(waist_mutex_);
+                waist_target_ = msg->data;
+                waist_target_valid_ = true;
+            });
+
+        RCLCPP_INFO(node_->get_logger(),
+                    "COMPLIANCE waist: joint='%s' (index %d, in this controller) mode=%s "
+                    "soft_limit=±%.3f rad rate=%.3f rad/s",
+                    waist_joint_.c_str(), waist_index_, waist_mode_.c_str(),
+                    waist_soft_limit_, waist_rate_);
+    }
+
+    double StateCompliance::waistYawMeasured() const
+    {
+        if (!waist_enabled_ || waist_index_ < 0) return 0.0;
+        const auto& pos_if = ctrl_interfaces_.joint_position_state_interface_;
+        if (static_cast<size_t>(waist_index_) >= pos_if.size()) return 0.0;
+        const auto value = pos_if[static_cast<size_t>(waist_index_)].get().get_optional();
+        return value.value_or(0.0);
+    }
+
+    void StateCompliance::setJointLayout(const std::vector<std::string>& controller_joint_names,
+                                         size_t arm_offset, int waist_index)
+    {
+        controller_joint_names_ = controller_joint_names;
+        arm_offset_ = arm_offset;
+        waist_index_ = waist_index;
+        if (node_)
+        {
+            RCLCPP_INFO(node_->get_logger(),
+                        "COMPLIANCE joint layout: arm_offset=%zu, waist_index=%d",
+                        arm_offset_, waist_index_);
+        }
+    }
+
+    void StateCompliance::syncAuxJointPositions()
+    {
+        // 全身模型（WBC）里腰部/头部关节在手臂之前，FK/Jacobian 必须带上它们的
+        // 实际值，否则手末端位姿会算错。分体模式（无腰部关节）这里是空操作。
+        if (!kinematics_ || waist_index_ < 0) return;
+        std::vector<std::pair<std::string, double>> aux;
+        aux.reserve(hold_positions_.size());
+        for (size_t i = 0; i < hold_positions_.size(); ++i)
+        {
+            const bool is_arm = i >= arm_offset_ &&
+                                i < arm_offset_ + arms_[0].joint_count + arms_[1].joint_count;
+            if (is_arm) continue;
+            if (i < controller_joint_names_.size() && std::isfinite(hold_positions_[i]))
+            {
+                aux.emplace_back(controller_joint_names_[i], hold_positions_[i]);
+            }
+        }
+        kinematics_->setAuxJointPositions(aux);
+    }
+
+    double StateCompliance::waistTargetResidualAzimuth() const
+    {
+        // 目标在模型系里的方位角 = 世界方位角 − 腰角，正是“腰还要转多少”的残差。
+        double sx = 0.0;
+        double sy = 0.0;
+        int count = 0;
+        for (const auto& a : arms_)
+        {
+            if (!a.target_valid) continue;
+            const double x = a.target.position.x();
+            const double y = a.target.position.y();
+            const double radius = std::hypot(x, y);
+            if (radius < 1e-3) continue;  // 目标在腰轴上，方位角无意义
+            sx += x / radius;
+            sy += y / radius;
+            ++count;
+        }
+        if (count == 0) return 0.0;
+        return std::atan2(sy, sx);
+    }
+
+    void StateCompliance::updateArmConditioning()
+    {
+        // “病态程度”取雅可比矩阵的条件数 σmax/σmin（两臂取大）。它不需要任何
+        // 手臂/腰部模型假设，直接反映“最弱方向与最强方向差多少倍”：接近奇异、
+        // 腕部对齐、肘接近伸直都会让它变大。代价是一对 6×N 的 SVD，所以降频到
+        // 10 Hz——比腰部外环（≈0.2 Hz）仍然快两个量级。
+        arm_cond_badness_ = 0.0;
+        if (!kinematicsAvailable() || !waist_enabled_) return;
+
+        const RobotState state = makeRobotState(/*measured=*/true);
+        double worst = 0.0;
+        for (int s = 0; s < 2; ++s)
+        {
+            if (arms_[s].joint_count == 0) continue;
+            Eigen::MatrixXd jacobian;
+            try
+            {
+                jacobian = kinematics_->computeJacobian(state, kArmName[s]);
+            }
+            catch (const std::exception&)
+            {
+                continue;
+            }
+            if (jacobian.rows() != 6 || jacobian.cols() < 2 || !jacobian.allFinite()) continue;
+
+            const Eigen::JacobiSVD<Eigen::MatrixXd> svd(jacobian);
+            const auto& sigma = svd.singularValues();
+            if (sigma.size() == 0) continue;
+            const double sigma_max = sigma(0);
+            if (!(sigma_max > 1e-9)) continue;
+            const double sigma_min = std::max(sigma(sigma.size() - 1), 1e-6);
+            worst = std::max(worst, sigma_max / sigma_min);
+        }
+        arm_cond_badness_ = worst;
+    }
+
+    void StateCompliance::runWaistChannel(const rclcpp::Time& /*time*/, double dt)
+    {
+        // 腰部是同一个控制器自己的关节：直接写 hold_positions_，由统一的
+        // 指令下发路径输出，不需要任何跨控制器话题。
+        if (!waist_enabled_ || waist_index_ < 0 ||
+            static_cast<size_t>(waist_index_) >= hold_positions_.size())
+        {
+            return;
+        }
+
+        const double measured = waistYawMeasured();
+        {
+            std::lock_guard<std::mutex> lk(waist_mutex_);
+            waist_position_ = measured;
+            waist_position_valid_ = true;
+        }
+
+        if (!waist_command_valid_)
+        {
+            waist_command_ = measured;   // 从当前位置起步，不跳变
+            waist_command_valid_ = true;
+        }
+
+        // 目标角速率（rad/s），两条路都经同一个速率限幅。
+        double rate_cmd = 0.0;
+        if (waist_mode_ == "follow_target")
+        {
+            double azimuth = waistTargetResidualAzimuth();
+            if (waist_filter_tau_ > 0.0 && dt > 1e-6)
+            {
+                const double alpha = dt / (waist_filter_tau_ + dt);
+                if (!waist_azimuth_filt_valid_)
+                {
+                    waist_azimuth_filt_ = azimuth;
+                    waist_azimuth_filt_valid_ = true;
+                }
+                else
+                {
+                    waist_azimuth_filt_ += alpha * (azimuth - waist_azimuth_filt_);
+                }
+                azimuth = waist_azimuth_filt_;
+            }
+            const bool conditioning_bad =
+                waist_cond_max_ > 0.0 && arm_cond_badness_ > waist_cond_max_;
+            // 病态时门限收紧一半 → 更早让腰分担方位量。
+            const double comfort = conditioning_bad ? 0.5 * waist_comfort_ : waist_comfort_;
+            constexpr double kRadToDeg = 57.29577951308232;
+
+            if (!waist_follow_engaged_)
+            {
+                if (std::abs(azimuth) > comfort)
+                {
+                    waist_follow_engaged_ = true;
+                    if (node_)
+                    {
+                        RCLCPP_INFO(node_->get_logger(),
+                                    "COMPLIANCE waist: engage (az=%.1f deg, comfort=%.1f deg, "
+                                    "arm cond=%.1f / limit %.1f)",
+                                    azimuth * kRadToDeg, comfort * kRadToDeg,
+                                    arm_cond_badness_, waist_cond_max_);
+                    }
+                }
+            }
+            else
+            {
+                const bool still_bad_cond =
+                    waist_cond_max_ > 0.0 && arm_cond_badness_ > 0.8 * waist_cond_max_;
+                if (std::abs(azimuth) < 0.5 * comfort && !still_bad_cond)
+                {
+                    waist_follow_engaged_ = false;
+                    if (node_)
+                    {
+                        RCLCPP_INFO(node_->get_logger(),
+                                    "COMPLIANCE waist: release (az=%.1f deg, arm cond=%.1f)",
+                                    azimuth * kRadToDeg, arm_cond_badness_);
+                    }
+                }
+            }
+
+            if (waist_follow_engaged_ && std::abs(azimuth) > waist_deadband_)
+            {
+                rate_cmd = waist_gain_ * azimuth;   // [1/s] × rad = rad/s
+            }
+            else if (waist_follow_engaged_ && conditioning_bad && node_)
+            {
+                RCLCPP_WARN_THROTTLE(node_->get_logger(), *node_->get_clock(), 3000,
+                                     "COMPLIANCE waist: arm ill-conditioned (cond=%.1f) but the "
+                                     "target azimuth is centered (%.1f deg) — waist yaw cannot help; "
+                                     "move the target instead",
+                                     arm_cond_badness_, azimuth * kRadToDeg);
+            }
+        }
+        else
+        {
+            double target = measured;
+            {
+                std::lock_guard<std::mutex> lk(waist_mutex_);
+                if (waist_target_valid_) target = waist_target_;
+            }
+            if (waist_soft_limit_ > 0.0)
+            {
+                target = std::clamp(target, -waist_soft_limit_, waist_soft_limit_);
+            }
+            rate_cmd = waist_gain_ * (target - measured);
+        }
+
+        // 速率限幅 + 软限位，然后写入本控制器的关节指令缓冲。
+        rate_cmd = std::clamp(rate_cmd, -waist_rate_, waist_rate_);
+        double next = waist_command_ + rate_cmd * std::clamp(dt, 0.0, 0.1);
+        if (waist_soft_limit_ > 0.0)
+        {
+            next = std::clamp(next, -waist_soft_limit_, waist_soft_limit_);
+        }
+        if (!std::isfinite(next)) return;
+
+        waist_command_ = next;
+        hold_positions_[static_cast<size_t>(waist_index_)] = next;
+    }
+
     void StateCompliance::enter()
     {
         updateParam();
@@ -559,6 +835,10 @@ namespace arms_controller_common
             hold_positions_[i] = ctrl_interfaces_.last_sent_joint_positions_.size() > i
                 ? ctrl_interfaces_.last_sent_joint_positions_[i] : measured;
         }
+
+        // 把腰部/头部等非手臂关节的当前指令值喂给模型（全身模型必须），
+        // 否则入口 FK 会把手臂位姿算错。
+        syncAuxJointPositions();
 
         // Match StateOCS2::resetMpc(): the target on state entry is the FK of
         // the last commanded joint state.  Store it as a real target (instead
@@ -591,6 +871,7 @@ namespace arms_controller_common
         }
 
         setupTeleopSubscriptions();
+        setupWaistChannel();
 
         if (node_)
         {
@@ -638,6 +919,23 @@ namespace arms_controller_common
     {
         for (auto& a : arms_) a.resetComplianceIo();
         force_status_pub_.reset();
+
+        // 腰部：直接写的是本控制器的关节指令，退出后由 HOLD 状态接管（保持当前角），
+        // 不需要额外“停车”报文；这里只把会话状态清空。
+        if (waist_enabled_ && node_)
+        {
+            RCLCPP_INFO(node_->get_logger(),
+                        "COMPLIANCE waist: released at %.4f rad (HOLD holds it)", waist_command_);
+        }
+        waist_target_sub_.reset();
+        {
+            std::lock_guard<std::mutex> lk(waist_mutex_);
+            waist_position_valid_ = false;
+            waist_target_valid_ = false;
+        }
+        waist_command_valid_ = false;
+        waist_follow_engaged_ = false;
+        waist_azimuth_filt_valid_ = false;
     }
 
     void StateCompliance::updateZeroCalibration(
@@ -939,6 +1237,17 @@ namespace arms_controller_common
         if (!checkMeasuredWorkspace()) return;
         const double dt = period.seconds();
 
+        // 腰部通道：只在 COMPLIANCE 内运行（慢速、限幅）。
+        // 手臂病态程度（雅可比条件数）10 Hz 更新即可，供腰部介入判断。
+        if (++cond_update_counter_ >= 10)
+        {
+            cond_update_counter_ = 0;
+            updateArmConditioning();
+        }
+        runWaistChannel(time, dt);
+        // 腰/头等非手臂关节的本周期指令值喂给运动学模型，FK/Jacobian 才与实际一致。
+        syncAuxJointPositions();
+
         const WrenchSnapshot wrench_snapshot = sampleAndPublishWrenches(time);
         const auto& net = wrench_snapshot.net;
         const auto& ft_active = wrench_snapshot.active;
@@ -967,6 +1276,7 @@ namespace arms_controller_common
                     stopForWorkspaceViolation(std::string("wrench transform failed: ") + error.what());
                     return;
                 }
+
             }
         }
 
@@ -1043,12 +1353,14 @@ namespace arms_controller_common
         for (size_t i = 0; i < N; ++i)
         {
             double cmd = hold_positions_[i];
-            const bool la = i < arms_[0].joint_count;
+            const bool in_arm_block =
+                i >= arm_offset_ && i < arm_offset_ + arms_[0].joint_count + arms_[1].joint_count;
+            const bool la = in_arm_block && i < arm_offset_ + arms_[0].joint_count;
             const Eigen::Index ai = static_cast<Eigen::Index>(
-                la ? i : i - arms_[0].joint_count);
+                la ? i - arm_offset_ : i - arm_offset_ - arms_[0].joint_count);
             const auto& lo = la ? arms_[0].joint_lower : arms_[1].joint_lower;
             const auto& hi = la ? arms_[0].joint_upper : arms_[1].joint_upper;
-            if (ai >= 0 && ai < lo.size() && ai < hi.size() && lo(ai) < hi(ai))
+            if (in_arm_block && ai >= 0 && ai < lo.size() && ai < hi.size() && lo(ai) < hi(ai))
             {
                 cmd = std::clamp(cmd,
                     lo(ai) + hybrid_joint_limit_margin_,
@@ -1180,7 +1492,7 @@ namespace arms_controller_common
         if (dt <= 1e-6 || !kinematicsAvailable()) return;
 
         ArmSide& a = arm(is_left);
-        const size_t offset = is_left ? 0 : arms_[0].joint_count;
+        const size_t offset = arm_offset_ + (is_left ? 0 : arms_[0].joint_count);
         const size_t nq = a.joint_count;
         if (nq == 0 || offset + nq > hold_positions_.size()) return;
 
@@ -2144,10 +2456,12 @@ namespace arms_controller_common
         const auto& pos_if = ctrl_interfaces_.joint_position_state_interface_;
         for (size_t i = 0; i < total; ++i)
         {
-            const double fallback = i < hold_positions_.size() ? hold_positions_[i] : 0.0;
-            if (measured && i < pos_if.size())
+            // arm_offset_：全身控制器里腰/头关节排在手之前（WBC 为 4）。
+            const size_t j = arm_offset_ + i;
+            const double fallback = j < hold_positions_.size() ? hold_positions_[j] : 0.0;
+            if (measured && j < pos_if.size())
                 q_all(static_cast<Eigen::Index>(i)) =
-                    pos_if[i].get().get_optional().value_or(fallback);
+                    pos_if[j].get().get_optional().value_or(fallback);
             else
                 q_all(static_cast<Eigen::Index>(i)) = fallback;
         }
@@ -2325,6 +2639,7 @@ namespace arms_controller_common
                                               pose_base.orientation.x,
                                               pose_base.orientation.y,
                                               pose_base.orientation.z).normalized());
+
 
         ArmSide& a = arm(is_left);
         a.target = tgt;

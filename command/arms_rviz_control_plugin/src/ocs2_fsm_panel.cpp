@@ -174,19 +174,24 @@ namespace arms_rviz_control_plugin
         compliance_soft_btn_ = std::make_unique<QPushButton>("软", this);
         compliance_medium_btn_ = std::make_unique<QPushButton>("中", this);
         compliance_hard_btn_ = std::make_unique<QPushButton>("硬", this);
+        compliance_custom_btn_ = std::make_unique<QPushButton>("自定义", this);
         compliance_soft_btn_->setCheckable(true);
         compliance_medium_btn_->setCheckable(true);
         compliance_hard_btn_->setCheckable(true);
+        compliance_custom_btn_->setCheckable(true);
         compliance_soft_btn_->setToolTip(
             "软：位姿跟踪更柔、力轴更顺从（低 K / 低 D）");
         compliance_medium_btn_->setToolTip(
             "中：默认刚度（控制器默认参数）");
         compliance_hard_btn_->setToolTip(
             "硬：位姿跟踪更刚、力轴更硬（高 K / 高 D）");
+        compliance_custom_btn_->setToolTip(
+            "自定义：不覆盖任何参数，直接用 compliance.yaml（或 ros2 param set 在线调过）的值");
         preset_layout->addWidget(preset_label);
         preset_layout->addWidget(compliance_soft_btn_.get());
         preset_layout->addWidget(compliance_medium_btn_.get());
         preset_layout->addWidget(compliance_hard_btn_.get());
+        preset_layout->addWidget(compliance_custom_btn_.get());
         button_layout->addWidget(compliance_preset_row_.get());
         compliance_preset_row_->setVisible(false);
         updateCompliancePresetButtonStyles();
@@ -397,6 +402,7 @@ namespace arms_rviz_control_plugin
         connect(compliance_soft_btn_.get(), &QPushButton::clicked, this, &OCS2FSMPanel::onComplianceSoft);
         connect(compliance_medium_btn_.get(), &QPushButton::clicked, this, &OCS2FSMPanel::onComplianceMedium);
         connect(compliance_hard_btn_.get(), &QPushButton::clicked, this, &OCS2FSMPanel::onComplianceHard);
+        connect(compliance_custom_btn_.get(), &QPushButton::clicked, this, &OCS2FSMPanel::onComplianceCustom);
         connect(hold_to_home_btn_.get(), &QPushButton::clicked, this, &OCS2FSMPanel::onHoldToHome);
         connect(switch_pose_btn_.get(), &QPushButton::clicked, this, &OCS2FSMPanel::onSwitchPose);
 
@@ -544,6 +550,11 @@ namespace arms_rviz_control_plugin
         applyComplianceStiffnessPreset(ComplianceStiffnessPreset::Hard);
     }
 
+    void OCS2FSMPanel::onComplianceCustom()
+    {
+        applyComplianceStiffnessPreset(ComplianceStiffnessPreset::Custom);
+    }
+
     void OCS2FSMPanel::updateCompliancePresetButtonStyles()
     {
         auto style_for = [](bool selected, const QString& color) {
@@ -565,6 +576,7 @@ namespace arms_rviz_control_plugin
         const bool soft = compliance_preset_ == ComplianceStiffnessPreset::Soft;
         const bool medium = compliance_preset_ == ComplianceStiffnessPreset::Medium;
         const bool hard = compliance_preset_ == ComplianceStiffnessPreset::Hard;
+        const bool custom = compliance_preset_ == ComplianceStiffnessPreset::Custom;
 
         if (compliance_soft_btn_)
         {
@@ -580,6 +592,11 @@ namespace arms_rviz_control_plugin
         {
             compliance_hard_btn_->setChecked(hard);
             compliance_hard_btn_->setStyleSheet(style_for(hard, "#2E7D32"));
+        }
+        if (compliance_custom_btn_)
+        {
+            compliance_custom_btn_->setChecked(custom);
+            compliance_custom_btn_->setStyleSheet(style_for(custom, "#546E7A"));
         }
     }
 
@@ -600,6 +617,17 @@ namespace arms_rviz_control_plugin
         double vel_lpf_alpha = 0.3;
         double ki_leak = 0.5;
         const char* name = "中";
+
+        // 自定义：一个参数都不写 —— 控制器保持 compliance.yaml 里加载的值
+        // （以及运行时 `ros2 param set` 在线调过的值）。这也是默认档，避免每次
+        // 进 COMPLIANCE 都把手工调好的参数覆盖掉。
+        if (preset == ComplianceStiffnessPreset::Custom)
+        {
+            RCLCPP_INFO(node_->get_logger(),
+                        "COMPLIANCE stiffness preset → 自定义：不覆盖参数，"
+                        "使用 compliance.yaml / 在线 param 当前值");
+            return;
+        }
 
         switch (preset)
         {

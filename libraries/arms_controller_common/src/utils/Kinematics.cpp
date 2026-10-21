@@ -2,6 +2,7 @@
 #include <algorithm>
 #include <chrono>
 #include <iostream>
+#include <sstream>
 #include <limits>
 #include <ament_index_cpp/get_package_share_directory.hpp>
 // #include <ament_index_cpp/get_package_share_directory.hpp>
@@ -20,6 +21,7 @@ namespace arms_controller_common
         data_ = pinocchio::Data(model_);
         baseFrameName_ = baseFrameName;
         buildMappings();
+        aux_positions_ = Eigen::VectorXd::Zero(model_.nq);
 
         // 初始化权重为单位权重
         weight_ = Eigen::VectorXd::Ones(6);
@@ -29,6 +31,7 @@ namespace arms_controller_common
     {
         data_ = pinocchio::Data(model_);
         buildMappings();
+        aux_positions_ = Eigen::VectorXd::Zero(model_.nq);
         weight_ = Eigen::VectorXd::Ones(6);
     }
 
@@ -41,6 +44,20 @@ namespace arms_controller_common
     {
         setJointNames(joint_names, dual_arm);
         setEndEffectorNames(left_ee_name, right_ee_name);
+
+        // 一次性打印模型维度与手臂关节下标：分体模式（纯手臂模型）应为
+        // left=0..6 / right=7..13；全身模式（含腰/头）应是 left=4..10 /
+        // right=11..17。对不上说明 .info / joints 顺序有问题，FK 一定是错的。
+        std::ostringstream oss;
+        oss << "[ArmKinematics] model nq=" << model_.nq << " nv=" << model_.nv
+            << " left_q=[";
+        for (size_t i = 0; i < leftArmQIndices_.size(); ++i)
+            oss << (i ? "," : "") << leftArmQIndices_[i];
+        oss << "] right_q=[";
+        for (size_t i = 0; i < rightArmQIndices_.size(); ++i)
+            oss << (i ? "," : "") << rightArmQIndices_[i];
+        oss << "] L=" << leftEndEffectorName_ << " R=" << rightEndEffectorName_;
+        std::cerr << oss.str() << std::endl;
     }
 
     void ArmKinematics::setJointNames(const std::vector<std::string>& joint_names, bool dual_arm)
@@ -60,6 +77,54 @@ namespace arms_controller_common
 
         leftArmJointCount_ = leftArmJointNames_.size();
         rightArmJointCount_ = rightArmJointNames_.size();
+
+        // 记录手臂关节在模型里的 q/v 下标：全身模型（腰/头在手之前）必须按名字取，
+        // 不能假设手臂就是前 14 维。
+        auto collect_indices = [this](const std::vector<std::string>& names,
+                                      std::vector<int>& q_indices,
+                                      std::vector<int>& v_indices)
+        {
+            q_indices.clear();
+            v_indices.clear();
+            for (const auto& name : names)
+            {
+                const auto it = jointNameToId_.find(name);
+                if (it == jointNameToId_.end())
+                {
+                    q_indices.push_back(-1);
+                    v_indices.push_back(-1);
+                    continue;
+                }
+                const auto& joint =
+                    model_.joints[static_cast<pinocchio::JointIndex>(it->second)];
+                q_indices.push_back(joint.nq() == 1 ? joint.idx_q() : -1);
+                v_indices.push_back(joint.nv() == 1 ? joint.idx_v() : -1);
+            }
+        };
+        collect_indices(leftArmJointNames_, leftArmQIndices_, leftArmVIndices_);
+        collect_indices(rightArmJointNames_, rightArmQIndices_, rightArmVIndices_);
+        // 任一关节在模型里找不到时退回旧的“前 14 维”假设（纯手臂模型）。
+        const auto has_invalid = [](const std::vector<int>& v)
+        {
+            return std::any_of(v.begin(), v.end(), [](int i) { return i < 0; });
+        };
+        if (has_invalid(leftArmQIndices_) || has_invalid(rightArmQIndices_))
+        {
+            leftArmQIndices_.clear();
+            rightArmQIndices_.clear();
+            leftArmVIndices_.clear();
+            rightArmVIndices_.clear();
+            for (size_t i = 0; i < leftArmJointCount_; ++i)
+            {
+                leftArmQIndices_.push_back(static_cast<int>(i));
+                leftArmVIndices_.push_back(static_cast<int>(i));
+            }
+            for (size_t i = 0; i < rightArmJointCount_; ++i)
+            {
+                rightArmQIndices_.push_back(static_cast<int>(leftArmJointCount_ + i));
+                rightArmVIndices_.push_back(static_cast<int>(leftArmJointCount_ + i));
+            }
+        }
 
         extractJointLimits();
     }
@@ -88,7 +153,7 @@ namespace arms_controller_common
                                                    EndEffectorPose& leftPose,
                                                    EndEffectorPose& rightPose)
     {
-        Eigen::VectorXd joints = stateToJointVector(state);
+        Eigen::VectorXd joints = stateToModelConfiguration(state);
         updateKinematics(joints);
 
         int leftFrameId = getFrameId(leftEndEffectorName_);
@@ -112,7 +177,7 @@ namespace arms_controller_common
     EndEffectorPose ArmKinematics::computeFramePose(const RobotState& state,
                                                     const std::string& frameName)
     {
-        Eigen::VectorXd joints = stateToJointVector(state);
+        Eigen::VectorXd joints = stateToModelConfiguration(state);
         updateKinematics(joints);
 
         int frameId = getFrameId(frameName);
@@ -246,7 +311,7 @@ namespace arms_controller_common
                 state.leftArmJoints = q;
             else
                 state.rightArmJoints = q;
-            Eigen::VectorXd joints = stateToJointVector(state);
+            Eigen::VectorXd joints = stateToModelConfiguration(state);
             updateKinematics(joints);
 
             const auto& placement = data_.oMf[frameId];
@@ -370,60 +435,64 @@ namespace arms_controller_common
     Eigen::MatrixXd ArmKinematics::computeJacobian(const RobotState& state,
                                                    const std::string& armType)
     {
-        Eigen::VectorXd joints = stateToJointVector(state);
+        Eigen::VectorXd joints = stateToModelConfiguration(state);
         updateKinematics(joints);
         return getJacobian(armType);
     }
 
     Eigen::MatrixXd ArmKinematics::getJacobian(std::string armType)
     {
+        // 按关节在模型里的下标挑列（模型顺序不一定是“左臂在前 14 维”）：
+        // 全身模型里腰部/头部关节排在手之前，leftCols(7) 会挑到腰部关节。
+        auto frameArmColumns = [this](int frameId) {
+            Eigen::MatrixXd fullJacobian(6, model_.nv);
+            fullJacobian.setZero();
+            pinocchio::getFrameJacobian(model_, data_, frameId,
+                                        pinocchio::LOCAL_WORLD_ALIGNED, fullJacobian);
+            Eigen::MatrixXd out(6, static_cast<Eigen::Index>(
+                                       leftArmJointCount_ + rightArmJointCount_));
+            out.setZero();
+            for (size_t i = 0; i < leftArmVIndices_.size() && i < leftArmJointCount_; ++i)
+                out.col(static_cast<Eigen::Index>(i)) = fullJacobian.col(leftArmVIndices_[i]);
+            for (size_t i = 0; i < rightArmVIndices_.size() && i < rightArmJointCount_; ++i)
+                out.col(static_cast<Eigen::Index>(leftArmJointCount_ + i)) =
+                    fullJacobian.col(rightArmVIndices_[i]);
+            return out;
+        };
+
         if (armType == "left")
         {
-            int frameId = getFrameId(leftEndEffectorName_);
+            const int frameId = getFrameId(leftEndEffectorName_);
             if (frameId < 0)
             {
                 std::cerr << "Invalid end effector name: " << leftEndEffectorName_ << std::endl;
                 return Eigen::MatrixXd::Zero(6, leftArmJointCount_);
             }
-            Eigen::MatrixXd fullJacobian(6, model_.nv);
-            fullJacobian.setZero();
-            pinocchio::getFrameJacobian(model_, data_, frameId,
-                                        pinocchio::LOCAL_WORLD_ALIGNED, fullJacobian);
-            return fullJacobian.leftCols(leftArmJointCount_);
+            return frameArmColumns(frameId).leftCols(
+                static_cast<Eigen::Index>(leftArmJointCount_));
         }
         else if (armType == "right")
         {
-            int frameId = getFrameId(rightEndEffectorName_);
+            const int frameId = getFrameId(rightEndEffectorName_);
             if (frameId < 0)
             {
                 std::cerr << "Invalid end effector name: " << rightEndEffectorName_ << std::endl;
                 return Eigen::MatrixXd::Zero(6, rightArmJointCount_);
             }
-            Eigen::MatrixXd fullJacobian(6, model_.nv);
-            fullJacobian.setZero();
-            pinocchio::getFrameJacobian(model_, data_, frameId,
-                                        pinocchio::LOCAL_WORLD_ALIGNED, fullJacobian);
-            return fullJacobian.rightCols(rightArmJointCount_);
+            return frameArmColumns(frameId).rightCols(
+                static_cast<Eigen::Index>(rightArmJointCount_));
         }
         else if (armType == "both")
         {
-            int leftFrameId = getFrameId(leftEndEffectorName_);
-            int rightFrameId = getFrameId(rightEndEffectorName_);
-
+            const int leftFrameId = getFrameId(leftEndEffectorName_);
+            const int rightFrameId = getFrameId(rightEndEffectorName_);
             if (leftFrameId < 0 || rightFrameId < 0)
             {
                 return Eigen::MatrixXd::Zero(12, leftArmJointCount_ + rightArmJointCount_);
             }
 
-            Eigen::MatrixXd leftJacobian(6, leftArmJointCount_ + rightArmJointCount_);
-            Eigen::MatrixXd rightJacobian(6, leftArmJointCount_ + rightArmJointCount_);
-            leftJacobian.setZero();
-            rightJacobian.setZero();
-
-            pinocchio::getFrameJacobian(model_, data_, leftFrameId,
-                                        pinocchio::LOCAL_WORLD_ALIGNED, leftJacobian);
-            pinocchio::getFrameJacobian(model_, data_, rightFrameId,
-                                        pinocchio::LOCAL_WORLD_ALIGNED, rightJacobian);
+            const Eigen::MatrixXd leftJacobian = frameArmColumns(leftFrameId);
+            const Eigen::MatrixXd rightJacobian = frameArmColumns(rightFrameId);
 
             Eigen::MatrixXd combinedJacobian(12, leftArmJointCount_ + rightArmJointCount_);
             combinedJacobian.topRows(6) = leftJacobian;
@@ -573,6 +642,46 @@ namespace arms_controller_common
             joints.tail(rightArmJointCount_) = state.rightArmJoints;
         }
         return joints;
+    }
+
+    Eigen::VectorXd ArmKinematics::stateToModelConfiguration(const RobotState& state) const
+    {
+        // 模型完整配置（尺寸 model.nq）：先铺腰部/头部等非手臂关节，再按名字查到的
+        // 下标填手臂关节。14 自由度（纯手臂）模型下与 stateToJointVector 等价。
+        Eigen::VectorXd q = (aux_positions_.size() == model_.nq)
+                                ? aux_positions_
+                                : Eigen::VectorXd::Zero(model_.nq);
+        for (size_t i = 0; i < leftArmQIndices_.size() &&
+                           i < static_cast<size_t>(state.leftArmJoints.size()); ++i)
+        {
+            q(leftArmQIndices_[i]) = state.leftArmJoints(static_cast<Eigen::Index>(i));
+        }
+        for (size_t i = 0; i < rightArmQIndices_.size() &&
+                           i < static_cast<size_t>(state.rightArmJoints.size()); ++i)
+        {
+            q(rightArmQIndices_[i]) = state.rightArmJoints(static_cast<Eigen::Index>(i));
+        }
+        return q;
+    }
+
+    void ArmKinematics::setAuxJointPositions(
+        const std::vector<std::pair<std::string, double>>& values)
+    {
+        if (aux_positions_.size() != model_.nq)
+        {
+            aux_positions_ = Eigen::VectorXd::Zero(model_.nq);
+        }
+        for (const auto& entry : values)
+        {
+            const auto it = jointNameToId_.find(entry.first);
+            if (it == jointNameToId_.end()) continue;
+            const auto& joint = model_.joints[static_cast<pinocchio::JointIndex>(it->second)];
+            if (joint.nq() != 1) continue;
+            const int idx_q = joint.idx_q();
+            if (idx_q < 0 || idx_q >= model_.nq) continue;
+            if (!std::isfinite(entry.second)) continue;
+            aux_positions_(idx_q) = entry.second;
+        }
     }
 
     RobotState ArmKinematics::jointVectorToState(const Eigen::VectorXd& joint,

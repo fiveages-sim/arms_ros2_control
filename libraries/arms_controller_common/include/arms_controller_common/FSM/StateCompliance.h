@@ -32,6 +32,8 @@
 #include <geometry_msgs/msg/wrench_stamped.hpp>
 #include <geometry_msgs/msg/transform_stamped.hpp>
 #include <rclcpp_lifecycle/lifecycle_node.hpp>
+#include <sensor_msgs/msg/joint_state.hpp>
+#include <std_msgs/msg/float64.hpp>
 #include <std_srvs/srv/trigger.hpp>
 #include <tf2_ros/buffer.h>
 #include <tf2_ros/transform_listener.h>
@@ -53,6 +55,18 @@ namespace arms_controller_common
 
         /** Process tare requests and publish compensated FT telemetry in other FSM states. */
         void publishWrenchTelemetry(const rclcpp::Time& time, const rclcpp::Duration& period);
+
+        /**
+         * @brief 告知宿主控制器的关节布局。
+         *
+         * 分体模式：手臂占前 14 个接口（arm_offset = 0，无腰部）。
+         * 全身模式（WBC）：[body×4 | left×7 | right×7 | head×2]，口径为
+         * arm_offset = 4、waist_index = 3 — 腰部是同一控制器的关节，
+         * 可以直接写指令，不需要跨控制器话题。
+         * waist_index < 0 表示未提供腰部。
+         */
+        void setJointLayout(const std::vector<std::string>& controller_joint_names,
+                            size_t arm_offset, int waist_index);
 
     private:
         // ── Per-arm runtime state (index 0 = left, 1 = right) ──
@@ -186,6 +200,18 @@ namespace arms_controller_common
         void setupTeleopSubscriptions();
         void setupZeroWrenchService();
         void setupSurfaceTrackingService();
+
+        // ── 腰部（同一控制器的关节，直接写指令；见 setJointLayout）──
+        void setupWaistChannel();
+        void runWaistChannel(const rclcpp::Time& time, double dt);
+        /** 实测腰角（未使能/无腰部时为 0）。 */
+        double waistYawMeasured() const;
+        /** 有效目标在模型系里的平均方位角（= 世界方位 − 腰角）。 */
+        double waistTargetResidualAzimuth() const;
+        /** 两臂雅可比条件数的最大值（"手臂病态程度"，<=0 表示未计算）。 */
+        void updateArmConditioning();
+        /** 把非手臂关节（腰/头）的当前指令值写入运动学模型，使 FK/Jacobian 与实际一致。 */
+        void syncAuxJointPositions();
         WrenchSnapshot sampleAndPublishWrenches(const rclcpp::Time& time);
         void updateZeroCalibration(const WrenchSnapshot& snapshot, const rclcpp::Time& time,
                                    const rclcpp::Duration& period);
@@ -364,5 +390,40 @@ namespace arms_controller_common
         rclcpp::Time last_force_status_pub_{0, 0, RCL_ROS_TIME};
 
         std::mutex wrench_mutex_;
+
+        // ── 腰部柔顺通道状态 ──
+        bool waist_enabled_{false};
+        std::string waist_joint_{"body_joint4"};
+        std::string waist_target_topic_{"/compliance_waist_target"};
+        double waist_soft_limit_{1.047};  // rad, |q| 上限（≈60°）
+        double waist_rate_{0.15};         // rad/s，关节指令速率上限
+        double waist_gain_{0.5};          // 1/s，方位残差 → 角速率
+        double waist_deadband_{0.005};    // rad
+        // 宿主控制器的关节布局（见 setJointLayout）
+        size_t arm_offset_{0};
+        int waist_index_{-1};
+        std::vector<std::string> controller_joint_names_;
+        mutable std::mutex waist_mutex_;
+        double waist_position_{0.0};      // 最近实测腰角 [rad]
+        bool waist_position_valid_{false};
+        double waist_target_{0.0};        // 外部目标 [rad]（manual 模式）
+        bool waist_target_valid_{false};
+        double waist_command_{0.0};       // 实际下发（已速率/限幅）[rad]
+        bool waist_command_valid_{false};
+        // ── 腰/臂策略分配 ──
+        // "manual"：跟 /compliance_waist_target；"follow_target"：腰跟随目标方位，
+        // 让手臂留在舒适区（扩大目标可达方位范围）。
+        std::string waist_mode_{"manual"};
+        double waist_comfort_{0.35};      // rad，残差方位超过该值才动腰
+        bool waist_follow_engaged_{false};
+        // 手臂病态程度（雅可比条件数 σmax/σmin）：超门槛时把介入门限收紧一半。
+        double waist_cond_max_{12.0};     // <=0 关闭该触发条件
+        double arm_cond_badness_{0.0};    // 当前两臂最大条件数
+        int cond_update_counter_{0};      // 降频计数器（条件数 10 Hz 更新即可）
+        // 方位残差一阶低通：不让目标抖动去激励本来就慢、延迟又大的腰部回路。
+        double waist_filter_tau_{0.2};    // s，<=0 关闭
+        double waist_azimuth_filt_{0.0};
+        bool waist_azimuth_filt_valid_{false};
+        rclcpp::Subscription<std_msgs::msg::Float64>::SharedPtr waist_target_sub_;
     };
 } // namespace arms_controller_common
