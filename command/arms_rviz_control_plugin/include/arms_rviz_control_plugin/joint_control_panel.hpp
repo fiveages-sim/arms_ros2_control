@@ -33,6 +33,9 @@
 #include <geometry_msgs/msg/twist_stamped.hpp>
 #include <arms_ros2_control_msgs/msg/wbc_current_state.hpp>
 #include <arms_controller_common/utils/JointLimitsManager.h>
+#include <arms_controller_common/utils/HeadCouplingLimits.h>
+#include <future>
+#include <optional>
 #include <rclcpp/parameter_client.hpp>
 
 namespace arms_rviz_control_plugin
@@ -107,6 +110,16 @@ namespace arms_rviz_control_plugin
         bool hasControllerForCategory(const std::string& category);
         bool shouldShowSendButton() const;
         void updateSpinboxRanges();
+        void refreshHeadCouplingParameters(bool send_after_refresh = false);
+        void applyHeadCouplingRanges();
+        std::unique_ptr<QTimer> head_coupling_timer_;
+        std::shared_ptr<rclcpp::AsyncParametersClient> head_parameter_client_;
+        std::shared_future<std::vector<rclcpp::Parameter>> head_parameter_future_;
+        std::chrono::steady_clock::time_point head_parameter_requested_at_;
+        std::string head_parameter_context_;
+        std::optional<arms_controller_common::HeadCouplingConfig> head_panel_config_;
+        bool head_send_pending_{false};
+        bool head_range_updates_suspended_{false};
         bool refreshJointMetadataFromCache();
         void initializeJoints(const std::vector<std::string>& joint_names_source);
         void publishWaistLifting(double value);

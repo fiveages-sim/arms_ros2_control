@@ -39,6 +39,7 @@ set(ARMS_CONTROLLER_COMMON_SOURCES
         src/FSM/StateHold.cpp
         src/FSM/StateMoveJ.cpp
         src/utils/GravityCompensation.cpp
+        src/utils/HeadCouplingLimits.cpp
         src/utils/JointLimitsManager.cpp
         src/utils/JointTrajectoryManager.cpp
         src/utils/JointSpeedStopPlanner.cpp

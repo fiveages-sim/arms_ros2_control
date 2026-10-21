@@ -217,6 +217,16 @@ namespace basic_joint_controller
     controller_interface::CallbackReturn BasicJointController::on_configure(
         const rclcpp_lifecycle::State& /*previous_state*/)
     {
+        // Initialize limits synchronously; activation must not depend on a subscription callback.
+        const auto& robot_description = get_robot_description();
+        if (robot_description.empty())
+        {
+            RCLCPP_ERROR(get_node()->get_logger(), "Cannot configure without robot description");
+            return CallbackReturn::ERROR;
+        }
+        state_list_.home->updateJointLimitsFromURDF(robot_description, joint_names_);
+        state_list_.movej->updateJointLimitsFromURDF(robot_description);
+
         // Subscribe to FSM command (dedicated topic for state transitions)
         fsm_command_subscription_ = get_node()->create_subscription<std_msgs::msg::Int32>(
             "/fsm_command", 10, [this](const std_msgs::msg::Int32::SharedPtr msg)
@@ -603,6 +613,17 @@ namespace basic_joint_controller
         for (auto& interface : state_interfaces_)
         {
             state_interface_map_[interface.get_interface_name()]->push_back(interface);
+        }
+
+        try
+        {
+            state_list_.movej->validateHeadCouplingSetup();
+        }
+        catch (const std::exception& error)
+        {
+            RCLCPP_ERROR(get_node()->get_logger(), "Head coupling setup failed: %s", error.what());
+            ctrl_interfaces_.clear();
+            return CallbackReturn::ERROR;
         }
 
         // Initialize last sent joint positions from current state

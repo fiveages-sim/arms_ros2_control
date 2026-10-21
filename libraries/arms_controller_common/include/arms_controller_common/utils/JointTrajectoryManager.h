@@ -1,6 +1,7 @@
 #pragma once
 
 #include "arms_controller_common/utils/Interpolation.h"
+#include "arms_controller_common/utils/HeadCouplingLimits.h"
 #include <vector>
 #include <memory>
 #include <rclcpp/rclcpp.hpp>
@@ -40,6 +41,53 @@ namespace arms_controller_common
          * @return True if DOUBLES interpolation can be used
          */
         static bool isDoublesAvailable();
+
+        struct TimedPoint
+        {
+            std::vector<double> positions, velocities, accelerations;
+        };
+
+        // Single targets initialized with initSingleNode only. Does not advance execution.
+        // Invalid time or unsupported/uninitialized plans throw std::invalid_argument.
+        // At/after the end, returns the exact target with zero derivatives.
+        TimedPoint evaluateAt(double elapsed_seconds) const;
+        double singleNodeDuration() const;
+        InterpolationType interpolationType() const { return interpolation_type_; }
+
+        struct HeadCandidateOptions
+        {
+            double duration{3.0};
+            InterpolationType type{InterpolationType::DOUBLES};
+            double frequency{100.0};
+            double tanh_scale{3.0};
+            bool auto_extend_duration{true};
+            double max_velocity{2.0}, max_acceleration{4.0}, max_jerk{20.0};
+        };
+
+        struct HeadTimedCandidate
+        {
+            HeadJointIndices indices{};
+            double yaw_start_delay{0.0};
+            double pitch_start_delay{0.0};
+            std::unique_ptr<JointTrajectoryManager> base;
+            std::unique_ptr<JointTrajectoryManager> yaw;
+            std::unique_ptr<JointTrajectoryManager> pitch;
+            TimedPoint evaluateAt(double elapsed_seconds) const;
+            double duration() const;
+        };
+
+        // Target is already clipped. Failure clears candidate and supplies a reason.
+        // Axis start delays coordinate boundary crossings; other joints retain the base trajectory.
+        bool buildHeadTimedCandidate(
+            const std::vector<double>& start,
+            const std::vector<double>& target,
+            HeadJointIndices indices,
+            const HeadCouplingLimits& limits,
+            bool allow_yaw,
+            bool allow_pitch,
+            const HeadCandidateOptions& options,
+            std::unique_ptr<HeadTimedCandidate>& candidate,
+            std::string& error) const;
 
         /**
          * @brief Initialize single-node trajectory
@@ -278,11 +326,14 @@ namespace arms_controller_common
                                     planning::TrajectoryParameter& res);
 #endif
         double planningTime_{0.0};
+        bool timed_evaluation_ready_{false};
 
         // Advanced mode (lina_planning) - conditionally compiled
 #ifdef HAS_LINA_PLANNING
         // Single-node DOUBLES planner
         std::unique_ptr<planning::moveJ> movej_planner_;
+        // Random-access calls mutate planner completion state; isolate them from run().
+        std::unique_ptr<planning::moveJ> evaluation_planner_;
 
         // Multi-node DOUBLES planner
         std::unique_ptr<planning::SmoothCurveOfMultiJointsUsingBlending> multi_node_planner_;

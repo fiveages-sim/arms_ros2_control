@@ -108,12 +108,308 @@ namespace arms_controller_common
         last_waist_turning_factor_ = 0.0;
         if (node_)
         {
+            loadHeadCouplingConfig();
             declareCartesianDefaultParameters();
             declareMoveJVelocityParameters();
             current_target_joint_publisher_ =
                 arms_controller_common::utils::getOrCreateCurrentTargetJointPublisher(node_);
             fsm_command_publisher_ = node_->create_publisher<std_msgs::msg::Int32>(
                 "/fsm_command", 1);
+        }
+    }
+
+    void StateMoveJ::loadHeadCouplingConfig()
+    {
+        auto& c = head_coupling_config_;
+        const auto read = [this](const std::string& field, auto& value) {
+            const std::string name = "head_coupling." + field;
+            if (!node_->has_parameter(name)) node_->declare_parameter(name, value);
+            node_->get_parameter(name, value);
+        };
+        read("yaw_joint", c.yaw_joint);
+        read("pitch_joint", c.pitch_joint);
+
+        // Enable by default only when this controller owns both configured head joints.
+        // An explicit parameter override still takes precedence over this default.
+        c.enabled = std::find(joint_names_.begin(), joint_names_.end(), c.yaw_joint) != joint_names_.end() &&
+                    std::find(joint_names_.begin(), joint_names_.end(), c.pitch_joint) != joint_names_.end();
+        read("enabled", c.enabled);
+        head_joint_indices_ = findHeadJointIndices(c, joint_names_);
+        if (c.enabled)
+            RCLCPP_INFO(node_->get_logger(),
+                "Head coupling enabled for direct doubles/linear/tanh position targets");
+    }
+
+    void StateMoveJ::validateHeadCouplingSetup() const
+    {
+        if (!head_coupling_config_.enabled) return;
+        const auto indices = findHeadJointIndices(head_coupling_config_, joint_names_).value();
+        for (size_t index : {indices.yaw, indices.pitch})
+        {
+            if (index >= ctrl_interfaces_.joint_position_state_interface_.size() ||
+                ctrl_interfaces_.joint_position_state_interface_[index].get().get_prefix_name() != joint_names_[index])
+                throw std::invalid_argument("Head coupling position interfaces missing or out of order");
+            const auto value = ctrl_interfaces_.joint_position_state_interface_[index].get().get_optional();
+            if (!value || !std::isfinite(*value))
+                throw std::invalid_argument("Head coupling position feedback unavailable");
+        }
+        const auto yaw = joint_limits_manager_->getJointLimits(head_coupling_config_.yaw_joint);
+        const auto pitch = joint_limits_manager_->getJointLimits(head_coupling_config_.pitch_joint);
+        if (!yaw.initialized || !pitch.initialized)
+            throw std::invalid_argument("Head coupling requires URDF position limits before activation");
+        const HeadCouplingLimits limits(head_coupling_config_, {yaw.lower, yaw.upper},
+                                        {pitch.lower, pitch.upper});
+        (void)limits;
+    }
+
+    bool StateMoveJ::headCouplingApplies() const
+    {
+        return head_coupling_config_.enabled && head_joint_indices_ &&
+               (interpolation_type_ == InterpolationType::DOUBLES ||
+                interpolation_type_ == InterpolationType::LINEAR ||
+                interpolation_type_ == InterpolationType::TANH);
+    }
+
+    HeadCouplingLimits StateMoveJ::headCouplingLimits() const
+    {
+        const auto yaw = joint_limits_manager_->getJointLimits(head_coupling_config_.yaw_joint);
+        const auto pitch = joint_limits_manager_->getJointLimits(head_coupling_config_.pitch_joint);
+        if (!yaw.initialized || !pitch.initialized)
+        {
+            throw std::invalid_argument("Head coupling requires URDF limits");
+        }
+        return HeadCouplingLimits(head_coupling_config_, {yaw.lower, yaw.upper}, {pitch.lower, pitch.upper});
+    }
+
+    HeadPose StateMoveJ::measuredHeadPose() const
+    {
+        const auto indices = head_joint_indices_.value();
+        const auto read = [this](size_t index) {
+            if (index >= ctrl_interfaces_.joint_position_state_interface_.size())
+                throw std::invalid_argument("Head position interface unavailable");
+            const auto value = ctrl_interfaces_.joint_position_state_interface_[index].get().get_optional();
+            if (!value || !std::isfinite(*value))
+                throw std::invalid_argument("Head position feedback unavailable");
+            return *value;
+        };
+        return {read(indices.yaw), read(indices.pitch)};
+    }
+
+    void StateMoveJ::clearHeadExecution()
+    {
+        head_execution_active_ = false;
+        head_waiting_ = false;
+        head_wait_elapsed_ = 0.0;
+        head_candidate_.reset();
+        head_elapsed_ = 0.0;
+    }
+
+    bool StateMoveJ::prepareHeadTarget(
+        const std::vector<double>& requested,
+        const std::vector<bool>& mask,
+        std::vector<double>& effective,
+        std::unique_ptr<JointTrajectoryManager::HeadTimedCandidate>& candidate) const
+    {
+        try
+        {
+            // 检查配置、输入维度和当前实测姿态。
+            validateHeadCouplingSetup();
+            const auto limits = headCouplingLimits();
+            const auto indices = head_joint_indices_.value();
+            auto start = ctrl_interfaces_.last_sent_joint_positions_;
+
+            if (requested.size() != joint_names_.size() ||
+                start.size() != requested.size() ||
+                mask.size() != requested.size())
+            {
+                throw std::invalid_argument("Head target dimensions do not match controller");
+            }
+
+            const auto measured = measuredHeadPose();
+            if (!limits.containsMeasured(measured))
+            {
+                throw std::invalid_argument(
+                    "Head feedback outside measured tolerance: yaw=" + std::to_string(measured.yaw) +
+                    ", pitch=" + std::to_string(measured.pitch) + " rad");
+            }
+
+            // Initial commands may originate from encoder feedback just outside a boundary.
+            // Normalize only this local candidate start, not the stored command or target limits.
+            const auto normalized = limits.normalizedStart({start[indices.yaw], start[indices.pitch]});
+            if ((!mask[indices.yaw] && normalized.yaw != start[indices.yaw]) ||
+                (!mask[indices.pitch] && normalized.pitch != start[indices.pitch]))
+            {
+                throw std::invalid_argument("Head start correction requires both affected joints to be authorized");
+            }
+            start[indices.yaw] = normalized.yaw;
+            start[indices.pitch] = normalized.pitch;
+
+            // 应用原有限位；未选中的关节保持最后下发位置。
+            effective = joint_limit_checker_ ? joint_limit_checker_(requested) : requested;
+            if (effective.size() != requested.size())
+            {
+                throw std::invalid_argument("Joint limit callback returned invalid dimensions");
+            }
+
+            for (size_t i = 0; i < effective.size(); ++i)
+            {
+                if (!mask[i])
+                {
+                    effective[i] = start[i];
+                }
+            }
+
+            // 根据最终水平角裁剪俯仰，不能擅自移动未授权的俯仰轴。
+            const auto clipped = limits.clipPitch({effective[indices.yaw], effective[indices.pitch]});
+            if (clipped.clipped && !mask[indices.pitch])
+            {
+                throw std::invalid_argument("Head avoidance requires authorized pitch movement");
+            }
+            effective[indices.pitch] = clipped.value;
+
+            // 沿用当前控制器的插值模式、时长和运动限制。
+            JointTrajectoryManager::HeadCandidateOptions options;
+            options.duration = duration_;
+            options.type = interpolation_type_;
+            options.frequency = ctrl_interfaces_.frequency_;
+            options.tanh_scale = tanh_scale_ > 0.0 ? tanh_scale_ : 3.0;
+            options.auto_extend_duration = movej_auto_extend_duration_;
+            options.max_velocity = movej_max_velocity_;
+            options.max_acceleration = movej_max_acceleration_;
+            options.max_jerk = movej_max_jerk_;
+
+            // 生成独立候选，不替换或推进当前执行中的轨迹。
+            std::string error;
+            if (!trajectory_manager_.buildHeadTimedCandidate(
+                    start, effective, indices, limits,
+                    mask[indices.yaw], mask[indices.pitch], options, candidate, error))
+            {
+                throw std::invalid_argument(error);
+            }
+
+            return true;
+        }
+        catch (const std::exception& error)
+        {
+            RCLCPP_WARN(node_->get_logger(), "Head target rejected: %s", error.what());
+            return false;
+        }
+    }
+
+    bool StateMoveJ::submitHeadTarget(const std::vector<double>& requested, const std::vector<bool>& mask)
+    {
+        const auto indices = head_joint_indices_.value();
+        if (!mask[indices.yaw] && !mask[indices.pitch]) return false;
+        std::vector<double> effective;
+        std::unique_ptr<JointTrajectoryManager::HeadTimedCandidate> candidate;
+        if (!prepareHeadTarget(requested, mask, effective, candidate)) return true;
+        if (head_execution_active_ && !stop_to_zero_active_ && joint_mask_ == mask &&
+            areJointPositionsSame(target_pos_, effective)) return true;
+
+        // 空闲时立即执行此回调；有旧运动时，停止完成后再执行。
+        requestMotionOrDefer([this, requested, mask]() {
+            // 起点可能因停止而改变，必须从最后下发位置重新规划。
+            std::vector<double> final_target;
+            std::unique_ptr<JointTrajectoryManager::HeadTimedCandidate> planned;
+            if (!headCouplingApplies() ||
+                !prepareHeadTarget(requested, mask, final_target, planned))
+            {
+                return;
+            }
+
+            // 新候选已准备好，替换旧任务并记录有效最终目标。
+            clearHeadExecution();
+            trajectory_manager_.reset();
+            start_pos_ = ctrl_interfaces_.last_sent_joint_positions_;
+            target_pos_ = final_target;
+
+            // 仅执行本次授权的关节，其余关节保持当前命令。
+            joint_mask_ = mask;
+            use_prefix_filter_ = true;
+            active_prefix_.clear();
+            refreshHoldPositions();
+
+            // 相同目标无需启动新的计时运动。
+            has_target_ = !areJointPositionsSame(start_pos_, target_pos_);
+            interpolation_active_ = has_target_;
+            head_execution_active_ = has_target_;
+
+            // 对外反馈最终目标，而不是第一段的过渡点。
+            publishCurrentTargetJoint(target_pos_);
+            if (requested[head_joint_indices_->pitch] != target_pos_[head_joint_indices_->pitch])
+            {
+                RCLCPP_INFO(node_->get_logger(), "Head pitch clipped from %.9f to %.9f rad",
+                            requested[head_joint_indices_->pitch], target_pos_[head_joint_indices_->pitch]);
+            }
+
+            if (has_target_)
+            {
+                head_candidate_ = std::move(planned);
+            }
+
+        });
+        return true;
+    }
+
+    void StateMoveJ::failHeadExecution(const std::string& reason)
+    {
+        RCLCPP_ERROR(node_->get_logger(), "Head execution aborted: %s; requesting HOLD", reason.c_str());
+        clearPendingMotion();
+        clearHeadExecution();
+        trajectory_manager_.reset();
+        interpolation_active_ = false;
+        has_target_ = false;
+        maintainCommandFromLastSent();
+        ctrl_interfaces_.fsm_command_ = 2;
+        publishFsmCommand(2);
+    }
+
+    bool StateMoveJ::runHeadWait(const rclcpp::Duration& period)
+    {
+        if (!head_execution_active_) return false;
+        try
+        {
+            const auto limits = headCouplingLimits();
+            const auto measured = measuredHeadPose();
+            if (!limits.containsMeasured(measured))
+            {
+                throw std::invalid_argument(
+                    "Head feedback outside measured tolerance: yaw=" + std::to_string(measured.yaw) +
+                    ", pitch=" + std::to_string(measured.pitch) + " rad");
+            }
+            if (!head_waiting_) return false;
+            const bool arrived = std::abs(measured.yaw - head_final_endpoint_.yaw) <=
+                                     HeadCouplingConfig::position_tolerance &&
+                                 std::abs(measured.pitch - head_final_endpoint_.pitch) <=
+                                     HeadCouplingConfig::position_tolerance;
+            if (arrived)
+            {
+                head_waiting_ = false;
+                head_wait_elapsed_ = 0.0;
+                clearHeadExecution();
+                interpolation_active_ = false;
+                has_target_ = false;
+                trajectory_manager_.reset();
+            }
+            else
+            {
+                head_wait_elapsed_ += period.seconds();
+                if (head_wait_elapsed_ >= HeadCouplingConfig::transition_timeout)
+                    throw std::invalid_argument("Head position arrival timeout");
+            }
+            // Keep the final command; arrival uses position feedback only.
+            refreshHoldPositions();
+            for (size_t i = 0; i < hold_positions_.size(); ++i)
+            {
+                ctrl_interfaces_.setJointPositionCommand(i, hold_positions_[i]);
+                ctrl_interfaces_.setCommandDerivatives(i, 0.0, 0.0);
+            }
+            return true;
+        }
+        catch (const std::exception& error)
+        {
+            failHeadExecution(error.what());
+            return true;
         }
     }
 
@@ -142,6 +438,13 @@ namespace arms_controller_common
         trajectory_manager_.setControllerFrequency(ctrl_interfaces_.frequency_);
         updateMoveJVelocityParameters();
         updateCartesianDefaults();
+        if (previous_type != interpolation_type_ && head_execution_active_)
+        {
+            clearHeadExecution();
+            trajectory_manager_.reset();
+            interpolation_active_ = false;
+            has_target_ = false;
+        }
         if (previous_type != interpolation_type_ &&
             (previous_type == InterpolationType::SERVO || interpolation_type_ == InterpolationType::SERVO))
         {
@@ -525,7 +828,7 @@ namespace arms_controller_common
     {
         std::lock_guard lock(target_mutex_);
 
-        if (trajectory_manager_.isInitialized() || move_cartesian_active_ ||
+        if (head_execution_active_ || trajectory_manager_.isInitialized() || move_cartesian_active_ ||
             waist_lifting_active_ || waist_turning_active_ || stop_to_zero_active_)
             servo_initialized_ = false;
 
@@ -549,6 +852,8 @@ namespace arms_controller_common
         {
             return;
         }
+        if (runHeadWait(period)) return;
+
         // 优先处理腰部升降（与转向互斥）
         if (waist_lifting_active_ && waist_lifting_planer_)
         {
@@ -975,8 +1280,29 @@ namespace arms_controller_common
         double runtime_step = period.seconds();
         const bool servo_step = interpolation_type_ == InterpolationType::SERVO &&
                                 !trajectory_manager_.isInitialized();
-        std::vector<double> next_positions = servo_step
-            ? advanceServo(runtime_step) : trajectory_manager_.getNextPoint(runtime_step);
+        JointTrajectoryManager::TimedPoint head_point;
+        std::vector<double> next_positions;
+        if (head_execution_active_)
+        {
+            try
+            {
+                if (!head_candidate_ || !std::isfinite(runtime_step) || runtime_step <= 0.0)
+                    throw std::invalid_argument("Invalid head execution candidate or control period");
+                head_elapsed_ = std::min(head_elapsed_ + runtime_step, head_candidate_->duration());
+                head_point = head_candidate_->evaluateAt(head_elapsed_);
+                next_positions = head_point.positions;
+            }
+            catch (const std::exception& error)
+            {
+                failHeadExecution(error.what());
+                return;
+            }
+        }
+        else
+        {
+            next_positions = servo_step ? advanceServo(runtime_step)
+                                        : trajectory_manager_.getNextPoint(runtime_step);
+        }
 
         if (next_positions.empty())
         {
@@ -1089,6 +1415,12 @@ namespace arms_controller_common
             {
                 ctrl_interfaces_.setCommandDerivatives(i, servo_filters_[i].qd, servo_filters_[i].qdd);
             }
+            else if (head_execution_active_)
+            {
+                const bool held = use_prefix_filter_ && i < joint_mask_.size() && !joint_mask_[i];
+                ctrl_interfaces_.setCommandDerivatives(i, held ? 0.0 : head_point.velocities[i],
+                                                      held ? 0.0 : head_point.accelerations[i]);
+            }
             else if (trajectory_manager_.lastVelocities().size() == next_positions.size())
             {
                 const bool held = use_prefix_filter_ && i < joint_mask_.size() && !joint_mask_[i];
@@ -1109,6 +1441,14 @@ namespace arms_controller_common
                 has_target_ = false;
                 finishJointTrajectoryAction(true, false, "Joint trajectory completed successfully");
             }
+        }
+        else if (head_execution_active_ && head_elapsed_ >= head_candidate_->duration())
+        {
+            const auto indices = head_joint_indices_.value();
+            head_final_endpoint_ = {ctrl_interfaces_.last_sent_joint_positions_[indices.yaw],
+                                    ctrl_interfaces_.last_sent_joint_positions_[indices.pitch]};
+            head_waiting_ = true;
+            head_wait_elapsed_ = 0.0;
         }
         else if (!servo_step && trajectory_manager_.isCompleted())
         {
@@ -1158,6 +1498,7 @@ namespace arms_controller_common
         start_pos_.clear();
 
         // Reset trajectory manager
+        clearHeadExecution();
         trajectory_manager_.reset();
 
         // Reset prefix filtering
@@ -1319,6 +1660,7 @@ namespace arms_controller_common
 
     void StateMoveJ::abortActiveMotionForStop()
     {
+        clearHeadExecution();
         pending_waist_motion_ = nullptr;
         pending_waist_kind_ = PendingWaistKind::NONE;
         servo_initialized_ = false;
@@ -1389,18 +1731,57 @@ namespace arms_controller_common
                 return false;
             }
         }
-        double vmax, amax, jmax;
-        if (trajectory_manager_.isInitialized())
+        if (headCouplingApplies())
         {
-            vmax = trajectory_manager_.stopMaxVelocity();
-            amax = trajectory_manager_.stopMaxAcceleration();
-            jmax = trajectory_manager_.stopMaxJerk();
+            try
+            {
+                const auto limits = headCouplingLimits();
+                const auto indices = head_joint_indices_.value();
+                const HeadPose commanded{command.positions[indices.yaw], command.positions[indices.pitch]};
+                const auto measured = measuredHeadPose();
+                if (!limits.containsMeasured(measured))
+                {
+                    throw std::invalid_argument(
+                        "Head stop feedback outside measured tolerance: yaw=" + std::to_string(measured.yaw) +
+                        ", pitch=" + std::to_string(measured.pitch) + " rad");
+                }
+                if (!limits.contains(commanded))
+                    throw std::invalid_argument("Head stop command begins outside coupling range");
+                const auto yaw = limits.yawRange();
+                lower[indices.yaw] = std::max(lower[indices.yaw], yaw.lower);
+                upper[indices.yaw] = std::min(upper[indices.yaw], yaw.upper);
+                const auto pitch = limits.pitchRange(commanded.yaw);
+                lower[indices.pitch] = std::max(lower[indices.pitch], pitch.lower);
+                upper[indices.pitch] = std::min(upper[indices.pitch], pitch.upper);
+                if (commanded.pitch > HeadCouplingConfig::pitch_side_upper)
+                {
+                    lower[indices.yaw] = std::max(lower[indices.yaw], -HeadCouplingConfig::yaw_boundary);
+                    upper[indices.yaw] = std::min(upper[indices.yaw], HeadCouplingConfig::yaw_boundary);
+                }
+                else
+                {
+                    upper[indices.pitch] = std::min(upper[indices.pitch], HeadCouplingConfig::pitch_side_upper);
+                }
+            }
+            catch (const std::exception& error)
+            {
+                RCLCPP_ERROR(node_->get_logger(), "Head stop rejected: %s; retaining motion", error.what());
+                return false;
+            }
+        }
+        double vmax, amax, jmax;
+        const auto& stop_trajectory = head_candidate_ ? *head_candidate_->base : trajectory_manager_;
+        if (stop_trajectory.isInitialized())
+        {
+            vmax = stop_trajectory.stopMaxVelocity();
+            amax = stop_trajectory.stopMaxAcceleration();
+            jmax = stop_trajectory.stopMaxJerk();
         }
         else
         {
             std::tie(vmax, amax, jmax) = std::make_tuple(movej_max_velocity_, movej_max_acceleration_, movej_max_jerk_);
         }
-        const bool truncate = !trajectory_manager_.isInitialized() || !trajectory_manager_.isDoubles();
+        const bool truncate = !stop_trajectory.isInitialized() || !stop_trajectory.isDoubles();
         if (!speed_stop_planner_.init(command.positions, command.velocities, command.accelerations,
                                       vmax, amax, jmax, lower, upper, truncate))
         {
@@ -1543,6 +1924,8 @@ namespace arms_controller_common
         std::lock_guard lock(target_mutex_);
         if (!validatePositionRequest(joint_names_, target_pos)) return;
         updateParam();
+        if (state_active_ && headCouplingApplies() &&
+            submitHeadTarget(target_pos, std::vector<bool>(joint_names_.size(), true))) return;
         if (interpolation_type_ != InterpolationType::SERVO && interpolation_active_ &&
             !stop_to_zero_active_ && has_target_ && areJointPositionsSame(target_pos_, target_pos)) return;
 
@@ -1621,6 +2004,22 @@ namespace arms_controller_common
             }
         if (!validatePositionRequest(selected_names, target_pos)) return;
         updateParam();
+        if (state_active_ && headCouplingApplies())
+        {
+            auto full_target = ctrl_interfaces_.last_sent_joint_positions_;
+            std::vector<bool> mask(joint_names_.size(), false);
+            if (full_target.size() != mask.size()) return;
+            size_t selected = 0;
+            for (size_t i = 0; i < joint_names_.size(); ++i)
+            {
+                if (isJointInPrefixGroup(joint_names_[i], prefix))
+                {
+                    mask[i] = true;
+                    full_target[i] = target_pos[selected++];
+                }
+            }
+            if (submitHeadTarget(full_target, mask)) return;
+        }
         if (interpolation_type_ != InterpolationType::SERVO && interpolation_active_ &&
             !stop_to_zero_active_ && has_target_ && areJointPositionsSame(previous_target, target_pos)) return;
 
@@ -1715,7 +2114,9 @@ namespace arms_controller_common
 
     void StateMoveJ::setJointNames(const std::vector<std::string>& joint_names)
     {
+        const auto head_indices = findHeadJointIndices(head_coupling_config_, joint_names);
         joint_names_ = joint_names;
+        head_joint_indices_ = head_indices;
 
         // Update joint limits manager if it exists
         if (joint_limits_manager_)
@@ -5206,6 +5607,7 @@ namespace arms_controller_common
                 ctrl_interfaces_.setJointPositionCommand(i, hold_positions_[i]);
             }
 
+            clearHeadExecution();
             interpolation_active_ = false;
             has_target_ = false;
             move_cartesian_active_ = false;

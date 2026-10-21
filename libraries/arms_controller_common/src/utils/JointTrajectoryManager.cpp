@@ -5,6 +5,7 @@
 #include <algorithm>
 #include <cmath>
 #include <utility>
+#include <stdexcept>
 
 namespace
 {
@@ -44,6 +45,193 @@ namespace arms_controller_common
 #else
         return false;
 #endif
+    }
+
+    JointTrajectoryManager::TimedPoint JointTrajectoryManager::HeadTimedCandidate::evaluateAt(double t) const
+    {
+        auto result = base->evaluateAt(t);
+        const auto apply = [&](const auto& axis, size_t index, double delay) {
+            if (!axis) return;
+            auto point = axis->evaluateAt(std::max(0.0, t-delay));
+            if (t < delay)
+            {
+                point.velocities[0] = 0.0;
+                point.accelerations[0] = 0.0;
+            }
+            result.positions[index] = point.positions[0];
+            result.velocities[index] = point.velocities[0];
+            result.accelerations[index] = point.accelerations[0];
+        };
+        apply(yaw, indices.yaw, yaw_start_delay);
+        apply(pitch, indices.pitch, pitch_start_delay);
+        return result;
+    }
+
+    double JointTrajectoryManager::HeadTimedCandidate::duration() const
+    {
+        return std::max({base->singleNodeDuration(), yaw ? yaw_start_delay + yaw->singleNodeDuration() : 0.0,
+                         pitch ? pitch_start_delay + pitch->singleNodeDuration() : 0.0});
+    }
+
+    bool JointTrajectoryManager::buildHeadTimedCandidate(
+        const std::vector<double>& start,
+        const std::vector<double>& target,
+        HeadJointIndices indices,
+        const HeadCouplingLimits& limits,
+        bool allow_yaw,
+        bool allow_pitch,
+        const HeadCandidateOptions& options,
+        std::unique_ptr<HeadTimedCandidate>& candidate,
+        std::string& error) const
+    {
+        candidate.reset();
+        error.clear();
+        try
+        {
+            const auto require = [](bool ok, const char* message) {
+                if (!ok) throw std::invalid_argument(message);
+            };
+            require(options.type == InterpolationType::DOUBLES || options.type == InterpolationType::LINEAR ||
+                    options.type == InterpolationType::TANH, "Unsupported head timing interpolation");
+            require(!start.empty() && start.size() == target.size() && indices.yaw != indices.pitch &&
+                    indices.yaw < start.size() && indices.pitch < start.size(), "Invalid head timing dimensions");
+            for (const auto* values : {&start, &target})
+                for (double v : *values) require(std::isfinite(v), "Non-finite head timing position");
+            for (double v : {options.duration, options.frequency, options.tanh_scale,
+                             options.max_velocity, options.max_acceleration, options.max_jerk})
+                require(std::isfinite(v) && v > 0.0, "Invalid head timing options");
+            const HeadPose from{start[indices.yaw], start[indices.pitch]};
+            const HeadPose to{target[indices.yaw], target[indices.pitch]};
+            require(limits.contains(from) && limits.contains(to), "Head timing endpoints outside limits");
+            require((allow_yaw || from.yaw == to.yaw) && (allow_pitch || from.pitch == to.pitch),
+                    "Head timing moves an unauthorized joint");
+
+            // Each initialization enforces its own limits. Stationary vectors use basic holding.
+            const auto plan = [&](const std::vector<double>& a, const std::vector<double>& b,
+                                  double requested) {
+                auto trajectory = std::make_unique<JointTrajectoryManager>(logger_);
+                auto type = a == b ? InterpolationType::LINEAR : options.type;
+                double duration = requested;
+                if (type != InterpolationType::DOUBLES || !isDoublesAvailable())
+                {
+                    double distance = 0.0;
+                    for (size_t i = 0; i < a.size(); ++i) distance = std::max(distance, std::abs(b[i]-a[i]));
+                    const double scale = type == InterpolationType::TANH ? options.tanh_scale : 1.0;
+                    duration = std::max(duration, scale * distance / options.max_velocity);
+                }
+                require(trajectory->initSingleNode(a, b, duration, type, options.frequency,
+                    options.tanh_scale, true, options.max_velocity, options.max_acceleration,
+                    options.max_jerk), "Failed to initialize head timing trajectory");
+                require(options.auto_extend_duration || trajectory->singleNodeDuration() <= options.duration + 1e-9,
+                        "Head timing requires duration extension but extension is disabled");
+                return trajectory;
+            };
+            auto result = std::make_unique<HeadTimedCandidate>();
+            result->indices = indices;
+            result->base = plan(start, target, options.duration);
+            if (limits.containsSegment(from, to))
+            {
+                candidate = std::move(result);
+                return true;
+            }
+            require(allow_yaw && allow_pitch, "Head timing avoidance requires both joints");
+            result->yaw = plan({from.yaw}, {to.yaw}, result->base->singleNodeDuration());
+            result->pitch = plan({from.pitch}, {to.pitch}, result->base->singleNodeDuration());
+
+            const double boundary = HeadCouplingConfig::yaw_boundary;
+            const bool outward = std::abs(to.yaw) > boundary;
+            const double side_yaw = outward ? to.yaw : from.yaw;
+            const auto side_range = limits.pitchRange(side_yaw);
+            // Advance outward clearance / postpone inward release by the existing yaw margin.
+            // If a center endpoint lies inside the margin, use half its remaining clearance.
+            const double center_yaw = outward ? std::abs(from.yaw) : std::abs(to.yaw);
+            const double clearance = std::min(HeadCouplingConfig::yaw_margin,
+                                             std::max(0.0, (boundary-center_yaw)/2.0));
+            const double guarded_boundary = boundary - clearance;
+            const double side_upper = outward ? std::max(to.pitch,
+                side_range.upper - HeadCouplingConfig::pitch_margin) : side_range.upper;
+
+            // Find the first crossing with a bracket. The upper/lower bounds let us
+            // align safety events conservatively, including tanh's endpoint jump.
+            const auto crossing = [](const JointTrajectoryManager& axis, double start,
+                                     double target, double value) {
+                double low = 0.0, high = axis.singleNodeDuration();
+                if (start == value) return std::pair<double, double>{0.0, 0.0};
+                const bool increasing = target > start;
+                for (int i = 0; i < 60; ++i)
+                {
+                    const double mid = (low+high)/2.0;
+                    const double position = axis.evaluateAt(mid).positions[0];
+                    if (increasing ? position < value : position > value) low = mid;
+                    else high = mid;
+                }
+                return std::pair<double, double>{low, high};
+            };
+            const double guarded_yaw = std::copysign(guarded_boundary, side_yaw);
+            const auto yaw_crossing = crossing(*result->yaw, from.yaw, to.yaw, guarded_yaw);
+            const auto pitch_crossing = crossing(*result->pitch, from.pitch, to.pitch, side_upper);
+            // Preserve both curves: delay only the axis that would cross too early.
+            // One control period supplies temporal clearance in addition to angle margins.
+            if (outward)
+            {
+                result->yaw_start_delay = std::max(0.0, pitch_crossing.second - yaw_crossing.first)
+                                          + 1.0/options.frequency;
+            }
+            else
+            {
+                result->pitch_start_delay = std::max(0.0, yaw_crossing.second - pitch_crossing.first)
+                                            + 1.0/options.frequency;
+            }
+            require(options.auto_extend_duration || result->duration() <= options.duration + 1e-9,
+                    "Head start delay exceeds requested duration while extension is disabled");
+
+            // Monotone single-target interpolation: partition at every yaw boundary.
+            // Pitch extrema on each interval are its endpoints, including one-sided limits.
+            const auto safe = [&]() {
+                const double end = result->duration();
+                std::vector<double> times{0.0, end, result->yaw_start_delay,
+                                          result->pitch_start_delay};
+                for (double boundary : {-guarded_boundary, guarded_boundary})
+                {
+                    if (boundary < std::min(from.yaw, to.yaw) || boundary > std::max(from.yaw, to.yaw)) continue;
+                    double low = 0.0, high = result->yaw->singleNodeDuration();
+                    const bool increasing = to.yaw > from.yaw;
+                    for (int i = 0; i < 60; ++i)
+                    {
+                        const double mid = (low + high) / 2.0;
+                        const double y = result->yaw->evaluateAt(mid).positions[0];
+                        if (increasing ? y < boundary : y > boundary) low = mid;
+                        else high = mid;
+                    }
+                    times.push_back(result->yaw_start_delay + low);
+                    times.push_back(result->yaw_start_delay + high);
+                }
+                std::sort(times.begin(), times.end());
+                for (size_t i = 1; i < times.size(); ++i)
+                {
+                    const double a = times[i-1], b = times[i];
+                    if (a == b) continue;
+                    const double y = result->evaluateAt((a+b)/2.0).positions[indices.yaw];
+                    auto range = limits.pitchRange(y);
+                    if (std::abs(y) > guarded_boundary)
+                    {
+                        range.upper = std::min(range.upper, side_upper);
+                    }
+                    const double p = result->evaluateAt(a).positions[indices.pitch];
+                    const double q = result->evaluateAt(b).positions[indices.pitch];
+                    if (std::min(p,q) < range.lower || std::max(p,q) > range.upper) return false;
+                }
+                return true;
+            };
+            require(safe(), "Delayed head trajectories leave coupling range");
+            candidate = std::move(result);
+            return true;
+        }
+        catch (const std::exception& exception)
+        {
+            error = exception.what();
+            return false;
+        }
     }
 
     bool JointTrajectoryManager::initSingleNode(
@@ -160,6 +348,12 @@ namespace arms_controller_common
                             return false;
                         }
 
+                        evaluation_planner_ = std::make_unique<planning::moveJ>();
+                        if (!evaluation_planner_->init(movej_init_para))
+                        {
+                            return false;
+                        }
+                        evaluation_planner_->setRealStartTime(0.0);
                         movej_planner_->setRealStartTime(0.0);
                         return true;
                     }
@@ -237,6 +431,7 @@ namespace arms_controller_common
         // another HOME request can mistake home_duration for an active trajectory
         // and start stop-to-zero. getNextPoint() supplies the target with zero
         // command derivatives; the physical device handles its own motion.
+        timed_evaluation_ready_ = true;
         completed_ = (type == InterpolationType::NONE);
         percent_ = completed_ ? 1.0 : 0.0;
 
@@ -513,6 +708,11 @@ namespace arms_controller_common
 
     void JointTrajectoryManager::reset()
     {
+        timed_evaluation_ready_ = false;
+#ifdef HAS_LINA_PLANNING
+        evaluation_planner_.reset();
+#endif
+
         mode_ = TrajectoryMode::NONE;
         initialized_ = false;
         completed_ = false;
@@ -591,6 +791,61 @@ namespace arms_controller_common
         default_max_velocity_ = std::max(max_velocity, 1e-6);
         default_max_acceleration_ = std::max(max_acceleration, 1e-6);
         default_max_jerk_ = std::max(max_jerk, 1e-6);
+    }
+
+    double JointTrajectoryManager::singleNodeDuration() const
+    {
+        if (!initialized_ || !timed_evaluation_ready_ || !isSingleNode())
+        {
+            throw std::invalid_argument("Timed evaluation requires initSingleNode");
+        }
+        return interpolation_type_ == InterpolationType::NONE ? 0.0 : duration_;
+    }
+
+    JointTrajectoryManager::TimedPoint JointTrajectoryManager::evaluateAt(double elapsed_seconds) const
+    {
+        const double duration = singleNodeDuration();
+        if (!std::isfinite(elapsed_seconds) || elapsed_seconds < 0.0)
+        {
+            throw std::invalid_argument("Trajectory time must be finite and nonnegative");
+        }
+        TimedPoint result{target_pos_, std::vector<double>(target_pos_.size(), 0.0),
+                          std::vector<double>(target_pos_.size(), 0.0)};
+        if (elapsed_seconds >= duration)
+        {
+            return result;
+        }
+#ifdef HAS_LINA_PLANNING
+        if (interpolation_type_ == InterpolationType::DOUBLES)
+        {
+            const auto point = evaluation_planner_->calculatePointAtTInRealTime(elapsed_seconds);
+            for (size_t i = 0; i < target_pos_.size(); ++i)
+            {
+                result.positions[i] = point.joint_pos(i);
+                result.velocities[i] = point.joint_vel(i);
+                result.accelerations[i] = point.joint_acc(i);
+            }
+            return result;
+        }
+#endif
+        const double percent = elapsed_seconds / duration;
+        const double phase = calculatePhase(interpolation_type_, percent);
+        double velocity = 1.0 / duration;
+        double acceleration = 0.0;
+        if (interpolation_type_ == InterpolationType::TANH)
+        {
+            const double rate = (tanh_scale_ > 0.0 ? tanh_scale_ : 3.0) / duration;
+            velocity = rate * (1.0 - phase * phase);
+            acceleration = -2.0 * rate * rate * phase * (1.0 - phase * phase);
+        }
+        for (size_t i = 0; i < target_pos_.size(); ++i)
+        {
+            const double distance = target_pos_[i] - start_pos_[i];
+            result.positions[i] = start_pos_[i] + phase * distance;
+            result.velocities[i] = velocity * distance;
+            result.accelerations[i] = acceleration * distance;
+        }
+        return result;
     }
 
     std::vector<double> JointTrajectoryManager::computeSingleNodePoint(double step_seconds)
@@ -1143,6 +1398,7 @@ namespace arms_controller_common
 
     void JointTrajectoryManager::clearPlan()
     {
+        timed_evaluation_ready_ = false;
 #ifdef HAS_LINA_PLANNING
         movej_planner_.reset();
         multi_node_planner_.reset();
