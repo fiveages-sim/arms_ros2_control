@@ -11,6 +11,7 @@
 #include <std_msgs/msg/float64_multi_array.hpp>
 #include <string>
 #include <cmath>
+#include <stdexcept>
 #include <boost/log/attributes/constant.hpp>
 #include <tf2/exceptions.h>
 
@@ -25,8 +26,10 @@ namespace basic_joint_controller
         conf.names.reserve(joint_names_.size() * command_interface_types_.size());
         for (const auto& joint_name : joint_names_)
         {
+            bool claims_velocity = false;
             for (const auto& interface_type : command_interface_types_)
             {
+                claims_velocity = claims_velocity || interface_type == "velocity";
                 if (!command_prefix_.empty())
                 {
                     conf.names.push_back(command_prefix_ + "/" + joint_name + "/" + interface_type);
@@ -34,6 +37,21 @@ namespace basic_joint_controller
                 else
                 {
                     conf.names.push_back(joint_name + "/" + interface_type);
+                }
+            }
+            const bool needs_reference_velocity =
+                std::find(reference_velocity_joints_.begin(),
+                          reference_velocity_joints_.end(), joint_name) !=
+                reference_velocity_joints_.end();
+            if (needs_reference_velocity && !claims_velocity)
+            {
+                if (!command_prefix_.empty())
+                {
+                    conf.names.push_back(command_prefix_ + "/" + joint_name + "/velocity");
+                }
+                else
+                {
+                    conf.names.push_back(joint_name + "/velocity");
                 }
             }
         }
@@ -81,6 +99,8 @@ namespace basic_joint_controller
             mode_ = FSMMode::NORMAL;
         }
 
+        // 参考速度必须在 FSM 写入位置命令后计算。
+        publishReferenceVelocities();
         ctrl_interfaces_.recordCommandMotion(period.seconds());
         return controller_interface::return_type::OK;
     }
@@ -103,6 +123,25 @@ namespace basic_joint_controller
                 auto_declare<std::vector<std::string>>("command_interfaces", command_interface_types_);
             state_interface_types_ =
                 auto_declare<std::vector<std::string>>("state_interfaces", state_interface_types_);
+            reference_velocity_joints_ =
+                auto_declare<std::vector<std::string>>("reference_velocity_joints", {});
+            for (size_t i = 0; i < reference_velocity_joints_.size(); ++i)
+            {
+                const auto& joint_name = reference_velocity_joints_[i];
+                if (std::find(joint_names_.begin(), joint_names_.end(), joint_name) ==
+                    joint_names_.end())
+                {
+                    throw std::invalid_argument(
+                        "reference_velocity_joints contains unknown joint '" + joint_name + "'");
+                }
+                if (std::find(reference_velocity_joints_.begin(),
+                              reference_velocity_joints_.begin() + i, joint_name) !=
+                    reference_velocity_joints_.begin() + i)
+                {
+                    throw std::invalid_argument(
+                        "reference_velocity_joints contains duplicate joint '" + joint_name + "'");
+                }
+            }
 
             // Home state
             auto_declare<double>("home_duration", 3.0);
@@ -131,6 +170,9 @@ namespace basic_joint_controller
             auto_declare<double>("movej_trajectory_blend_ratio", 0.0);
             auto_declare<double>("movej_max_velocity", 2.0);
             auto_declare<double>("movej_max_acceleration", 4.0);
+            // 轨迹参考速度输出幅值上限（rad/s）。
+            velocity_command_max_rad_s_ =
+                auto_declare<double>("velocity_command_max_rad_s", 2.0);
             auto_declare<double>("movej_max_jerk", 20.0);
             auto_declare<bool>("movej_auto_extend_duration", true);
 
@@ -599,6 +641,32 @@ namespace basic_joint_controller
             }
         }
 
+        velocity_command_index_by_joint_.assign(joint_names_.size(), -1);
+        for (size_t velocity_index = 0;
+             velocity_index < ctrl_interfaces_.joint_velocity_command_interface_.size();
+             ++velocity_index)
+        {
+            std::string joint_name =
+                ctrl_interfaces_.joint_velocity_command_interface_[velocity_index]
+                    .get().get_prefix_name();
+            if (!command_prefix_.empty() &&
+                joint_name.rfind(command_prefix_ + "/", 0) == 0)
+            {
+                joint_name.erase(0, command_prefix_.size() + 1);
+            }
+            const auto joint_it = std::find(joint_names_.begin(), joint_names_.end(), joint_name);
+            if (joint_it == joint_names_.end())
+            {
+                RCLCPP_ERROR(get_node()->get_logger(),
+                             "Claimed velocity interface belongs to unknown joint '%s'",
+                             joint_name.c_str());
+                return CallbackReturn::ERROR;
+            }
+            const size_t joint_index =
+                static_cast<size_t>(std::distance(joint_names_.begin(), joint_it));
+            velocity_command_index_by_joint_[joint_index] = static_cast<int>(velocity_index);
+        }
+
         // assign state interfaces
         for (auto& interface : state_interfaces_)
         {
@@ -608,6 +676,15 @@ namespace basic_joint_controller
         // Initialize last sent joint positions from current state
         // This ensures we have a baseline for smooth transitions to HOLD state
         ctrl_interfaces_.initializeLastSentPositions();
+
+        if (!ctrl_interfaces_.joint_velocity_command_interface_.empty())
+        {
+            RCLCPP_INFO(get_node()->get_logger(),
+                        "参考速度输出已启用：%zu 个关节的 command_interfaces 含 velocity "
+                        "⇒ 每拍写轨迹原生速度（上限 %.2f rad/s），供驱动内部阻抗层当 q̇_d 用",
+                        ctrl_interfaces_.joint_velocity_command_interface_.size(),
+                        velocity_command_max_rad_s_);
+        }
 
         // Initialize FSM
         current_state_ = state_list_.hold;
@@ -644,6 +721,21 @@ namespace basic_joint_controller
         const rclcpp_lifecycle::State& /*previous_state*/)
     {
         return CallbackReturn::SUCCESS;
+    }
+
+    void BasicJointController::publishReferenceVelocities()
+    {
+        for (size_t i = 0; i < velocity_command_index_by_joint_.size(); ++i)
+        {
+            const int velocity_index = velocity_command_index_by_joint_[i];
+            if (velocity_index < 0) continue;
+            double velocity = ctrl_interfaces_.getReferenceVelocity(i);
+            if (!std::isfinite(velocity)) velocity = 0.0;
+            if (std::isfinite(velocity_command_max_rad_s_) && velocity_command_max_rad_s_ > 0.0)
+                velocity = std::clamp(velocity, -velocity_command_max_rad_s_, velocity_command_max_rad_s_);
+            std::ignore = ctrl_interfaces_.joint_velocity_command_interface_[
+                static_cast<size_t>(velocity_index)].get().set_value(velocity);
+        }
     }
 
     void BasicJointController::buildTargetCommandHoldMask()

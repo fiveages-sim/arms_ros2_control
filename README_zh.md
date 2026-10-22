@@ -10,6 +10,7 @@
 - [快速开始](#快速开始)
 - [组件](#组件)
 - [配置](#配置)
+- [腰部电流环与两层重力补偿](#腰部电流环与两层重力补偿)
 - [开发](#开发)
 - [故障排除](#故障排除)
 - [许可证](#许可证)
@@ -281,6 +282,101 @@ colcon build --packages-up-to ocs2_arm_controller cr5_description arms_teleop ad
 
 - `ocs2_arm_controller/config/` - OCS2控制器配置
 - 硬件特定配置在硬件接口包中
+
+## Juxie 控制模式：位置环、速度环与电流环
+
+W2 的 Juxie 腰部/头部支持逐关节选择控制模式。配置位于机器 profile 的
+`hardware.juxie_joint_modes`；未列出的关节默认为 `csp`。
+
+| 模式 | 命令接口 | 驱动行为 |
+| --- | --- | --- |
+| `csp` | `position` | 位置命令直接发送到电机位置环 |
+| `csv` | `velocity` | 速度命令直接发送到电机速度环 |
+| `cst` | `position` + `velocity` | 两者作为位置/速度参考，驱动内部阻抗环计算电流并发送到电机电流环 |
+
+`csv` 和 `cst` 所需的硬件接口及控制器命令接口由 profile 自动派生；全身和分体控制器无需重复配置关节名单。
+电流环不导出 `effort` 命令接口。
+
+示例：
+
+```yaml
+hardware:
+  juxie_joint_modes:
+    body_joint1: cst
+    body_joint2: cst
+    head_joint1: csv
+```
+
+电流环由驱动以 2 ms 周期按 `I = Kp(q_d-q) + Kd(q̇_d-q̇) + 重力前馈 + 摩擦前馈` 计算，
+输出受 `max_current_ma` 限制。参数默认来自描述包的 `juxie_joint_impedance.yaml`；机器 profile 只需覆盖差异项。
+
+腰部重力前馈有两种来源：控制器发布的新鲜 RNEA 结果优先；话题超时后，驱动使用
+`gravity_ff_table` 指定的查表值。两种来源不叠加。表路径错误会导致硬件初始化失败。
+使用 `python3 scripts/identify_juxie_friction_gravity.py table` 生成查表文件。
+
+反馈异常超过 `feedback_timeout_cycles` 后，驱动将对应电机锁存为 CSP 位置保持并忽略后续命令。
+
+阻抗测试工具 `scripts/juxie_impedance.py` 支持离线自检、仿真和单电机 HIL。HIL 会接管所选电机；
+测试前停止 `ros2_control`，固定其余关节和负载，并设置保守的电流、转速和行程限制。
+
+### 快速摆臂时的腰部惯性前馈（WBC，可选）
+
+静态重力补偿 `g(q)` 不包含摆臂加速、减速产生的反作用力矩。WBC 可在相同负载快照中计算
+`Δτ = RNEA(q, v_arm, a_arm) - RNEA(q, 0, 0)`，将腰部对应的附加电流发到
+`<gravity_ff_topic>/dynamic`，由驱动与重力前馈相加，重力话题本身仍只包含静态项。
+`v_arm` 取硬件速度状态接口，`a_arm` 由实测速度差分后限幅、低通得到；不使用 MPC 目标速度。
+只启用模型中 `left_joint*`、`right_joint*` 的速度与加速度，腰部、头部和底盘运动分量设为零。
+因此这是双臂运动的附加补偿，不是全身完整逆动力学。
+
+参数放在 `robot.local.yaml` 的 `control.patch.ocs2_wbc_controller.ros__parameters` 下：
+
+```yaml
+waist_dynamic_ff_gain: 0.0                # 默认关闭；范围 [0, 1]
+waist_dynamic_ff_max_ma: 0.0              # 每个腰关节的附加电流限幅；启用前须确定正值
+waist_dynamic_ff_filter_hz: 10.0           # 速度/加速度估计低通，Hz
+waist_dynamic_ff_max_acceleration: 20.0    # 加速度估计限幅，rad/s²
+waist_dynamic_ff_advance_ms: 0.0           # 前馈超前量 [0,50] ms，补偿滤波/发布滞后
+waist_dynamic_ff_accel_method: diff_lpf    # 加速度估计：diff_lpf（差分+一阶低通）| sg（Savitzky-Golay）
+waist_dynamic_ff_sg_window: 9              # sg 的窗口长度（奇数 [5,31]，9 ≈ 18 ms @500 Hz）
+```
+
+`waist_dynamic_ff_advance_ms` 用一阶泰勒把手臂速度/加速度外推到“真正作用时刻”
+（`v ← v + T·a`，`a ← a + T·ȧ`），再进 RNEA；`0` 即不超前，行为与未加该参数时一致。
+
+为什么是超前而不是延后：手臂指令的 `future_time_offset`（22 周期 = 44 ms）是用来抵消
+位置环延迟的 —— 前视准了以后，手臂实际轨迹与 policy 在时间上已经对齐，实测 `q / q̇`
+就是当下正在发生的运动。真正错位的是**前馈链路自身**：10 Hz 一阶低通约 16 ms、
+100 Hz 发布平均 5 ms、CAN 发帧 1–2 ms，合计让 FF 晚 20–25 ms。因此按 15–25 ms 标定
+advance 才对齐；用环形缓冲去“延后”会把误差翻倍。
+
+标定方法：摆臂正弦（0.5/1/2/3 Hz）同时记录腰部关节跟踪误差与 `/body_gravity_feedforward_ma/dynamic`，
+扫 `advance_ms`（0–40）取腰角误差 RMS 最小点。纯低通在 0.5–3 Hz 的滞后实测约 15 ms，
+加上发布周期后从 20–25 ms 起扫即可。
+
+加速度估计有两种可配方法（`waist_dynamic_ff_accel_method`）：
+
+| 方法 | 做法 | 滞后 | 特点 |
+|---|---|---|---|
+| `diff_lpf`（默认） | 速度一阶差分 → 限幅 → 一阶低通 | ≈ 15 ms（10 Hz） | 最简单；低通把高频噪声压住的同时带来相位滞后 |
+| `sg` | 对速度做窗口内二次最小二乘拟合，取一次项作加速度、二次项作加速度导数 | ≈ 窗口/2 个采样（9 点 ≈ 8 ms） | 滞后减半，`advance` 的外推项不再需要对加速度二次差分 |
+
+两种方法都只在本拍位于 `waist_gravity_ff_decimation` 发布周期时进 RNEA；窗口未填满（`sg` 需
+`window` 个采样）期间只发静态重力。两者噪声增益接近（速度噪声都被 ×1/dt 放大），
+`sg` 的优势是相位更靠前、不衰减幅度；若噪声明显，可加长 `sg_window` 或调低 `filter_hz`。
+
+附加电流先按 `max_ma` 限幅，再与重力电流相加，最终仍受驱动总电流限幅和变化率限制。
+驱动仅在静态重力话题有效且动态数据接收后不超过 20 ms 时使用动态项，并沿用重力接管的渐变权重；
+动态项超时即将该目标分量归零，不会保留 0.5 秒。实际电流的回落仍受总电流变化率限制。
+动态发布采用 best_effort、depth 1、20 ms lifespan；需同时更新支持该话题的 Juxie 驱动。
+滤波每个 update 周期更新，RNEA 和发布沿用 `waist_gravity_ff_decimation`，默认约 100 Hz。
+启用动态项时应保持至少约 100 Hz 的发布频率，避免触及 20 ms 超时。
+控制器重新激活、速度无效或控制周期间隔超过 50 ms 时清空动态估计，首个有效样本只初始化速度。
+无效速度时继续发布静态重力补偿；无效位置时不发布。动态参数须卸载并重新加载控制器才能修改。
+分体模式仍只发布静态重力补偿，启用动态增益会被拒绝。
+
+目前默认关闭，未在真机验证。启用前应核对 URDF 惯量、末端负载及 mA/N·m 换算，并在有支撑的条件下
+从小增益、小附加电流限幅、低速开始验证。即使对齐到最佳 advance，实测速度噪声与模型误差仍存在，
+不能保证消除晃动；腰部阻抗、结构间隙以及驱动延迟也需要结合记录分析。
 
 ## 开发
 

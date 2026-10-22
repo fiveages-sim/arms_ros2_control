@@ -645,6 +645,7 @@ namespace arms_controller_common
             // Basic interpolation (TANH, LINEAR, NONE)
             updateProgress(step_seconds);
             double phase = calculatePhase(interpolation_type_, percent_);
+            recordBasicDerivatives(percent_, duration_, start_pos_, target_pos_);
 
             for (size_t i = 0; i < start_pos_.size() && i < target_pos_.size(); ++i)
             {
@@ -687,6 +688,7 @@ namespace arms_controller_common
             // Interpolate between current segment's start and end waypoints
             const auto& start_waypoint = waypoints_[current_segment_];
             const auto& end_waypoint = waypoints_[current_segment_ + 1];
+            recordBasicDerivatives(segment_percent, segment_duration, start_waypoint, end_waypoint);
 
             std::vector<double> result;
             result.reserve(start_waypoint.size());
@@ -804,6 +806,31 @@ namespace arms_controller_common
         return result;
     }
 #endif
+
+    void JointTrajectoryManager::recordBasicDerivatives(
+        double percent, double duration, const std::vector<double>& start,
+        const std::vector<double>& target)
+    {
+        const size_t count = std::min(start.size(), target.size());
+        last_velocities_.assign(count, 0.0);
+        last_accelerations_.assign(count, 0.0);
+        if (duration <= 0.0 || percent >= 1.0 || interpolation_type_ == InterpolationType::NONE)
+            return;
+        double phase_velocity = 1.0 / duration;
+        double phase_acceleration = 0.0;
+        if (interpolation_type_ == InterpolationType::TANH)
+        {
+            const double scale = tanh_scale_ > 0.0 ? tanh_scale_ : 3.0;
+            const double phase = std::tanh(percent * scale);
+            phase_velocity = scale * (1.0 - phase * phase) / duration;
+            phase_acceleration = -2.0 * scale * phase * phase_velocity / duration;
+        }
+        for (size_t i = 0; i < count; ++i)
+        {
+            last_velocities_[i] = (target[i] - start[i]) * phase_velocity;
+            last_accelerations_[i] = (target[i] - start[i]) * phase_acceleration;
+        }
+    }
 
     double JointTrajectoryManager::calculatePhase(InterpolationType type, double percent) const
     {

@@ -13,6 +13,7 @@
 #include <optional>
 #include <string>
 #include <thread>
+#include <unordered_map>
 #include <vector>
 
 #include <ament_index_cpp/get_package_share_directory.hpp>
@@ -33,6 +34,7 @@
 
 #include <arms_controller_common/CtrlInterfaces.h>
 #include <arms_controller_common/utils/TrajectoryRecorder.h>
+#include <arms_controller_common/waist/WaistGravityFeedforward.h>
 #include <pinocchio/multibody/data.hpp>
 
 namespace ocs2::mobile_manipulator
@@ -126,6 +128,18 @@ namespace ocs2::mobile_manipulator
             dual_arm_mode_ = interface_->dual_arm_;
 
             setupPublisher();
+
+            // ── 腰部重力前馈（分体模式代发）───────────────────────────────────────────
+            // 全身模式下 /body_gravity_feedforward_ma 由 ocs2_wbc_controller 发（它拥有全部
+            // 20 个关节的状态口）；分体模式没有 WBC ⇒ 驱动只剩自带查表（标称手臂姿态，~1°）
+            // ⇒ 这里代发同一话题。实现是**两边共用**的模块，本控制器的两处不同：
+            //   · 模型 = /robot_description（xacro 产物）里的全机模型（自己的模型是双臂树，
+            //     算不出腰力矩）
+            //   · q 里腰/头部分来自 /joint_states（自己只 claim 手臂）
+            // 关节名单/电机号/话题都由模块自己从同一份 URDF 里派生 ⇒ 不用任何配置。
+            waist_ff_ = std::make_shared<arms_controller_common::WaistGravityFeedforward>(
+                node_, auto_declare, nullptr, "ocs2_arm_controller(分体代发)",
+                1);  // update 100 Hz ⇒ 每拍发一次
 
             {
                 ocs2::controller_common::Ocs2VisualizerConfig viz_cfg;
@@ -230,6 +244,14 @@ namespace ocs2::mobile_manipulator
 
         // Torque calculation for force control
         vector_t calculateStaticTorques() const;
+
+        /**
+         * 腰部【精确】重力前馈：把含真实手臂/头部姿态的 τ_g 换算成 mA 推给 juxie 驱动。
+         * 驱动侧：本话题**新鲜就用它、过期（0.5 s）退回自带的查表**（取其一，不叠加）。
+         * 全身模式下这个话题由 ocs2_wbc_controller 发；分体模式下由本控制器代发
+         * （见构造函数里的说明）。参数没注入时 = 空操作（RT 上只多一次 atomic load）。
+         */
+        void publishWaistGravityFeedforward();
 
         /**
          * RT-safe: viz thread already compared FCL min distance to configured threshold.
@@ -351,5 +373,9 @@ namespace ocs2::mobile_manipulator
         double dds_publish_period_sec_{0.02};
         rclcpp::Time last_dds_publish_time_{0, 0, RCL_ROS_TIME};
         mutable std::optional<pinocchio::Data> rnea_data_;
+
+        // ── 腰部重力前馈（分体模式代发；实现与 ocs2_wbc_controller 共用）────────────────
+        // 参数/模型/末端负载快照/发布都在模块里；本控制器只调 publish()（q 由模块自己攒）。
+        std::shared_ptr<arms_controller_common::WaistGravityFeedforward> waist_ff_;
     };
 }

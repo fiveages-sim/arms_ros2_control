@@ -129,6 +129,14 @@ namespace arms_controller_common
             }
         }
 
+        // Exact reference produced by the trajectory in this cycle; HOLD has no derivative.
+        double getReferenceVelocity(size_t i) const
+        {
+            std::lock_guard<std::mutex> lock(command_motion_mutex_);
+            return i < derivative_valid_.size() && derivative_valid_[i]
+                ? analytic_velocities_[i] : 0.0;
+        }
+
         CommandMotionState getCommandMotionState() const
         {
             std::lock_guard<std::mutex> lock(command_motion_mutex_);
