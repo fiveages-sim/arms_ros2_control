@@ -69,17 +69,13 @@
     # 骨架单关节数据看门狗 (s)：超时只冻结对应任务，其余正常
     skeleton_timeout: 0.2
 
-    # 人体根 H（由下肢骨架构造）：
-    #   xy  = 两**踝** xy 均值（踝比脚尖更接近人的站立点）
-    #   z   = 两**足** z 的较低者（行走时支撑脚即地面，天然屏蔽摆动脚）
-    #   朝向 = 两**踝** x 轴在地平面投影的平均（直立、非内八外八时即人体前向）
-    human_root_filter_alpha: 0.1
-
-    # 人体根原点的固定偏置 [x, y, z]（m），在**人体根自身坐标系**里施加：
-    #   x 前 / y 左 / z 上（与 base_footprint 同向），因此会随人体朝向一起转。
-    # 根已由踝（xy/偏航）+ 足（z）直接给出，一般保持 0；
-    # 各部位相对人体根的位置 = 原值 − 该三点，即机器人目标整体反向平移该量。
-    human_root_offset: [0.0, 0.0, 0.0]
+    # 人体基坐标系 H（human footprint）由 vr_pose_publisher 统一计算并发布：
+    #   /teleop/human_footprint_pose
+    #   xy = 骨盆地面投影，z = 双足较低者（地面），yaw = 双踝 x 轴平均。
+    # 低通系数与原点偏置也迁到发布端，通过环境变量或 XRTargetNode 构造参数配置：
+    #   XR_HUMAN_FOOTPRINT_FILTER_ALPHA / XR_HUMAN_FOOTPRINT_OFFSET
+    #   human_footprint_filter_alpha / human_footprint_offset
+    # 本节点只订阅结果，不再声明 human_root_filter_alpha / human_root_offset。
 
     # 胸部位置沿「脊柱轴」（spine3 → pelvis）的锚点比例：
     #   0 = 取 spine3 位置，1 = 取 pelvis 位置（机器人的 body_link4 比人体 spine3 偏下、
@@ -89,6 +85,18 @@
     # 骨架几何一致性容差（手–脊柱距离相对参考臂长的允许偏差比例）
     # <=0 表示关闭该过滤
     skeleton_geometry_tolerance: 0.2
+
+    # ================= 接管渐入（仅过渡段限速） =================
+    # 全新开启「全部跟踪」时，胸/头/双臂目标从机器人当前保持的位姿，按下面速度上限
+    # 缓慢过渡到实时 VR 期望位姿；过渡结束后恢复直通，不影响稳态跟随手感。
+    # 过渡时长由距离反算：T = 1.875 * max(|Δp|/v, Δθ/ω)，再钳到 [min, max]。
+    # 骨架超时冻结后恢复（输出中断 > resume_gap）也会重新渐入，避免阶跃。
+    absolute_ramp_enable: true
+    absolute_ramp_max_linear_velocity: 0.15   # 过渡段线速度上限 (m/s)
+    absolute_ramp_max_angular_velocity: 0.4   # 过渡段角速度上限 (rad/s)
+    absolute_ramp_min_duration: 0.2           # 最短过渡时长 (s)
+    absolute_ramp_max_duration: 3.0           # 最长过渡时长 (s)；触顶时峰值速度会超上限
+    absolute_ramp_resume_gap: 0.3             # 输出中断超过该时长后重新渐入 (s)
 
     # ================= 底盘跟踪（位置外环 → /cmd_vel） =================
     # 软参考「跑步机」：p_ref 以 tau 追赶人体骨盆位置，稳态速度增益 ≈ kp * tau
