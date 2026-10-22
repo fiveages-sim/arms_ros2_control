@@ -22,6 +22,7 @@
 VR 侧数据（`xr_target_node`，XRoboToolkit 后端）：
 
 - `/teleop/body_<关节名>_pose`（`geometry_msgs/Pose`，24 关节，头显开启 Whole Body Motion Tracking 且配对足部追踪器后动态出现，断流 5 s 销毁话题）；
+- `/teleop/human_footprint_pose`（`geometry_msgs/Pose`，人体基坐标系：骨盆地面投影 xy + 双足较低者 z + 双踝 x 轴平均 yaw，由 `vr_pose_publisher` 计算，同样动态增删）；
 - 与 `/teleop/head_pose`、手柄 pose **同一世界系、同一原点**（App 启动时头显位置），OpenXR→机器人轴转换已在上游 wrapper 完成。
 
 ## 1. 坐标系与数据语义
@@ -111,9 +112,12 @@ flowchart LR
 > $$p^{r}_{E|base}(t) = R_{\mathrm{align}}\,p^{h}_{hand|H}(t),
 >   \qquad R^{r}_{E|base}(t) = R_{\mathrm{align}}\,R^{h}_{hand|H}(t)\,C_{hand\to E}$$
 >
-> 其中 **人体根 H 由下肢骨架构造**：位置 xy = 两**踝**均值、z = 两**足**较低者；
+> 其中 **人体根 H 由 `vr_pose_publisher` 的 `HumanFootprintEstimator` 统一计算**
+> （话题 `/teleop/human_footprint_pose`）：位置 xy = **骨盆**在地面的投影、z = 两**足**较低者；
 > 朝向 = 两**踝** x 轴在地平面投影的平均；俯仰/滚转恒为 0（即 H 永远是竖直系）；
-> 最后加一个人体根自身坐标系下的三轴原点偏置 `human_root_offset`（默认 `[0,0,0]` m）。
+> 位置 xy/z 一阶低通，最后加一个人体基坐标系自身系下的三轴原点偏置
+> （`human_footprint_filter_alpha` / `human_footprint_offset`，或环境变量
+> `XR_HUMAN_FOOTPRINT_FILTER_ALPHA` / `XR_HUMAN_FOOTPRINT_OFFSET`）。
 > （VR 世界系原点是头显启动时的头部，z=0 不是地面。）
 >
 > **骨架分段尺度**（只缩放「段向量」，因此关节姿态完全不变、人体根与地面不动）：
@@ -429,10 +433,13 @@ H 无效（看门狗超时）时上肢目标一并冻结。
 | `head_translation_gain` | 1.0 | 头平移 |
 | `head_yaw_max` / `head_pitch_max` | URDF 限位内 | 头部分轴限幅 |
 | `skeleton_timeout` | 0.2 s | 骨架数据超时（逐任务冻结） |
-| `human_root_filter_alpha` | 0.1 | 人体根 H（由下肢骨架）位置 xy/z 估计的低通系数 |
-| `human_root_offset` | [0,0,0] | 人体根原点偏置 [x,y,z]（m，人体根自身坐标系） |
+| ~~`human_root_filter_alpha`~~ / ~~`human_root_offset`~~ | — | **已迁移**到 `vr_pose_publisher`：`XR_HUMAN_FOOTPRINT_FILTER_ALPHA` / `XR_HUMAN_FOOTPRINT_OFFSET` |
 | `body_anchor_lambda` | 1.0 | 胸部位置沿脊柱轴的锚点比例（0=spine3，1=骨盆）；姿态仍由 spine3 定 |
 | `skeleton_geometry_tolerance` | 0.2 | 臂长一致性容差（20%，手–脊柱距离） |
+| `absolute_ramp_enable` | true | 接管渐入总开关 |
+| `absolute_ramp_max_linear_velocity` / `_max_angular_velocity` | 0.15 / 0.4 | 过渡段速度上限 (m/s / rad/s) |
+| `absolute_ramp_min_duration` / `_max_duration` | 0.2 / 3.0 | 过渡时长钳位 (s) |
+| `absolute_ramp_resume_gap` | 0.3 | 输出中断超过该时长后重新渐入 (s) |
 
 ### 7.1 已实现参数（默认值见 `config/default.yaml`）
 
@@ -456,6 +463,11 @@ H 无效（看门狗超时）时上肢目标一并冻结。
 | `base_cmd_tau` | 0.2 | 指令低通 (s) |
 | `base_follow_data_timeout` | 0.2 | 骨盆数据看门狗 (s) |
 | `base_follow_tau_yaw` | 2.0 | **预留**（偏航为绝对跟踪，不使用软参考） |
+| `absolute_ramp_enable` | true | 接管渐入总开关（关掉即旧行为） |
+| `absolute_ramp_max_linear_velocity` | 0.15 | 过渡段线速度上限 (m/s) |
+| `absolute_ramp_max_angular_velocity` | 0.4 | 过渡段角速度上限 (rad/s) |
+| `absolute_ramp_min_duration` / `absolute_ramp_max_duration` | 0.2 / 3.0 | 过渡时长钳位 (s) |
+| `absolute_ramp_resume_gap` | 0.3 | 输出中断超过该时长后重新渐入 (s) |
 
 上游 `xr_target_node`：`right_thumbstick_long_press_ms`（默认 500 ms，环境变量
 `XR_RIGHT_STICK_LONG_PRESS_MS` 可覆盖），用于区分短按（事件 `4`）与长按（事件 `31`）。
@@ -496,9 +508,11 @@ H 无效（看门狗超时）时上肢目标一并冻结。
    `*_to_ee_rpy_deg` 修正「数据源坐标系 → 目标坐标系」的轴向差异
    （换 `body_ee_source=wrist` 或换机型必须重调）；
    偏航不需要参数：映射按「人体系」锚定，人体朝向即机头朝向。
-7. **接管瞬间姿态会跳变**到人体姿态（「直接映射」的必然结果）。若人体与机器人当前姿态差别很大，
-   建议开启跟踪前先把人体摆成接近机器人的姿态；若需要软起步，可后续加一个
-   `absolute_pose_ramp_sec` 把跳变量摊到若干帧。
+7. ~~**接管瞬间姿态会跳变**~~ → **已实现接管渐入**：开启「全部跟踪」后，胸/头/双臂目标从
+   当前保持位姿按 `absolute_ramp_max_*_velocity` 限速过渡到实时 VR 期望位姿，
+   过渡时长 `T = 1.875·max(|Δp|/v, Δθ/ω)` 钳到 `[absolute_ramp_min_duration, _max_duration]`，
+   进度用五次多项式（两端速度/加速度为 0），收敛后恢复直通；骨架超时冻结恢复时
+   （输出中断 > `absolute_ramp_resume_gap`）也会重新渐入。
 8. **无 TF 时底座位姿靠 `/cmd_vel` 积分**：打滑、限速饱和、或被导航/手柄驱动时会产生偏差。
    有条件时应在底盘侧发 `world→base_footprint` TF。
 9. `ψ_offset`（底盘外环的 yaw 补偿）同样靠积分自下发 ω，漂移风险同上。

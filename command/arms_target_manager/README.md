@@ -144,12 +144,17 @@ RViz Joint Panel：绝对 / 相对基座 / 相对末端（手臂）或相对身�
 | `absolute_filter_alpha` | 绝对目标一阶低通系数（0=不滤波） | `0.3` | 仅启动 |
 | `capture_settle_ms` | 标定前等待姿态稳定时长 (ms) | `200.0` | 仅启动 |
 | `skeleton_timeout` | 骨架单关节数据看门狗 (s)，超时只冻结对应任务 | `0.2` | 仅启动 |
-| `human_root_filter_alpha` | 人体根 H（由下肢骨架构造）位置 xy/z 估计的一阶低通系数 | `0.1` | 仅启动 |
-| `human_root_offset` | 人体根原点偏置 [x,y,z]（m，人体根自身坐标系） | `[0,0,0]` | 仅启动 |
+| ~~`human_root_filter_alpha`~~ / ~~`human_root_offset`~~ | **已迁移**到 `vr_pose_publisher`：`XR_HUMAN_FOOTPRINT_FILTER_ALPHA` / `XR_HUMAN_FOOTPRINT_OFFSET`（或 `XRTargetNode` 构造参数） | — | — |
 | `body_length_scale` | 身长尺度：`pelvis→spine3`（并同尺度推 `spine3→head`） | `1.0` | 仅启动 |
 | `shoulder_width_scale` | 肩宽尺度：`spine3→shoulder(L/R)` | `1.0` | 仅启动 |
 | `arm_length_scale` | 臂长尺度：`shoulder→末端(hand/wrist)` | `1.0` | 仅启动 |
 | `skeleton_geometry_tolerance` | 手–脊柱距离相对参考臂长的允许偏差；`<=0` 关闭 | `0.2` | 仅启动 |
+| `absolute_ramp_enable` | 接管渐入总开关；关掉后行为与旧版完全一致 | `true` | 仅启动 |
+| `absolute_ramp_max_linear_velocity` | 过渡段线速度上限 (m/s) | `0.15` | 仅启动 |
+| `absolute_ramp_max_angular_velocity` | 过渡段角速度上限 (rad/s) | `0.4` | 仅启动 |
+| `absolute_ramp_min_duration` | 最短过渡时长 (s) | `0.2` | 仅启动 |
+| `absolute_ramp_max_duration` | 最长过渡时长 (s)；触顶时实际峰值速度会高于上限 | `3.0` | 仅启动 |
+| `absolute_ramp_resume_gap` | 目标输出中断超过该时长后重新渐入 (s) | `0.3` | 仅启动 |
 | `base_follow_enable` | 底盘跟踪总开关（长按右摇杆仍需在全身模式内） | `true` | 仅启动 |
 | `base_follow_rate` | 底盘位置外环频率 (Hz) | `50.0` | 仅启动 |
 | `base_follow_tau` | 软参考「跑步机」时间常数 (s)；稳态增益 ≈ `kp*tau` | `2.0` | 仅启动 |

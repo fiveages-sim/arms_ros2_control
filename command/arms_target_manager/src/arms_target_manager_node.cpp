@@ -80,17 +80,23 @@ int main(int argc, char** argv)
     absolute_options.filter_alpha = node->declare_parameter("absolute_filter_alpha", 0.3);
     absolute_options.capture_settle_sec = node->declare_parameter("capture_settle_ms", 200.0) / 1000.0;
     absolute_options.skeleton_timeout_sec = node->declare_parameter("skeleton_timeout", 0.2);
-    absolute_options.human_root_filter_alpha = node->declare_parameter("human_root_filter_alpha", 0.1);
-    absolute_options.human_root_offset = node->declare_parameter(
-        "human_root_offset", std::vector<double>{0.0, 0.0, 0.0});
-    if (absolute_options.human_root_offset.size() != 3)
-    {
-        RCLCPP_WARN(node->get_logger(),
-                    "human_root_offset 需要 3 个元素 [x,y,z]（m，人体根自身坐标系），当前 %zu 个 → 按 0 处理",
-                    absolute_options.human_root_offset.size());
-    }
+    // 人体基坐标系 H 的低通系数/原点偏置已迁到 vr_pose_publisher
+    // （/teleop/human_footprint_pose 的发布端），此处不再声明。
     absolute_options.body_anchor_lambda = node->declare_parameter("body_anchor_lambda", 1.0);
     absolute_options.geometry_tolerance = node->declare_parameter("skeleton_geometry_tolerance", 0.2);
+    // 接管渐入：只在「开启全部跟踪」与「数据恢复」的过渡段限速，收敛后直通。
+    absolute_options.pose_ramp_enable =
+        node->declare_parameter("absolute_ramp_enable", true);
+    absolute_options.pose_ramp_max_linear_velocity =
+        node->declare_parameter("absolute_ramp_max_linear_velocity", 0.15);
+    absolute_options.pose_ramp_max_angular_velocity =
+        node->declare_parameter("absolute_ramp_max_angular_velocity", 0.4);
+    absolute_options.pose_ramp_min_duration_sec =
+        node->declare_parameter("absolute_ramp_min_duration", 0.2);
+    absolute_options.pose_ramp_max_duration_sec =
+        node->declare_parameter("absolute_ramp_max_duration", 3.0);
+    absolute_options.pose_ramp_resume_gap_sec =
+        node->declare_parameter("absolute_ramp_resume_gap", 0.3);
     absolute_options.base_follow_enable = node->declare_parameter("base_follow_enable", true);
     absolute_options.base_follow_rate_hz = node->declare_parameter("base_follow_rate", 50.0);
     absolute_options.base_follow_tau = node->declare_parameter("base_follow_tau", 2.0);
