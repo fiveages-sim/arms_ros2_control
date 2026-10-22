@@ -27,6 +27,7 @@
 #include <optional>
 #include "arms_target_manager/ArmsTargetManager.h"
 #include "arms_controller_common/utils/FSMCommandPublisher.h"
+#include "arms_controller_common/utils/PoseRamp.h"
 #include <arms_ros2_control_msgs/msg/wbc_capability.hpp>
 
 namespace arms_ros2_control::command
@@ -73,19 +74,24 @@ namespace arms_ros2_control::command
         double capture_settle_sec{0.2};
         // 骨架单关节数据看门狗 [s]；超时只冻结对应任务
         double skeleton_timeout_sec{0.2};
-        // 人体根 H 的位置（xy + z）估计的低通系数。
-        // H 由双足得到（xy 取双足均值、z 取双足较低者）；行走时双足交替会让均值抖动，
-        // 因此需要低通抑制，避免抖动直接进入各部位目标。
-        double human_root_filter_alpha{0.1};
-        // 人体根原点的固定偏置 [m]（三轴），在**人体根自身坐标系**里施加：
-        //   x 前 / y 左 / z 上（与 base_footprint 同向）。
-        // 人体根已经由踝（xy/偏航）+ 足（z）算出，一般不需额外偏置。
-        std::vector<double> human_root_offset{0.0, 0.0, 0.0};
+        // 注：人体基坐标系 H 的低通系数与原点偏置已迁到 vr_pose_publisher
+        // （/teleop/human_footprint_pose 的发布端），本节点只消费结果。
         // 胸部位置沿「脊柱轴」的锚点比例：0 = 取 spine3 位置，1 = 取 pelvis 位置。
         // 机器人的 body_link4 比人体 spine3 偏下、大致在骨盆高度，所以默认取 1。
         double body_anchor_lambda{1.0};
         // 骨架几何一致性容差（臂长偏离比例）
         double geometry_tolerance{0.2};
+
+        // ---- 接管渐入（仅「开启跟踪」与「数据恢复」的过渡段） ----
+        // 全新开启「全部跟踪」时，目标位姿从机器人当前保持的位姿按速度约束缓慢过渡到
+        // 实时 VR 期望位姿；过渡结束后恢复直通，不影响稳态跟随手感。
+        bool pose_ramp_enable{true};
+        double pose_ramp_max_linear_velocity{0.15};   // [m/s]
+        double pose_ramp_max_angular_velocity{0.4};   // [rad/s]
+        double pose_ramp_min_duration_sec{0.2};       // [s]
+        double pose_ramp_max_duration_sec{3.0};       // [s]
+        // 目标输出中断超过该时长后再恢复（如骨架超时冻结）时，重新渐入 [s]
+        double pose_ramp_resume_gap_sec{0.3};
 
         // ---- 底盘跟踪（位置外环 → /cmd_vel） ----
         bool base_follow_enable{true};
@@ -304,6 +310,9 @@ namespace arms_ros2_control::command
         void bodySpine3Callback(geometry_msgs::msg::Pose::SharedPtr msg);
         void bodyHeadCallback(geometry_msgs::msg::Pose::SharedPtr msg);
 
+        /** 人体基坐标系回调（/teleop/human_footprint_pose，上游 vr_pose_publisher 计算） */
+        void humanFootprintCallback(geometry_msgs::msg::Pose::SharedPtr msg);
+
         /** 全身遥操作前置条件：VR enabled + FULL_BODY + FSM=OCS2 + WBC 已确认 BODY_TRACKING + 骨架数据可用 */
         bool wholeBodyTeleopReady() const;
 
@@ -422,9 +431,6 @@ namespace arms_ros2_control::command
         /** 骨架手部回调（末端数据源，左/右各一个话题） */
         void bodyHandCallback(bool is_left, geometry_msgs::msg::Pose::SharedPtr msg);
 
-        /** 骨架足部/踝部/肩部回调：用于构造人体根 H 与骨架分段尺度 */
-        void bodyPointCallback(bool is_left, bool is_ankle, geometry_msgs::msg::Pose::SharedPtr msg);
-
         /** 骨架分点：肩部（用于肩宽/臂长尺度） */
         void bodyShoulderCallback(bool is_left, geometry_msgs::msg::Pose::SharedPtr msg);
 
@@ -450,14 +456,14 @@ namespace arms_ros2_control::command
         void buildDeformedSkeleton(const Eigen::Isometry3d& T_H_world, DeformedSkeleton& out);
 
         /**
-         * 人体根 H（由下肢骨架构造）：
-         *   位置 xy  = 两**踝** xy 的均值（踝比脚尖更接近人的站立点）
-         *   位置 z   = 两**足** z 的较低者（行走时支撑脚即地面，天然屏蔽摆动脚）
+         * 人体基坐标系 H（human footprint，由 vr_pose_publisher 统一计算）：
+         *   位置 xy  = **骨盆**在地面的投影
+         *   位置 z   = 两**足** z 的较低者（行走时支撑脚即地面）
          *   朝向     = 两**踝** x 轴在地平面投影的平均（直立、非内八外八时即人体前向）
          *   俯仰/滚转恒为 0，即 H 永远是竖直系（与 base_footprint 同构）。
-         * 下肢数据断流时冻结上一帧 H，从不建过则返回 false。
+         * 订阅 /teleop/human_footprint_pose；无数据或超时返回 false。
          */
-        bool humanRootTransform(Eigen::Isometry3d& T_H_world);
+        bool humanFootprintTransform(Eigen::Isometry3d& T_H_world);
 
         /** 单关节骨架数据是否新鲜（未超时） */
         bool skeletonJointFresh(const std::chrono::steady_clock::time_point& stamp) const;
@@ -491,6 +497,16 @@ namespace arms_ros2_control::command
 
         /** 清掉绝对映射状态与标定结果（停跟踪 / 失能 / 退出模式） */
         void resetAbsoluteTracking();
+
+        /**
+         * 开启「全部跟踪」时给四条目标链路建立渐入锚点：
+         * 优先取最后一次实际下发的目标（仍在有效期内），否则退回实测位姿；
+         * 两者都不可用的任务保持直通（不渐入）。
+         */
+        void armAbsoluteRamps();
+
+        /** 交还直通语义（停跟踪 / 失能 / 坐标系变化） */
+        void resetAbsoluteRamps();
 
         // ================= 底盘跟踪（位置外环 → /cmd_vel） =================
 
@@ -794,15 +810,11 @@ namespace arms_ros2_control::command
         // 骨架手部位姿订阅器（全身绝对映射的末端数据源）
         rclcpp::Subscription<geometry_msgs::msg::Pose>::SharedPtr sub_body_left_hand_;
         rclcpp::Subscription<geometry_msgs::msg::Pose>::SharedPtr sub_body_right_hand_;
-        // 骨架踝部位姿订阅器（人体根 xy/偏航）
-        rclcpp::Subscription<geometry_msgs::msg::Pose>::SharedPtr sub_body_left_ankle_;
-        rclcpp::Subscription<geometry_msgs::msg::Pose>::SharedPtr sub_body_right_ankle_;
+        // 人体基坐标系订阅器（/teleop/human_footprint_pose，上游 vr_pose_publisher 计算）
+        rclcpp::Subscription<geometry_msgs::msg::Pose>::SharedPtr sub_human_footprint_;
         // 骨架肩部位姿订阅器（肩宽 / 臂长尺度链的起点）
         rclcpp::Subscription<geometry_msgs::msg::Pose>::SharedPtr sub_body_left_shoulder_;
         rclcpp::Subscription<geometry_msgs::msg::Pose>::SharedPtr sub_body_right_shoulder_;
-        // 骨架足部位姿订阅器（人体根 z）
-        rclcpp::Subscription<geometry_msgs::msg::Pose>::SharedPtr sub_body_left_foot_;
-        rclcpp::Subscription<geometry_msgs::msg::Pose>::SharedPtr sub_body_right_foot_;
         // 按钮事件订阅器（Int32类型）
         rclcpp::Subscription<std_msgs::msg::Int32>::SharedPtr sub_controller_state_;
         // 摇杆轴值订阅器（合并订阅左右摇杆，使用 Twist 消息）
@@ -853,6 +865,15 @@ namespace arms_ros2_control::command
         Eigen::Quaterniond robot_head_base_orientation_ = Eigen::Quaterniond::Identity();
         // Last published command with its current-pose frame, not measured pose.
         std::optional<geometry_msgs::msg::PoseStamped> last_head_target_;
+        std::chrono::steady_clock::time_point last_head_target_stamp_{};
+
+        // 最后一次下发的胸部目标（ee_frame_id_ 系），供接管渐入取锚点。
+        // 胸部目标经 BodyMarker 有 20 Hz 节流，且帧系与 marker 自身帧可能不同，
+        // 因此这里缓存「本节点实际发出去的值」，而不是回读 marker。
+        bool has_last_body_target_{false};
+        Eigen::Vector3d last_body_target_position_ = Eigen::Vector3d::Zero();
+        Eigen::Quaterniond last_body_target_orientation_ = Eigen::Quaterniond::Identity();
+        std::chrono::steady_clock::time_point last_body_target_stamp_{};
 
         // ---- 全身遥操（case 30）状态 ----
         std::atomic<bool> whole_body_teleop_active_{false};
@@ -885,27 +906,22 @@ namespace arms_ros2_control::command
         Eigen::Quaterniond body_right_hand_orientation_ = Eigen::Quaterniond::Identity();
         bool has_body_left_hand_pose_{false};
         bool has_body_right_hand_pose_{false};
-        // 骨架下肢点缓存（足与踝共用结构）：踝提供 xy/偏航，足提供 z
+        // 骨架肩部点缓存（肩宽 / 臂长尺度链的起点）
         struct SkeletonPoint
         {
             Eigen::Vector2d xy = Eigen::Vector2d::Zero();
             double z{0.0};
-            Eigen::Quaterniond orientation = Eigen::Quaterniond::Identity();
             bool valid{false};
             std::chrono::steady_clock::time_point stamp{};
         };
-        SkeletonPoint body_left_ankle_;
-        SkeletonPoint body_right_ankle_;
-        SkeletonPoint body_left_foot_;
-        SkeletonPoint body_right_foot_;
         SkeletonPoint body_left_shoulder_;
         SkeletonPoint body_right_shoulder_;
-        // 人体根 H 的低通状态（xy 与 z）与朝向
-        Eigen::Vector2d human_root_xy_ = Eigen::Vector2d::Zero();
-        double ground_z_{0.0};
-        double human_root_yaw_{0.0};
-        bool human_root_yaw_valid_{false};
-        bool human_root_initialized_{false};
+
+        // 人体基坐标系（/teleop/human_footprint_pose，已含发布端的低通与原点偏置）
+        Eigen::Vector3d human_footprint_position_ = Eigen::Vector3d::Zero();
+        Eigen::Quaterniond human_footprint_orientation_ = Eigen::Quaterniond::Identity();
+        std::chrono::steady_clock::time_point human_footprint_stamp_{};
+        bool has_human_footprint_pose_{false};
         // 各骨架话题的最后更新时间（看门狗）
         std::chrono::steady_clock::time_point body_pelvis_stamp_{};
         std::chrono::steady_clock::time_point body_spine3_stamp_{};
@@ -951,6 +967,12 @@ namespace arms_ros2_control::command
         Eigen::Vector3d abs_head_pos_lp_ = Eigen::Vector3d::Zero();
         Eigen::Quaterniond abs_head_ori_lp_ = Eigen::Quaterniond::Identity();
 
+        // 接管渐入：每条目标链路一份（左臂 / 右臂 / 胸 / 头）
+        arms_controller_common::PoseRamp left_arm_ramp_;
+        arms_controller_common::PoseRamp right_arm_ramp_;
+        arms_controller_common::PoseRamp body_ramp_;
+        arms_controller_common::PoseRamp head_ramp_;
+
         // ---- 底盘跟踪（位置外环 → /cmd_vel） ----
         // 「底盘跟踪」开关（全身模式内长按右摇杆 toggle）
         std::atomic<bool> base_tracking_enabled_{false};
@@ -983,6 +1005,10 @@ namespace arms_ros2_control::command
         bool has_last_published_right_target_ = false;
         Eigen::Vector3d last_published_right_position_ = Eigen::Vector3d::Zero();
         Eigen::Quaterniond last_published_right_orientation_ = Eigen::Quaterniond::Identity();
+        // 最后一次下发时刻，用于判断锚点是否仍然有效（旧缓存只说明「曾经的意图」
+        // 已可能被 RViz marker / control_input 改写过，此时应退回实测位姿）。
+        std::chrono::steady_clock::time_point last_published_left_stamp_{};
+        std::chrono::steady_clock::time_point last_published_right_stamp_{};
 
         // 冻结追赶斜坡状态（每臂一份），语义见 applyStaleCatchUpRamp()。
         struct StaleCatchUpRamp

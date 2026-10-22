@@ -265,13 +265,14 @@ FULL_BODY 下右握把+右摇杆方向组合仍会锁存并清零右轴（含预
 - **开启时不做任何“按下瞬间的快照”**，而是逐帧按下面三步求值：
 
   ```
-  ① 人体根 H（由**下肢骨架**构造）：
-       位置 xy = 两**踝** xy 的均值（踝比脚尖更接近人的站立点）
-       位置 z  = 两**足** z 的较低者（行走时支撑脚即地面，天然屏蔽摆动脚）
+  ① 人体基坐标系 H（由 vr_pose_publisher 统一计算并发布到
+       /teleop/human_footprint_pose）：
+       位置 xy = **骨盆**在地面的投影（骨盆 xy）
+       位置 z  = 两**足** z 的较低者（行走时支撑脚即地面）
        朝向   = 两**踝** x 轴在地平面投影的平均（直立、非内八外八时即人体前向）
        俯仰/滚转恒为 0， 即 H 永远是竖直系（与 base_footprint 同构）
-       最后加一个人体根自身坐标系下的三轴原点偏置 `human_root_offset`（默认 [0,0,0] m）
-       （位置 xy/z 均一阶低通，避免行走时下肢交替的抖动进入目标）
+       xy/z 一阶低通，最后加人体基坐标系自身系下的原点偏置
+       （发布端参数 human_footprint_filter_alpha / human_footprint_offset）
   ② 各部位换算到 H： p_H = Rz(ψ_H)ᵀ·(p − p_H)，R_H = Rz(ψ_H)ᵀ·R
   ③ **骨架分段尺度**（在 H 里只缩放「段向量」，姿态完全不变）：
        p'spine3   = p_pelvis   + s_body    ·(p_spine3  − p_pelvis)
@@ -311,27 +312,26 @@ FULL_BODY 下右握把+右摇杆方向组合仍会锁存并清零右轴（含预
   某段数据缺失时该段尺度退回 1.0（节流告警），不影响其它段。
   肩部话题 `/teleop/body_{left,right}_shoulder_pose` 是标定的必要条件。
 
-- **人体根为什么用踝 + 足**：VR 世界系原点是头显启动时的**头部**（z=0 在头高、地面在负侧），
-  而又需要一个「永远竖直、在地面」的参考系才能与 `base_footprint` 对应。
-  两踝提供水平位置与朝向（踝比脚尖更接近人的站立点/朝向），两足提供地面高度（取较低者）。
-  副作用：**行走时下肢交替会让均值摆动**，已用 `human_root_filter_alpha` 一阶低通抑制。
-  下肢数据断流 → **冻结上一帧 H**（不打回 z=0），从未建立过则不开始下发目标。
+- **人体基坐标系为什么需要骨盆 + 踝 + 足**：VR 世界系原点是头显启动时的**头部**
+  （z=0 在头高、地面在负侧），而又需要一个「永远竖直、在地面」的参考系才能与
+  `base_footprint` 对应。骨盆提供水平位置，两踝提供朝向，两足提供地面高度（取较低者）。
+  计算、低通与原点偏置都在 `vr_pose_publisher` 内完成；本节点只订阅
+  `/teleop/human_footprint_pose`，话题断流/超时即冻结对应全身目标。
 
 - **`T_base_world`（底座位姿）怎么来**：优先查 TF `vr_follow_frame → ee_frame_id`
   （移动底盘下即 `base_footprint → world`）；无 TF 时回退到**对自己下发 `/cmd_vel` 的积分估计**。
   回退路径下会打印节流告警；此时若底盘被打滑或外部（导航 / 手柄）驱动，手臂会有偏差。
   为什么需要它：底盘跟随前进时，目标必须跟着底座一起走，否则手臂会被向后拖长。
 
-- 数据源（全部来自 `/teleop/body_*`）：
+- 数据源（`/teleop/body_*` + `/teleop/human_footprint_pose`）：
 
   | 机器人目标 | 人体数据源（默认） | 固定偏置参数 |
   |---|---|---|
   | `left_tcp` / `right_tcp` | `body_left_hand_pose` / `body_right_hand_pose`（`body_ee_source=wrist` 时用 `*_wrist_pose`） | `hand_to_ee_rpy_deg_left` / `_right` |
   | `body_link4`（胸） | `body_spine3_pose` | `body_src_to_ee_rpy_deg` |
   | `head_link2` | `body_head_pose` | `head_src_to_ee_rpy_deg` |
-  | （人体根 H） | `body_pelvis_pose`（位置，作胸部 λ 锚点） | — |
-  | （人体根 H 的 xy/偏航） | `body_{left,right}_ankle_pose` | — |
-  | （人体根 H 的 z / 地面） | `body_{left,right}_foot_pose` 的较低者 | — |
+  | （人体根 H） | `human_footprint_pose`（骨盆 xy + 双踝 yaw + 双足 z，由 vr_pose_publisher 计算） | — |
+  | （胸部 λ 锚点） | `body_pelvis_pose` | — |
 
 - **`C_src→ee` 为什么必需**：人体骨架坐标系与机器人目标坐标系（tcp/body_link4/head_link2）
   的轴向定义不同。例如手柄面朝上时，人手 x 轴向上、左手 z 轴向左 / 右手 z 轴向右；
@@ -347,8 +347,24 @@ FULL_BODY 下右握把+右摇杆方向组合仍会锁存并清零右轴（含预
 
 - **人体上半身姿态直接映射为机器人姿态**：胸转时手/头自动跟随（骨架绝对位姿已包含胸的运动），
   不需要额外的「胸转手补」处理；非全身模式的相对增量（冻结基准）路径完全不受影响；
-- **接管瞬间姿态会跳变**到人体姿态（这是「直接映射」的必然结果）：若人体姿态与机器人当前姿态
-  差别很大，WBC 会一次性大范围跟踪。建议开启跟踪前把人体摆成与机器人接近的姿态；- 可达自由度投影：胸部/头部目标按 ZYX 分解**丢弃 roll**（W2 腰部 3×pitch + 1×yaw、无 roll；
+- **接管瞬间不再阶跃**：开启「全部跟踪」后，胸/头/双臂目标会从机器人当前保持的位姿
+  （优先取 1 s 内最后一次下发的目标，其次实测位姿），按下面的速度上限缓慢过渡到实时
+  VR 期望位姿；过渡结束后恢复逐帧直通，稳态跟随手感不变。
+  过渡时长由距离自动反算：`T = 1.875 · max(|Δp|/v, Δθ/ω)`，再钳到 `[min, max]`；
+  进度用五次多项式（两端速度、加速度为 0），因此起手与交接都没有速度阶跃。
+  过渡期间目标持续跟随**实时**期望位姿，不会“追一个冻结的旧终点”。
+  骨架超时冻结后恢复（输出中断 > `absolute_ramp_resume_gap`）也会重新渐入。
+
+  | 参数 | 默认 | 说明 |
+  |---|---|---|
+  | `absolute_ramp_enable` | `true` | 总开关（关掉即回到旧行为） |
+  | `absolute_ramp_max_linear_velocity` | `0.15` m/s | 过渡段线速度上限 |
+  | `absolute_ramp_max_angular_velocity` | `0.4` rad/s | 过渡段角速度上限 |
+  | `absolute_ramp_min_duration` | `0.2` s | 最短过渡时长 |
+  | `absolute_ramp_max_duration` | `3.0` s | 最长过渡时长；触顶时峰值速度会超上限（节流告警） |
+  | `absolute_ramp_resume_gap` | `0.3` s | 输出中断超过该时长后重新渐入 |
+
+- 可达自由度投影：胸部/头部目标按 ZYX 分解**丢弃 roll**（W2 腰部 3×pitch + 1×yaw、无 roll；
   头部仅 yaw/pitch）；
 - 摇杆微调（左/右摇杆增量）叠加在**绝对映射结果之后**，语义与原来一致；
 - 数据质量：逐关节看门狗（`skeleton_timeout`）只冻结对应任务；一阶低通（`absolute_filter_alpha`）
