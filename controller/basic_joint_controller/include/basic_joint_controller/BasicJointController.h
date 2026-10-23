@@ -76,6 +76,8 @@ namespace basic_joint_controller
         std::vector<std::string> joint_names_;
         std::vector<std::string> command_interface_types_;
         std::vector<std::string> state_interface_types_;
+        std::vector<std::string> reference_velocity_joints_;
+        std::vector<int> velocity_command_index_by_joint_;
 
         // Control interfaces
         CtrlInterfaces ctrl_interfaces_;
@@ -88,11 +90,19 @@ namespace basic_joint_controller
         FSMMode mode_{FSMMode::NORMAL};
 
         // Interface mapping
+        // ⚠️ command_interface_map_[name] 用的是 operator[] ⇒ yaml 的 `command_interfaces`
+        //    里写了某类口、而这里没有对应项时，会插入 nullptr 再被解引用（段错误）。
+        //    两边必须同步改。
         std::unordered_map<std::string, std::vector<std::reference_wrapper<hardware_interface::LoanedCommandInterface>>
                            *>
         command_interface_map_ = {
-            {"position", &ctrl_interfaces_.joint_position_command_interface_}
+            {"position", &ctrl_interfaces_.joint_position_command_interface_},
+            {"velocity", &ctrl_interfaces_.joint_velocity_command_interface_}
         };
+
+        // CSV/CST references come directly from the trajectory, with zero velocity in HOLD.
+        void publishReferenceVelocities();
+        double velocity_command_max_rad_s_{2.0};
 
         std::unordered_map<std::string, std::vector<std::reference_wrapper<hardware_interface::LoanedStateInterface>>*>
         state_interface_map_ = {

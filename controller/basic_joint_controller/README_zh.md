@@ -99,6 +99,9 @@ my_controller:
     update_rate: 1000
     joints: ["j1", "j2", ...]
     command_interfaces: ["position"]
+    # 可选：按关节额外 claim velocity，并直接输出轨迹生成器的速度参考。
+    # W2 profile 会依据 hardware.juxie_joint_modes 自动生成此名单。
+    reference_velocity_joints: []
     state_interfaces:  ["position", "velocity"]
 
     home_1: [0.0, 0.0, ...]
@@ -140,6 +143,10 @@ my_controller:
     waist_single_joint_pitch_direction: 1.0
     waist_single_joint_pitch_offset: 0.0
 ```
+
+`reference_velocity_joints` 可只包含 `joints` 中需要 velocity 参考的关节；
+其他关节仍只 claim `command_interfaces` 中声明的接口。分体模式下可分别配置
+`body_joint_controller` 和 `head_joint_controller`，无需让 CSP 关节额外 claim velocity。
 
 非 W2 机型示例：
 

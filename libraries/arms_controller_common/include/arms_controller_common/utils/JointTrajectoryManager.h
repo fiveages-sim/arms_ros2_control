@@ -244,6 +244,9 @@ namespace arms_controller_common
         double getPlanningTime() const;
 
     private:
+        void recordBasicDerivatives(double percent, double duration,
+                                    const std::vector<double>& start,
+                                    const std::vector<double>& target);
         std::vector<double> last_velocities_, last_accelerations_;
         double active_max_velocity_{2.0}, active_max_acceleration_{4.0}, active_max_jerk_{20.0};
         // Trajectory mode

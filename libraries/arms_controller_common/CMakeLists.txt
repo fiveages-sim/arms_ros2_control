@@ -19,6 +19,8 @@ set(dependencies
         tf2_geometry_msgs
         tf2
         geometry_msgs
+        std_msgs
+        sensor_msgs
         trajectory_msgs
         nav_msgs
         tf2_ros
@@ -46,6 +48,7 @@ set(ARMS_CONTROLLER_COMMON_SOURCES
         src/utils/WaistLiftingPlaner.cpp
         src/utils/TrajectoryRecorder.cpp
         src/utils/Kinematics.cpp
+        src/waist/WaistGravityFeedforward.cpp
 )
 
 if(lina_planning_FOUND)
@@ -82,6 +85,8 @@ target_link_libraries(${PROJECT_NAME} PUBLIC
         ${tf2_TARGETS}
         ${tf2_ros_TARGETS}
         ${geometry_msgs_TARGETS}
+        ${std_msgs_TARGETS}
+        ${sensor_msgs_TARGETS}
         ${trajectory_msgs_TARGETS}
         ${nav_msgs_TARGETS}
         ${arms_ros2_control_msgs_TARGETS}
