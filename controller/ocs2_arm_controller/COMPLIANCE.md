@@ -3,8 +3,8 @@
 OCS2 控制器 **COMPLIANCE** 状态：6 自由度笛卡尔混合控制，每位可独立选 **位控 (S=0)** 或 **力控 (S=1)**。
 
 ```
-位控：v = K · (target − current)           → DLS 映射到关节
-力控：v = (F_des − F_meas + I_err) / D   → DLS 映射到关节
+位控：v = K · (target − current)           → 逆解（QP/DLS）映射到关节
+力控：v = (F_des − F_meas + I_err) / D   → 逆解（QP/DLS）映射到关节
 ```
 
 **进入**：HOLD 下 `fsm_command=5`（RViz **COMPLIANCE** 按钮）  
@@ -409,14 +409,55 @@ Rx/Ry/Rz 为位控。返回成功表示配置已接受，控制循环下一次�
 这沿用力控行程参数，不对 S=0 的位控方向额外设置固定空间边界；上下限是逐轴值，不是平移距离球半径。
 HOLD 保持触发位置，不自动规划回退，也不等同于硬件急停；持续外力仍可能推动机械臂。
 
+#### 两种模式
+
+| 模式 | 控制器 | 求解 | 腰部 |
+|------|--------|------|------|
+| 分体 | `ocs2_arm_controller`（`joints` 只有两臂） | 每臂独立，`compliance_hybrid_inverse_method`（w2 配 **QP**，盒进求解；DLS 仅作对照） | 无腰关节，`waist_index=-1`，不参与 |
+| 全身 | `ocs2_wbc_controller`（`joints` 含 `body_joint1~4`） | `compliance_waist_mode: qp` → **联合 QP**（腰部 + 双臂一次求解） | 作为变量参与，与双臂竞争 |
+
+分体模式判定在 `jointWaistSolveActive()`：`waist_enabled_ && waist_index_ >= 0 &&
+waist_mode_ == "qp"`。没有腰关节时恒为 false，因此分体模式始终走每臂 DLS/QP，
+行为与本次改动前一致。
+
+#### 全身模式的联合求解（`compliance_waist_mode: qp`）
+
+`ocs2_wbc_controller` 的关节包含腰部时，COMPLIANCE 可以把**腰部与双臂放进同一个 QP**：
+
+```
+变量  x = [ q̇_waist , q̇_left(7) , q̇_right(7) ]
+
+min   Σ_arm ‖ W (J_arm · x − v_des) ‖²  +  λ²‖q̇_arm‖² + (λ·w_waist)²·q̇_waist²
+s.t.  |q̇_arm,i| ≤ vmax_i                (关节限位/6-7 轴耦合边界的软减速盒)
+      |q̇_waist| ≤ compliance_waist_rate
+      q_waist + q̇_waist·dt ∈ ±compliance_waist_soft_limit
+```
+
+- 腰部的雅可比列由 `ArmKinematics::computeAuxJacobian()` 取（`LOCAL_WORLD_ALIGNED`、
+  两臂各自的末端帧），它同时出现在两臂的任务行里——所以必须一次求解；按臂分开解
+  会得到两个互相矛盾的腰速度。
+- 分配比例由 `compliance_qp_waist_weight` 控制：<1 更愿意用腰，>1 更保守。注意腰的
+  力臂 r（末端到腰轴的水平距离）会把 `q̇_waist` 放大成末端速度 `r·ω`，权重不要按
+  关节速度的量级去拍。
+- 输出仍然是**位置指令**（`hold_positions_` 积分），软限位直接作为速度盒约束，
+  解出来的增量就是本周期实际下发量，不会被事后截断。
+- **逐轴限位进盒**：两臂 14 个关节沿用 `vmax_up/dn`（URDF 限位 + `compliance_hybrid_joint_limit_margin`
+  + 6/7 轴 L1 耦合的软减速）；腰部的位置盒取 `URDF 限位 ∩ compliance_waist_soft_limit`，
+  速度盒取 `min(compliance_waist_rate, URDF velocityLimit)`。配置的软限位只能收紧、
+  不能放大 URDF 限位。
+- 联合求解固定使用 QP：`compliance_hybrid_inverse_method` 只对单臂求解（非 `qp`
+  模式）有效；腰部参与时会日志告警说明该项被忽略。
+- `manual` / `follow_target` 两种旧策略保留：它们不走 QP，由独立的腰通道驱动。
+
 #### 关节参数
 
 | 参数 | 默认 | 说明 |
 |------|------|------|
 | `compliance_hybrid_joint_vmax` | `0.8` | 关节速度上限 [rad/s] |
 | `compliance_hybrid_joint_limit_margin` | `0.02` | 关节限位裕度 [rad] |
-| `compliance_wrist_coupling_max` | `0.0`（关闭） | 6/7 轴耦合上限：\|q6\|+\|q7\| ≤ max [rad]（110° = `1.9199`，说明书图 4-4 八边形可行域的斜边；直边已由 URDF 限位覆盖）。≤0 关闭 |
-| `compliance_hybrid_dls_lambda` | `0.05` | DLS 正则化系数 |
+| `compliance_wrist_coupling_max` | `0.0`（关闭） | 6/7 轴耦合上限：\|q6\|+\|q7\| ≤ max [rad]（110° = `1.9199`，说明书图 4-4 八边形可行域的斜边；直边已由 URDF 限位覆盖）。≤0 关闭。w2/M6 CCS 配 `1.9199`；**只有 QP 把盒放进求解**，DLS 下仅由事后 L1 投影兜底 |
+| `compliance_hybrid_dls_lambda` | `0.05` | DLS 正则化系数（DLS 不带速度盒，仅作对照/调试） |
+| `compliance_hybrid_qp_lambda` | `1.0` | QP 正则化系数。任务增益 = σ²/(σ²+λ²)：λ=1.0 时 σ=0.5 只剩 20%，调跟踪增益先看这一项（w2 配 `0.1`） |
 
 ### 力信号与校准
 

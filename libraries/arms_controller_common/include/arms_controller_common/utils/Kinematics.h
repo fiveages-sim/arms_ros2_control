@@ -215,6 +215,25 @@ namespace arms_controller_common
         Eigen::MatrixXd computeJacobian(const RobotState& state,
                                         const std::string& armType);
 
+        /**
+         * @brief 取指定关节对某臂末端的雅可比列（6×N）。
+         *
+         * 用于全身模式的联合求解：腰部等非手臂关节虽然是"已知量"（不在手臂
+         * 雅可比里），但它们对末端速度有贡献，需要单独的列参与 QP。
+         * 列与 jointNames 一一对应；找不到或非单自由度关节时该列保持 0。
+         */
+        Eigen::MatrixXd computeAuxJacobian(const RobotState& state,
+                                           const std::string& armType,
+                                           const std::vector<std::string>& jointNames);
+
+        /**
+         * @brief 取单个关节的位置/速度限位（来自 Pinocchio 模型，即 URDF）。
+         * @return 找到且为有限值时 true；关节不存在或非单自由度时 false（输出不变）。
+         */
+        bool getJointLimits(const std::string& jointName,
+                            double& lower, double& upper) const;
+        bool getJointVelocityLimit(const std::string& jointName, double& limit) const;
+
         // ==================== 辅助函数 ====================
 
         /**

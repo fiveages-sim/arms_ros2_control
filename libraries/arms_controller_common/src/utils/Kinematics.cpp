@@ -502,7 +502,74 @@ namespace arms_controller_common
         return Eigen::MatrixXd();
     }
 
+    Eigen::MatrixXd ArmKinematics::computeAuxJacobian(
+        const RobotState& state, const std::string& armType,
+        const std::vector<std::string>& jointNames)
+    {
+        Eigen::MatrixXd out = Eigen::MatrixXd::Zero(
+            6, static_cast<Eigen::Index>(jointNames.size()));
+
+        const std::string frameName = armType == "right"
+                                          ? rightEndEffectorName_ : leftEndEffectorName_;
+        const int frameId = getFrameId(frameName);
+        if (frameId < 0) return out;
+
+        const Eigen::VectorXd joints = stateToModelConfiguration(state);
+        updateKinematics(joints);
+
+        Eigen::MatrixXd fullJacobian(6, model_.nv);
+        fullJacobian.setZero();
+        pinocchio::getFrameJacobian(model_, data_, frameId,
+                                    pinocchio::LOCAL_WORLD_ALIGNED, fullJacobian);
+
+        for (size_t k = 0; k < jointNames.size(); ++k)
+        {
+            const auto it = jointNameToId_.find(jointNames[k]);
+            if (it == jointNameToId_.end()) continue;
+            const auto& joint = model_.joints[static_cast<pinocchio::JointIndex>(it->second)];
+            if (joint.nv() != 1) continue;
+            const int idx_v = joint.idx_v();
+            if (idx_v < 0 || idx_v >= model_.nv) continue;
+            out.col(static_cast<Eigen::Index>(k)) = fullJacobian.col(idx_v);
+        }
+        return out;
+    }
+
     // ==================== 辅助函数 ====================
+
+    bool ArmKinematics::getJointLimits(const std::string& jointName,
+                                       double& lower, double& upper) const
+    {
+        const auto it = jointNameToId_.find(jointName);
+        if (it == jointNameToId_.end()) return false;
+        const auto& joint = model_.joints[static_cast<pinocchio::JointIndex>(it->second)];
+        if (joint.nq() != 1) return false;
+        const int idx_q = joint.idx_q();
+        if (idx_q < 0 || idx_q >= model_.nq) return false;
+
+        const double lo = model_.lowerPositionLimit[idx_q];
+        const double hi = model_.upperPositionLimit[idx_q];
+        if (!std::isfinite(lo) || !std::isfinite(hi) || lo >= hi) return false;
+        lower = lo;
+        upper = hi;
+        return true;
+    }
+
+    bool ArmKinematics::getJointVelocityLimit(const std::string& jointName,
+                                              double& limit) const
+    {
+        const auto it = jointNameToId_.find(jointName);
+        if (it == jointNameToId_.end()) return false;
+        const auto& joint = model_.joints[static_cast<pinocchio::JointIndex>(it->second)];
+        if (joint.nv() != 1) return false;
+        const int idx_v = joint.idx_v();
+        if (idx_v < 0 || idx_v >= model_.nv) return false;
+
+        const double v = model_.velocityLimit[idx_v];
+        if (!std::isfinite(v) || v <= 0.0) return false;
+        limit = v;
+        return true;
+    }
 
     void ArmKinematics::getJointLimits(const std::string& armType,
                                        Eigen::VectorXd& lower,

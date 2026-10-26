@@ -191,6 +191,26 @@ namespace arms_controller_common
             std::array<std::string, 2> frame_id;
         };
 
+        // ── 联合 QP 的本周期输入（每臂一份）──
+        // 控制律（位置/力 → 笛卡尔速度）在 stepHybridControl 里算，关节速度
+        // 由 solveJointAndFinalize() 统一求解（腰部与双臂同一组变量）；单臂
+        // 模式下则就地求解后走同一套收尾（限位逃逸/诊断/下发）。
+        struct ArmSolve
+        {
+            bool valid{false};
+            Eigen::MatrixXd J;                        // 6×nq（该臂）
+            Eigen::Matrix<double, 6, 1> v_des{Eigen::Matrix<double, 6, 1>::Zero()};
+            Eigen::VectorXd vmax_up, vmax_dn;
+            EndEffectorPose cur, tgt;
+            size_t nq{0};
+            size_t offset{0};
+            bool diag_due{false};
+            std::array<double, 6> diag_err{};
+            std::array<double, 6> diag_f_err{};
+            std::array<double, 6> diag_f_eff{};
+            std::string diag_jlim, diag_bounds, diag_saturated;
+        };
+
         ArmSide& arm(bool is_left) { return arms_[is_left ? 0 : 1]; }
 
         void updateParam();
@@ -235,12 +255,27 @@ namespace arms_controller_common
                                const Eigen::Matrix<double, 6, 1>& contact_wrench,
                                bool ft_active);
 
+        /** 腰部是否作为变量参与联合 QP（waist_mode=qp 且布局里有腰）。 */
+        bool jointWaistSolveActive() const;
+        /** 双臂 + 腰部一次求解并下发（jointWaistSolveActive() 为真时由 run() 调用）。 */
+        void solveJointAndFinalize(double dt);
+        /** 单臂收尾：限位逃逸、诊断、写入 hold_positions_ 与腕部耦合投影。 */
+        void finalizeArmSolve(bool is_left, const Eigen::VectorXd& qdot_in, double dt);
+        /** 联合解出的腰速度：积分进 hold_positions_，限幅与软限位在此统一处理。 */
+        void applyWaistQdot(double qdot_w, double dt, double lower, double upper);
+
         // 逆解（笛卡尔速度 v_des → 关节速度 qdot），可选 DLS 或 QP。
-        // QP: 加权单层 min 0.5·qdotᵀ(JᵀW²J+λ²I)qdot − (JᵀW²v)ᵀqdot
+        // QP: 加权单层 min 0.5·qdotᵀ(JᵀW²J+Λ²)qdot − (JᵀW²v)ᵀqdot
         //     s.t. |qdot_i|≤vmax，W=diag(w,w,w,1,1,1)（平移软优先级）。
         Eigen::VectorXd solveVelocityQp(const Eigen::MatrixXd& J,
                                         const Eigen::VectorXd& v_des,
                                         double lambda, const Eigen::VectorXd& vmax_up,
+                                        const Eigen::VectorXd& vmax_dn) const;
+        /** 同上，但每个变量可以用不同的正则强度（腰部与手臂分开）。 */
+        Eigen::VectorXd solveVelocityQp(const Eigen::MatrixXd& J,
+                                        const Eigen::VectorXd& v_des,
+                                        const Eigen::VectorXd& lambda_diag,
+                                        const Eigen::VectorXd& vmax_up,
                                         const Eigen::VectorXd& vmax_dn) const;
 
         std::shared_ptr<rclcpp_lifecycle::LifecycleNode> node_;
@@ -248,6 +283,9 @@ namespace arms_controller_common
         std::shared_ptr<ArmKinematics> kinematics_;
 
         std::array<ArmSide, 2> arms_;
+
+        // 本周期各臂的联合 QP 输入（见 ArmSolve）。
+        std::array<ArmSolve, 2> solve_;
 
         // ── Shared joint command buffer (left then right) ──
         std::vector<double> hold_positions_;
@@ -337,6 +375,8 @@ namespace arms_controller_common
         // 设 5.0；过大（>10）在近奇异时反而诱发旋转反号。
         double hybrid_lin_task_weight_{1.0};
         std::string hybrid_inverse_method_{"DLS"};  // 逆解方法: "DLS" 或 "QP"
+        // 配置文件里的原始选择（未被腰部联合求解强制改写），仅用于日志/告警。
+        std::string inverse_method_config_{"DLS"};
 
         // ── Wrench / zero-cal ──
         double wrench_lpf_alpha_{0.15};
@@ -411,11 +451,13 @@ namespace arms_controller_common
         double waist_command_{0.0};       // 实际下发（已速率/限幅）[rad]
         bool waist_command_valid_{false};
         // ── 腰/臂策略分配 ──
-        // "manual"：跟 /compliance_waist_target；"follow_target"：腰跟随目标方位，
-        // 让手臂留在舒适区（扩大目标可达方位范围）。
+        // "manual"：跟 /compliance_waist_target；"follow_target"：腰跟随目标方位；
+        // "qp"：腰部作为变量进入双臂联合 QP（见 solveJointAndFinalize）。
         std::string waist_mode_{"manual"};
         double waist_comfort_{0.35};      // rad，残差方位超过该值才动腰
         bool waist_follow_engaged_{false};
+        // qp 模式：腰部正则强度相对手臂的倍数。<1 → 更愿意用腰；>1 → 少用腰。
+        double qp_waist_weight_{1.0};
         // 手臂病态程度（雅可比条件数 σmax/σmin）：超门槛时把介入门限收紧一半。
         double waist_cond_max_{12.0};     // <=0 关闭该触发条件
         double arm_cond_badness_{0.0};    // 当前两臂最大条件数
