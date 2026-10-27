@@ -192,6 +192,11 @@ namespace arms_controller_common
         hybrid_force_ki_max_   = get_double("compliance_hybrid_force_ki_max", hybrid_force_ki_max_);
         hybrid_force_ki_leak_  = std::max(0.0, get_double("compliance_hybrid_force_ki_leak", hybrid_force_ki_leak_));
         hybrid_force_deadband_ = get_double("compliance_hybrid_force_deadband", hybrid_force_deadband_);
+        // 接触门控/软着陆：≤0 关闭（保持旧行为），>0 时未接触阶段不积分、低速接近。
+        hybrid_force_contact_eps_ = std::max(0.0, get_double(
+            "compliance_hybrid_force_contact_eps", hybrid_force_contact_eps_));
+        hybrid_force_approach_vel_ = std::max(0.0, get_double(
+            "compliance_hybrid_force_approach_vel", hybrid_force_approach_vel_));
         get_array("compliance_force_setpoint", force_setpoint_);
         force_feedback_sign_ = get_double("compliance_force_feedback_sign", force_feedback_sign_);
         force_vel_lpf_alpha_ = std::clamp(
@@ -900,6 +905,16 @@ namespace arms_controller_common
                         "only the post-hoc clamp/L1 projection apply, which distorts the Cartesian "
                         "direction near limits. Use QP unless you are comparing solvers.",
                         hybrid_inverse_method_.c_str(), wrist_coupling_max_);
+        }
+
+        if (node_ && hybrid_force_contact_eps_ > 0.0)
+        {
+            RCLCPP_INFO(node_->get_logger(),
+                        "COMPLIANCE: force contact gate ON — eps=%.3f (release %.3f), "
+                        "approach_vel=%.4f m/s. The force-axis integral is held at 0 and the "
+                        "axis approaches at approach_vel until |F| exceeds eps.",
+                        hybrid_force_contact_eps_, 0.6 * hybrid_force_contact_eps_,
+                        hybrid_force_approach_vel_);
         }
 
         if (jointWaistSolveActive() && node_)
@@ -1777,6 +1792,22 @@ namespace arms_controller_common
                     ? f_err - std::copysign(db, f_err) : 0.0;
                 if (diag_due) { diag_f_err[i] = f_err; diag_f_eff[i] = f_eff; }
 
+                // ── 接触门控（软着陆）────────────────────────────────
+                // 未接触时 f_err 恒等于 F_des，积分会以 ki·f_eff 一路充到
+                // ki_max（ki=1、F_des=5N → 4.5 N/s，约 1.1 s 充满）。接触瞬间
+                // 带着这个偏置压上去，实测过冲 ≈ 积分值（5N 设定冲到 -10N）。
+                // contact_eps>0 时：未接触阶段积分强制清零 + 固定低速接近；
+                // |F_meas| 超过 contact_eps 才进导纳。退出门限取 0.6 倍做迟滞。
+                bool in_contact = true;
+                if (hybrid_force_contact_eps_ > 0.0)
+                {
+                    const double f_mag = std::abs(a.wrench_filt(i));
+                    in_contact = a.force_in_contact[i]
+                                     ? f_mag > 0.6 * hybrid_force_contact_eps_
+                                     : f_mag > hybrid_force_contact_eps_;
+                    a.force_in_contact[i] = in_contact;
+                }
+
                 // ── 响应守卫（鲁棒导纳）────────────────────────────────
                 // 判据用"累积行程比"（指令/实测），不是瞬时速度比——后者会被底层
                 // 位置环延迟（≈34 ms）误判。比值 ≈0 = 请求了但没动 → 环路没合上
@@ -1805,38 +1836,52 @@ namespace arms_controller_common
                     a.force_vdisp(i) *= std::max(0.0, 1.0 - hybrid_force_stall_release_ * dt);
                 }
 
-                // Leakage: force_integral *= (1 - leak·dt). Prevents wind-up
-                // accumulation during sustained drag (main oscillation driver).
-                // Applied also inside the deadband so a stale integral cannot
-                // cause a velocity jump when the error re-enters the deadband.
-                a.force_integral(i) *= std::max(0.0, 1.0 - hybrid_force_ki_leak_ * dt);
-                // 实现度冻结/反算：上周期请求（v_des_filt）明显未被 QP 实现
-                // （奇异/关节限位卡住）时不再积累——积分不感知可实现性会在
-                // 卡住期间持续充能，恢复后猛冲。停滞时额外以 2×leak 退积分。
-                const double req_prev = std::abs(a.v_des_filt(i));
-                const double ach_prev = std::abs(v_ee_fb(i));
-                const bool realized = req_prev < 1e-4 || ach_prev > 0.3 * req_prev;
-                if (!realized || a.force_axis_stalled[i])
+                if (!in_contact)
                 {
-                    a.force_integral(i) *= std::max(
-                        0.0, 1.0 - 2.0 * hybrid_force_ki_leak_ * dt);
+                    // 自由段：积分一律清零，绝不允许带着偏置接触。
+                    a.force_integral(i) = 0.0;
+                    // 接近速度：配了 approach_vel 就用它（恒定低速、可预期），
+                    // 否则退回纯比例导纳 f_eff/D（更慢但无需额外参数）。
+                    if (hybrid_force_approach_vel_ > 0.0 && std::abs(F_des) > db)
+                        v_des(i) = std::copysign(hybrid_force_approach_vel_, F_des);
+                    else
+                        v_des(i) = f_eff / std::max(D, 1e-3);
                 }
-                else if (std::abs(f_err) >= db)
+                else
                 {
-                    a.force_integral(i) += hybrid_force_ki_ * dt * f_eff;
-                }
-                a.force_integral(i) = std::clamp(
-                    a.force_integral(i), -hybrid_force_ki_max_, hybrid_force_ki_max_);
-                v_des(i) = (f_eff + a.force_integral(i)) / std::max(D, 1e-3);
+                    // Leakage: force_integral *= (1 - leak·dt). Prevents wind-up
+                    // accumulation during sustained drag (main oscillation driver).
+                    // Applied also inside the deadband so a stale integral cannot
+                    // cause a velocity jump when the error re-enters the deadband.
+                    a.force_integral(i) *= std::max(0.0, 1.0 - hybrid_force_ki_leak_ * dt);
+                    // 实现度冻结/反算：上周期请求（v_des_filt）明显未被 QP 实现
+                    // （奇异/关节限位卡住）时不再积累——积分不感知可实现性会在
+                    // 卡住期间持续充能，恢复后猛冲。停滞时额外以 2×leak 退积分。
+                    const double req_prev = std::abs(a.v_des_filt(i));
+                    const double ach_prev = std::abs(v_ee_fb(i));
+                    const bool realized = req_prev < 1e-4 || ach_prev > 0.3 * req_prev;
+                    if (!realized || a.force_axis_stalled[i])
+                    {
+                        a.force_integral(i) *= std::max(
+                            0.0, 1.0 - 2.0 * hybrid_force_ki_leak_ * dt);
+                    }
+                    else if (std::abs(f_err) >= db)
+                    {
+                        a.force_integral(i) += hybrid_force_ki_ * dt * f_eff;
+                    }
+                    a.force_integral(i) = std::clamp(
+                        a.force_integral(i), -hybrid_force_ki_max_, hybrid_force_ki_max_);
+                    v_des(i) = (f_eff + a.force_integral(i)) / std::max(D, 1e-3);
 
-                // 可选回弹项（力控轴上的位控刚度）：v -= K·实测行程。
-                // 纯导纳只有积分、没有恢复力：一旦力/力矩误差不可达（几何增益
-                // 变号、被环境约束），轴会一路漂到行程限位，随后被软限位静默冻结
-                // ——既不能继续调整，也不会自己回中（表现就是"扭矩一直增大不回调"）。
-                // K>0 时轴稳定在有限偏置 phi ≈ (f_eff+I)/(D·K)，误差消失后自动回中。
-                const double K_pos = i < static_cast<int>(hybrid_force_pos_stiffness_.size())
-                                         ? std::max(0.0, hybrid_force_pos_stiffness_[i]) : 0.0;
-                if (K_pos > 0.0) v_des(i) -= K_pos * a.force_disp(i);
+                    // 可选回弹项（力控轴上的位控刚度）：v -= K·实测行程。
+                    // 纯导纳只有积分、没有恢复力：一旦力/力矩误差不可达（几何增益
+                    // 变号、被环境约束），轴会一路漂到行程限位，随后被软限位静默冻结
+                    // ——既不能继续调整，也不会自己回中（表现就是"扭矩一直增大不回调"）。
+                    // K>0 时轴稳定在有限偏置 phi ≈ (f_eff+I)/(D·K)，误差消失后自动回中。
+                    const double K_pos = i < static_cast<int>(hybrid_force_pos_stiffness_.size())
+                                             ? std::max(0.0, hybrid_force_pos_stiffness_[i]) : 0.0;
+                    if (K_pos > 0.0) v_des(i) -= K_pos * a.force_disp(i);
+                }
 
                 // 响应守卫确认停滞：保持当前位形，不再通过加大指令去"顶"。
                 if (a.force_axis_stalled[i]) v_des(i) = 0.0;

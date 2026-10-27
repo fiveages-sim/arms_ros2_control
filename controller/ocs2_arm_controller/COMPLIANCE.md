@@ -298,6 +298,8 @@ COMPLIANCE 力控轴在新零偏标定完成前保持禁用。校准过程与零
 | `compliance_hybrid_force_ki_max` | `10.0` | 积分上限 |
 | `compliance_hybrid_force_ki_leak` | `0.5` | 积分泄漏 [1/s]；拖拽振荡时调大（0.5–1.5） |
 | `compliance_hybrid_force_deadband` | `0.5` | 力误差死区 |
+| `compliance_hybrid_force_contact_eps` | `0.0`（关闭） | 接触门控阈值 [N]/[Nm]。>0 时：`\|F_meas\|` 未超过它的阶段**积分强制为 0**、力控轴只按接近速度走；超过后才进导纳+积分（退出门限 0.6·eps 做迟滞）。**力控轴自己走去接触时必开**——否则自由段 `f_err≡F_des`，积分会以 `ki·f_eff` 充到 `ki_max`（ki=1、5N 设定 → 4.5 N/s，1.1 s 满），接触瞬间带着该偏置压上去，实测过冲 ≈ 积分值。推荐 `1.0~2.0` |
+| `compliance_hybrid_force_approach_vel` | `0.0`（关闭） | 未接触阶段的接近速度 [m/s]；`0` 则退回纯比例导纳 `f_eff/D`（慢）。接触峰值 ≈ `k_env·v·T_d`，刚性面建议 `0.001~0.003` |
 | `compliance_force_feedback_sign` | `-1.0` | 力方向反了改为 `1.0` |
 | `compliance_force_vel_lpf_alpha` | `0.3` | 导纳输出低通（虚拟惯性）；振荡调小（0.1–0.3），迟钝调大 |
 | `compliance_hybrid_force_xmax_lin` | `0.2` | 力控各平移轴行程 [m]；实测越界切 HOLD |
@@ -524,6 +526,7 @@ ros2 param set /ocs2_arm_controller compliance_zero_cal_duration 5.0
 | 力方向反 | `compliance_force_feedback_sign` 改为 `1.0` |
 | 力控力矩轴不响应扭矩偏差、扭矩一直增大不回弹 | 看 `fdisp`：`?` = 响应守卫已确认"环境没有给增益"（保持中）；`!` = 行程用尽。两者都不解决物理问题——需加弹性层（造出 $k_\theta$）、把 TCP 标到接触面中心、或把该轴改回位控 `S=0` |
 | 拖拽时低频振荡（1–3 Hz） | `compliance_force_vel_lpf_alpha` 调小至 0.1–0.2；`compliance_hybrid_force_ki_leak` 调大至 0.8–1.5；必要时增大 `compliance_hybrid_force_damping` |
+| 接触瞬间力过冲（设定 -5 N 冲到 -10 N 之类） | 自由段积分充能：开 `compliance_hybrid_force_contact_eps`（1.5）+ `compliance_hybrid_force_approach_vel`（0.002）。若开了还冲，说明是接近速度×延迟造成的侵入（`k_env·v·T_d`），把 `approach_vel` 降到 0.001；若过冲与接近速度无关而是恒定偏置，查 `zero_cal` 残差 |
 
 ### 诊断日志（排查"追踪不到位/下垂"）
 

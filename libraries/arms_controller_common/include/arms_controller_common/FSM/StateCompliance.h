@@ -106,6 +106,8 @@ namespace arms_controller_common
             // 响应守卫：连续处于"请求了但实测没动"的时长 [s] 与确认标志。
             std::array<double, 6> force_stall_time{};
             std::array<bool, 6> force_axis_stalled{};
+            // 接触门控的迟滞锁存：进用 contact_eps，退用 0.6·contact_eps。
+            std::array<bool, 6> force_in_contact{};
             // 曲面贴合：力矩驱动的目标姿态偏置（轴角向量，有界）。
             compliance_detail::AlignmentState alignment;
             Eigen::Matrix<double, 6, 1> wrench_filt{Eigen::Matrix<double, 6, 1>::Zero()};
@@ -164,6 +166,7 @@ namespace arms_controller_common
                 force_vdisp.setZero();
                 force_stall_time.fill(0.0);
                 force_axis_stalled.fill(false);
+                force_in_contact.fill(false);
                 alignment.reset();
                 qdot_prev.resize(0);
                 v_pos_prev.setZero();
@@ -335,6 +338,14 @@ namespace arms_controller_common
         double hybrid_force_realize_tol_{0.25};
         double hybrid_force_stall_time_{0.2};
         double hybrid_force_stall_release_{1.0};
+        // ── 接触门控 / 软着陆（力控轴自己走去接触时用）──
+        // 未接触时 f_err 恒等于 F_des，积分会以 ki·f_eff 一路充到 ki_max
+        // （ki=1、F_des=5N → 4.5 N/s，1.1 s 充满），接触瞬间带着这个偏置压上去，
+        // 实测过冲 ≈ 积分值。contact_eps > 0 时：未接触阶段积分强制清零、改用
+        // approach_vel 低速接近；|F_meas| 超过 contact_eps 才进导纳+积分。
+        // contact_eps ≤ 0 关闭门控（旧行为）。
+        double hybrid_force_contact_eps_{0.0};       // [N]/[Nm]
+        double hybrid_force_approach_vel_{0.0};      // [m/s]；≤0 则用 f_eff/D 接近
         // ── 曲面贴合：力矩驱动的"目标姿态偏置"外环（compliance_align_enable）──
         // 与力控轴不同：输出不进关节位置积分，而是偏置**目标姿态**，由位控轴
         // 跟踪。位控轴永远有增益（K·Δx），所以环境给增益就收敛（贴合成功）；
