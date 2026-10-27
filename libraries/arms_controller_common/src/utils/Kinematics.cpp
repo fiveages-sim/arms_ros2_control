@@ -718,6 +718,13 @@ namespace arms_controller_common
         Eigen::VectorXd q = (aux_positions_.size() == model_.nq)
                                 ? aux_positions_
                                 : Eigen::VectorXd::Zero(model_.nq);
+        for (const auto& entry : state.auxiliaryJoints)
+        {
+            const auto it = jointNameToId_.find(entry.first);
+            if (it == jointNameToId_.end() || !std::isfinite(entry.second)) continue;
+            const auto& joint = model_.joints[static_cast<pinocchio::JointIndex>(it->second)];
+            if (joint.nq() == 1) q(joint.idx_q()) = entry.second;
+        }
         for (size_t i = 0; i < leftArmQIndices_.size() &&
                            i < static_cast<size_t>(state.leftArmJoints.size()); ++i)
         {

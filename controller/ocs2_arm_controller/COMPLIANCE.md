@@ -277,7 +277,7 @@ COMPLIANCE 力控轴在新零偏标定完成前保持禁用。校准过程与零
 | 参数 | 默认 | 说明 |
 |------|------|------|
 | `compliance_task_selection` | `[1,0,0,0,0,0]` | 6 轴 S 矩阵 |
-| `compliance_hybrid_pos_stiffness` | `[20,20,20,10,10,10]` | 位控 K [1/s]；稳定：K·dt ≤ 0.3 |
+| `compliance_hybrid_pos_stiffness` | `[20,20,20,10,10,10]` | 位控 K [1/s]；启用伺服守卫时，实际 `K/(1+D)` 受外环速率上限约束；仅检查 K·dt 不能判断含延迟系统的稳定性 |
 | `compliance_hybrid_pos_damping` | `[0,0,0,0,0,0]` | 位控阻尼 |
 | `compliance_hybrid_pos_vel_damping` | `0.0` | 基于上周期指令速度的实验性阻尼；指令速度不等于实测速度，默认关闭 |
 | `compliance_hybrid_pos_accel_ramp` | `0.0` | 位控轴速度斜坡时间 [s]；平移/旋转组分别共享一个缩放量以保持方向，可在机器人 `compliance.yaml` 中启用 |
@@ -289,7 +289,7 @@ COMPLIANCE 力控轴在新零偏标定完成前保持禁用。校准过程与零
 | 参数 | 默认 | 说明 |
 |------|------|------|
 | `compliance_force_setpoint` | 全 0 | 目标力 [N, Nm] |
-| `compliance_hybrid_force_damping` | `[5000,…,250]` | 力控 D；越大越柔 |
+| `compliance_hybrid_force_damping` | `[5000,…,250]` | 力控 D；越大则同一误差下速度越小。启用伺服守卫时，实际 D 不低于 `stiffness_bound / outer_rate` |
 | `compliance_hybrid_force_pos_stiffness` | 全 0 | 力控轴上的回弹（位控）刚度 [1/s]：`v -= K·行程`。0 = 纯导纳（现状：无恢复力，误差追不上时会漂到行程限位后停住）；旋转力控轴设 `0.5~2.0` 可稳定在有限偏置并在误差消失后回中 |
 | `compliance_hybrid_force_realize_tol` | `0.25` | 响应守卫：实测/指令行程比低于此值视为"未实现"（设 `0` 关闭守卫） |
 | `compliance_hybrid_force_stall_time` | `0.2` | 响应守卫：持续多久确认停滞 [s] |
@@ -298,13 +298,91 @@ COMPLIANCE 力控轴在新零偏标定完成前保持禁用。校准过程与零
 | `compliance_hybrid_force_ki_max` | `10.0` | 积分上限 |
 | `compliance_hybrid_force_ki_leak` | `0.5` | 积分泄漏 [1/s]；拖拽振荡时调大（0.5–1.5） |
 | `compliance_hybrid_force_deadband` | `0.5` | 力误差死区 |
-| `compliance_hybrid_force_contact_eps` | `0.0`（关闭） | 接触门控阈值 [N]/[Nm]。>0 时：`\|F_meas\|` 未超过它的阶段**积分强制为 0**、力控轴只按接近速度走；超过后才进导纳+积分（退出门限 0.6·eps 做迟滞）。**力控轴自己走去接触时必开**——否则自由段 `f_err≡F_des`，积分会以 `ki·f_eff` 充到 `ki_max`（ki=1、5N 设定 → 4.5 N/s，1.1 s 满），接触瞬间带着该偏置压上去，实测过冲 ≈ 积分值。推荐 `1.0~2.0` |
-| `compliance_hybrid_force_approach_vel` | `0.0`（关闭） | 未接触阶段的接近速度 [m/s]；`0` 则退回纯比例导纳 `f_eff/D`（慢）。接触峰值 ≈ `k_env·v·T_d`，刚性面建议 `0.001~0.003` |
+| `compliance_hybrid_force_contact_eps` | `0.0`（关闭） | 接触门控阈值 [N]/[Nm]。>0 时，自由段清零力积分；滤波力超过阈值后进入接触导纳，退出门限为 0.6·eps。主动接近物体时应启用；它解决自由段积分充能，底层位置指令积压另由伺服守卫限制。阈值需高于噪声且低于目标接触力，力与力矩须分别核对量纲 |
+| `compliance_hybrid_force_approach_vel` | `0.0`（关闭） | 自由段接近速度的请求值；`0` 退回 `f_eff/D`。启用伺服守卫后，两种请求都受力增长预算和指令领先量限制，实际可能低于该值；旋转轴使用时须按 rad/s 核对 |
 | `compliance_force_feedback_sign` | `-1.0` | 力方向反了改为 `1.0` |
-| `compliance_force_vel_lpf_alpha` | `0.3` | 导纳输出低通（虚拟惯性）；振荡调小（0.1–0.3），迟钝调大 |
+| `compliance_force_vel_lpf_alpha` | `0.3` | 500 Hz 基准的导纳速度 EMA，按实际 dt 精确换算极点。调小会增加延迟；启用伺服守卫时，减速、归零和反向不保留旧的推进速度 |
 | `compliance_hybrid_force_xmax_lin` | `0.2` | 力控各平移轴行程 [m]；实测越界切 HOLD |
 | `compliance_hybrid_force_xmax_ang` | `0.3` | 力控各旋转轴行程 [rad]；实测越界切 HOLD |
 | `compliance_hybrid_force_xmax_margin_ratio` | `0.2` | 软限渐缓区占 xmax 比例 |
+
+### 第三方位置环：延迟、带宽与指令领先量
+
+底层接收位置指令时，`v_des=0` 只会停止累加目标，并不能撤销已经发出的目标。
+接触瞬间，实测位置仍落后于指令位置，位置环会继续追踪这段差值，使接触力继续增大。
+积分充能和力／速度滤波会放大过冲；即使力积分为零，位置环延迟仍会产生接触峰值。
+低速线性接触的额外力可粗估为 `k_env·v_approach·T_response`，但第三方伺服的谐振、
+插值、饱和和反馈延迟都会改变实际结果。
+
+`compliance_servo_guard_enable=true` 时，控制器按以下链路限制这种积压：
+
+1. 根据位置环带宽、延迟及外层滤波时间常数计算外环速率上限，限制位置 P 增益和力导纳增益。
+2. 自由段按刚度上界和力增长预算限制接近速度；接触后仍使用有界导纳调节力。
+3. 逆解、关节限幅和腰部求解完成后，用实测／指令两份完整 FK 检查选中力轴的领先量。
+   超限时统一缩放本周期关节增量，覆盖双臂及腰部，并复查非线性 FK。
+4. 实测 TCP 增量经过位置环响应时间尺度的低通，作为积分是否实现的依据；受限时冻结／泄漏积分。
+   力控总指令行程按最终 FK 增量更新，包含 QP 残差、关节限幅和腰部贡献。
+
+领先量定义为 base 系下的 `TCP_command − TCP_measured`；旋转取两姿态的最短轴角向量。
+它约束选中的力轴，达到边界会同时降低同一关节路径上的切向运动速度，因此接触时路径进度可能变慢。
+已有超限偏差不会被瞬间清零：允许向内收回，阻止继续扩大。静态承载所需的位置差可保留，
+正常力控不会把整组关节指令持续拉回实测值。
+
+已建立有效力反馈后，若力控仍启用而该臂 FT 掉线／超时，控制器在下一次求解前走实测位置 HOLD：
+将有效实测关节位置写为保持目标，清除动态状态并锁定，需手动重新进入 COMPLIANCE。
+这会替换尚未执行完的位置目标，避免只令外层速度归零后仍继续追踪旧目标。
+初次等待 FT 或尚未完成校准不触发该掉线锁定；此时对应力轴积分和滤波速度清零，
+最终守卫阻止这些方向新增指令位移。驱动器内部队列的替换语义及机械制动响应由厂商实现决定，
+HOLD 不等同于硬件急停，也不能保证实际机械臂瞬时停止。
+
+| 参数 | 代码默认值 | 说明 |
+|------|------------|------|
+| `compliance_servo_guard_enable` | `true` | 启用延迟／带宽约束和最终指令领先量守卫 |
+| `compliance_servo_delay` | `0.04` | 位置指令传输／执行延迟估计 [s]，应计入可见的反馈延迟 |
+| `compliance_servo_bandwidth_hz` | `3.0` | 最弱工作方向的位置环可用带宽估计 [Hz] |
+| `compliance_servo_bandwidth_ratio` | `0.2` | 外环／位置环带宽比例上限，取值 `(0, 0.25]` |
+| `compliance_servo_stiffness_bound` | `[50000,50000,50000,100,100,100]` | 各力轴的接触刚度上界 [N/m, Nm/rad]；不是自动辨识结果 |
+| `compliance_servo_max_lead` | `[0.0003,0.0003,0.0003,0.015,0.015,0.015]` | 各力轴的指令领先量上限 [m, rad]，独立于总行程上限；按 ≈1.25×`force_vmax`×`response_horizon` 取 |
+| `compliance_hybrid_force_vmax` | `[0.002,0.002,0.002,0.05,0.05,0.05]` | 力轴独立速度上限 [m/s, rad/s]；仍受原笛卡尔／关节速度约束 |
+
+> 早期版本还有一个 `compliance_servo_force_rise_budget`（按环境刚度反解接近速度），已删除。
+> 原因：盲接近的首接触峰值恒为 `k_env · v · T_act`，与所用控制律无关——执行器在这段时间
+> 内停不下来。给定刚度上界并不能让接近同时做到“快”和“软”，它只是把速度压成
+> `budget/(k_bound·T_resp)`，而且必须事先知道工件刚度。现在改为：接近速度由用户给定，
+> 峰值按 `F_des + k_env · v · T_act` 估算并对上表说明的硬接触取值负责。
+
+延迟、带宽及六维数组必须有限且为正；数组须恰好六项。代码初值用于没有辨识数据时保守起步，
+不表示已测得当前机器人延迟为 40 ms、带宽为 3 Hz。旧配置中的 34 ms／3 Hz 注释也不能替代
+当前机型、负载和姿态下的辨识。减小带宽估计、提高延迟或刚度上界通常会降低响应速度。
+
+设 `tau_filter = -0.002/log(1-alpha_500Hz)`，两层滤波分别计入：
+
+```text
+outer_rate = min(2*pi*servo_bandwidth_hz*bandwidth_ratio,
+                 0.5/(servo_delay + tau_wrench + tau_velocity))
+D_effective = max(D_configured, stiffness_bound/outer_rate)
+position_gain = min(K/(1+D_position), outer_rate)
+response_horizon = servo_delay + 1/(2*pi*servo_bandwidth_hz)
+                   + tau_wrench + tau_velocity
+approach_limit = min(force_vmax,
+                     max_lead/response_horizon)
+```
+
+这些是保守的外环整定规则和指令约束，不是任意未知驱动器及任意刚性接触下的稳定性证明。
+实际刚度超过配置上界、负载变化导致伺服谐振，或厂商队列仍保留旧位置目标时，仍可能过冲。
+领先量过小也可能限制达到目标力；应核对静态承载偏差，不能仅为加快速度而放大该值。
+
+有日志后可按以下顺序标定，离线分析本身不发送机械臂运动指令：
+
+1. 使用同一时钟下的真实位置 command interface 和 state interface 记录。目标话题不等于最终位置指令。
+2. 用工作区 `scripts/analyze_position_loop.py` 分析 CSV 或 rosbag，查看拟合频段、相干性、
+   阶跃超调和谐振峰。它估计的是等效延迟，不能单凭低频相位斜率分离纯传输延迟与伺服滞后。
+3. 按最弱方向／负载选择带宽和延迟，保留外环带宽余量；根据接触力与实测压入量估计刚度上界。
+4. 先核对接触门控、力增长预算和低速接近，再查看 `servo guard` 日志中的领先量及路径缩放。
+   若持续受限，区分驱动器跟踪慢、静态承载偏差、关节限位及环境刚度，随后调整对应参数。
+5. 将实测值写入机型 `compliance.yaml`，保留接触、退让、目标力反向、FT 丢失和负载变化的验证记录。
+
+本次代码及离线验证不会自动更新运行中机械臂的参数或发送运动指令；部署后的实际接触性能需在机验证。
 
 ### 曲面贴合：力矩驱动的目标姿态偏置
 
@@ -385,7 +463,7 @@ Rx/Ry/Rz 为位控。返回成功表示配置已接受，控制循环下一次�
 
 力控轴的信号链是 `wrench → err → 1/D 速度 → 逆解 → 关节位置指令`，**到这里就断了**——闭环必须由环境合上。力轴的环境能合上（压深必然增加反力），力矩轴常常合不上，那条通路就变成开环积分器：误差恒定、位置指令无界累积。
 
-- **行程门限改用"指令行程"**（导纳自己的虚拟位移，有界积分），不再用实测位移——被堵住时实测不增长，旧门限永不触发。
+- **总指令行程有界**：伺服守卫启用时累计最终 FK 指令增量；关闭时沿用导纳速度积分。它限制会话内总行程；指令相对实测的瞬时领先量由独立伺服守卫限制。
 - **响应守卫**：累积行程比 `实测/指令` ≈ 0（请求了但没动）持续 `stall_time` → **保持、不升级**，并让虚拟位移缓慢回退以自动重试。用累积行程比而非瞬时速度比，避免被底层位置环延迟误判。
 
 ### 关节限幅与求解
@@ -420,7 +498,7 @@ HOLD 保持触发位置，不自动规划回退，也不等同于硬件急停；
 
 分体模式判定在 `jointWaistSolveActive()`：`waist_enabled_ && waist_index_ >= 0 &&
 waist_mode_ == "qp"`。没有腰关节时恒为 false，因此分体模式始终走每臂 DLS/QP，
-行为与本次改动前一致。
+求解器选择保持独立；最终位置指令仍经过共同的伺服守卫。
 
 #### 全身模式的联合求解（`compliance_waist_mode: qp`）
 
@@ -442,7 +520,7 @@ s.t.  |q̇_arm,i| ≤ vmax_i                (关节限位/6-7 轴耦合边界的
   力臂 r（末端到腰轴的水平距离）会把 `q̇_waist` 放大成末端速度 `r·ω`，权重不要按
   关节速度的量级去拍。
 - 输出仍然是**位置指令**（`hold_positions_` 积分），软限位直接作为速度盒约束，
-  解出来的增量就是本周期实际下发量，不会被事后截断。
+  最终下发量还需经过关节数值保护和双臂／腰部共用的伺服领先量守卫；守卫按共同路径比例缩放。
 - **逐轴限位进盒**：两臂 14 个关节沿用 `vmax_up/dn`（URDF 限位 + `compliance_hybrid_joint_limit_margin`
   + 6/7 轴 L1 耦合的软减速）；腰部的位置盒取 `URDF 限位 ∩ compliance_waist_soft_limit`，
   速度盒取 `min(compliance_waist_rate, URDF velocityLimit)`。配置的软限位只能收紧、
@@ -516,7 +594,7 @@ ros2 param set /ocs2_arm_controller compliance_zero_cal_duration 5.0
 | `zero_cal=done FT(L=on)` | 校准完成，力控可用 |
 | `zero_cal=running` | 校准中，保持静止 |
 | `zero_cal=waiting_FT` | 等待 FT（超时后跳过） |
-| `ft_ok=0` | FT 掉线或未完成校准 |
+| `ft_ok=0` | 初始等待 FT／未校准时力轴不新增位移；已建立反馈后掉线且仍启用力控则锁定到实测位置 HOLD，需手动重入 |
 
 | 现象 | 处理 |
 |------|------|
@@ -525,8 +603,8 @@ ros2 param set /ocs2_arm_controller compliance_zero_cal_duration 5.0
 | F_meas 全 0 | 查 `robot.local.yaml` FT 配置与 `ros2 control list_controllers \| grep ft` |
 | 力方向反 | `compliance_force_feedback_sign` 改为 `1.0` |
 | 力控力矩轴不响应扭矩偏差、扭矩一直增大不回弹 | 看 `fdisp`：`?` = 响应守卫已确认"环境没有给增益"（保持中）；`!` = 行程用尽。两者都不解决物理问题——需加弹性层（造出 $k_\theta$）、把 TCP 标到接触面中心、或把该轴改回位控 `S=0` |
-| 拖拽时低频振荡（1–3 Hz） | `compliance_force_vel_lpf_alpha` 调小至 0.1–0.2；`compliance_hybrid_force_ki_leak` 调大至 0.8–1.5；必要时增大 `compliance_hybrid_force_damping` |
-| 接触瞬间力过冲（设定 -5 N 冲到 -10 N 之类） | 自由段积分充能：开 `compliance_hybrid_force_contact_eps`（1.5）+ `compliance_hybrid_force_approach_vel`（0.002）。若开了还冲，说明是接近速度×延迟造成的侵入（`k_env·v·T_d`），把 `approach_vel` 降到 0.001；若过冲与接近速度无关而是恒定偏置，查 `zero_cal` 残差 |
+| 拖拽时低频振荡（1–3 Hz） | 先核对位置环带宽、延迟、刚度上界与指令领先量；必要时增大力阻尼或积分泄漏。减小速度滤波 alpha 会增加相位滞后，不能一律作为抗振措施 |
+| 接触瞬间力过冲（设定 -5 N 冲到 -10 N 之类） | 首查位置指令领先量和底层响应延迟；外环速度归零后，底层仍可能追踪积压目标。启用伺服守卫与接触门控，核对刚度上界及力增长预算；积分、滤波和零偏作为另外的检查项 |
 
 ### 诊断日志（排查"追踪不到位/下垂"）
 
@@ -540,8 +618,8 @@ ros2 param set /ocs2_arm_controller compliance_zero_cal_duration 5.0
 | 字段 | 含义 | 指向的问题 |
 |---|---|---|
 | `err` | **位控轴**的位置/姿态误差（base 系，m/rad；力控轴显示 `--`） | 误差大且不收敛 = 没追上 |
-| `v` | 各轴最终笛卡尔速度指令（限幅后） | 误差大但 v 小 → 上游（力轴死区）；v 大仍不追 → 下游（J/限位） |
-| `vach` | 各轴实际达成的任务速度（J·qdot；力控轴同样输出真实值） | `v` 与 `vach` 差距大 = 解被衰减（奇异/QP λ/限位边界） |
+| `v` | 逆解前的笛卡尔速度请求（任务限幅后，最终伺服守卫前） | 误差大但 v 小 → 上游（力轴死区／带宽约束）；v 大仍不追 → 逆解、伺服守卫或硬件跟踪 |
+| `vach` | `J_arm·qdot_arm` 的指令任务速度；不是机器人实测速度，也未包含共享腰部贡献及之后的最终伺服缩放 | `v` 与 `vach` 差距大反映逆解衰减；两者接近不能证明第三方位置环已执行 |
 | `res` | 位控轴**不可达残差**（v−vach 的范数） | 持续接近 \|v\| 且 \|qdot\|≈0 → 目标不可达，已停在最近可达点（λ 阻尼收敛点） |
 | `\|qdot\|` | 关节速度范数 | v 大但 qdot≈0 → 奇异衰减 |
 | `smin` | J 最小奇异值 | <0.05 且伴随上述现象 → 接近奇异构型 |
@@ -549,7 +627,7 @@ ros2 param set /ocs2_arm_controller compliance_zero_cal_duration 5.0
 | `f_err`/`f_eff` | 力轴误差 / 死区后误差（N、N·m） | 静止无接触时 \|f_err\|>deadband → 零力残差（重新校零或加大死区） |
 | `fdisp` | 力控轴行程 **指令/实测**（m / rad）。指令侧涨而实测侧不涨 = 发了但没动；`!` = 指令行程顶到软限位；`?` = 已确认停滞（保持、不升级） | 出现 `?` 或 `!` 且 `f_err` 持续大 = 该轴已无调整能力（环境不给增益 / 几何增益变号 / 行程用尽） |
 | `align` | 贴合外环的姿态偏置轴角向量 [rad]（模长 = 当前让位角） | 持续增长到 `\|align\|=align_max` = 环境一直在推、贴合不到位；恒为 0 = 没有力矩误差或未启用 |
-| `track_gap` | 实测末端 vs 指令末端距离（m） | 明显增大 → 硬件侧重力补偿不足（下垂在指令之下） |
+| `tcp_gap` | 实测末端 vs 当前缓存指令末端的平移／旋转距离（m/rad）；该诊断输出早于最终伺服守卫 | 增大可能来自位置环延迟、承载偏差或硬件跟踪误差；结合最终 `servo guard` 领先量日志判断 |
 
 
 ---

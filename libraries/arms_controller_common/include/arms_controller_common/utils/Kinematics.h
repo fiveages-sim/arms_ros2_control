@@ -50,6 +50,9 @@ namespace arms_controller_common
         size_t rightArmJointCount = 7;
         Eigen::VectorXd leftArmJoints;
         Eigen::VectorXd rightArmJoints;
+        // Per-snapshot auxiliary joints (waist/head). Empty retains the legacy
+        // model defaults; explicit snapshots keep measured and commanded FK distinct.
+        std::vector<std::pair<std::string, double>> auxiliaryJoints;
 
         RobotState(size_t left_count = 7, size_t right_count = 7)
             : leftArmJointCount(left_count), rightArmJointCount(right_count),

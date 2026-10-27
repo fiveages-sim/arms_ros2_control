@@ -29,6 +29,35 @@ namespace arms_controller_common
             for (const auto& parameter : parameters)
             {
                 const auto& name = parameter.get_name();
+                const bool servo_positive = name == "compliance_servo_delay" ||
+                    name == "compliance_servo_bandwidth_hz";
+                if (servo_positive || name == "compliance_servo_bandwidth_ratio")
+                {
+                    if (parameter.get_type() != rclcpp::ParameterType::PARAMETER_DOUBLE ||
+                        !std::isfinite(parameter.as_double()) || parameter.as_double() <= 0.0 ||
+                        (name == "compliance_servo_bandwidth_ratio" && parameter.as_double() > 0.25))
+                    {
+                        result.successful = false;
+                        result.reason = name + " must be finite and positive (bandwidth ratio <= 0.25)";
+                        return result;
+                    }
+                    continue;
+                }
+                if (name == "compliance_servo_stiffness_bound" ||
+                    name == "compliance_servo_max_lead" ||
+                    name == "compliance_hybrid_force_vmax")
+                {
+                    if (parameter.get_type() != rclcpp::ParameterType::PARAMETER_DOUBLE_ARRAY ||
+                        parameter.as_double_array().size() != 6 ||
+                        !std::all_of(parameter.as_double_array().begin(), parameter.as_double_array().end(),
+                            [](double value) { return std::isfinite(value) && value > 0.0; }))
+                    {
+                        result.successful = false;
+                        result.reason = name + " requires six finite positive doubles";
+                        return result;
+                    }
+                    continue;
+                }
                 if (name == "compliance_align_torque_deadband" ||
                     name == "compliance_align_rotational_damping")
                 {
@@ -158,6 +187,22 @@ namespace arms_controller_common
                 node_->declare_parameter(n, rclcpp::ParameterValue(s));
             try { s = node_->get_parameter(n).as_string(); } catch (...) {}
         };
+
+        servo_guard_enabled_ = get_bool("compliance_servo_guard_enable", servo_guard_enabled_);
+        servo_delay_ = get_double("compliance_servo_delay", servo_delay_);
+        servo_bandwidth_hz_ = get_double("compliance_servo_bandwidth_hz", servo_bandwidth_hz_);
+        servo_bandwidth_ratio_ = get_double("compliance_servo_bandwidth_ratio", servo_bandwidth_ratio_);
+        get_array("compliance_servo_stiffness_bound", servo_stiffness_bound_);
+        get_array("compliance_servo_max_lead", servo_max_lead_);
+        get_array("compliance_hybrid_force_vmax", force_vmax_);
+        // Validate YAML overrides as well as runtime changes, including array size.
+        for (const char* name : {"compliance_servo_delay", "compliance_servo_bandwidth_hz",
+                "compliance_servo_bandwidth_ratio", "compliance_servo_stiffness_bound",
+                "compliance_servo_max_lead", "compliance_hybrid_force_vmax"})
+        {
+            const auto validation = validateForceSetpoint({node_->get_parameter(name)});
+            if (!validation.successful) throw std::invalid_argument(validation.reason);
+        }
 
         get_array("compliance_task_selection", task_selection_);
         get_array("compliance_hybrid_pos_stiffness", hybrid_pos_stiffness_);
@@ -1311,6 +1356,13 @@ namespace arms_controller_common
         updateParam();
         if (!checkMeasuredWorkspace()) return;
         const double dt = period.seconds();
+        if (!std::isfinite(dt) || dt <= 0.0 || dt > 0.1)
+        {
+            stopForWorkspaceViolation("invalid control period or deadline missed (>100 ms)");
+            return;
+        }
+        // Include manual/follow-target waist movement in the final shared guard.
+        const std::vector<double> command_previous = hold_positions_;
 
         // 腰部通道：只在 COMPLIANCE 内运行（慢速、限幅）。
         // 手臂病态程度（雅可比条件数）10 Hz 更新即可，供腰部介入判断。
@@ -1333,6 +1385,15 @@ namespace arms_controller_common
         Eigen::Matrix<double, 6, 1> contact_wrench[2];
         for (int s = 0; s < 2; ++s)
         {
+            if (arms_[s].joint_count > 0 && arms_[s].force_feedback_valid && !ft_active[s] &&
+                std::any_of(task_selection_.begin(), task_selection_.end(), [](double value) { return value >= 0.5; }))
+            {
+                // A zero outer velocity still leaves an unexecuted position
+                // target inside the surface. Loss of established force feedback
+                // uses the existing measured-position HOLD path to cancel it.
+                stopForWorkspaceViolation(std::string(kArmName[s]) + ": force feedback lost during force control");
+                return;
+            }
             std::array<double, 6> tared = net[s];
             for (int i = 0; i < 6; ++i) tared[i] -= arms_[s].wrench_bias[i];
 
@@ -1417,6 +1478,7 @@ namespace arms_controller_common
             // qp 模式：两臂的控制律算完后，腰部与双臂在同一组变量里一次求解
             // （stepHybridControl 只填 solve_ 不下发）。
             if (jointWaistSolveActive()) solveJointAndFinalize(dt);
+            if (servo_guard_enabled_ && !guardPositionCommands(command_previous, dt)) return;
         }
         else
         {
@@ -1596,8 +1658,24 @@ namespace arms_controller_common
             kinematics_->computeSingleEndEffectorPose(state_actual, kArmName[is_left ? 0 : 1]);
         EndEffectorPose tgt = a.target_valid ? a.target : cur;
 
+        // Low-pass actual pose increments over the servo response horizon. This
+        // is realization feedback for anti-windup, not a noisy velocity damping loop.
+        if (a.measured_prev_valid)
+        {
+            Eigen::Matrix<double, 6, 1> delta;
+            delta.head<3>() = cur.position - a.measured_prev.position;
+            const Eigen::AngleAxisd rotation(cur.rotationMatrix * a.measured_prev.rotationMatrix.transpose());
+            delta.tail<3>() = rotation.angle() * rotation.axis();
+            constexpr double two_pi = 6.2831853071795864769;
+            const double horizon = servo_delay_ + 1.0 / (two_pi * servo_bandwidth_hz_);
+            const double alpha = -std::expm1(-dt / horizon);
+            a.measured_velocity += alpha * (delta / dt - a.measured_velocity);
+        }
+        a.measured_prev = cur;
+        a.measured_prev_valid = true;
+
         // wrench EMA：α 按 500 Hz 标定，按实际 dt 折算保持带宽恒定。
-        const double alpha_wrench = std::clamp(wrench_lpf_alpha_ * dt / 0.002, 0.0, 1.0);
+        const double alpha_wrench = compliance_detail::servoLpfAlpha(wrench_lpf_alpha_, dt);
         a.wrench_filt = alpha_wrench * contact_wrench +
                         (1.0 - alpha_wrench) * a.wrench_filt;
 
@@ -1688,7 +1766,8 @@ namespace arms_controller_common
         // 速度阻尼反馈：上一周期指令速度经 J 映射的末端速度。用指令而非
         // 实测差分——底层位置反馈的延迟/刷新节拍/量化会让差分产生与速度
         // 成正比的纹波（实测反馈会放大高频抖动）；指令是发给底层的量，
-        // 无噪声，且底层以 ~34ms 跟随指令，指令侧刹车同样在误差过零前生效。
+        // 这是求解器指令速度，不代表第三方伺服的实测响应；实际跟踪能力
+        // 另由 measured_velocity 与最终指令领先量守卫检查。
         Eigen::Matrix<double, 6, 1> v_ee_fb = Eigen::Matrix<double, 6, 1>::Zero();
         if (a.qdot_prev.size() == static_cast<Eigen::Index>(nq) &&
             a.qdot_prev.allFinite())
@@ -1710,7 +1789,7 @@ namespace arms_controller_common
                                      ? hybrid_pos_stiffness_[i] : 20.0;
                 const double D = i < static_cast<int>(hybrid_pos_damping_.size())
                                      ? std::max(0.0, hybrid_pos_damping_[i]) : 0.0;
-                a.pos_integral(i) += ki_dt * dp(i);
+                if (!servo_guard_enabled_ || !a.servo_limited) a.pos_integral(i) += ki_dt * dp(i);
                 a.pos_integral(i) = std::clamp(
                     a.pos_integral(i), -hybrid_pos_ki_max_, hybrid_pos_ki_max_);
                 // 速度阻尼（随速度渐隐）：只在 |v| 超过 vmax/3 时全额生效——
@@ -1724,7 +1803,8 @@ namespace arms_controller_common
                                           ? hybrid_cart_vmax_[i] : 0.05;
                 const double fade = std::clamp(
                     std::abs(v_ee_fb(i)) / std::max(vmax_i / 3.0, 1e-3), 0.0, 1.0);
-                const double v_p = (K / (1.0 + D)) * dp(i) + a.pos_integral(i);
+                const double gain = servo_guard_enabled_ ? std::min(K / (1.0 + D), servoOuterRate()) : K / (1.0 + D);
+                const double v_p = gain * dp(i) + a.pos_integral(i);
                 const double damp = hybrid_pos_vel_damping_ * fade * v_ee_fb(i);
                 v_des(i) = (v_p * damp > 0.0)
                     ? v_p - std::clamp(damp, -std::abs(v_p), std::abs(v_p))
@@ -1746,7 +1826,7 @@ namespace arms_controller_common
                                      ? hybrid_pos_stiffness_[i+3] : 10.0;
                 const double D = i+3 < static_cast<int>(hybrid_pos_damping_.size())
                                      ? std::max(0.0, hybrid_pos_damping_[i+3]) : 0.0;
-                a.pos_integral(i+3) += ki_dt * rotvec(i);
+                if (!servo_guard_enabled_ || !a.servo_limited) a.pos_integral(i+3) += ki_dt * rotvec(i);
                 a.pos_integral(i+3) = std::clamp(
                     a.pos_integral(i+3), -hybrid_pos_ki_max_, hybrid_pos_ki_max_);
                 // 速度阻尼随速度渐隐（平移轴 vmax/3；旋转轴 vmax/6）。旋转
@@ -1759,7 +1839,8 @@ namespace arms_controller_common
                                           ? hybrid_cart_vmax_[i+3] : 0.3;
                 const double fade = std::clamp(
                     std::abs(v_ee_fb(i+3)) / std::max(vmax_i / 6.0, 1e-3), 0.0, 1.0);
-                const double v_p = (K / (1.0 + D)) * rotvec(i) + a.pos_integral(i+3);
+                const double gain = servo_guard_enabled_ ? std::min(K / (1.0 + D), servoOuterRate()) : K / (1.0 + D);
+                const double v_p = gain * rotvec(i) + a.pos_integral(i+3);
                 const double damp = hybrid_pos_vel_damping_ * fade * v_ee_fb(i+3);
                 v_des(i+3) = (v_p * damp > 0.0)
                     ? v_p - std::clamp(damp, -std::abs(v_p), std::abs(v_p))
@@ -1770,15 +1851,29 @@ namespace arms_controller_common
         // Force axes: v = (F_err + I) / D
         {
             const bool ft_ok = zero_cal_done_ && ft_active;
+            a.force_feedback_valid = ft_ok;
             for (int i = 0; i < 6; ++i) {
-                if (S(i) < 0.5) continue;
-                if (!ft_ok) { v_des(i) = 0.0; continue; }
+                if (S(i) < 0.5) {
+                    a.force_integral(i) = 0.0;
+                    a.force_in_contact[i] = false;
+                    continue;
+                }
+                if (!ft_ok) {
+                    v_des(i) = 0.0;
+                    a.v_des_filt(i) = 0.0;
+                    a.force_integral(i) = 0.0;
+                    a.force_in_contact[i] = false;
+                    continue;
+                }
 
                 const double F_des = i < static_cast<int>(force_setpoint_.size())
                                          ? force_setpoint_[i] : 0.0;
                 const double f_err = F_des - force_feedback_sign_ * a.wrench_filt(i);
-                const double D = i < static_cast<int>(hybrid_force_damping_.size())
+                const double configured_D = i < static_cast<int>(hybrid_force_damping_.size())
                                      ? hybrid_force_damping_[i] : (i < 3 ? 2000.0 : 100.0);
+                const double D = servo_guard_enabled_
+                    ? compliance_detail::servoForceDamping(configured_D, servo_stiffness_bound_[i], servoOuterRate())
+                    : configured_D;
 
                 // Anti-drift deadzone: a static residual (tool-gravity model
                 // error, sensor drift) must not produce continuous creep. With
@@ -1846,6 +1941,12 @@ namespace arms_controller_common
                         v_des(i) = std::copysign(hybrid_force_approach_vel_, F_des);
                     else
                         v_des(i) = f_eff / std::max(D, 1e-3);
+                    if (servo_guard_enabled_)
+                    {
+                        const double approach_limit = compliance_detail::servoApproachVelocity(
+                            force_vmax_[i], servoResponseHorizon(), servo_max_lead_[i]);
+                        v_des(i) = std::clamp(v_des(i), -approach_limit, approach_limit);
+                    }
                 }
                 else
                 {
@@ -1854,24 +1955,35 @@ namespace arms_controller_common
                     // Applied also inside the deadband so a stale integral cannot
                     // cause a velocity jump when the error re-enters the deadband.
                     a.force_integral(i) *= std::max(0.0, 1.0 - hybrid_force_ki_leak_ * dt);
-                    // 实现度冻结/反算：上周期请求（v_des_filt）明显未被 QP 实现
-                    // （奇异/关节限位卡住）时不再积累——积分不感知可实现性会在
-                    // 卡住期间持续充能，恢复后猛冲。停滞时额外以 2×leak 退积分。
-                    const double req_prev = std::abs(a.v_des_filt(i));
-                    const double ach_prev = std::abs(v_ee_fb(i));
-                    const bool realized = req_prev < 1e-4 || ach_prev > 0.3 * req_prev;
-                    if (!realized || a.force_axis_stalled[i])
+                    // Guarded mode checks actual, low-pass TCP motion, including
+                    // the measured waist. Solver velocity alone hides drive lag.
+                    const double req = a.v_des_filt(i);
+                    const double achieved = servo_guard_enabled_ ? a.measured_velocity(i) : v_ee_fb(i);
+                    const bool realized = std::abs(req) < 1e-6 ||
+                        (req * achieved > 0.0 && std::abs(achieved) > 0.3 * std::abs(req));
+                    if (!realized || a.force_axis_stalled[i] || (servo_guard_enabled_ && a.servo_limited))
                     {
                         a.force_integral(i) *= std::max(
                             0.0, 1.0 - 2.0 * hybrid_force_ki_leak_ * dt);
                     }
-                    else if (std::abs(f_err) >= db)
+                    else if (std::abs(f_err) >= db &&
+                             (!servo_guard_enabled_ ||
+                              std::abs(req) < force_vmax_[i] * 0.99))
                     {
                         a.force_integral(i) += hybrid_force_ki_ * dt * f_eff;
                     }
                     a.force_integral(i) = std::clamp(
                         a.force_integral(i), -hybrid_force_ki_max_, hybrid_force_ki_max_);
                     v_des(i) = (f_eff + a.force_integral(i)) / std::max(D, 1e-3);
+                    // A stale integral must not keep compressing after the
+                    // measured force reaches/exceeds its setpoint. 只在误差真的
+                    // 越过死区时判符号：死区内 f_eff==0，v_des*f_eff 恒 <=0，
+                    // 否则会每周期把积分清零、使 ki 在稳态完全失效。
+                    if (servo_guard_enabled_ && std::abs(f_err) > db && v_des(i) * f_eff <= 0.0)
+                    {
+                        a.force_integral(i) = 0.0;
+                        v_des(i) = f_eff / std::max(D, 1e-3);
+                    }
 
                     // 可选回弹项（力控轴上的位控刚度）：v -= K·实测行程。
                     // 纯导纳只有积分、没有恢复力：一旦力/力矩误差不可达（几何增益
@@ -1889,18 +2001,19 @@ namespace arms_controller_common
 
         }
 
-        // Force-axis admittance output damping: low-pass v_des to add virtual
-        // inertia. This is the primary suppressor of the ~1-3 Hz drag oscillation
-        // (pure proportional admittance + joint-tracking lag → positive feedback).
-        // α 按 500 Hz 标定，实际控制周期偏离时按 dt 比例折算（EMA 时间常数
-        // τ≈(1−α)·dt/α 随 dt 保持恒定），避免带宽随周期漂移。
+        // Smooth force-axis acceleration. An EMA adds delay, so guarded braking
+        // bypasses its stale velocity. Preserve the filter pole at varying dt.
         for (int i = 0; i < 6; ++i)
         {
             if (S(i) < 0.5) { a.v_des_filt(i) = 0.0; continue; }
-            const double alpha_eff = std::clamp(
-                force_vel_lpf_alpha_ * dt / 0.002, 0.0, 1.0);
-            a.v_des_filt(i) = alpha_eff * v_des(i) +
-                              (1.0 - alpha_eff) * a.v_des_filt(i);
+            const double alpha_eff = compliance_detail::servoLpfAlpha(force_vel_lpf_alpha_, dt);
+            if (servo_guard_enabled_)
+            {
+                v_des(i) = std::clamp(v_des(i), -force_vmax_[i], force_vmax_[i]);
+                a.v_des_filt(i) = compliance_detail::brakingVelocityFilter(
+                    a.v_des_filt(i), v_des(i), alpha_eff);
+            }
+            else a.v_des_filt(i) = alpha_eff * v_des(i) + (1.0 - alpha_eff) * a.v_des_filt(i);
             v_des(i) = a.v_des_filt(i);
         }
 
@@ -2036,7 +2149,9 @@ namespace arms_controller_common
             else if (std::abs(proposed) > xmax - margin)
                 v_des(i) *= std::clamp((xmax - std::abs(proposed)) / margin, 0.0, 1.0);
             // 有界累积（导纳自身的状态）
-            a.force_vdisp(i) = std::clamp(
+            // Guarded mode accounts for the final FK command increment after
+            // inverse solve, limits and the shared waist/arm lead governor.
+            if (!servo_guard_enabled_) a.force_vdisp(i) = std::clamp(
                 a.force_vdisp(i) + v_des(i) * dt, -xmax, xmax);
         }
 
@@ -2767,9 +2882,159 @@ namespace arms_controller_common
                (arms_[0].joint_count > 0 || arms_[1].joint_count > 0);
     }
 
-    RobotState StateCompliance::makeRobotState(bool measured) const
+    double StateCompliance::servoOuterRate() const
+    {
+        auto filter_delay = [](double alpha) {
+            return alpha >= 1.0 ? 0.0 : -0.002 / std::log1p(-alpha);
+        };
+        return compliance_detail::servoOuterRate(servo_delay_, servo_bandwidth_hz_,
+            servo_bandwidth_ratio_, filter_delay(wrench_lpf_alpha_) + filter_delay(force_vel_lpf_alpha_));
+    }
+
+    double StateCompliance::servoResponseHorizon() const
+    {
+        constexpr double two_pi = 6.2831853071795864769;
+        auto filter_delay = [](double alpha) {
+            return alpha >= 1.0 ? 0.0 : -0.002 / std::log1p(-alpha);
+        };
+        return servo_delay_ + 1.0 / (two_pi * servo_bandwidth_hz_) +
+            filter_delay(wrench_lpf_alpha_) + filter_delay(force_vel_lpf_alpha_);
+    }
+
+    RobotState StateCompliance::commandRobotState(const std::vector<double>& positions) const
     {
         RobotState state(arms_[0].joint_count, arms_[1].joint_count);
+        size_t offset = arm_offset_;
+        for (size_t s = 0; s < 2; ++s)
+        {
+            auto& joints = s == 0 ? state.leftArmJoints : state.rightArmJoints;
+            for (Eigen::Index i = 0; i < joints.size(); ++i)
+                joints(i) = offset + static_cast<size_t>(i) < positions.size()
+                    ? positions[offset + static_cast<size_t>(i)] : 0.0;
+            offset += arms_[s].joint_count;
+        }
+        for (size_t j = 0; j < positions.size() && j < controller_joint_names_.size(); ++j)
+        {
+            const bool is_arm = j >= arm_offset_ &&
+                j < arm_offset_ + arms_[0].joint_count + arms_[1].joint_count;
+            if (!is_arm) state.auxiliaryJoints.emplace_back(controller_joint_names_[j], positions[j]);
+        }
+        return state;
+    }
+
+    bool StateCompliance::guardPositionCommands(const std::vector<double>& previous, double dt)
+    {
+        using Vec6 = Eigen::Matrix<double, 6, 1>;
+        auto difference = [](const EndEffectorPose& to, const EndEffectorPose& from) -> Vec6 {
+            Vec6 result;
+            result.head<3>() = to.position - from.position;
+            const Eigen::AngleAxisd rotation(to.rotationMatrix * from.rotationMatrix.transpose());
+            result.tail<3>() = rotation.angle() * rotation.axis();
+            return result;
+        };
+        const auto proposed = hold_positions_;
+        const RobotState measured_state = makeRobotState(true);
+        const RobotState before_state = commandRobotState(previous);
+        EndEffectorPose measured[2], before[2], after[2];
+        Vec6 lead[2], increment[2];
+        double scale = 1.0;
+        try
+        {
+            for (int s = 0; s < 2; ++s)
+            {
+                if (arms_[s].joint_count == 0) continue;
+                measured[s] = kinematics_->computeSingleEndEffectorPose(measured_state, kArmName[s]);
+                before[s] = kinematics_->computeSingleEndEffectorPose(before_state, kArmName[s]);
+                lead[s] = difference(before[s], measured[s]);
+                if (!lead[s].allFinite())
+                    return stopForWorkspaceViolation("invalid servo tracking error");
+            }
+            // All joints, including the waist, share one path scale. Verify with
+            // nonlinear FK so QP residuals, wrist projection and waist coupling
+            // cannot bypass the selected task-axis lead/travel bounds.
+            for (int attempt = 0; attempt < 10; ++attempt)
+            {
+                for (size_t j = 0; j < hold_positions_.size(); ++j)
+                    hold_positions_[j] = previous[j] + scale * (proposed[j] - previous[j]);
+                const RobotState candidate = makeRobotState(false);
+                double reduction = 1.0;
+                for (int s = 0; s < 2; ++s)
+                {
+                    if (arms_[s].joint_count == 0) continue;
+                    after[s] = kinematics_->computeSingleEndEffectorPose(candidate, kArmName[s]);
+                    const Vec6 next_lead = difference(after[s], measured[s]);
+                    increment[s] = difference(after[s], before[s]);
+                    if (!next_lead.allFinite() || !increment[s].allFinite())
+                        return stopForWorkspaceViolation("invalid guarded command FK");
+                    for (int i = 0; i < 6; ++i)
+                    {
+                        if (task_selection_[i] < 0.5) continue;
+                        const double delta = next_lead(i) - lead[s](i);
+                        // Numerical FK residue must not stop tangential motion
+                        // while FT is unavailable / zeroing.
+                        if (!arms_[s].force_feedback_valid && std::abs(increment[s](i)) > 1e-10)
+                            reduction = 0.0;
+                        const double lo = std::min(-servo_max_lead_[i], lead[s](i));
+                        const double hi = std::max(servo_max_lead_[i], lead[s](i));
+                        if (next_lead(i) < lo - 1e-10 || next_lead(i) > hi + 1e-10)
+                            reduction = std::min(reduction, compliance_detail::commandLeadScale(
+                                lead[s](i), delta, servo_max_lead_[i]));
+                        const double travel_limit = i < 3 ? hybrid_force_xmax_lin_ : hybrid_force_xmax_ang_;
+                        reduction = std::min(reduction, compliance_detail::commandLeadScale(
+                            arms_[s].force_vdisp(i), increment[s](i), travel_limit));
+                    }
+                }
+                if (reduction >= 1.0 - 1e-9) break;
+                // A small margin absorbs curvature between the two FK samples.
+                scale *= std::max(0.0, reduction * 0.99);
+                if (attempt == 8) scale = 0.0;  // final pass verifies a continuous hold
+            }
+        }
+        catch (const std::exception& error)
+        {
+            return stopForWorkspaceViolation(std::string("servo guard FK failed: ") + error.what());
+        }
+        for (int s = 0; s < 2; ++s)
+        {
+            auto& a = arms_[s];
+            if (a.joint_count == 0) continue;
+            a.servo_limited = scale < 1.0 - 1e-6;
+            a.command_lead = difference(after[s], measured[s]);
+            a.cmd_pose = after[s];
+            const size_t offset = arm_offset_ + (s == 0 ? 0 : arms_[0].joint_count);
+            a.qdot_prev.resize(static_cast<Eigen::Index>(a.joint_count));
+            for (size_t j = 0; j < a.joint_count; ++j)
+                a.qdot_prev(static_cast<Eigen::Index>(j)) = (hold_positions_[offset+j] - previous[offset+j]) / dt;
+            for (int i = 0; i < 6; ++i)
+            {
+                if (task_selection_[i] < 0.5) continue;
+                a.force_vdisp(i) += increment[s](i);
+                if (a.servo_limited)
+                {
+                    a.v_des_filt(i) = increment[s](i) / dt;
+                    a.force_integral(i) *= std::max(0.0, 1.0 - hybrid_force_ki_leak_ * dt);
+                }
+            }
+        }
+        if (waist_index_ >= 0 && static_cast<size_t>(waist_index_) < hold_positions_.size())
+            waist_command_ = hold_positions_[static_cast<size_t>(waist_index_)];
+        if (scale < 1.0 - 1e-6 && node_)
+        {
+            static rclcpp::Clock guard_clock(RCL_STEADY_TIME);
+            RCLCPP_INFO_THROTTLE(node_->get_logger(), guard_clock, 1000,
+                "COMPLIANCE servo guard: path scale=%.3f lead L=[%.6f %.6f %.6f %.4f %.4f %.4f] "
+                "R=[%.6f %.6f %.6f %.4f %.4f %.4f] (m/rad), outer rate<=%.3f/s",
+                scale, arms_[0].command_lead(0), arms_[0].command_lead(1), arms_[0].command_lead(2),
+                arms_[0].command_lead(3), arms_[0].command_lead(4), arms_[0].command_lead(5),
+                arms_[1].command_lead(0), arms_[1].command_lead(1), arms_[1].command_lead(2),
+                arms_[1].command_lead(3), arms_[1].command_lead(4), arms_[1].command_lead(5), servoOuterRate());
+        }
+        return true;
+    }
+
+    RobotState StateCompliance::makeRobotState(bool measured) const
+    {
+        RobotState state = commandRobotState(hold_positions_);
         const size_t total = arms_[0].joint_count + arms_[1].joint_count;
         Eigen::VectorXd q_all(static_cast<Eigen::Index>(total));
         const auto& pos_if = ctrl_interfaces_.joint_position_state_interface_;
@@ -2788,6 +3053,15 @@ namespace arms_controller_common
             state.leftArmJoints = q_all.head(static_cast<Eigen::Index>(arms_[0].joint_count));
         if (arms_[1].joint_count > 0)
             state.rightArmJoints = q_all.tail(static_cast<Eigen::Index>(arms_[1].joint_count));
+        if (measured)
+        {
+            for (auto& entry : state.auxiliaryJoints)
+            {
+                const auto it = std::find(controller_joint_names_.begin(), controller_joint_names_.end(), entry.first);
+                const auto j = static_cast<size_t>(std::distance(controller_joint_names_.begin(), it));
+                if (j < pos_if.size()) entry.second = pos_if[j].get().get_optional().value_or(entry.second);
+            }
+        }
         return state;
     }
 

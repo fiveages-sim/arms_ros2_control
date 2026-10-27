@@ -14,6 +14,7 @@
 
 #include "arms_controller_common/FSM/FSMState.h"
 #include "arms_controller_common/FSM/ComplianceSupport.h"
+#include "arms_controller_common/FSM/PositionServoGuard.h"
 #include "arms_controller_common/utils/GravityCompensation.h"
 #include "arms_controller_common/utils/Kinematics.h"
 
@@ -114,6 +115,12 @@ namespace arms_controller_common
             // Low-pass filtered force-axis velocity (adds virtual inertia / damping
             // to the admittance law, suppresses low-frequency drag oscillation).
             Eigen::Matrix<double, 6, 1> v_des_filt{Eigen::Matrix<double, 6, 1>::Zero()};
+            EndEffectorPose measured_prev;
+            bool measured_prev_valid{false};
+            Eigen::Matrix<double, 6, 1> measured_velocity{Eigen::Matrix<double, 6, 1>::Zero()};
+            Eigen::Matrix<double, 6, 1> command_lead{Eigen::Matrix<double, 6, 1>::Zero()};
+            bool servo_limited{false};
+            bool force_feedback_valid{false};
 
             // 上一周期解算的关节速度（位控轴速度阻尼反馈用）：J·qdot_prev
             // 近似任务速度。不用实测位置差分——底层反馈有延迟且刷新/量化
@@ -167,6 +174,11 @@ namespace arms_controller_common
                 force_stall_time.fill(0.0);
                 force_axis_stalled.fill(false);
                 force_in_contact.fill(false);
+                measured_prev_valid = false;
+                measured_velocity.setZero();
+                command_lead.setZero();
+                servo_limited = false;
+                force_feedback_valid = false;
                 alignment.reset();
                 qdot_prev.resize(0);
                 v_pos_prev.setZero();
@@ -241,6 +253,10 @@ namespace arms_controller_common
         bool kinematicsAvailable() const;
         /** measured=true: joint state interfaces; else hold_positions_. */
         RobotState makeRobotState(bool measured) const;
+        RobotState commandRobotState(const std::vector<double>& positions) const;
+        bool guardPositionCommands(const std::vector<double>& previous, double dt);
+        double servoOuterRate() const;
+        double servoResponseHorizon() const;
 
         bool computeToolGravityWrenchInSensorFrame(
             int side_index, const std::string& sensor_frame,
@@ -364,6 +380,17 @@ namespace arms_controller_common
         double force_feedback_sign_{-1.0};
         // Low-pass on admittance output v_des (virtual inertia). Smaller = more damping.
         double force_vel_lpf_alpha_{0.3};
+
+        // Third-party position servo: estimates, not an identified plant model.
+        bool servo_guard_enabled_{true};
+        double servo_delay_{0.04};              // transport / execution delay [s]
+        double servo_bandwidth_hz_{3.0};        // lowest useful inner-loop bandwidth
+        double servo_bandwidth_ratio_{0.2};     // outer / inner bandwidth ceiling
+        std::vector<double> servo_stiffness_bound_{50000., 50000., 50000., 100., 100., 100.};
+        // Command-lead bound, kept at ~1.25 * force_vmax * T_resp: a steady
+        // approach at force_vmax must not trip the guard, anything beyond does.
+        std::vector<double> servo_max_lead_{0.0003, 0.0003, 0.0003, 0.015, 0.015, 0.015};
+        std::vector<double> force_vmax_{0.002, 0.002, 0.002, 0.05, 0.05, 0.05};
 
         // ── Limits ──
         std::vector<double> hybrid_cart_vmax_{0.15, 0.15, 0.15, 0.6, 0.6, 0.6};
