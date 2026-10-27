@@ -2969,11 +2969,14 @@ namespace arms_controller_common
                     for (int i = 0; i < 6; ++i)
                     {
                         if (task_selection_[i] < 0.5) continue;
+                        // 本臂没有有效力反馈（单侧 FT 机型 / 尚未完成清零）：该力控轴
+                        // 在这只手上没有物理意义，跳过本轴的全部判据。
+                        // 这里绝不能置 reduction = 0 —— path scale 是所有臂共享的，
+                        // 一旦归零另一侧也被冻死（现象：力控轴不动，或在 0/1 之间跳变
+                        // 表现为「一抖一抖」）。原先的写法只在 increment>1e-10 时归零，
+                        // 于是另一臂的微米级残余运动每几个周期就把整机冻结一次。
+                        if (!arms_[s].force_feedback_valid) continue;
                         const double delta = next_lead(i) - lead[s](i);
-                        // Numerical FK residue must not stop tangential motion
-                        // while FT is unavailable / zeroing.
-                        if (!arms_[s].force_feedback_valid && std::abs(increment[s](i)) > 1e-10)
-                            reduction = 0.0;
                         const double lo = std::min(-servo_max_lead_[i], lead[s](i));
                         const double hi = std::max(servo_max_lead_[i], lead[s](i));
                         if (next_lead(i) < lo - 1e-10 || next_lead(i) > hi + 1e-10)
