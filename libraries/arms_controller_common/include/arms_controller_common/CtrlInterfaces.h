@@ -129,12 +129,26 @@ namespace arms_controller_common
             }
         }
 
-        // Exact reference produced by the trajectory in this cycle; HOLD has no derivative.
-        double getReferenceVelocity(size_t i) const
+        // This cycle's reference velocity: the trajectory's exact derivative when it supplies
+        // one, otherwise the difference of the position command against the previous cycle
+        // (paths that only write positions: waist lifting/turning, MoveL/MoveC). HOLD does not
+        // move the command, so its difference is 0 without a special case.
+        // dt is the controller period; unusable dt yields 0 rather than a stale value.
+        double getReferenceVelocity(size_t i, double dt) const
         {
             std::lock_guard<std::mutex> lock(command_motion_mutex_);
-            return i < derivative_valid_.size() && derivative_valid_[i]
-                ? analytic_velocities_[i] : 0.0;
+            if (i < derivative_valid_.size() && derivative_valid_[i])
+            {
+                return analytic_velocities_[i];
+            }
+            // command_motion_.positions still holds the previous cycle's command here: it is
+            // advanced by recordCommandMotion() at the end of the cycle.
+            if (i >= last_sent_joint_positions_.size() || i >= command_motion_.positions.size() ||
+                !std::isfinite(dt) || dt <= 1e-6)
+            {
+                return 0.0;
+            }
+            return (last_sent_joint_positions_[i] - command_motion_.positions[i]) / dt;
         }
 
         CommandMotionState getCommandMotionState() const

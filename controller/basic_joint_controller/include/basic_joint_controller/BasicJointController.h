@@ -100,8 +100,9 @@ namespace basic_joint_controller
             {"velocity", &ctrl_interfaces_.joint_velocity_command_interface_}
         };
 
-        // CSV/CST references come directly from the trajectory, with zero velocity in HOLD.
-        void publishReferenceVelocities();
+        // CSV/CST references: the trajectory's exact derivative, otherwise the position
+        // command's own difference (see CtrlInterfaces::getReferenceVelocity).
+        void publishReferenceVelocities(double dt);
         double velocity_command_max_rad_s_{2.0};
 
         std::unordered_map<std::string, std::vector<std::reference_wrapper<hardware_interface::LoanedStateInterface>>*>

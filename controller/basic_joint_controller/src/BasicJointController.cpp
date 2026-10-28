@@ -99,8 +99,8 @@ namespace basic_joint_controller
             mode_ = FSMMode::NORMAL;
         }
 
-        // 参考速度必须在 FSM 写入位置命令后计算。
-        publishReferenceVelocities();
+        // 参考速度必须在 FSM 写入位置命令后计算（差分要用本周期刚写的指令）。
+        publishReferenceVelocities(period.seconds());
         ctrl_interfaces_.recordCommandMotion(period.seconds());
         return controller_interface::return_type::OK;
     }
@@ -723,13 +723,13 @@ namespace basic_joint_controller
         return CallbackReturn::SUCCESS;
     }
 
-    void BasicJointController::publishReferenceVelocities()
+    void BasicJointController::publishReferenceVelocities(double dt)
     {
         for (size_t i = 0; i < velocity_command_index_by_joint_.size(); ++i)
         {
             const int velocity_index = velocity_command_index_by_joint_[i];
             if (velocity_index < 0) continue;
-            double velocity = ctrl_interfaces_.getReferenceVelocity(i);
+            double velocity = ctrl_interfaces_.getReferenceVelocity(i, dt);
             if (!std::isfinite(velocity)) velocity = 0.0;
             if (std::isfinite(velocity_command_max_rad_s_) && velocity_command_max_rad_s_ > 0.0)
             {

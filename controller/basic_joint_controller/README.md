@@ -148,6 +148,11 @@ my_controller:
 interfaces listed in `command_interfaces`. In split-body mode, configure the body and head
 controllers independently so CSP joints do not claim velocity unnecessarily.
 
+The velocity reference is the trajectory's exact derivative when it provides one (joint
+trajectories, HOME), otherwise the position command's own difference against the previous
+cycle — so paths that only write positions (waist lifting/turning, MoveL/MoveC) still get a
+correct q̇_d, and HOLD reports 0 because its command does not move.
+
 Examples for non-W2 robots:
 
 ```yaml

@@ -139,7 +139,7 @@ namespace ocs2::mobile_manipulator
         {
             for (size_t i = 0; i < ctrl_interfaces_.joint_velocity_command_interface_.size(); ++i)
                 std::ignore = ctrl_interfaces_.joint_velocity_command_interface_[i].get().set_value(
-                    ctrl_interfaces_.getReferenceVelocity(i));
+                    ctrl_interfaces_.getReferenceVelocity(i, period.seconds()));
         }
         ctrl_interfaces_.recordCommandMotion(period.seconds());
         return controller_interface::return_type::OK;
