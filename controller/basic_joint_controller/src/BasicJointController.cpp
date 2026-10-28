@@ -732,7 +732,17 @@ namespace basic_joint_controller
             double velocity = ctrl_interfaces_.getReferenceVelocity(i);
             if (!std::isfinite(velocity)) velocity = 0.0;
             if (std::isfinite(velocity_command_max_rad_s_) && velocity_command_max_rad_s_ > 0.0)
+            {
+                if (std::abs(velocity) > velocity_command_max_rad_s_)
+                {
+                    RCLCPP_WARN_THROTTLE(get_node()->get_logger(), *get_node()->get_clock(), 5000,
+                                         "参考速度 %.3f rad/s 被 velocity_command_max_rad_s（%.2f）"
+                                         "截断：%s 的阻抗层 q̇_d 不再等于轨迹原生速度",
+                                         velocity, velocity_command_max_rad_s_,
+                                         joint_names_[i].c_str());
+                }
                 velocity = std::clamp(velocity, -velocity_command_max_rad_s_, velocity_command_max_rad_s_);
+            }
             std::ignore = ctrl_interfaces_.joint_velocity_command_interface_[
                 static_cast<size_t>(velocity_index)].get().set_value(velocity);
         }
