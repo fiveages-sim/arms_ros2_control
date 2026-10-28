@@ -99,6 +99,9 @@ my_controller:
     update_rate: 1000
     joints: ["j1", "j2", ...]
     command_interfaces: ["position"]
+    # 可选：按关节额外 claim velocity，并直接输出轨迹生成器的速度参考。
+    # W2 profile 会依据 hardware.juxie_joint_modes 自动生成此名单。
+    reference_velocity_joints: []
     state_interfaces:  ["position", "velocity"]
 
     home_1: [0.0, 0.0, ...]
@@ -140,6 +143,14 @@ my_controller:
     waist_single_joint_pitch_direction: 1.0
     waist_single_joint_pitch_offset: 0.0
 ```
+
+`reference_velocity_joints` 可只包含 `joints` 中需要 velocity 参考的关节；
+其他关节仍只 claim `command_interfaces` 中声明的接口。分体模式下可分别配置
+`body_joint_controller` 和 `head_joint_controller`，无需让 CSP 关节额外 claim velocity。
+
+速度参考优先取轨迹给出的精确导数（关节轨迹、HOME）；没有时用当前位置指令相对
+上一周期的差分 —— 因此只写位置的路径（腰部升降/转向、MoveL/MoveC）同样能得到正确的
+q̇_d，而 HOLD 因指令不动自然为 0。
 
 非 W2 机型示例：
 

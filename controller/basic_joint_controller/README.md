@@ -99,6 +99,9 @@ my_controller:
     update_rate: 1000
     joints: ["j1", "j2", ...]
     command_interfaces: ["position"]
+    # Optional: claim velocity for selected joints and publish the native trajectory velocity.
+    # W2 profiles generate this list from hardware.juxie_joint_modes.
+    reference_velocity_joints: []
     state_interfaces:  ["position", "velocity"]
 
     home_1: [0.0, 0.0, ...]
@@ -140,6 +143,15 @@ my_controller:
     waist_single_joint_pitch_direction: 1.0
     waist_single_joint_pitch_offset: 0.0
 ```
+
+`reference_velocity_joints` may contain a subset of `joints`; other joints only claim the
+interfaces listed in `command_interfaces`. In split-body mode, configure the body and head
+controllers independently so CSP joints do not claim velocity unnecessarily.
+
+The velocity reference is the trajectory's exact derivative when it provides one (joint
+trajectories, HOME), otherwise the position command's own difference against the previous
+cycle — so paths that only write positions (waist lifting/turning, MoveL/MoveC) still get a
+correct q̇_d, and HOLD reports 0 because its command does not move.
 
 Examples for non-W2 robots:
 

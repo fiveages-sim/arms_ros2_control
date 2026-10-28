@@ -59,12 +59,19 @@ namespace ocs2::mobile_manipulator
                                                                 const rclcpp::Duration& period)
     {
         const std::string fsm = current_state_ ? current_state_->state_name_string : "none";
+        for (auto& command : ctrl_interfaces_.joint_velocity_command_interface_)
+            std::ignore = command.get().set_value(0.0);
         ctrl_comp_->beginRtCycle();
         ctrl_comp_->applyRtLoopSchedulingOnce();
         {
             auto obs_scope = ctrl_comp_->rtScopeObs();
             ctrl_comp_->updateObservation(time);
         }
+
+        // 腰部【精确】重力前馈（分体模式专有；参数没注入时是空操作）。
+        // 放在这里 = 无论 HOLD / MOVEJ / OCS2 都在发 ⇒ 腰部进电流环后任何状态都有重力补偿。
+        // 全身模式由 ocs2_wbc_controller 发同一个话题（两者不会同时跑）。
+        ctrl_comp_->publishWaistGravityFeedforward();
 
         if (mode_ == FSMMode::NORMAL)
         {
@@ -128,6 +135,12 @@ namespace ocs2::mobile_manipulator
             ctrl_comp_->maybeRequestVisualizationUpdate(time);
         }
         ctrl_comp_->endRtCycle(current_state_ ? current_state_->state_name_string : fsm);
+        if (!current_state_ || current_state_->state_name != FSMStateName::OCS2)
+        {
+            for (size_t i = 0; i < ctrl_interfaces_.joint_velocity_command_interface_.size(); ++i)
+                std::ignore = ctrl_interfaces_.joint_velocity_command_interface_[i].get().set_value(
+                    ctrl_interfaces_.getReferenceVelocity(i, period.seconds()));
+        }
         ctrl_interfaces_.recordCommandMotion(period.seconds());
         return controller_interface::return_type::OK;
     }
