@@ -228,6 +228,11 @@ namespace arms_controller_common
 
         ArmSide& arm(bool is_left) { return arms_[is_left ? 0 : 1]; }
 
+        /**
+         * 刷新 compliance_* 参数。只在参数变化（on-set 回调置 dirty）时才真正读取，
+         * 另有 1 Hz 兜底刷新：本类的一次刷新是 70+ 次参数查询，每周期做会吃掉
+         * 500 Hz 控制周期的很大一块预算。
+         */
         void updateParam();
         bool checkMeasuredWorkspace();
         bool stopForWorkspaceViolation(const std::string& reason);
@@ -464,6 +469,9 @@ namespace arms_controller_common
         rclcpp::Service<std_srvs::srv::Trigger>::SharedPtr zero_wrench_service_;
         rclcpp::Service<arms_ros2_control_msgs::srv::SetSurfaceTracking>::SharedPtr surface_tracking_service_;
         rclcpp::node_interfaces::OnSetParametersCallbackHandle::SharedPtr force_setpoint_callback_;
+        rclcpp::node_interfaces::OnSetParametersCallbackHandle::SharedPtr param_dirty_callback_;
+        std::atomic<bool> params_dirty_{true};
+        std::chrono::steady_clock::time_point last_param_refresh_{};
         std::atomic_bool zero_cal_requested_{false};
         rclcpp::Time last_force_status_pub_{0, 0, RCL_ROS_TIME};
 

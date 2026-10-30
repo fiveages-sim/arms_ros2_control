@@ -121,6 +121,24 @@ namespace arms_controller_common
         if (node_)
         {
             force_setpoint_callback_ = node_->add_on_set_parameters_callback(validateForceSetpoint);
+            // 参数只在变化时重读：这里只置 dirty 位，真正的读取在 updateParam() 里。
+            param_dirty_callback_ = node_->add_on_set_parameters_callback(
+                [this](const std::vector<rclcpp::Parameter>& parameters)
+                {
+                    for (const auto& parameter : parameters)
+                    {
+                        const std::string& name = parameter.get_name();
+                        if (name.rfind("compliance_", 0) == 0 ||
+                            name == "left_dyn_param" || name == "right_dyn_param")
+                        {
+                            params_dirty_.store(true, std::memory_order_release);
+                            break;
+                        }
+                    }
+                    rcl_interfaces::msg::SetParametersResult result;
+                    result.successful = true;
+                    return result;
+                });
             // Parameters may already have been declared with YAML overrides before this state exists.
             if (node_->has_parameter("compliance_force_setpoint"))
             {
@@ -153,6 +171,15 @@ namespace arms_controller_common
     void StateCompliance::updateParam()
     {
         if (!node_) return;
+
+        // 70+ 次参数查询只在参数变化时做；dirty 先清零，避免刷新期间又有 set 被漏掉。
+        const auto now = std::chrono::steady_clock::now();
+        const bool dirty = params_dirty_.exchange(false, std::memory_order_acq_rel);
+        const bool fallback_due =
+            last_param_refresh_.time_since_epoch().count() == 0 ||
+            now - last_param_refresh_ >= std::chrono::seconds(1);
+        if (!dirty && !fallback_due) return;
+        last_param_refresh_ = now;
 
         // 读取（缺失时用默认值声明）：yaml 未提供的参数也会出现在节点上，
         // 保证 ros2 param set 可在线调整（未声明的参数 set 会被拒绝）。
