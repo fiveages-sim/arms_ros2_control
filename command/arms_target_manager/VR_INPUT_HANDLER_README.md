@@ -4,7 +4,16 @@
 
 VRInputHandler是基于VRMarkerWrapper功能开发的VR输入处理器，专门为arms_target_manager设计。它实现了VR pose订阅、状态切换机制和marker更新功能。
 
-当 `ocs2_wbc_controller` 处于 active 时，拓扑判定为 **FULL_BODY（全身控制）**，可在 VR 手柄上切换身体模式、底盘锁、双臂耦合和单臂启用。当 `ocs2_arm_controller` 处于 active 时为 **SPLIT_BODY（分体/双臂）**，全身组合键无效。
+### 普通模式 / 全身模式分离
+
+从本版起，VR 遥操作拆成两个**物理独立**的组件：
+
+- `VRInputHandler`：普通 VR 遥操作 + 共享的 FSM（11/12）与夹爪（9/10/13/14 + 扳机模拟量），并负责按键/摇杆事件的路由；
+- `WholeBodyVrTeleop`（`WholeBodyVrTeleop.h/.cpp`）：全身骨架遥操作（case 30），独占 `/teleop/body_*` 与 `/teleop/human_footprint_pose` 订阅，只提供事件 4（全部跟踪）与事件 7（底盘跟踪）。
+
+进入全身模式后，普通模式的组合键（`3`/`6`/`16`/`20`/`21–28`）全部不可用，必须先退出全身模式。两者只共享 FSM、夹爪与发布基础设施。
+
+当 `ocs2_wbc_controller` 处于 active 时，拓扑判定为 **FULL_BODY（全身控制）**，普通模式下可在 VR 手柄上切换身体模式、底盘锁、双臂耦合和单臂启用。当 `ocs2_arm_controller` 处于 active 时为 **SPLIT_BODY（分体/双臂）**，普通模式的全身组合键无效。
 
 ## 功能特性
 
@@ -31,20 +40,24 @@ VRInputHandler是基于VRMarkerWrapper功能开发的VR输入处理器，专门�
 
 ## 订阅的Topic
 
-### VR输入
+### 普通模式（`VRInputHandler`）
 - `/teleop/left_ee_pose` (`geometry_msgs/msg/Pose`): VR左臂末端执行器pose
 - `/teleop/right_ee_pose` (`geometry_msgs/msg/Pose`): VR右臂末端执行器pose
 - `/teleop/head_pose` (`geometry_msgs/msg/Pose`): VR头显pose
 - `/teleop/controller_state` (`std_msgs/msg/Int32`): 按钮/组合键事件码（单帧）
 - `/teleop/thumbstick_axes` (`geometry_msgs/msg/Twist`): 左右摇杆轴值；`linear.z` / `angular.z` 携带左右握把按下状态
 - `/teleop/trigger_values` (`geometry_msgs/msg/Twist`): 左右扳机模拟量
-- `/teleop/body_pelvis_pose` (`geometry_msgs/msg/Pose`): 骨架骨盆（全身模式骨盆底盘跟随）
+
+### 全身模式（`WholeBodyVrTeleop`）
+- `/teleop/body_pelvis_pose` (`geometry_msgs/msg/Pose`): 骨架骨盆（胸部锚点 / 绝对映射）
 - `/teleop/body_spine3_pose` (`geometry_msgs/msg/Pose`): 骨架胸椎上段（胸部绝对目标）
 - `/teleop/body_head_pose` (`geometry_msgs/msg/Pose`): 骨架头部（头部绝对目标）
 - `/teleop/body_left_hand_pose` / `body_right_hand_pose` (`geometry_msgs/msg/Pose`):
   骨架手部，双臂末端绝对目标（`body_ee_source=wrist` 时订阅 `*_wrist_pose`）
+- `/teleop/body_left_shoulder_pose` / `body_right_shoulder_pose`: 肩宽/臂长尺度链起点
+- `/teleop/human_footprint_pose`: 人体基坐标系 H
 
-> 所有 `/teleop/body_*` 都是**动态话题**（头显开启全身追踪后才出现），此处常驻订阅。
+> 所有 `/teleop/body_*` 与 `/teleop/human_footprint_pose` 都是**动态话题**（头显开启全身追踪后才出现），`WholeBodyVrTeleop` 常驻订阅。
 
 ### 机器人状态
 - `left_current_pose` (`geometry_msgs/msg/PoseStamped`): 机器人左臂当前pose
@@ -92,7 +105,12 @@ R_target_C = R_C_F * delta_R_F * inverse(R_C_F) * R_anchor_C
 
 ## 全身控制操作说明
 
-以下操作仅在控制拓扑为 **FULL_BODY**（`ocs2_wbc_controller` active）、VR 已启用、且 FSM = **OCS2** 时生效。SPLIT_BODY 下按这些组合会被忽略。
+VR 操作分为两套**互斥**模式：
+
+- **普通 VR 遥操作**：UPDATE/STORAGE、镜像、单臂启用/暂停、身体模式、WBC 开关、CHASSIS 遥控等；
+- **全身遥操作**（组合键 30）：只保留 FSM（11/12）、夹爪（9/10/13/14）、事件 4（全部跟踪）、事件 7（底盘跟踪）。
+
+以下普通模式组合键仅在控制拓扑为 **FULL_BODY**（`ocs2_wbc_controller` active）、VR 已启用、且 FSM = **OCS2** 时生效。SPLIT_BODY 下按这些组合会被忽略；**进入全身遥操作后也全部不可用**，需先按组合键 30 退出。
 
 方向组合由 `xr_target_node` 在握把按住且摇杆偏置超过 **0.7** 时发出；松开握把后，对应摇杆必须回到 **0.3** 以内，才会解除抑制，避免「先松握把、后松摇杆」误驱动末端或底盘。
 
@@ -100,12 +118,13 @@ R_target_C = R_C_F * delta_R_F * inverse(R_C_F) * R_anchor_C
 
 1. 启动全身控制器（`ocs2_wbc_controller`）和 `arms_target_manager`（`enable_vr:=true`），并确认 `xr_target_node` 在线。
 2. 用 **右 A** 把 FSM 推到 OCS2（HOME → HOLD → OCS2）；**左 X** 后退。
-3. **（相对增量路径）**把双手柄放到期望起始姿态，点 **右摇杆** 进入 UPDATE，双臂开始跟随。
-4. **（全身绝对映射路径）**按 **左右握把 + 右摇杆按下** 进入全身遥操作模式，再 **短按右摇杆** 开启「全部跟踪」（骨架绝对位姿驱动胸/头/双臂）；
-   需要底盘跟随时再 **长按右摇杆** 开关「底盘跟踪」。
-5. 用 **左握把 + 左摇杆四方向** 切换身体模式；用 **右握把 + 右摇杆上/下/右** 切换双臂耦合 / 底盘锁 / 参考关节。单臂启用默认用左 Y / 右 B；**左右握把 + 左 Y + 右 B**（事件 16）可把 Y/B 切到 VR 暂停语义。
-6. 进入 **跟随（BODY_TRACKING）** 后，左摇杆改控腰部，右摇杆仍控右臂。
-7. 需要底盘遥控时，再同时按下左右摇杆进入 CHASSIS 模式（全身模式内开启底盘跟踪时让路给骨盆跟随）。
+3. **（普通模式相对增量路径）**把双手柄放到期望起始姿态，点 **右摇杆** 进入 UPDATE，双臂开始跟随。
+4. **（全身绝对映射路径）**按 **左右握把 + 右摇杆按下**（30）进入全身遥操作模式，再按 **右摇杆短按**（4）开启「全部跟踪」（骨架绝对位姿驱动胸/头/双臂）；需要底盘跟随时按 **左摇杆按键**（7）开关「底盘跟踪」。
+5. **（普通模式）**用 **左握把 + 左摇杆四方向** 切换身体模式；用 **右握把 + 右摇杆上/下/右** 切换双臂耦合 / 底盘锁 / 参考关节。单臂启用默认用左 Y / 右 B；**左右握把 + 左 Y + 右 B**（事件 16）可把 Y/B 切到 VR 暂停语义。
+6. **（普通模式）**进入 **跟随（BODY_TRACKING）** 后，左摇杆改控腰部，右摇杆仍控右臂。
+7. **（普通模式）**需要底盘遥控时，同时按下左右摇杆进入 CHASSIS 模式。全身模式下没有手动底盘遥控，只有事件 7 的底盘跟踪。
+
+> 以下“身体模式 / 腰部跟随 / WBC 开关 / 单臂启用 / 底盘遥控”各节均为**普通模式**行为，全身模式下不可用。
 
 ### 身体模式（左握把 + 左摇杆）
 
@@ -199,21 +218,29 @@ FULL_BODY 下右握把+右摇杆方向组合仍会锁存并清零右轴（含预
 
 `/cmd_vel` 交接：仅在 **FULL_BODY + FSM=OCS2 + `BASE_UNLOCKED`** 时 VR 不发 `/cmd_vel`（让给 WBC）。HOLD / HOME / MOVEJ，或 OCS2 里手动 `BASE_LOCK`，手柄底盘照常可用。SPLIT_BODY 不让路。退出 OCS2 的零速由 WBC `stopBase()` 负责；退出 CHASSIS / `disable()` 仍由 VR 清零。
 
-### 全身控制速查
+### 全身控制速查（普通模式）
 
 ```
 左握把 + 左摇杆上/下/左/右  →  竖直 / 锁定 / 跟随 / 自定义
 右握把 + 右摇杆上/下        →  双臂耦合 / 底盘锁（左/右预留）
 左 Y / 右 B                 →  默认对应臂 ENABLE/DISABLE；事件 16 后为 VR 暂停/恢复
 左右握把 + 左 Y + 右 B      →  切换 Y/B 禁用 ↔ 暂停语义（SPLIT_BODY 忽略）
-左右握把 + 右摇杆按下       →  全身遥操作模式开关（开启后屏蔽 21–24）
-全身模式内短按右摇杆          →  开/关「全部跟踪」（胸/头/双臂 = /teleop/body_* 绝对映射）
-全身模式内长按右摇杆(≥500ms)  →  开/关「底盘跟踪」（骨盆 → 位置外环 → /cmd_vel）
-左右摇杆同时按下            →  底盘遥控 ↔ 末端控制（全身模式内与底盘跟踪互斥）
-跟随模式下短按左握把      →  腰部摇杆 XY ↔ Z+Yaw
-短按左/右握把              →  对应臂摇杆 XY ↔ Z+Yaw（长按或组合键不切换）
+左右摇杆同时按下            →  底盘遥控 ↔ 末端控制
+跟随模式下短按左握把        →  腰部摇杆 XY ↔ Z+Yaw
+短按左/右握把               →  对应臂摇杆 XY ↔ Z+Yaw（长按或组合键不切换）
 右摇杆点击                  →  STORAGE ↔ UPDATE（需 OCS2；全身模式内改为「全部跟踪」开关）
 右 A / 左 X                 →  FSM 前进 / 后退
+```
+
+### 全身模式速查
+
+```
+左右握把 + 右摇杆按下       →  进入/退出全身遥操作模式
+右摇杆短按（事件 4）        →  开/关「全部跟踪」（胸/头/双臂 = /teleop/body_* 绝对映射）
+左摇杆按键（事件 7）        →  开/关「底盘跟踪」（人体 footprint → 位置外环 → /cmd_vel）
+右 A / 左 X                 →  FSM 前进 / 后退（共享）
+扳机 / 握把+扳机            →  夹爪控制（共享）
+其他组合键                  →  不可用，需先退出全身模式
 ```
 
 ## 全身遥操作（全身骨骼数据驱动，组合键 case 30）
@@ -221,20 +248,20 @@ FULL_BODY 下右握把+右摇杆方向组合仍会锁存并清零右轴（含预
 **组合键：左右握把 + 右摇杆按下**（事件码 30）。在 VR enabled + FULL_BODY（`ocs2_wbc_controller` active）+ FSM=OCS2 下开关：
 
 - **开启（进入模式）**：自动请求身体模式「跟随」（`BODY_TRACKING`）与头部模式「跟踪」（`HEAD_TRACKING`）；
-  此时**尚未下发胸/头/双臂目标**，需再短按右摇杆开启「全部跟踪」；
+  此时**尚未下发胸/头/双臂目标**，需再按右摇杆（4）开启「全部跟踪」；
 - **手动关闭**：再次按组合键退出模式，同时关掉「全部跟踪」与「底盘跟踪」（WBC 保持当前目标）。
-- **自动退出**（与普通遥操作一致）：该模式是「OCS2 会话级」开关，权威 FSM 一离开 OCS2
-  （HOLD / HOME / MOVEJ，含控制器侧异常自动回 `HOLD`）就退出整个模式，
+- **自动退出**：权威 FSM 一离开 OCS2（HOLD / HOME / MOVEJ，含控制器侧异常自动回 `HOLD`）就退出整个模式，
   **「全部跟踪」与「底盘跟踪」一并关闭**，回到 OCS2 后需重新按组合键开启；
-  判定放在 FSM 命令回调里（依据 `ArmsTargetManager` 的权威状态，而非本地缓存），
-  因此 FSM 由任何来源切换——VR 按键、RViz OCS2 面板、手柄 `/fsm_command`、控制器自动回退——都能退出。
+  判定同时放在 FSM 命令回调、按键/摇杆入口与 50 Hz 底盘外环里，因此 FSM 由任何来源切换
+  （VR 按键、RViz OCS2 面板、手柄 `/fsm_command`、控制器自动回退）都能退出。
   控制拓扑不再为 FULL_BODY（如切成 `split_body`）时同样自动退出。
-  不自动退出的话模式标志会残留：HOLD/HOME 下腰部组合键（21–24）与 case 20 底盘遥控会被继续屏蔽，
-  且再回到 OCS2 时会未经确认就自动恢复跟随。
 
-### 模式内开关：全部跟踪（短按右摇杆，事件 4）
+**模式内允许的用户操作只有四项**：FSM（11/12）、夹爪（9/10/13/14）、事件 4、事件 7。
+`3`/`6`/`16`/`20`/`21–28` 等其他组合键在全身模式下**全部不可用**，必须先按 30 退出。
 
-短按右摇杆（按下不到 500 ms 就松开，上游发事件 `4`）在全身模式内改为 **开/关「全部跟踪」**
+### 模式内开关：全部跟踪（右摇杆短按，事件 4）
+
+右摇杆松开沿（上游发事件 `4`）在全身模式内改为 **开/关「全部跟踪」**
 （toggle，与双臂末端同步启动）：
 
 > ⚠️ **该模式内只有绝对映射，没有“相对运动模式”**。早期版本在这里还留着一套
@@ -366,18 +393,18 @@ FULL_BODY 下右握把+右摇杆方向组合仍会锁存并清零右轴（含预
 
 - 可达自由度投影：胸部/头部目标按 ZYX 分解**丢弃 roll**（W2 腰部 3×pitch + 1×yaw、无 roll；
   头部仅 yaw/pitch）；
-- 摇杆微调（左/右摇杆增量）叠加在**绝对映射结果之后**，语义与原来一致；
+- **摇杆微调**：全身模式下不可用（摇杆完全让给骨架绝对映射）；普通模式下仍按原规则叠加在相对增量路径上。
 - 数据质量：逐关节看门狗（`skeleton_timeout`）只冻结对应任务；一阶低通（`absolute_filter_alpha`）
   抑制骨架抖动；手–脊柱距离超出 `skeleton_geometry_tolerance` 的帧丢弃（冻结该臂）；
 - 标定需要全部 5 个数据源就位（3 个机器人位姿 + pelvis/spine3/head/hand×2），
   未就位时按 2 s 节流日志列出缺失项；标定完成后才真正下发目标。
 
-### 模式内开关：底盘跟踪（长按右摇杆，事件 31）
+### 模式内开关：底盘跟踪（左摇杆按键，事件 7）
 
-长按右摇杆（按住 ≥500 ms，上游发事件 `31`）在全身模式内 **开/关「底盘跟踪」**，
-**独立于「全部跟踪」**（不要求后者已开）：
+左摇杆按键（松开沿，上游发事件 `7`）在全身模式内 **开/关「底盘跟踪」**，
+**独立于「全部跟踪」**（不要求后者已开）。普通模式下同一个 `7` 仍是镜像切换。
 
-- 数据源：`/teleop/body_pelvis_pose` 的水平位置 + 偏航；
+- 数据源：`/teleop/human_footprint_pose` 的水平位置 + 偏航（上游已完成低通与原点偏置）；
 - 外环（默认 50 Hz）：
 
   ```
@@ -392,9 +419,9 @@ FULL_BODY 下右握把+右摇杆方向组合仍会锁存并清零右轴（含预
 
 - 稳态速度增益 ≈ `base_follow_kp * base_follow_tau`（默认 0.5×2.0 = 1:1）；
 - 输出全向 `/cmd_vel`：`linear.x`、`linear.y`、`angular.z`；
-- 零速退出：关闭开关、骨盆数据超时（`base_follow_data_timeout`）、离开 OCS2 / FULL_BODY、
+- 零速退出：关闭开关、人体 footprint 数据超时（`base_follow_data_timeout`）、离开 OCS2 / FULL_BODY、
   `disable()` 各发一次零 Twist；
-- 与 case 20 手动底盘遥控互斥（底盘跟踪开启时 `processChassisAxes()` 直接返回）；
+- 与普通模式的手动底盘遥控（case 20）**不会同时生效**：进入全身模式时 CHASSIS 会被强制退出并零速；全身模式内不提供手动底盘遥控；
 - **`BASE_UNLOCKED` 时让路给 WBC**：不发 `/cmd_vel`，但把 `p_ref` 与人体同步，
   回到 `BASE_LOCKED` 时不产生冲击。
 
@@ -405,11 +432,12 @@ FULL_BODY 下右握把+右摇杆方向组合仍会锁存并清零右轴（含预
 ### 其余行为
 
 - 全身遥操开启期间：
-  - **屏蔽原有身体模式组合键（事件 21–24）**；
+  - **只保留 FSM、夹爪、事件 4、事件 7**；`3`/`6`/`16`/`20`/`21–28` 等其他组合键不可用；
   - **左右摇杆都不再微调末端/腰部**（thumbstickAxesCallback 在全身模式下直接早退）：
     本模式下双臂末端与腰部目标全部由骨架绝对映射给出，若容许摇杆累加偏移，
     会表现为“拨右摇杆就推着右臂走”。进入模式时会把已有摇杆偏移清零；
-  - FSM 切换（右 A / 左 X）、夹爪、镜像、WBC 开关、底盘（case 20）等其余按键逻辑不变。
+  - 进入模式时强制关闭镜像并退出 CHASSIS（零速），退出后普通模式从 STORAGE 开始，
+    镜像保持关闭，需重新按事件 7 开启。
 - 数据失效（骨架断流/关节非法）时目标保持不动（冻结，不清零）；
   离开 OCS2（或拓扑变为 SPLIT_BODY）时**整个全身遥操作模式自动退出**（「全部跟踪」「底盘跟踪」一并关闭），
   回到 OCS2 后需重新按组合键恢复。
