@@ -34,6 +34,7 @@ add_library(${PROJECT_NAME} SHARED
         src/MarkerFactory.cpp
         src/ControlInputHandler.cpp
         src/VRInputHandler.cpp
+        src/WholeBodyVrTeleop.cpp
         src/marker/HeadMarker.cpp
         src/marker/ArmMarker.cpp
         src/marker/BodyMarker.cpp

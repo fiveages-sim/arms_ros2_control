@@ -27,8 +27,8 @@
 
     # ================= 全身骨架绝对位姿映射 =================
     # 以下参数只在「全身遥操作模式」（左右握把+右摇杆按下开启）内部生效：
-    #   短按右摇杆 = 开/关「全部跟踪」（胸/头/双臂末端改为 /teleop/body_* 绝对位姿映射）
-    #   长按右摇杆 = 开/关「底盘跟踪」（骨盆水平位姿 → 位置外环 → /cmd_vel）
+    #   右摇杆短按（事件 4） = 开/关「全部跟踪」（胸/头/双臂末端改为 /teleop/body_* 绝对位姿映射）
+    #   左摇杆按键（事件 7） = 开/关「底盘跟踪」（人体 footprint → 位置外环 → /cmd_vel）
     # 非全身模式下的一切既有行为（UPDATE/STORAGE、摇杆微调、镜像、case 20 底盘模式）不受影响。
 
     # 双臂末端数据源：hand / wrist（对应 /teleop/body_{left,right}_<源>_pose）
@@ -99,7 +99,7 @@
     absolute_ramp_resume_gap: 0.3             # 输出中断超过该时长后重新渐入 (s)
 
     # ================= 底盘跟踪（位置外环 → /cmd_vel） =================
-    # 软参考「跑步机」：p_ref 以 tau 追赶人体骨盆位置，稳态速度增益 ≈ kp * tau
+    # 软参考「跑步机」：p_ref 以 tau 追赶人体 footprint 位置，稳态速度增益 ≈ kp * tau
     base_follow_enable: true
     base_follow_rate: 50.0          # 外环频率 (Hz)
     base_follow_tau: 2.0            # 软参考时间常数 (s)
@@ -113,7 +113,7 @@
     base_acc_max: 1.0               # 线加速度上限 (m/s^2)
     base_alpha_max: 2.0             # 角加速度上限 (rad/s^2)
     base_cmd_tau: 0.2               # 指令一阶低通时间常数 (s)
-    base_follow_data_timeout: 0.2   # 骨盆数据看门狗 (s)
+    base_follow_data_timeout: 0.2   # 人体 footprint 数据看门狗 (s)
 
     # 是否启用VR输入处理
     enable_vr: false
