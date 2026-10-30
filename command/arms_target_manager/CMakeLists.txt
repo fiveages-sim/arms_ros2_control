@@ -16,6 +16,7 @@ set(TARGET_MANAGER_INCLUDE_DEPENDS
         arms_ros2_control_msgs
         arms_controller_common
         tf2_ros
+        tf2_msgs
         tf2_geometry_msgs
         std_msgs
         nav_msgs
@@ -54,6 +55,7 @@ target_link_libraries(${PROJECT_NAME} PUBLIC
         ${arms_ros2_control_msgs_TARGETS}
         arms_controller_common::arms_controller_common
         ${tf2_ros_TARGETS}
+        ${tf2_msgs_TARGETS}
         ${tf2_geometry_msgs_TARGETS}
         ${std_msgs_TARGETS}
         ${nav_msgs_TARGETS}

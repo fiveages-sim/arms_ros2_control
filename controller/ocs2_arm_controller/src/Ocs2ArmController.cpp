@@ -341,12 +341,13 @@ namespace ocs2::mobile_manipulator
     controller_interface::CallbackReturn Ocs2ArmController::on_configure(
         const rclcpp_lifecycle::State& /*previous_state*/)
     {
+        // Relative names: respect ControllerManager / robot namespace (multi-robot).
         fsm_state_publisher_ = get_node()->create_publisher<std_msgs::msg::Int32>(
-            "/fsm_state", rclcpp::QoS(1).transient_local());
+            "fsm_state", rclcpp::QoS(1).transient_local());
 
         // Subscribe to FSM command (dedicated topic for state transitions)
         fsm_command_subscription_ = get_node()->create_subscription<std_msgs::msg::Int32>(
-            "/fsm_command", 10, [this](const std_msgs::msg::Int32::SharedPtr msg)
+            "fsm_command", 10, [this](const std_msgs::msg::Int32::SharedPtr msg)
             {
                 ctrl_interfaces_.fsm_command_ = msg->data;
             });
@@ -354,7 +355,7 @@ namespace ocs2::mobile_manipulator
         state_list_.movej->setupSubscriptions("target_joint_position", true);
         state_list_.movej->setupTrajectorySubscription();
         robot_description_subscription_ = get_node()->create_subscription<std_msgs::msg::String>(
-            "/robot_description", rclcpp::QoS(rclcpp::KeepLast(1)).transient_local(),
+            "robot_description", rclcpp::QoS(rclcpp::KeepLast(1)).transient_local(),
             [this](const std_msgs::msg::String::SharedPtr msg)
             {
                 state_list_.home->updateJointLimitsFromURDF(msg->data, joint_names_);
@@ -390,8 +391,9 @@ namespace ocs2::mobile_manipulator
         // ===== Waist-related subscriptions copied from BasicJointController =====
         if (waist_lifting_enabled_)
         {
-            // speedj-like lifting factor command
-            std::string waist_lifting_command_topic = "/" + controller_name_ + "/waist_lifting_command";
+            // Relative with controller name → /<ns>/<controller>/waist_*
+            const std::string waist_lifting_command_topic =
+                controller_name_ + "/waist_lifting_command";
             waist_lifting_command_subscription_ = get_node()->create_subscription<std_msgs::msg::Float64>(
                 waist_lifting_command_topic, 10,
                 [this](const std_msgs::msg::Float64::SharedPtr msg)
@@ -414,8 +416,8 @@ namespace ocs2::mobile_manipulator
                     }
                 });
 
-            // waist turning factor command
-            std::string waist_turning_command_topic = "/" + controller_name_ + "/waist_turning_command";
+            const std::string waist_turning_command_topic =
+                controller_name_ + "/waist_turning_command";
             waist_turning_command_subscription_ = get_node()->create_subscription<std_msgs::msg::Float64>(
                 waist_turning_command_topic, 10,
                 [this](const std_msgs::msg::Float64::SharedPtr msg)

@@ -20,8 +20,8 @@
 #include <interactive_markers/interactive_marker_server.hpp>
 #include <interactive_markers/menu_handler.hpp>
 #include <arms_ros2_control_msgs/msg/inputs.hpp>
-#include <tf2_ros/transform_listener.hpp>
 #include <tf2_ros/buffer.hpp>
+#include <tf2_msgs/msg/tf_message.hpp>
 #include <std_msgs/msg/float64_multi_array.hpp>
 #include <std_msgs/msg/int32.hpp>
 #include <arms_ros2_control_msgs/msg/wbc_current_state.hpp>
@@ -220,7 +220,10 @@ namespace arms_ros2_control::command
         double publish_rate_;
 
         std::shared_ptr<tf2_ros::Buffer> tf_buffer_;
-        std::shared_ptr<tf2_ros::TransformListener> tf_listener_;
+        // Relative tf/tf_static subs (not TransformListener): Isaac dual robots
+        // publish /<ns>/tf; absolute /tf is empty under multi-robot namespaces.
+        rclcpp::Subscription<tf2_msgs::msg::TFMessage>::SharedPtr tf_sub_;
+        rclcpp::Subscription<tf2_msgs::msg::TFMessage>::SharedPtr tf_static_sub_;
 
         MarkerState current_mode_ = MarkerState::SINGLE_SHOT;
 

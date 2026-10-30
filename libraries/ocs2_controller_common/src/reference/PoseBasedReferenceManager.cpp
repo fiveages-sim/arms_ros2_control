@@ -12,6 +12,7 @@
 #include <rclcpp/rclcpp.hpp>
 #include <tf2/exceptions.hpp>
 #include <tf2_geometry_msgs/tf2_geometry_msgs.hpp>
+#include <tf2_msgs/msg/tf_message.hpp>
 #include <fstream>
 #include <iomanip>
 #include <limits>
@@ -199,6 +200,58 @@ namespace ocs2::controller_common
         return tf_buffer_;
     }
 
+    void PoseBasedReferenceManager::setupTfBuffer(
+        const rclcpp_lifecycle::LifecycleNode::SharedPtr& node)
+    {
+        tf_buffer_ = std::make_shared<tf2_ros::Buffer>(node->get_clock());
+
+        // Prefer controller-declared tf_topic (WbcCtrlComponent); else declare defaults.
+        std::string tf_topic = "tf";
+        std::string tf_static_topic = "tf_static";
+        if (!node->has_parameter("tf_topic"))
+        {
+            node->declare_parameter("tf_topic", tf_topic);
+        }
+        if (!node->has_parameter("tf_static_topic"))
+        {
+            node->declare_parameter("tf_static_topic", tf_static_topic);
+        }
+        tf_topic = node->get_parameter("tf_topic").as_string();
+        tf_static_topic = node->get_parameter("tf_static_topic").as_string();
+
+        tf_sub_ = node->create_subscription<tf2_msgs::msg::TFMessage>(
+            tf_topic, rclcpp::QoS(rclcpp::KeepLast(100)).best_effort().durability_volatile(),
+            [this](const tf2_msgs::msg::TFMessage::SharedPtr msg) { tfMsgCallback(msg, false); });
+        tf_static_sub_ = node->create_subscription<tf2_msgs::msg::TFMessage>(
+            tf_static_topic, rclcpp::QoS(rclcpp::KeepLast(100)).transient_local().reliable(),
+            [this](const tf2_msgs::msg::TFMessage::SharedPtr msg) { tfMsgCallback(msg, true); });
+
+        RCLCPP_INFO(logger_,
+                    "PoseBasedReferenceManager TF buffer on relative topics '%s' + '%s' "
+                    "(multi-robot: resolves under node namespace, not absolute /tf)",
+                    tf_topic.c_str(), tf_static_topic.c_str());
+    }
+
+    void PoseBasedReferenceManager::tfMsgCallback(
+        const tf2_msgs::msg::TFMessage::SharedPtr msg, bool is_static)
+    {
+        if (!tf_buffer_ || !msg)
+        {
+            return;
+        }
+        for (const auto& t : msg->transforms)
+        {
+            try
+            {
+                tf_buffer_->setTransform(t, "isaac_tf_authority", is_static);
+            }
+            catch (const tf2::TransformException& ex)
+            {
+                RCLCPP_WARN_THROTTLE(logger_, *clock_, 2000, "setTransform failed: %s", ex.what());
+            }
+        }
+    }
+
     void PoseBasedReferenceManager::subscribe(
         const rclcpp_lifecycle::LifecycleNode::SharedPtr& node)
     {
@@ -214,9 +267,7 @@ namespace ocs2::controller_common
         // 初始化参数（从参数服务器获取）
         updateParam();
 
-        // 初始化TF2 buffer和listener
-        tf_buffer_ = std::make_shared<tf2_ros::Buffer>(node->get_clock());
-        tf_listener_ = std::make_shared<tf2_ros::TransformListener>(*tf_buffer_);
+        setupTfBuffer(node);
 
         // 左臂pose订阅者（单臂机器人也使用这个）
         auto leftCallback = [this](const geometry_msgs::msg::Pose::SharedPtr msg)

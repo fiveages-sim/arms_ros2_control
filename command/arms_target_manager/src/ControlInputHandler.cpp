@@ -153,7 +153,7 @@ namespace arms_ros2_control::command
             if (!pub)
             {
                 pub = node_->create_publisher<std_msgs::msg::Int32>(
-                    "/" + controller_name + "/target_command", 10);
+                    controller_name + "/target_command", 10);
             }
             std_msgs::msg::Int32 cmd;
             cmd.data = (hand_command >= 0.5f) ? 1 : 0;
@@ -166,7 +166,7 @@ namespace arms_ros2_control::command
             if (!pub)
             {
                 pub = node_->create_publisher<std_msgs::msg::Float64>(
-                    "/" + controller_name + "/target_percent", 10);
+                    controller_name + "/target_percent", 10);
             }
             std_msgs::msg::Float64 pct;
             pct.data = std::clamp(value, 0.0, 1.0);

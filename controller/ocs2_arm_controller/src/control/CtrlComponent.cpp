@@ -102,7 +102,7 @@ namespace ocs2::mobile_manipulator
             robot_name_ + "_mpc_observation", 1);
 
         // Initialize FSM command publisher (for stopping all controllers)
-        fsm_command_publisher_ = node_->create_publisher<std_msgs::msg::Int32>("/fsm_command", 10);
+        fsm_command_publisher_ = node_->create_publisher<std_msgs::msg::Int32>("fsm_command", 10);
     }
 
     void CtrlComponent::updateObservation(const rclcpp::Time& time)

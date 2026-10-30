@@ -347,7 +347,38 @@ namespace arms_ros2_control::command
             node_, marker_fixed_frame_, disable_auto_update_states_);
 
         tf_buffer_ = std::make_shared<tf2_ros::Buffer>(node_->get_clock());
-        tf_listener_ = std::make_shared<tf2_ros::TransformListener>(*tf_buffer_);
+        // Feed Buffer from relative topics so __ns alone reaches /<ns>/tf (Isaac dual).
+        // TransformListener hard-binds absolute /tf and misses namespaced trees.
+        std::string tf_topic = "tf";
+        std::string tf_static_topic = "tf_static";
+        if (!node_->has_parameter("tf_topic")) {
+            node_->declare_parameter("tf_topic", tf_topic);
+        }
+        if (!node_->has_parameter("tf_static_topic")) {
+            node_->declare_parameter("tf_static_topic", tf_static_topic);
+        }
+        tf_topic = node_->get_parameter("tf_topic").as_string();
+        tf_static_topic = node_->get_parameter("tf_static_topic").as_string();
+        tf_sub_ = node_->create_subscription<tf2_msgs::msg::TFMessage>(
+            tf_topic,
+            rclcpp::QoS(rclcpp::KeepLast(100)).best_effort().durability_volatile(),
+            [this](const tf2_msgs::msg::TFMessage::SharedPtr msg) {
+                for (const auto& t : msg->transforms) {
+                    tf_buffer_->setTransform(t, "isaac_tf_authority", false);
+                }
+            });
+        tf_static_sub_ = node_->create_subscription<tf2_msgs::msg::TFMessage>(
+            tf_static_topic,
+            rclcpp::QoS(rclcpp::KeepLast(100)).transient_local().reliable(),
+            [this](const tf2_msgs::msg::TFMessage::SharedPtr msg) {
+                for (const auto& t : msg->transforms) {
+                    tf_buffer_->setTransform(t, "isaac_tf_authority", true);
+                }
+            });
+        RCLCPP_INFO(node_->get_logger(),
+                    "ATM TF buffer on relative '%s'+'%s' (ns=%s)",
+                    tf_topic.c_str(), tf_static_topic.c_str(),
+                    node_->get_namespace());
 
         left_arm_marker_ = std::make_shared<ArmMarker>(
             node_, marker_factory_, tf_buffer_, marker_fixed_frame_, control_base_frame_,
@@ -1138,7 +1169,7 @@ namespace arms_ros2_control::command
 
         wbc_state_subscriber_ =
             node_->create_subscription<arms_ros2_control_msgs::msg::WbcCurrentState>(
-                "/ocs2_wbc_controller/current_state",
+                "ocs2_wbc_controller/current_state",
                 10,
                 std::bind(&ArmsTargetManager::wbcStateCallback, this, std::placeholders::_1));
 
@@ -1149,7 +1180,7 @@ namespace arms_ros2_control::command
         body_controller_name_ = node_->get_parameter("body_controller_name").as_string();
 
         const std::string body_joint_target_topic =
-            "/" + body_controller_name_ + "/current_target_joint";
+            body_controller_name_ + "/current_target_joint";
         body_joint_target_subscriber_ =
             node_->create_subscription<std_msgs::msg::Float64MultiArray>(
                 body_joint_target_topic, 10,

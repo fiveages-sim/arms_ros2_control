@@ -27,7 +27,7 @@
 #include <string>
 #include <vector>
 #include <tf2_ros/buffer.hpp>
-#include <tf2_ros/transform_listener.hpp>
+#include <tf2_msgs/msg/tf_message.hpp>
 
 namespace ocs2::controller_common {
 
@@ -118,6 +118,8 @@ public:
         bool body_target_enabled, bool head_target_enabled);
 
 private:
+    void setupTfBuffer(const rclcpp_lifecycle::LifecycleNode::SharedPtr& node);
+    void tfMsgCallback(const tf2_msgs::msg::TFMessage::SharedPtr msg, bool is_static);
     void updateParam();
     void leftPoseCallback(geometry_msgs::msg::Pose::SharedPtr msg);
     void rightPoseCallback(geometry_msgs::msg::Pose::SharedPtr msg);
@@ -234,7 +236,10 @@ private:
     rclcpp::Publisher<geometry_msgs::msg::PoseStamped>::SharedPtr head_target_publisher_;
 
     std::shared_ptr<tf2_ros::Buffer> tf_buffer_;
-    std::shared_ptr<tf2_ros::TransformListener> tf_listener_;
+    // Relative tf/tf_static (not TransformListener): it hard-binds absolute /tf
+    // and misses Isaac multi-robot /<ns>/tf.
+    rclcpp::Subscription<tf2_msgs::msg::TFMessage>::SharedPtr tf_sub_;
+    rclcpp::Subscription<tf2_msgs::msg::TFMessage>::SharedPtr tf_static_sub_;
     std::shared_ptr<rclcpp::Clock> clock_;
     std::string base_frame_;
 

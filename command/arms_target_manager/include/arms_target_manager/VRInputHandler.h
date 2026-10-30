@@ -21,7 +21,7 @@
 #include <std_msgs/msg/string.hpp>
 #include <nav_msgs/msg/path.hpp>
 #include <tf2_ros/buffer.hpp>
-#include <tf2_ros/transform_listener.hpp>
+#include <tf2_msgs/msg/tf_message.hpp>
 #include <controller_manager_msgs/srv/list_controllers.hpp>
 #include <optional>
 #include "arms_target_manager/ArmsTargetManager.h"
@@ -827,9 +827,10 @@ namespace arms_ros2_control::command
         std::string ee_frame_id_;
         bool ee_frame_id_initialized_ = false;
 
-        // TF组件（用于在不同link/frame之间转换）
+        // TF（相对 tf/tf_static，多机 ns 下不用绝对 /tf 的 TransformListener）
         std::shared_ptr<tf2_ros::Buffer> tf_buffer_;
-        std::shared_ptr<tf2_ros::TransformListener> tf_listener_;
+        rclcpp::Subscription<tf2_msgs::msg::TFMessage>::SharedPtr tf_sub_;
+        rclcpp::Subscription<tf2_msgs::msg::TFMessage>::SharedPtr tf_static_sub_;
 
         // 常量
         static const double POSITION_THRESHOLD;
