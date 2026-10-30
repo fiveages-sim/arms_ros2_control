@@ -21,7 +21,7 @@ namespace arms_controller_common
      *
      * Usage example:
      * ```cpp
-     * auto fsm_publisher = node->create_publisher<std_msgs::msg::Int32>("/fsm_command", 10);
+     * auto fsm_publisher = node->create_publisher<std_msgs::msg::Int32>("fsm_command", 10);
      * FSMCommandPublisher cmd_publisher(node, fsm_publisher);
      *
      * // Regular commands (automatically handled)

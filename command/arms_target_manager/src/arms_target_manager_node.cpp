@@ -205,7 +205,7 @@ int main(int argc, char** argv)
         // 创建 FSM 命令订阅器（用于状态切换和 marker 形态更新）
         // 统一处理 ArmsTargetManager 和 VRInputHandler 的 FSM 状态更新，避免重复订阅冲突
         auto fsm_command_subscription = node->create_subscription<std_msgs::msg::Int32>(
-            "/fsm_command", 10,
+            "fsm_command", 10,
             [target_manager_ptr = target_manager.get(), vr_handler_ptr = vr_handler.get()](
             const std_msgs::msg::Int32::ConstSharedPtr msg)
             {

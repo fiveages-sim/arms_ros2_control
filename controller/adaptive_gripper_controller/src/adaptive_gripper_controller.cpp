@@ -54,18 +54,18 @@ namespace adaptive_gripper_controller
                         "Effort interface disabled (position-only mode)");
         }
 
+        // Relative names respect ControllerManager / robot namespace (multi-robot).
         robot_description_subscription_ = get_node()->create_subscription<std_msgs::msg::String>(
-            "/robot_description", rclcpp::QoS(rclcpp::KeepLast(1)).transient_local(),
+            "robot_description", rclcpp::QoS(rclcpp::KeepLast(1)).transient_local(),
             [this](const std_msgs::msg::String::SharedPtr msg)
             {
                 parse_joint_limits(msg->data);
                 parse_initial_value(msg->data);
             });
 
-        // 直接位置控制订阅器 - 无力反馈的精细控制
-        // 话题名称格式：/<joint_name>/position_command
+        // Direct position: /<ns>/<joint>/position_command (relative, no leading /)
         // 回调只做校验/截断，将有效值存入原子收件箱；状态变量由 update() 独占修改
-        std::string position_command_topic = "/" + joint_name_ + "/position_command";
+        std::string position_command_topic = joint_name_ + "/position_command";
         direct_position_subscription_ = get_node()->create_subscription<std_msgs::msg::Float64>(
             position_command_topic, 10, [this](const std_msgs::msg::Float64::SharedPtr msg)
             {
@@ -99,10 +99,9 @@ namespace adaptive_gripper_controller
         RCLCPP_INFO(get_node()->get_logger(),
                     "Direct position control subscribed to topic: %s", position_command_topic.c_str());
 
-        // 开关控制订阅器 - 通过 0/1 控制夹爪全开/全关（关闭时带力反馈）
-        // 话题名称格式：/<controller_name>/target_command
-        // 回调只做校验，将 0/1 存入原子收件箱；状态变量由 update() 独占修改
-        std::string target_command_topic = "/" + controller_name_ + "/target_command";
+        // Switch control 0/1 open/close.
+        // Relative with controller name → /<ns>/<controller>/target_command
+        const std::string target_command_topic = controller_name_ + "/target_command";
         target_command_subscription_ = get_node()->create_subscription<std_msgs::msg::Int32>(
             target_command_topic, 10, [this](const std_msgs::msg::Int32::SharedPtr msg)
             {
@@ -130,11 +129,9 @@ namespace adaptive_gripper_controller
                      "Target command control subscribed to topic: %s (0=close, 1=open, using controller name)",
                      target_command_topic.c_str());
 
-        // 百分比控制订阅器 - 通过 0.0~1.0 比例控制夹爪开合，自动选择力反馈方向
-        // 话题名称格式：/<controller_name>/target_percent
-        // 0.0 = 完全关闭（closed_position_），1.0 = 完全打开（open_position_）
-        // 向关闭方向运动时启用力反馈；向打开方向运动时使用纯位置控制
-        std::string target_percent_topic = "/" + controller_name_ + "/target_percent";
+        // Percent 0..1 open.
+        // Relative with controller name → /<ns>/<controller>/target_percent
+        const std::string target_percent_topic = controller_name_ + "/target_percent";
         target_percent_subscription_ = get_node()->create_subscription<std_msgs::msg::Float64>(
             target_percent_topic, 10, [this](const std_msgs::msg::Float64::SharedPtr msg)
             {

@@ -74,18 +74,44 @@ namespace arms_ros2_control::command
         // 创建 controller topology 检测 client 和启动期重试 timer
         list_controllers_client_ =
             node_->create_client<ListControllers>(
-                "/controller_manager/list_controllers");
+                "controller_manager/list_controllers");
 
         control_topology_timer_ = node_->create_wall_timer(
             std::chrono::seconds(1),
             [this]() { detectControlTopology(); });
 
-        // 初始化 TF 组件（用于在 reference_link 与末端 frame 之间进行坐标变换）
+        // Relative tf/tf_static (same as ATM/WBC) — multi-robot Isaac publishes /<ns>/tf.
         tf_buffer_ = std::make_shared<tf2_ros::Buffer>(node_->get_clock());
-        tf_listener_ = std::make_shared<tf2_ros::TransformListener>(*tf_buffer_);
+        std::string tf_topic = "tf";
+        std::string tf_static_topic = "tf_static";
+        if (!node_->has_parameter("tf_topic")) {
+            node_->declare_parameter("tf_topic", tf_topic);
+        }
+        if (!node_->has_parameter("tf_static_topic")) {
+            node_->declare_parameter("tf_static_topic", tf_static_topic);
+        }
+        tf_topic = node_->get_parameter("tf_topic").as_string();
+        tf_static_topic = node_->get_parameter("tf_static_topic").as_string();
+        tf_sub_ = node_->create_subscription<tf2_msgs::msg::TFMessage>(
+            tf_topic,
+            rclcpp::QoS(rclcpp::KeepLast(100)).best_effort().durability_volatile(),
+            [this](const tf2_msgs::msg::TFMessage::SharedPtr msg) {
+                for (const auto& t : msg->transforms) {
+                    tf_buffer_->setTransform(t, "isaac_tf_authority", false);
+                }
+            });
+        tf_static_sub_ = node_->create_subscription<tf2_msgs::msg::TFMessage>(
+            tf_static_topic,
+            rclcpp::QoS(rclcpp::KeepLast(100)).transient_local().reliable(),
+            [this](const tf2_msgs::msg::TFMessage::SharedPtr msg) {
+                for (const auto& t : msg->transforms) {
+                    tf_buffer_->setTransform(t, "isaac_tf_authority", true);
+                }
+            });
         RCLCPP_INFO(
             node_->get_logger(),
-            "VR stale-input catch-up ramp recovery is enabled (frozen >= %d identical frames).",
+            "VR TF buffer on relative '%s'+'%s' (ns=%s); stale-input ramp enabled (frozen >= %d).",
+            tf_topic.c_str(), tf_static_topic.c_str(), node_->get_namespace(),
             STALE_MIN_FROZEN_FRAMES);
         // 检测左右控制器名称
         detectGripperControllers(hand_controllers_);
@@ -93,7 +119,8 @@ namespace arms_ros2_control::command
         // 创建夹爪状态订阅器（用于同步夹爪状态）
         if (!left_gripper_controller_name_.empty())
         {
-            std::string left_topic = "/" + left_gripper_controller_name_ + "/target_command";
+            // Relative → /<ns>/<controller>/target_command (matches gripper ~/target_command)
+            std::string left_topic = left_gripper_controller_name_ + "/target_command";
             auto leftGripperStateCallback = [this](const std_msgs::msg::Int32::SharedPtr msg)
             {
                 this->leftGripperStateCallback(msg);
@@ -105,7 +132,7 @@ namespace arms_ros2_control::command
         
         if (!right_gripper_controller_name_.empty())
         {
-            std::string right_topic = "/" + right_gripper_controller_name_ + "/target_command";
+            std::string right_topic = right_gripper_controller_name_ + "/target_command";
             auto rightGripperStateCallback = [this](const std_msgs::msg::Int32::SharedPtr msg)
             {
                 this->rightGripperStateCallback(msg);
@@ -173,23 +200,23 @@ namespace arms_ros2_control::command
         if (pub_right_target_)
         {
             pub_dual_target_stamped_ = node_->create_publisher<nav_msgs::msg::Path>(
-                "/dual_target/stamped", 1);
+                "dual_target/stamped", 1);
         }
 
-        // 创建 FSM 命令发布器（使用通用工具类，自动处理command=100的特殊情况）
-        auto pub_fsm_command = node_->create_publisher<std_msgs::msg::Int32>("/fsm_command", 10);
+        // Relative names → /<ns>/fsm_command|cmd_vel|mode_command (multi-robot)
+        auto pub_fsm_command = node_->create_publisher<std_msgs::msg::Int32>("fsm_command", 10);
         fsm_command_publisher_ = std::make_unique<arms_controller_common::FSMCommandPublisher>(
             node_, pub_fsm_command);
 
         // 底盘控制模式相关发布器（case 20 触发）
-        pub_cmd_vel_ = node_->create_publisher<geometry_msgs::msg::Twist>("/cmd_vel", 10);
+        pub_cmd_vel_ = node_->create_publisher<geometry_msgs::msg::Twist>("cmd_vel", 10);
 
         // WBC 模式切换命令发布器（case 21–24 请求身体模式）
-        pub_mode_command_ = node_->create_publisher<std_msgs::msg::String>("/mode_command", 10);
+        pub_mode_command_ = node_->create_publisher<std_msgs::msg::String>("mode_command", 10);
 
         sub_wbc_capability_ =
             node_->create_subscription<arms_ros2_control_msgs::msg::WbcCapability>(
-                "/ocs2_wbc_controller/wbc_capabilities",
+                "ocs2_wbc_controller/wbc_capabilities",
                 rclcpp::QoS(1).transient_local(),
                 [this](const arms_ros2_control_msgs::msg::WbcCapability::ConstSharedPtr msg)
                 {
@@ -288,7 +315,7 @@ namespace arms_ros2_control::command
         // 创建发布器（如果还没有）- 类似ControlInputHandler的方式
         if (gripper_command_publishers_.find(controller_name) == gripper_command_publishers_.end())
         {
-            std::string topic_name = "/" + controller_name + "/target_command";
+            std::string topic_name = controller_name + "/target_command";
             gripper_command_publishers_[controller_name] = 
                 node_->create_publisher<std_msgs::msg::Int32>(topic_name, 10);
             RCLCPP_INFO(node_->get_logger(), "🕹️🕶️🕹️ Created gripper command publisher: %s", topic_name.c_str());
@@ -322,7 +349,7 @@ namespace arms_ros2_control::command
 
         if (gripper_percent_publishers_.find(controller_name) == gripper_percent_publishers_.end())
         {
-            std::string topic_name = "/" + controller_name + "/target_percent";
+            std::string topic_name = controller_name + "/target_percent";
             gripper_percent_publishers_[controller_name] =
                 node_->create_publisher<std_msgs::msg::Float64>(topic_name, 10);
             RCLCPP_INFO(node_->get_logger(), "🕹️🕶️🕹️ Created gripper percent publisher: %s", topic_name.c_str());
@@ -3875,9 +3902,9 @@ namespace arms_ros2_control::command
                         if (next == ControlTopology::SPLIT_BODY)
                         {
                             pub_waist_lifting_ = node_->create_publisher<std_msgs::msg::Float64>(
-                                "/body_joint_controller/waist_lifting_command", 10);
+                                "body_joint_controller/waist_lifting_command", 10);
                             pub_waist_turning_ = node_->create_publisher<std_msgs::msg::Float64>(
-                                "/body_joint_controller/waist_turning_command", 10);
+                                "body_joint_controller/waist_turning_command", 10);
                         }
                         else
                         {

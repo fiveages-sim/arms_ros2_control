@@ -227,14 +227,16 @@ namespace basic_joint_controller
         state_list_.home->updateJointLimitsFromURDF(robot_description, joint_names_);
         state_list_.movej->updateJointLimitsFromURDF(robot_description);
 
-        // Subscribe to FSM command (dedicated topic for state transitions)
+        // Relative names: respect ControllerManager / robot namespace (multi-robot).
         fsm_command_subscription_ = get_node()->create_subscription<std_msgs::msg::Int32>(
-            "/fsm_command", 10, [this](const std_msgs::msg::Int32::SharedPtr msg)
+            "fsm_command", 10, [this](const std_msgs::msg::Int32::SharedPtr msg)
             {
                 ctrl_interfaces_.fsm_command_ = msg->data;
             });
 
-        std::string target_joint_position_topic = controller_name_ + "/target_joint_position";
+        // Relative with controller name → /<ns>/<controller>/target_joint_position
+        const std::string target_joint_position_topic =
+            controller_name_ + "/target_joint_position";
         target_joint_position_subscription_ = get_node()->create_subscription<std_msgs::msg::Float64MultiArray>(
             target_joint_position_topic, rclcpp::QoS(10),
             [this](const std_msgs::msg::Float64MultiArray::SharedPtr msg)
@@ -250,7 +252,7 @@ namespace basic_joint_controller
 
         state_list_.movej->setupTrajectorySubscription();
         robot_description_subscription_ = get_node()->create_subscription<std_msgs::msg::String>(
-            "/robot_description", rclcpp::QoS(rclcpp::KeepLast(1)).transient_local(),
+            "robot_description", rclcpp::QoS(rclcpp::KeepLast(1)).transient_local(),
             [this](const std_msgs::msg::String::SharedPtr msg)
             {
                 state_list_.home->updateJointLimitsFromURDF(msg->data, joint_names_);
@@ -270,8 +272,8 @@ namespace basic_joint_controller
                 state_list_.movej->setupWaistLiftingPoseAction("waist_lifting_pose");
             }
 
-            std::string waist_lifting_pose_relative_topic =
-                "/" + controller_name_ + "/waist_lifting_pose_relative";
+            const std::string waist_lifting_pose_relative_topic =
+                controller_name_ + "/waist_lifting_pose_relative";
             waist_lifting_pose_relative_subscription_ =
                 get_node()->create_subscription<std_msgs::msg::Float64MultiArray>(
                 waist_lifting_pose_relative_topic, 10,
@@ -300,8 +302,8 @@ namespace basic_joint_controller
                         RCLCPP_WARN(get_node()->get_logger(), "waist lifting x/z/phi delta command failed");
                     }
                 });
-            std::string waist_lifting_pose_absolute_topic =
-                "/" + controller_name_ + "/waist_lifting_pose_absolute";
+            const std::string waist_lifting_pose_absolute_topic =
+                controller_name_ + "/waist_lifting_pose_absolute";
             waist_lifting_pose_absolute_subscription_ =
                 get_node()->create_subscription<std_msgs::msg::Float64MultiArray>(
                     waist_lifting_pose_absolute_topic, 10,
@@ -369,7 +371,8 @@ namespace basic_joint_controller
                         }
                     });
             // 订阅腰部升降speedj 指令
-            std::string waist_lifting_command_topic = "/" + controller_name_ + "/waist_lifting_command";
+            const std::string waist_lifting_command_topic =
+                controller_name_ + "/waist_lifting_command";
 
             waist_lifting_command_subscription_ = get_node()->create_subscription<std_msgs::msg::Float64>(
                 waist_lifting_command_topic, 10,
@@ -400,7 +403,8 @@ namespace basic_joint_controller
                     }
                 });
 
-            std::string waist_turning_command_topic = "/" + controller_name_ + "/waist_turning_command";
+            const std::string waist_turning_command_topic =
+                controller_name_ + "/waist_turning_command";
             waist_turning_command_subscription_ = get_node()->create_subscription<std_msgs::msg::Float64>(
                 waist_turning_command_topic, 10,
                 [this](const std_msgs::msg::Float64::SharedPtr msg)
@@ -421,7 +425,8 @@ namespace basic_joint_controller
                     }
                 });
 
-            std::string waist_phi_command_topic = "/" + controller_name_ + "/waist_phi_command";
+            const std::string waist_phi_command_topic =
+                controller_name_ + "/waist_phi_command";
             waist_phi_command_subscription_ = get_node()->create_subscription<std_msgs::msg::Float64>(
                 waist_phi_command_topic, 10,
                 [this](const std_msgs::msg::Float64::SharedPtr msg)
@@ -448,7 +453,7 @@ namespace basic_joint_controller
         // Only effective when in MOVEJ state - directly sets target position without switching states
         if (target_command_enabled_)
         {
-            std::string target_command_topic = "/" + controller_name_ + "/target_command";
+            const std::string target_command_topic = controller_name_ + "/target_command";
             target_command_subscription_ = get_node()->create_subscription<std_msgs::msg::Int32>(
                 target_command_topic, rclcpp::QoS(10),
                 [this](const std_msgs::msg::Int32::SharedPtr msg)
@@ -515,7 +520,7 @@ namespace basic_joint_controller
             // 百分比控制：在关闭配置和打开配置之间按比例插值
             // 0.0 = 完全关闭（close_config），1.0 = 完全打开（open_config）
             // 逐关节线性插值：target[i] = close[i] + percent * (open[i] - close[i])
-            std::string target_percent_topic = "/" + controller_name_ + "/target_percent";
+            const std::string target_percent_topic = controller_name_ + "/target_percent";
             target_percent_subscription_ = get_node()->create_subscription<std_msgs::msg::Float64>(
                 target_percent_topic, rclcpp::QoS(10),
                 [this](const std_msgs::msg::Float64::SharedPtr msg)

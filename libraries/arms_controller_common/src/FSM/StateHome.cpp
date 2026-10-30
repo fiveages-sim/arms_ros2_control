@@ -232,12 +232,17 @@ namespace arms_controller_common
     {
 
         const int32_t fsm_cmd = ctrl_interfaces_.fsm_command_;
+        // HOLD/OCS2/MOVEJ: abort HOME motion then leave. Do not call getNextPoint
+        // after reset() — that logs "trajectory is not initialized" (hand none +
+        // shared fsm_command with WBC is the usual trigger when clicking HOLD).
         if (fsm_cmd == 2 || fsm_cmd == 3 || fsm_cmd == 4)
         {
             clearPendingMotion();
             stop_to_zero_active_ = false;
             speed_stop_planner_.reset();
             abortActiveMotionForStop();
+            last_command_ = fsm_cmd;
+            return;
         }
 
         int32_t current_command = ctrl_interfaces_.fsm_command_;
@@ -269,7 +274,8 @@ namespace arms_controller_common
             return;
         }
 
-        // Get next trajectory point from unified manager
+        // NONE still uses JointTrajectoryManager (instant-complete target). LINEAR/
+        // TANH advance here; getNextPoint is valid only while initialized.
         double runtime_step = period.seconds();
         std::vector<double> next_positions = trajectory_manager_.getNextPoint(runtime_step);
 

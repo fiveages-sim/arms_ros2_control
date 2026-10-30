@@ -114,7 +114,7 @@ namespace arms_controller_common
             current_target_joint_publisher_ =
                 arms_controller_common::utils::getOrCreateCurrentTargetJointPublisher(node_);
             fsm_command_publisher_ = node_->create_publisher<std_msgs::msg::Int32>(
-                "/fsm_command", 1);
+                "fsm_command", 1);
         }
     }
 
