@@ -110,7 +110,9 @@ namespace ocs2::controller_common
             if (geometry_opt)
             {
                 const scalar_t activationDistance = config_.self_collision_activation_distance;
+                // Parent-node topics/clock → relative distance_markers under /<ns>
                 geometry_visualization_ = std::make_unique<GeometryInterfaceVisualization>(
+                    node_->get_node_topics_interface(), node_->get_clock(),
                     pinocchio_interface_, std::move(*geometry_opt), base_frame_, activationDistance);
                 RCLCPP_INFO(node_->get_logger(),
                             "Self-collision visualization initialized (activation distance: %.3f m)", activationDistance);
