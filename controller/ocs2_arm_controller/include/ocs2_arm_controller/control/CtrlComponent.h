@@ -40,19 +40,14 @@ namespace ocs2::mobile_manipulator
     // Use CtrlInterfaces from arms_controller_common
     using CtrlInterfaces = arms_controller_common::CtrlInterfaces;
 
-    /** Writable directory for OCS2 CppAD generated libraries (must not live under read-only share/). */
-    inline std::string defaultOcs2LibraryFolder(const std::string& robot_pkg)
-    {
-        if (const char* xdg = std::getenv("XDG_CACHE_HOME"); xdg && xdg[0] != '\0')
-        {
-            return std::string(xdg) + "/ocs2_ros2/" + robot_pkg;
-        }
-        if (const char* home = std::getenv("HOME"); home && home[0] != '\0')
-        {
-            return std::string(home) + "/.ros/ocs2_cache/" + robot_pkg;
-        }
-        return std::string("/tmp/ocs2_ros2/") + robot_pkg;
-    }
+    /**
+     * CppAD cache, same layout as planning URDF and WBC:
+     * ``${OCS2_PLANNING_URDF_DIR:-/tmp}/ocs2_ros2/<robot>/ocs2/<content-hash>``.
+     * Hash covers the task file and planning URDF. An explicit ocs2_library_folder
+     * parameter still overrides this.
+     */
+    std::string defaultOcs2LibraryFolder(const std::string& robot_name, const std::string& task_file,
+                                         const std::string& urdf_file);
 
     /** Read model frame defaults from task.info (eeFrame=left, eeFrame1=right). */
     FrameOverrides loadInfoFrameDefaults(const std::string& task_file);
@@ -104,9 +99,10 @@ namespace ocs2::mobile_manipulator
             const std::string config_path = ament_index_cpp::get_package_share_directory(robot_pkg);
 
             const std::string task_file = config_path + "/config/ocs2/" + info_file_name + ".info";
-            const std::string lib_folder =
-                auto_declare("ocs2_library_folder", defaultOcs2LibraryFolder(robot_pkg));
             const std::string urdf_file = resolvePlanningUrdfPath();
+            const std::string lib_folder = auto_declare(
+                "ocs2_library_folder", defaultOcs2LibraryFolder(robot_name_, task_file, urdf_file));
+            RCLCPP_INFO(node_->get_logger(), "CppAD library folder: %s", lib_folder.c_str());
 
             // Frame params: YAML overrides task.info defaults; applied in-memory into Interface.
             const auto info_frames = loadInfoFrameDefaults(task_file);

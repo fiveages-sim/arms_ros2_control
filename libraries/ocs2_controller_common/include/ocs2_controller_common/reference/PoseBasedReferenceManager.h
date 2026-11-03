@@ -87,6 +87,15 @@ public:
     void resetRightEndEffectorTarget(
         const vector_t& right_ee_pose, bool update_target_trajectory = true);
 
+    /**
+     * External EE commands are dropped for an arm while this returns false.
+     * Covers pose, stamped, twist, relative, path, circle, and dual-target inputs.
+     * Internal resets (resetLeft/RightEndEffectorTarget, setCurrentEndEffectorPoses) stay open.
+     * Invoked from subscription threads; the predicate must be thread-safe.
+     * An empty predicate accepts every arm. is_left selects the arm.
+     */
+    void setArmExternalCommandPredicate(std::function<bool(bool is_left)> predicate);
+
     /** Optional body pose block (7: x,y,z, qx,qy,qz,qw). */
     void setBodyPoseReference(const vector_t& body_pose_xyzw_7);
     /** Update only body target (keep arm targets unchanged), optionally pushing trajectory to MPC. */
@@ -368,7 +377,12 @@ private:
         return accepting_targets_.load(std::memory_order_acquire);
     }
 
+    /** False while this arm must keep the pose written by an internal reset. */
+    [[nodiscard]] bool armExternalCommandAllowed(bool is_left) const;
+    void warnBlockedArmExternalCommand(bool is_left) const;
+
     std::atomic<bool> accepting_targets_{true};
+    std::function<bool(bool)> arm_external_command_predicate_;
     PoseStampedHandler stamped_left_handler_;
     PoseStampedHandler stamped_right_handler_;
     DualStampedHandler stamped_dual_handler_;
