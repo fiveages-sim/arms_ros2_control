@@ -932,6 +932,10 @@ namespace ocs2::controller_common
         }
         leftQuat.normalize();
 
+        if (!armExternalCommandAllowed(false))
+        {
+            return;
+        }
         const Eigen::Matrix<scalar_t, 3, 1> rightPos = left_pose7_xyzw.head<3>() + leftQuat * relPos;
         const Eigen::Quaternion<scalar_t> rightQuat = (leftQuat * relQuat).normalized();
         right_target_state_.head<3>() = rightPos;
@@ -1120,6 +1124,10 @@ namespace ocs2::controller_common
         relQuat.normalize();
 
         if (left_target_was_updated) {
+            if (!armExternalCommandAllowed(false))
+            {
+                return false;
+            }
             const vector_t& left = left_target_state_;
             vector_t& right = right_target_state_;
             const Eigen::Matrix<scalar_t, 3, 1> leftPos = left.head<3>();
@@ -1133,6 +1141,10 @@ namespace ocs2::controller_common
             right(5) = rightQuat.z();
             right(6) = rightQuat.w();
         } else {
+            if (!armExternalCommandAllowed(true))
+            {
+                return false;
+            }
             vector_t& left = left_target_state_;
             const vector_t& right = right_target_state_;
             const Eigen::Matrix<scalar_t, 3, 1> rightPos = right.head<3>();
@@ -1254,8 +1266,40 @@ namespace ocs2::controller_common
         applyHeadAbsoluteTarget(target_state, false);
     }
 
+    void PoseBasedReferenceManager::setArmExternalCommandPredicate(
+        std::function<bool(bool is_left)> predicate)
+    {
+        arm_external_command_predicate_ = std::move(predicate);
+    }
+
+    bool PoseBasedReferenceManager::armExternalCommandAllowed(bool is_left) const
+    {
+        if (!arm_external_command_predicate_)
+        {
+            return true;
+        }
+        return arm_external_command_predicate_(is_left);
+    }
+
+    void PoseBasedReferenceManager::warnBlockedArmExternalCommand(bool is_left) const
+    {
+        if (!clock_)
+        {
+            return;
+        }
+        RCLCPP_WARN_THROTTLE(
+            logger_, *clock_, 1000,
+            "%s EE command ignored while the arm is disabled or enable has not released",
+            is_left ? "left" : "right");
+    }
+
     void PoseBasedReferenceManager::applyLeftAbsoluteTarget(const vector_t& goal7, bool interpolate)
     {
+        if (!armExternalCommandAllowed(true))
+        {
+            warnBlockedArmExternalCommand(true);
+            return;
+        }
         markLeftCouplingCommand();
 
         if (!interpolate)
@@ -1304,6 +1348,11 @@ namespace ocs2::controller_common
 
     void PoseBasedReferenceManager::applyRightAbsoluteTarget(const vector_t& goal7, bool interpolate)
     {
+        if (!armExternalCommandAllowed(false))
+        {
+            warnBlockedArmExternalCommand(false);
+            return;
+        }
         if (isWheelHumanoidBimanualCoupled() && isCoupledLeftLeaderFresh())
         {
             // Left still owns coupling (VR both-hands heartbeat, or recent left teleop).
@@ -1485,7 +1534,12 @@ namespace ocs2::controller_common
     {
         const double t = current_observation_.time;
         bool updated = false;
-        if (left_twist_active_)
+        if (left_twist_active_ && !armExternalCommandAllowed(true))
+        {
+            left_twist_active_ = false;
+            left_latched_twist_ = geometry_msgs::msg::Twist{};
+        }
+        else if (left_twist_active_)
         {
             // Preempt this arm's moveL; opposite arm preserved via rebuild below.
             markLeftCouplingCommand();
@@ -1493,6 +1547,11 @@ namespace ocs2::controller_common
             left_target_state_ = integrateTwistVelocity(left_target_state_, left_latched_twist_, dt);
             (void)syncWheelHumanoidCoupledOppositeArmIfNeeded(true);
             updated = true;
+        }
+        if (dual_arm_mode_ && right_twist_active_ && !armExternalCommandAllowed(false))
+        {
+            right_twist_active_ = false;
+            right_latched_twist_ = geometry_msgs::msg::Twist{};
         }
         const bool allow_right_twist =
             dual_arm_mode_ && right_twist_active_ &&
@@ -1525,6 +1584,13 @@ namespace ocs2::controller_common
         {
             return;
         }
+        if (!armExternalCommandAllowed(true))
+        {
+            left_twist_active_ = false;
+            left_latched_twist_ = geometry_msgs::msg::Twist{};
+            warnBlockedArmExternalCommand(true);
+            return;
+        }
         left_latched_twist_ = *msg;
         left_twist_stamp_ = std::chrono::steady_clock::now();
         const bool is_zero =
@@ -1543,6 +1609,13 @@ namespace ocs2::controller_common
     {
         if (!shouldAcceptExternalTargets())
         {
+            return;
+        }
+        if (!armExternalCommandAllowed(false))
+        {
+            right_twist_active_ = false;
+            right_latched_twist_ = geometry_msgs::msg::Twist{};
+            warnBlockedArmExternalCommand(false);
             return;
         }
         right_latched_twist_ = *msg;
@@ -1853,6 +1926,18 @@ namespace ocs2::controller_common
                 "Dual target stamped callback called but dual arm mode is not enabled");
             return;
         }
+        if (!armExternalCommandAllowed(true) || !armExternalCommandAllowed(false))
+        {
+            if (!armExternalCommandAllowed(true))
+            {
+                warnBlockedArmExternalCommand(true);
+            }
+            if (!armExternalCommandAllowed(false))
+            {
+                warnBlockedArmExternalCommand(false);
+            }
+            return;
+        }
 
         // 支持两种格式：
         //   2 poses: [left, right]
@@ -2048,6 +2133,19 @@ namespace ocs2::controller_common
             RCLCPP_WARN(logger_, "没有有效的路径点可以处理");
             return;
         }
+        if ((!left_arm_waypoints.empty() && !armExternalCommandAllowed(true)) ||
+            (!right_arm_waypoints.empty() && !armExternalCommandAllowed(false)))
+        {
+            if (!left_arm_waypoints.empty() && !armExternalCommandAllowed(true))
+            {
+                warnBlockedArmExternalCommand(true);
+            }
+            if (!right_arm_waypoints.empty() && !armExternalCommandAllowed(false))
+            {
+                warnBlockedArmExternalCommand(false);
+            }
+            return;
+        }
 
         // 如果某个臂没有路径点，使用当前缓存的状态（仅双臂模式）
         if (dual_arm_mode_)
@@ -2144,6 +2242,22 @@ namespace ocs2::controller_common
             response->success = false;
             response->message = "both left_arm_path and right_arm_path are empty";
             response->estimated_duration = 0.0;
+            return;
+        }
+        if ((!left_arm_waypoints.empty() && !armExternalCommandAllowed(true)) ||
+            (!right_arm_waypoints.empty() && !armExternalCommandAllowed(false)))
+        {
+            response->success = false;
+            response->message = "EE path ignored while the arm is disabled or enable has not released";
+            response->estimated_duration = 0.0;
+            if (!left_arm_waypoints.empty() && !armExternalCommandAllowed(true))
+            {
+                warnBlockedArmExternalCommand(true);
+            }
+            if (!right_arm_waypoints.empty() && !armExternalCommandAllowed(false))
+            {
+                warnBlockedArmExternalCommand(false);
+            }
             return;
         }
 
@@ -2614,6 +2728,14 @@ namespace ocs2::controller_common
     {
         (void)request_header; // 不使用
 
+        if (!armExternalCommandAllowed(true))
+        {
+            response->success = false;
+            response->message = "left EE command ignored while the arm is disabled or enable has not released";
+            warnBlockedArmExternalCommand(true);
+            return;
+        }
+
         RCLCPP_INFO(logger_, "Received left arm arc execution request");
         // 获取起始状态
         const vector_t start_state = left_target_state_;
@@ -2658,6 +2780,13 @@ namespace ocs2::controller_common
             response->success = false;
             response->message = "The robot is not in a dual-arm mode and does not support right arm arc";
             RCLCPP_WARN(logger_, "%s", response->message.c_str());
+            return;
+        }
+        if (!armExternalCommandAllowed(false))
+        {
+            response->success = false;
+            response->message = "right EE command ignored while the arm is disabled or enable has not released";
+            warnBlockedArmExternalCommand(false);
             return;
         }
 

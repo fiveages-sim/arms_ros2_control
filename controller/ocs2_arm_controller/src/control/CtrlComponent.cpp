@@ -20,12 +20,99 @@
 #include <boost/property_tree/ptree.hpp>
 #include <exception>
 #include <algorithm>
+#include <cmath>
+#include <cstdint>
+#include <cstdlib>
 #include <filesystem>
+#include <fstream>
 #include <chrono>
 #include <optional>
+#include <regex>
+#include <sstream>
 
 namespace ocs2::mobile_manipulator
 {
+    namespace
+    {
+        constexpr const char* kCppadCacheSchema = "cppad-cache-v1";
+
+        void fnv1aUpdate(std::uint64_t& hash, const char* data, std::streamsize size)
+        {
+            for (std::streamsize i = 0; i < size; ++i)
+            {
+                hash ^= static_cast<unsigned char>(data[i]);
+                hash *= 1099511628211ull;
+            }
+        }
+
+        std::string fnv1aFile(const std::string& path)
+        {
+            std::uint64_t hash = 14695981039346656037ull;
+            fnv1aUpdate(hash, kCppadCacheSchema,
+                        static_cast<std::streamsize>(std::char_traits<char>::length(kCppadCacheSchema)));
+            std::ifstream input(path, std::ios::binary);
+            char buffer[4096];
+            while (input)
+            {
+                input.read(buffer, sizeof buffer);
+                fnv1aUpdate(hash, buffer, input.gcount());
+            }
+            std::ostringstream out;
+            out << std::hex << hash;
+            return out.str();
+        }
+
+        std::string cppadCacheBase()
+        {
+            if (const char* override_dir = std::getenv("OCS2_PLANNING_URDF_DIR");
+                override_dir != nullptr && override_dir[0] != '\0')
+            {
+                std::string base(override_dir);
+                while (!base.empty() && base.back() == '/')
+                {
+                    base.pop_back();
+                }
+                return base;
+            }
+            return "/tmp";
+        }
+
+        /** Cache dirs are content-addressed, so a hit must load. Keep an explicit folder's info flag. */
+        std::string taskFileForCppadCache(const std::string& lib_folder, const std::string& task_file)
+        {
+            const std::string cache_root = cppadCacheBase() + "/ocs2_ros2/";
+            if (lib_folder.rfind(cache_root, 0) != 0)
+            {
+                return task_file;
+            }
+            std::ifstream input(task_file);
+            if (!input)
+            {
+                return task_file;
+            }
+            std::stringstream buffer;
+            buffer << input.rdbuf();
+            const std::string rewritten = std::regex_replace(
+                buffer.str(), std::regex(R"((recompileLibraries\s+)(true|false|1|0))"), "$1false");
+            std::filesystem::create_directories(lib_folder);
+            const std::string cached_task = lib_folder + "/task.info";
+            std::ofstream output(cached_task);
+            if (!output)
+            {
+                return task_file;
+            }
+            output << rewritten;
+            return cached_task;
+        }
+    } // namespace
+
+    std::string defaultOcs2LibraryFolder(const std::string& robot_name, const std::string& task_file,
+                                         const std::string& urdf_file)
+    {
+        const std::string hash = fnv1aFile(task_file) + fnv1aFile(urdf_file);
+        return cppadCacheBase() + "/ocs2_ros2/" + robot_name + "/ocs2/" + hash;
+    }
+
     FrameOverrides loadInfoFrameDefaults(const std::string& task_file)
     {
         boost::property_tree::ptree pt;
@@ -88,7 +175,7 @@ namespace ocs2::mobile_manipulator
     {
         // Create Mobile Manipulator interface (frame overrides applied in-memory)
         interface_ = std::make_shared<MobileManipulatorInterface>(
-            task_file, lib_folder, urdf_file, frame_overrides);
+            taskFileForCppadCache(lib_folder, task_file), lib_folder, urdf_file, frame_overrides);
         task_file_ = task_file;
         urdf_file_ = urdf_file;
         // Setup publishers
@@ -153,10 +240,20 @@ namespace ocs2::mobile_manipulator
                 policy_active_ = true;
             }
         }
-        bool trigger_cached_state = (time - last_execute_time_).seconds() < hardware_latency_;
-        if (trigger_cached_state && cached_ob_state_)
+        // Keep the planner on the last commanded joints across HOLD. last_sent is
+        // what HOLD keeps publishing; do not fall back to measured q after hardware_latency.
+        if (cached_ob_state_)
         {
-            observation_.state = cached_last_action_;
+            const auto& command = ctrl_interfaces_.last_sent_joint_positions_;
+            for (size_t i = 0; i < joint_names_.size() && i < command.size()
+                 && i < static_cast<size_t>(observation_.state.size()); ++i)
+            {
+                if (!std::isfinite(command[i]))
+                {
+                    continue;
+                }
+                observation_.state(static_cast<Eigen::Index>(i)) = command[i];
+            }
         }
 
         mpc_mrt_interface_->setCurrentObservation(observation_);
