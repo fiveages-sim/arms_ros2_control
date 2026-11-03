@@ -12,6 +12,7 @@
 #include <geometry_msgs/msg/twist.hpp>
 #include <arms_ros2_control_msgs/msg/wbc_current_state.hpp>
 #include <arms_ros2_control_msgs/msg/wbc_capability.hpp>
+#include <std_msgs/msg/bool.hpp>
 #include <std_msgs/msg/float64.hpp>
 #include <std_msgs/msg/int32.hpp>
 #include <nav_msgs/msg/path.hpp>
@@ -213,6 +214,15 @@ namespace arms_ros2_control::command
 
         // WBC 模式切换命令发布器（case 21–24 请求身体模式）
         pub_mode_command_ = node_->create_publisher<std_msgs::msg::String>("mode_command", 10);
+
+        // Hand sinks / DualHand follow this latch (same bit as EE/trigger mirror).
+        pub_mirror_mode_ = node_->create_publisher<std_msgs::msg::Bool>(
+            "/teleop/mirror_mode",
+            rclcpp::QoS(1).transient_local());
+        publishMirrorMode();
+        RCLCPP_INFO(
+            node_->get_logger(),
+            "🕹️🕶️🕹️ Publishing /teleop/mirror_mode (Bool, transient_local)");
 
         sub_wbc_capability_ =
             node_->create_subscription<arms_ros2_control_msgs::msg::WbcCapability>(
@@ -470,11 +480,23 @@ namespace arms_ros2_control::command
                     right_gripper_percent_mode_.load() ? "比例" : "开关");
     }
 
+    void VRInputHandler::publishMirrorMode()
+    {
+        if (!pub_mirror_mode_)
+        {
+            return;
+        }
+        std_msgs::msg::Bool msg;
+        msg.data = mirror_mode_.load();
+        pub_mirror_mode_->publish(msg);
+    }
+
     void VRInputHandler::runScaleCalibration(bool use_left_z)
     {
         const char* tag = use_left_z ? "左组合键" : "右组合键";
 
         mirror_mode_.store(false);
+        publishMirrorMode();
         RCLCPP_INFO(node_->get_logger(), "🔘 [%s] 已切换至非镜像模式", tag);
         is_update_mode_.store(false);
         stopHeadTracking();
@@ -3644,6 +3666,7 @@ namespace arms_ros2_control::command
                 bool old_mirror_mode = mirror_mode_.load();
                 bool new_mirror_mode = !old_mirror_mode;
                 mirror_mode_.store(new_mirror_mode);
+                publishMirrorMode();
                 if (!new_mirror_mode)
                 {
                     mirror_mode_profile_.store(static_cast<int>(MirrorModeProfile::MODE_A));

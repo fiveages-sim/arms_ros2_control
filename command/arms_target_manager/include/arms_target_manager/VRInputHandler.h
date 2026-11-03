@@ -16,6 +16,7 @@
 #include <geometry_msgs/msg/twist.hpp>
 #include <Eigen/Core>
 #include <Eigen/Geometry>
+#include <std_msgs/msg/bool.hpp>
 #include <std_msgs/msg/float64.hpp>
 #include <std_msgs/msg/int32.hpp>
 #include <std_msgs/msg/string.hpp>
@@ -360,6 +361,9 @@ namespace arms_ros2_control::command
          */
         void runScaleCalibration(bool use_left_z);
 
+        /** Publish latch of mirror_mode_ on /teleop/mirror_mode (TRANSIENT_LOCAL). */
+        void publishMirrorMode();
+
         /**
          * 按镜像模式解析左右扳机对应的手控制器
          * @param is_left_trigger true=左扳机, false=右扳机
@@ -581,6 +585,8 @@ namespace arms_ros2_control::command
 
         // WBC 模式切换命令发布器（case 21–24 请求身体模式）
         rclcpp::Publisher<std_msgs::msg::String>::SharedPtr pub_mode_command_;
+        // Level latch for hand sinks / DualHand (same bit as EE/trigger mirror).
+        rclcpp::Publisher<std_msgs::msg::Bool>::SharedPtr pub_mirror_mode_;
         rclcpp::Subscription<arms_ros2_control_msgs::msg::WbcCapability>::SharedPtr
             sub_wbc_capability_;
 
