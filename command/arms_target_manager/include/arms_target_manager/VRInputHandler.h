@@ -273,24 +273,6 @@ namespace arms_ros2_control::command
         bool rebaseArmVrControlFromCurrentPose(WbcToggleTarget arm);
         void clearLastPublishedTarget(const std::string& armType);
 
-        /** True if quat is within ~angle_rad of identity (optical world R0=I). */
-        static bool isNearIdentityOrientation(
-            const Eigen::Quaterniond& q,
-            double angle_rad = 0.08);
-
-        /**
-         * Y/B pause resume: in full-body pause mode wait for topic quat≈I then
-         * snap R0=I (optical world). Otherwise snapshot current grip (controller).
-         * Does not change /teleop topic contracts.
-         */
-        void beginArmResume(
-            bool use_left_vr,
-            bool robot_arm_left,
-            const char* log_tag);
-
-        /** Called from VR pose callbacks while resume_pending is set. */
-        void tryCompletePendingArmResume(bool left_vr_topic);
-
         /**
          * 发布 WBC 模式切换命令
          * @param command 模式命令字符串，例如 "BODY_TRACKING"
@@ -381,6 +363,16 @@ namespace arms_ros2_control::command
 
         /** Publish latch of mirror_mode_ on /teleop/mirror_mode (TRANSIENT_LOCAL). */
         void publishMirrorMode();
+
+        /**
+         * Optional /teleop/optical_r0_gate (fa-py wrist): bit0/1 = side freeze ready.
+         * fa-py freezes enter palm (R_a,p_a) then encodes world Δ so ATM main
+         * R0=R_a yields Δ=world. Gate only times the snap — never force R0=I.
+         * No publisher → main immediate topic R0 (controller).
+         */
+        void opticalR0GateCallback(const std_msgs::msg::Int32::SharedPtr msg);
+        bool opticalR0GateAlive() const;
+        void tryCompleteOpticalUpdateEnter();
 
         /**
          * 按镜像模式解析左右扳机对应的手控制器
@@ -586,6 +578,13 @@ namespace arms_ros2_control::command
         rclcpp::Subscription<geometry_msgs::msg::Pose>::SharedPtr sub_head_;
         // 按钮事件订阅器（Int32类型）
         rclcpp::Subscription<std_msgs::msg::Int32>::SharedPtr sub_controller_state_;
+        // Optional optical world R0 gate (absent ⇒ controller main R0).
+        rclcpp::Subscription<std_msgs::msg::Int32>::SharedPtr sub_optical_r0_gate_;
+        std::atomic<int32_t> optical_r0_gate_bits_{0};
+        std::atomic<int64_t> optical_r0_gate_last_ns_{0};
+        std::atomic<bool> optical_update_enter_pending_{false};
+        static constexpr auto optical_r0_gate_alive_window_ =
+            std::chrono::milliseconds(750);
         // 摇杆轴值订阅器（合并订阅左右摇杆，使用 Twist 消息）
         rclcpp::Subscription<geometry_msgs::msg::Twist>::SharedPtr sub_thumbstick_axes_;
         // 扳机模拟量订阅器（合并订阅左右扳机，使用 Twist 消息）
@@ -677,14 +676,6 @@ namespace arms_ros2_control::command
         std::atomic<int> mirror_mode_profile_{static_cast<int>(MirrorModeProfile::MODE_A)};
         std::atomic<bool> left_arm_paused_; // 左臂是否暂停更新（Y按键控制）
         std::atomic<bool> right_arm_paused_; // 右臂是否暂停更新（B按键控制）
-        // Optical world: Y/B resume waits for publisher R_pub=I before R0 snap.
-        std::atomic<bool> left_vr_resume_pending_{false};
-        std::atomic<bool> right_vr_resume_pending_{false};
-        std::atomic<bool> left_vr_resume_robot_is_left_{true};
-        std::atomic<bool> right_vr_resume_robot_is_left_{false};
-        std::chrono::steady_clock::time_point left_vr_resume_pending_since_{};
-        std::chrono::steady_clock::time_point right_vr_resume_pending_since_{};
-        static constexpr auto arm_resume_r0_timeout_ = std::chrono::milliseconds(500);
         std::atomic<bool> left_grip_mode_; // 左摇杆控制模式：false=XY平移, true=Z轴+Yaw
         std::atomic<bool> right_grip_mode_; // 右摇杆控制模式：false=XY平移, true=Z轴+Yaw
         std::atomic<bool> chassis_mode_; // true = 底盘控制模式, false = 末端控制模式（case 20 切换）
@@ -723,8 +714,6 @@ namespace arms_ros2_control::command
         std::atomic<bool> right_wbc_vr_suppressed_{false};
         std::atomic<bool> left_wbc_rebase_pending_{false};
         std::atomic<bool> right_wbc_rebase_pending_{false};
-        std::chrono::steady_clock::time_point left_wbc_rebase_pending_since_{};
-        std::chrono::steady_clock::time_point right_wbc_rebase_pending_since_{};
 
         // FULL_BODY 下 case 16 锁存：false=Y/B 为 WBC 单臂禁用，true=Y/B 为 VR 暂停
         std::atomic<bool> full_body_yb_pause_mode_{false};
