@@ -121,6 +121,9 @@ namespace ocs2::mobile_manipulator
         loadData::loadPtreeValue<std::string>(pt, frames.baseFrame, "model_information.baseFrame", false);
         loadData::loadPtreeValue<std::string>(pt, frames.eeFrame, "model_information.eeFrame", false);
         loadData::loadPtreeValue<std::string>(pt, frames.eeFrame1, "model_information.eeFrame1", false);
+        bool recompile_libraries = true;
+        loadData::loadPtreeValue(pt, recompile_libraries, "model_settings.recompileLibraries", false);
+        frames.recompileLibraries = recompile_libraries;
         return frames;
     }
 
