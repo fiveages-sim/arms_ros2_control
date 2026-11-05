@@ -97,6 +97,7 @@ Package-specific parameters:
 | `base_frame` | task.info `baseFrame` | Startup only | Model / reference base; YAML overrides info |
 | `left_ee_frame` | task.info `eeFrame` | Startup only | Left tip; not hot-reloadable |
 | `right_ee_frame` | task.info `eeFrame1` | Startup only | Right tip; not hot-reloadable |
+| `recompile_libraries` | task.info `recompileLibraries` | Startup only | YAML overrides info; Isaac/`hardware:=isaac` defaults `false` (reuse CppAD cache). Set `true` after model/constraint changes or clear `/tmp/ocs2_ros2/...` |
 | `movel_duration` | `2.0` | Runtime | MoveL duration (s); next stamped / interpolating command |
 | `movel_trajectory_duration` | `2.0` | Runtime | MoveL trajectory duration |
 | `movel_sample_interval` | `0.04` | Runtime | MoveL sample interval |

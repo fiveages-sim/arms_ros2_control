@@ -104,7 +104,7 @@ namespace ocs2::mobile_manipulator
                 "ocs2_library_folder", defaultOcs2LibraryFolder(robot_name_, task_file, urdf_file));
             RCLCPP_INFO(node_->get_logger(), "CppAD library folder: %s", lib_folder.c_str());
 
-            // Frame params: YAML overrides task.info defaults; applied in-memory into Interface.
+            // Frame / model_settings params: YAML overrides task.info; applied in-memory into Interface.
             const auto info_frames = loadInfoFrameDefaults(task_file);
             const std::string base_frame =
                 auto_declare("base_frame", info_frames.baseFrame);
@@ -112,10 +112,15 @@ namespace ocs2::mobile_manipulator
                 auto_declare("left_ee_frame", info_frames.eeFrame);
             const std::string right_ee_frame =
                 auto_declare("right_ee_frame", info_frames.eeFrame1);
+            const bool recompile_libraries = auto_declare(
+                "recompile_libraries", info_frames.recompileLibraries.value_or(true));
             FrameOverrides frame_overrides;
             frame_overrides.baseFrame = base_frame;
             frame_overrides.eeFrame = left_ee_frame;
             frame_overrides.eeFrame1 = right_ee_frame;
+            frame_overrides.recompileLibraries = recompile_libraries;
+            RCLCPP_INFO(node_->get_logger(), "recompile_libraries=%s",
+                        recompile_libraries ? "true" : "false");
 
             setupInterface(task_file, lib_folder, urdf_file, frame_overrides);
 
