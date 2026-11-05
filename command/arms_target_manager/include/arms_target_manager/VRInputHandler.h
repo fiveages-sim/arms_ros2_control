@@ -365,14 +365,19 @@ namespace arms_ros2_control::command
         void publishMirrorMode();
 
         /**
-         * Optional /teleop/optical_r0_gate (fa-py wrist): bit0/1 = side freeze ready.
-         * fa-py freezes enter palm (R_a,p_a) then encodes world Δ so ATM main
-         * R0=R_a yields Δ=world. Gate only times the snap — never force R0=I.
-         * No publisher → main immediate topic R0 (controller).
+         * Optional optical R0 handshake (not in main teleop topics):
+         *   /teleop/optical_r0_request  ATM→fa-py  bit0/1 keep I+p_a; 0 = ACK open
+         *   /teleop/optical_r0_ready    fa-py→ATM  bit0/1 contract frame on EE
+         * No ready traffic → main immediate topic R0 (controller).
          */
-        void opticalR0GateCallback(const std_msgs::msg::Int32::SharedPtr msg);
-        bool opticalR0GateAlive() const;
+        void opticalR0ReadyCallback(const std_msgs::msg::Int32::SharedPtr msg);
+        bool opticalR0HandshakeAlive() const;
+        void publishOpticalR0Request(int32_t bits);
+        int32_t desiredOpticalR0RequestBits() const;
+        void refreshOpticalR0Request();
         void tryCompleteOpticalUpdateEnter();
+        bool tryCompleteOpticalSideSnap(bool useLeftVr);
+        void tryCompleteOpticalResumes();
 
         /**
          * 按镜像模式解析左右扳机对应的手控制器
@@ -578,12 +583,19 @@ namespace arms_ros2_control::command
         rclcpp::Subscription<geometry_msgs::msg::Pose>::SharedPtr sub_head_;
         // 按钮事件订阅器（Int32类型）
         rclcpp::Subscription<std_msgs::msg::Int32>::SharedPtr sub_controller_state_;
-        // Optional optical world R0 gate (absent ⇒ controller main R0).
-        rclcpp::Subscription<std_msgs::msg::Int32>::SharedPtr sub_optical_r0_gate_;
-        std::atomic<int32_t> optical_r0_gate_bits_{0};
-        std::atomic<int64_t> optical_r0_gate_last_ns_{0};
+        // Optional optical R0 handshake (absent ⇒ controller main R0).
+        rclcpp::Subscription<std_msgs::msg::Int32>::SharedPtr sub_optical_r0_ready_;
+        rclcpp::Publisher<std_msgs::msg::Int32>::SharedPtr pub_optical_r0_request_;
+        std::atomic<int32_t> optical_r0_ready_bits_{0};
+        std::atomic<int64_t> optical_r0_ready_last_ns_{0};
+        std::atomic<int32_t> optical_r0_request_bits_{0};
         std::atomic<bool> optical_update_enter_pending_{false};
-        static constexpr auto optical_r0_gate_alive_window_ =
+        std::chrono::steady_clock::time_point optical_update_enter_pending_since_{};
+        std::atomic<bool> optical_resume_pending_left_{false};
+        std::atomic<bool> optical_resume_pending_right_{false};
+        static constexpr auto optical_r0_handshake_timeout_ =
+            std::chrono::milliseconds(3000);
+        static constexpr auto optical_r0_ready_alive_window_ =
             std::chrono::milliseconds(750);
         // 摇杆轴值订阅器（合并订阅左右摇杆，使用 Twist 消息）
         rclcpp::Subscription<geometry_msgs::msg::Twist>::SharedPtr sub_thumbstick_axes_;
@@ -713,7 +725,9 @@ namespace arms_ros2_control::command
         std::atomic<bool> left_wbc_vr_suppressed_{false};
         std::atomic<bool> right_wbc_vr_suppressed_{false};
         std::atomic<bool> left_wbc_rebase_pending_{false};
+        std::chrono::steady_clock::time_point left_wbc_rebase_pending_since_{};
         std::atomic<bool> right_wbc_rebase_pending_{false};
+        std::chrono::steady_clock::time_point right_wbc_rebase_pending_since_{};
 
         // FULL_BODY 下 case 16 锁存：false=Y/B 为 WBC 单臂禁用，true=Y/B 为 VR 暂停
         std::atomic<bool> full_body_yb_pause_mode_{false};
