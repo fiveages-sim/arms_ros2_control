@@ -378,6 +378,8 @@ namespace arms_ros2_control::command
         void tryCompleteOpticalUpdateEnter();
         bool tryCompleteOpticalSideSnap(bool useLeftVr);
         void tryCompleteOpticalResumes();
+        /** Pause→resume one arm: optical handshake or main topic snap. */
+        bool resumeArmVrControl(WbcToggleTarget arm, const char* buttonTag);
 
         /**
          * 按镜像模式解析左右扳机对应的手控制器

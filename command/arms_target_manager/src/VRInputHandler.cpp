@@ -678,95 +678,183 @@ namespace arms_ros2_control::command
         }
         refreshOpticalR0Request();
 
-        auto finishLeftVrResume = [this](bool resumeRightArm)
+        auto finishOne = [this](WbcToggleTarget arm)
         {
-            if (!tryCompleteOpticalSideSnap(true))
+            const bool isLeftArm = arm == WbcToggleTarget::LEFT_ARM;
+            const bool useLeftVr = mirror_mode_.load() ? !isLeftArm : isLeftArm;
+            if (!tryCompleteOpticalSideSnap(useLeftVr))
             {
                 return;
             }
-            if (resumeRightArm)
+            const std::string armType = isLeftArm ? "left" : "right";
+            setRobotBase(armType, /*preferLastCommand=*/true);
+            if (isLeftArm)
             {
-                setRobotBase("right", /*preferLastCommand=*/true);
-                right_thumbstick_offset_ = Eigen::Vector3d::Zero();
-                right_thumbstick_yaw_offset_ = 0.0;
-                right_arm_paused_.store(false);
-                paused_left_position_ = Eigen::Vector3d::Zero();
-                paused_left_orientation_ = Eigen::Quaterniond::Identity();
-                optical_resume_pending_right_.store(false);
-            }
-            else
-            {
-                setRobotBase("left", /*preferLastCommand=*/true);
-                left_thumbstick_offset_ = Eigen::Vector3d::Zero();
+                left_thumbstick_offset_.setZero();
                 left_thumbstick_yaw_offset_ = 0.0;
                 left_arm_paused_.store(false);
-                paused_left_position_ = Eigen::Vector3d::Zero();
-                paused_left_orientation_ = Eigen::Quaterniond::Identity();
-                optical_resume_pending_left_.store(false);
-            }
-            refreshOpticalR0Request();
-            RCLCPP_INFO(
-                node_->get_logger(),
-                "🕹️ optical R0 handshake resume complete (%s)",
-                resumeRightArm ? "right arm via left VR" : "left arm");
-        };
-
-        auto finishRightVrResume = [this](bool resumeLeftArm)
-        {
-            if (!tryCompleteOpticalSideSnap(false))
-            {
-                return;
-            }
-            if (resumeLeftArm)
-            {
-                setRobotBase("left", /*preferLastCommand=*/true);
-                left_thumbstick_offset_ = Eigen::Vector3d::Zero();
-                left_thumbstick_yaw_offset_ = 0.0;
-                left_arm_paused_.store(false);
-                paused_right_position_ = Eigen::Vector3d::Zero();
-                paused_right_orientation_ = Eigen::Quaterniond::Identity();
                 optical_resume_pending_left_.store(false);
             }
             else
             {
-                setRobotBase("right", /*preferLastCommand=*/true);
-                right_thumbstick_offset_ = Eigen::Vector3d::Zero();
+                right_thumbstick_offset_.setZero();
                 right_thumbstick_yaw_offset_ = 0.0;
                 right_arm_paused_.store(false);
-                paused_right_position_ = Eigen::Vector3d::Zero();
-                paused_right_orientation_ = Eigen::Quaterniond::Identity();
                 optical_resume_pending_right_.store(false);
+            }
+            // Clear paused VR pose for the VR side that was controlling this arm.
+            if (useLeftVr)
+            {
+                paused_left_position_.setZero();
+                paused_left_orientation_.setIdentity();
+            }
+            else
+            {
+                paused_right_position_.setZero();
+                paused_right_orientation_.setIdentity();
             }
             refreshOpticalR0Request();
             RCLCPP_INFO(
                 node_->get_logger(),
-                "🕹️ optical R0 handshake resume complete (%s)",
-                resumeLeftArm ? "left arm via right VR" : "right arm");
+                "🕹️ optical R0 handshake resume complete (%s arm)",
+                armType.c_str());
         };
 
-        // Pending flags track which *arm* should resume; mirror selects VR side.
         if (optical_resume_pending_left_.load())
         {
-            if (mirror_mode_.load())
-            {
-                finishRightVrResume(/*resumeLeftArm=*/true);
-            }
-            else
-            {
-                finishLeftVrResume(/*resumeRightArm=*/false);
-            }
+            finishOne(WbcToggleTarget::LEFT_ARM);
         }
         if (optical_resume_pending_right_.load())
         {
-            if (mirror_mode_.load())
+            finishOne(WbcToggleTarget::RIGHT_ARM);
+        }
+    }
+
+    bool VRInputHandler::resumeArmVrControl(
+        WbcToggleTarget arm,
+        const char* buttonTag)
+    {
+        const bool isLeftArm = arm == WbcToggleTarget::LEFT_ARM;
+        const bool isRightArm = arm == WbcToggleTarget::RIGHT_ARM;
+        if (!isLeftArm && !isRightArm)
+        {
+            return false;
+        }
+        const bool useLeftVr = mirror_mode_.load() ? isRightArm : isLeftArm;
+        const char* armName = isLeftArm ? "left" : "right";
+
+        if (opticalR0HandshakeAlive())
+        {
+            if (isLeftArm)
             {
-                finishLeftVrResume(/*resumeRightArm=*/true);
+                optical_resume_pending_left_.store(true);
             }
             else
             {
-                finishRightVrResume(/*resumeLeftArm=*/false);
+                optical_resume_pending_right_.store(true);
             }
+            refreshOpticalR0Request();
+            tryCompleteOpticalResumes();
+            RCLCPP_INFO(
+                node_->get_logger(),
+                "🔘 [%s] optical R0 handshake resume (%s arm%s)",
+                buttonTag,
+                armName,
+                mirror_mode_.load() ? ", mirror" : "");
+            return true;  // caller should break (pending or done)
         }
+
+        // main: R0 = topic (same as origin/main, no .normalized())
+        if (useLeftVr)
+        {
+            vr_base_left_position_ = left_position_;
+            vr_base_left_orientation_ = left_orientation_;
+        }
+        else
+        {
+            vr_base_right_position_ = right_position_;
+            vr_base_right_orientation_ = right_orientation_;
+        }
+        const bool baseReady =
+            setRobotBase(armName, /*preferLastCommand=*/true);
+        if (isLeftArm)
+        {
+            left_thumbstick_offset_.setZero();
+            left_thumbstick_yaw_offset_ = 0.0;
+            left_arm_paused_.store(false);
+        }
+        else
+        {
+            right_thumbstick_offset_.setZero();
+            right_thumbstick_yaw_offset_ = 0.0;
+            right_arm_paused_.store(false);
+        }
+        if (useLeftVr)
+        {
+            paused_left_position_.setZero();
+            paused_left_orientation_.setIdentity();
+        }
+        else
+        {
+            paused_right_position_.setZero();
+            paused_right_orientation_.setIdentity();
+        }
+
+        const bool mirrored = mirror_mode_.load();
+        RCLCPP_INFO(
+            node_->get_logger(),
+            "🔘 [%s] 按下 - 功能: 切换%s臂更新状态 - 操作: 恢复%s臂更新"
+            "（重置基准位姿和摇杆偏移）%s",
+            buttonTag,
+            armName,
+            armName,
+            mirrored ? " [镜像模式]" : "");
+        RCLCPP_INFO(
+            node_->get_logger(),
+            "🕹️ %s VR base %s after resume",
+            armName,
+            baseReady ? "ready" : "waiting for TF");
+        if (isLeftArm)
+        {
+            RCLCPP_DEBUG(
+                node_->get_logger(),
+                "   VR Base Position: [%.3f, %.3f, %.3f]",
+                vr_base_left_position_.x(),
+                vr_base_left_position_.y(),
+                vr_base_left_position_.z());
+            RCLCPP_DEBUG(
+                node_->get_logger(),
+                "   Robot Base Position: [%.3f, %.3f, %.3f]",
+                robot_base_left_position_.x(),
+                robot_base_left_position_.y(),
+                robot_base_left_position_.z());
+            RCLCPP_DEBUG(
+                node_->get_logger(),
+                "   Left Robot Base Source: %s",
+                has_last_published_left_target_ ? "last_command"
+                                                : "current_pose");
+        }
+        else
+        {
+            RCLCPP_DEBUG(
+                node_->get_logger(),
+                "   VR Base Position: [%.3f, %.3f, %.3f]",
+                vr_base_right_position_.x(),
+                vr_base_right_position_.y(),
+                vr_base_right_position_.z());
+            RCLCPP_DEBUG(
+                node_->get_logger(),
+                "   Robot Base Position: [%.3f, %.3f, %.3f]",
+                robot_base_right_position_.x(),
+                robot_base_right_position_.y(),
+                robot_base_right_position_.z());
+            RCLCPP_DEBUG(
+                node_->get_logger(),
+                "   Right Robot Base Source: %s",
+                has_last_published_right_target_ ? "last_command"
+                                                 : "current_pose");
+        }
+        return true;
     }
 
     void VRInputHandler::runScaleCalibration(bool use_left_z)
@@ -2982,12 +3070,12 @@ namespace arms_ros2_control::command
         else if (useLeftVr)
         {
             vr_base_left_position_ = left_position_;
-            vr_base_left_orientation_ = left_orientation_.normalized();
+            vr_base_left_orientation_ = left_orientation_;
         }
         else
         {
             vr_base_right_position_ = right_position_;
-            vr_base_right_orientation_ = right_orientation_.normalized();
+            vr_base_right_orientation_ = right_orientation_;
         }
 
         if (isLeftArm)
@@ -3008,7 +3096,6 @@ namespace arms_ros2_control::command
         }
 
         clearLastPublishedTarget(armType);
-        // Caller clears rebasePending; ACK request after successful snap.
         return true;
     }
 
@@ -3631,37 +3718,11 @@ namespace arms_ros2_control::command
                     // 镜像模式：左话题数据用于右臂
                     if (right_arm_paused_.load())
                     {
-                        if (opticalR0HandshakeAlive())
-                        {
-                            optical_resume_pending_right_.store(true);
-                            refreshOpticalR0Request();
-                            tryCompleteOpticalResumes();
-                            RCLCPP_INFO(
-                                node_->get_logger(),
-                                "🔘 [左Y按钮] optical R0 handshake resume "
-                                "(right arm, mirror)");
-                            break;
-                        }
-                        vr_base_left_position_ = left_position_;
-                        vr_base_left_orientation_ =
-                            left_orientation_.normalized();
-                        const bool baseReady =
-                            setRobotBase("right", /*preferLastCommand=*/true);
-                        right_thumbstick_offset_ = Eigen::Vector3d::Zero();
-                        right_thumbstick_yaw_offset_ = 0.0;
-                        right_arm_paused_.store(false);
-                        paused_left_position_ = Eigen::Vector3d::Zero();
-                        paused_left_orientation_ = Eigen::Quaterniond::Identity();
-                        RCLCPP_INFO(node_->get_logger(), "🔘 [左Y按钮] 按下 - 功能: 切换右臂更新状态 - 操作: 恢复右臂更新（重置基准位姿和摇杆偏移） [镜像模式]");
-                        RCLCPP_INFO(
-                            node_->get_logger(),
-                            "🕹️ right VR base %s after resume",
-                            baseReady ? "ready" : "waiting for TF");
+                        resumeArmVrControl(
+                            WbcToggleTarget::RIGHT_ARM, "左Y按钮");
                     }
                     else
                     {
-                        // 当前是运行状态，执行暂停操作
-                        // 记录暂停时刻的VR位姿（镜像模式：左话题数据用于右臂）
                         paused_left_position_ = left_position_;
                         paused_left_orientation_ = left_orientation_;
                         right_arm_paused_.store(true);
@@ -3673,36 +3734,11 @@ namespace arms_ros2_control::command
                     // 正常模式：左话题数据用于左臂
                     if (left_arm_paused_.load())
                     {
-                        if (opticalR0HandshakeAlive())
-                        {
-                            optical_resume_pending_left_.store(true);
-                            refreshOpticalR0Request();
-                            tryCompleteOpticalResumes();
-                            RCLCPP_INFO(
-                                node_->get_logger(),
-                                "🔘 [左Y按钮] optical R0 handshake resume (left arm)");
-                            break;
-                        }
-                        vr_base_left_position_ = left_position_;
-                        vr_base_left_orientation_ =
-                            left_orientation_.normalized();
-                        const bool baseReady =
-                            setRobotBase("left", /*preferLastCommand=*/true);
-                        left_thumbstick_offset_ = Eigen::Vector3d::Zero();
-                        left_thumbstick_yaw_offset_ = 0.0;
-                        left_arm_paused_.store(false);
-                        paused_left_position_ = Eigen::Vector3d::Zero();
-                        paused_left_orientation_ = Eigen::Quaterniond::Identity();
-                        RCLCPP_INFO(node_->get_logger(), "🔘 [左Y按钮] 按下 - 功能: 切换左臂更新状态 - 操作: 恢复左臂更新（重置基准位姿和摇杆偏移）");
-                        RCLCPP_INFO(
-                            node_->get_logger(),
-                            "🕹️ left VR base %s after resume",
-                            baseReady ? "ready" : "waiting for TF");
+                        resumeArmVrControl(
+                            WbcToggleTarget::LEFT_ARM, "左Y按钮");
                     }
                     else
                     {
-                        // 当前是运行状态，执行暂停操作
-                        // 记录暂停时刻的VR位姿（正常模式：左话题数据用于左臂）
                         paused_left_position_ = left_position_;
                         paused_left_orientation_ = left_orientation_;
                         left_arm_paused_.store(true);
@@ -3743,13 +3779,11 @@ namespace arms_ros2_control::command
                         break;
                     }
                     optical_update_enter_pending_.store(false);
-                    // main: R0 = topic
+                    // main: R0 = topic (match origin/main)
                     vr_base_left_position_ = left_position_;
+                    vr_base_left_orientation_ = left_orientation_;
                     vr_base_right_position_ = right_position_;
-                    vr_base_left_orientation_ =
-                        left_orientation_.normalized();
-                    vr_base_right_orientation_ =
-                        right_orientation_.normalized();
+                    vr_base_right_orientation_ = right_orientation_;
 
                     const bool leftBaseReady =
                         setRobotBase("left", /*preferLastCommand=*/true);
@@ -3872,37 +3906,11 @@ namespace arms_ros2_control::command
                     // 镜像模式：右话题数据用于左臂
                     if (left_arm_paused_.load())
                     {
-                        if (opticalR0HandshakeAlive())
-                        {
-                            optical_resume_pending_left_.store(true);
-                            refreshOpticalR0Request();
-                            tryCompleteOpticalResumes();
-                            RCLCPP_INFO(
-                                node_->get_logger(),
-                                "🔘 [右B按钮] optical R0 handshake resume "
-                                "(left arm, mirror)");
-                            break;
-                        }
-                        vr_base_right_position_ = right_position_;
-                        vr_base_right_orientation_ =
-                            right_orientation_.normalized();
-                        const bool baseReady =
-                            setRobotBase("left", /*preferLastCommand=*/true);
-                        left_thumbstick_offset_ = Eigen::Vector3d::Zero();
-                        left_thumbstick_yaw_offset_ = 0.0;
-                        left_arm_paused_.store(false);
-                        paused_right_position_ = Eigen::Vector3d::Zero();
-                        paused_right_orientation_ = Eigen::Quaterniond::Identity();
-                        RCLCPP_INFO(node_->get_logger(), "🔘 [右B按钮] 按下 - 功能: 切换左臂更新状态 - 操作: 恢复左臂更新（重置基准位姿和摇杆偏移） [镜像模式]");
-                        RCLCPP_INFO(
-                            node_->get_logger(),
-                            "🕹️ left VR base %s after resume",
-                            baseReady ? "ready" : "waiting for TF");
+                        resumeArmVrControl(
+                            WbcToggleTarget::LEFT_ARM, "右B按钮");
                     }
                     else
                     {
-                        // 当前是运行状态，执行暂停操作
-                        // 记录暂停时刻的VR位姿（镜像模式：右话题数据用于左臂）
                         paused_right_position_ = right_position_;
                         paused_right_orientation_ = right_orientation_;
                         left_arm_paused_.store(true);
@@ -3914,36 +3922,11 @@ namespace arms_ros2_control::command
                     // 正常模式：右话题数据用于右臂
                     if (right_arm_paused_.load())
                     {
-                        if (opticalR0HandshakeAlive())
-                        {
-                            optical_resume_pending_right_.store(true);
-                            refreshOpticalR0Request();
-                            tryCompleteOpticalResumes();
-                            RCLCPP_INFO(
-                                node_->get_logger(),
-                                "🔘 [右B按钮] optical R0 handshake resume (right arm)");
-                            break;
-                        }
-                        vr_base_right_position_ = right_position_;
-                        vr_base_right_orientation_ =
-                            right_orientation_.normalized();
-                        const bool baseReady =
-                            setRobotBase("right", /*preferLastCommand=*/true);
-                        right_thumbstick_offset_ = Eigen::Vector3d::Zero();
-                        right_thumbstick_yaw_offset_ = 0.0;
-                        right_arm_paused_.store(false);
-                        paused_right_position_ = Eigen::Vector3d::Zero();
-                        paused_right_orientation_ = Eigen::Quaterniond::Identity();
-                        RCLCPP_INFO(node_->get_logger(), "🔘 [右B按钮] 按下 - 功能: 切换右臂更新状态 - 操作: 恢复右臂更新（重置基准位姿和摇杆偏移）");
-                        RCLCPP_INFO(
-                            node_->get_logger(),
-                            "🕹️ right VR base %s after resume",
-                            baseReady ? "ready" : "waiting for TF");
+                        resumeArmVrControl(
+                            WbcToggleTarget::RIGHT_ARM, "右B按钮");
                     }
                     else
                     {
-                        // 当前是运行状态，执行暂停操作
-                        // 记录暂停时刻的VR位姿（正常模式：右话题数据用于右臂）
                         paused_right_position_ = right_position_;
                         paused_right_orientation_ = right_orientation_;
                         right_arm_paused_.store(true);
