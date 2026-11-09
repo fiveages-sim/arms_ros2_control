@@ -366,12 +366,32 @@ namespace arms_ros2_control::command
 
         /**
          * Optional optical R0 handshake (not in main teleop topics):
+         *   /teleop/optical_r0_caps     fa-py→ATM  bit0 = publisher implements handshake
          *   /teleop/optical_r0_request  ATM→fa-py  bit0/1 keep I+p_a; 0 = ACK open
          *   /teleop/optical_r0_ready    fa-py→ATM  bit0/1 contract frame on EE
-         * No ready traffic → main immediate topic R0 (controller).
+         *
+         * Peer support tracks /teleop/optical_r0_caps (assignable, including
+         * caps=0). Once any caps message is seen, ready traffic no longer
+         * latches support — only caps does. Legacy publishers that never send
+         * caps may still learn support from ready. Unlearn only on
+         * timeout&&alive (broken peer); a still headset (!alive) cancels
+         * without unlearning.
          */
         void opticalR0ReadyCallback(const std_msgs::msg::Int32::SharedPtr msg);
+        void opticalR0CapsCallback(const std_msgs::msg::Int32::SharedPtr msg);
+        /** Current: fa-py advertises R0 handshake (caps=1, or legacy ready). */
+        bool opticalR0HandshakeSupported() const;
+        /** Live: ready traffic seen within optical_r0_ready_alive_window_. */
         bool opticalR0HandshakeAlive() const;
+        /**
+         * 100ms supervisor: completes pending enter/resume even when no VR pose
+         * arrives (peer died) and expires them with a WARN.
+         */
+        void superviseOpticalHandshake();
+        /** Drop pendings + request bits without touching arm pause state. */
+        void cancelOpticalPending(const char* reason);
+        /** Forget peer support until caps=1 (or legacy ready) returns. */
+        void unlearnOpticalR0Peer(const char* reason);
         void publishOpticalR0Request(int32_t bits);
         int32_t desiredOpticalR0RequestBits() const;
         void refreshOpticalR0Request();
@@ -586,8 +606,12 @@ namespace arms_ros2_control::command
         // 按钮事件订阅器（Int32类型）
         rclcpp::Subscription<std_msgs::msg::Int32>::SharedPtr sub_controller_state_;
         // Optional optical R0 handshake (absent ⇒ controller main R0).
+        rclcpp::Subscription<std_msgs::msg::Int32>::SharedPtr sub_optical_r0_caps_;
         rclcpp::Subscription<std_msgs::msg::Int32>::SharedPtr sub_optical_r0_ready_;
         rclcpp::Publisher<std_msgs::msg::Int32>::SharedPtr pub_optical_r0_request_;
+        std::atomic<bool> optical_r0_peer_supports_{false};
+        /** True after any caps message; gates whether ready may latch support. */
+        std::atomic<bool> optical_caps_seen_{false};
         std::atomic<int32_t> optical_r0_ready_bits_{0};
         std::atomic<int64_t> optical_r0_ready_last_ns_{0};
         std::atomic<int32_t> optical_r0_request_bits_{0};
@@ -595,6 +619,20 @@ namespace arms_ros2_control::command
         std::chrono::steady_clock::time_point optical_update_enter_pending_since_{};
         std::atomic<bool> optical_resume_pending_left_{false};
         std::atomic<bool> optical_resume_pending_right_{false};
+        /** Armed-at times so a dead peer cannot leave a resume pending forever. */
+        std::chrono::steady_clock::time_point optical_resume_pending_left_since_{};
+        std::chrono::steady_clock::time_point optical_resume_pending_right_since_{};
+        /**
+         * VR side latched at request time. Mirror can flip while a resume is
+         * pending; re-deriving from mirror_mode_ then would snap the wrong
+         * wrist base and strand the other side's paused pose.
+         */
+        std::atomic<bool> optical_resume_use_left_vr_left_{false};
+        std::atomic<bool> optical_resume_use_left_vr_right_{false};
+        /** One WARN per cancelled pending, not one per 30 Hz frame. */
+        std::atomic<bool> optical_fallback_warned_{false};
+        rclcpp::TimerBase::SharedPtr optical_handshake_timer_;
+        static constexpr int32_t optical_r0_caps_version_ = 1;
         static constexpr auto optical_r0_handshake_timeout_ =
             std::chrono::milliseconds(3000);
         static constexpr auto optical_r0_ready_alive_window_ =
@@ -728,8 +766,10 @@ namespace arms_ros2_control::command
         std::atomic<bool> right_wbc_vr_suppressed_{false};
         std::atomic<bool> left_wbc_rebase_pending_{false};
         std::chrono::steady_clock::time_point left_wbc_rebase_pending_since_{};
+        std::atomic<bool> left_wbc_rebase_use_left_vr_{false};
         std::atomic<bool> right_wbc_rebase_pending_{false};
         std::chrono::steady_clock::time_point right_wbc_rebase_pending_since_{};
+        std::atomic<bool> right_wbc_rebase_use_left_vr_{false};
 
         // FULL_BODY 下 case 16 锁存：false=Y/B 为 WBC 单臂禁用，true=Y/B 为 VR 暂停
         std::atomic<bool> full_body_yb_pause_mode_{false};
