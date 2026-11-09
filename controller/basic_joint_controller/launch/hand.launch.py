@@ -24,17 +24,10 @@ def launch_setup(context, *args, **kwargs):
 
     # 显示手部配置信息
     hand_side = "left" if direction == "1" else "right"
-    if hand_name == "freedom":
-        modbus_id = "0" if direction == "1" else "1"
-    elif hand_name == "inspire":
-        modbus_id = "2" if direction == "1" else "1"
-    elif hand_name == "theohand":
-        modbus_id = "2" if direction == "1" else "1"
-    elif hand_name == "dh":
-        modbus_id = context.launch_configurations.get('slave_id') or "1"
-    else:
-        modbus_id = "0x28" if direction == "1" else "0x27"
-    print(f"[INFO] Hand configuration: {hand_side} hand (direction={direction}, Modbus ID={modbus_id})")
+    print(
+        f"[INFO] Hand configuration: {hand_name}/{hand_type}, {hand_side} hand "
+        f"(direction={direction}, hardware={hardware})"
+    )
 
     # 生成 ros2_control robot_description
     # 对于灵巧手，直接处理 hand.xacro 文件
@@ -62,17 +55,6 @@ def launch_setup(context, *args, **kwargs):
         mappings["type"] = hand_type
     if direction and direction.strip():
         mappings["direction"] = direction
-
-    # DH-3-7 exposes these settings through its standalone control Xacro.
-    # Keep other hands' existing parameter/default behavior unchanged.
-    if hand_name == "dh" and hand_type == "dh_3_7":
-        for key in (
-            'serial_port', 'baudrate', 'slave_id', 'tool_velocity', 'tool_torque',
-            'background_period_ms', 'feedback_timeout_ms', 'homing_timeout_ms',
-        ):
-            value = context.launch_configurations.get(key, '')
-            if value.strip():
-                mappings[key] = value
 
     # 如果是 Gazebo 模式，添加 gazebo 映射
     if hardware == 'gz':
@@ -272,18 +254,5 @@ def generate_launch_description():
         use_rviz_arg,
         can_interface_arg,
         read_tactile_arg,
-        *[
-            DeclareLaunchArgument(key, default_value='', description=description)
-            for key, description in (
-                ('serial_port', 'DH-3-7 serial device (default /dev/ttyUSB0)'),
-                ('baudrate', 'DH-3-7 baudrate (default 115200)'),
-                ('slave_id', 'DH-3-7 slave ID (default 1)'),
-                ('tool_velocity', 'DH-3-7 speed ratio, 0.01 to 1.0 (default 1.0)'),
-                ('tool_torque', 'DH-3-7 target force ratio, 0.2 to 1.0 (default 1.0)'),
-                ('background_period_ms', 'DH-3-7 polling period (default 20 ms)'),
-                ('feedback_timeout_ms', 'DH-3-7 transaction timeout (default 50 ms)'),
-                ('homing_timeout_ms', 'DH-3-7 startup homing timeout (default 90000 ms)'),
-            )
-        ],
         OpaqueFunction(function=launch_setup),
     ])
