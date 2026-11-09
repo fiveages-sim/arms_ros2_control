@@ -1284,10 +1284,17 @@ namespace arms_controller_common
         std::vector<double> next_positions;
         if (head_execution_active_)
         {
+            // use_sim_time can deliver a zero-length period. That is not a bad
+            // trajectory; aborting here switches MOVEJ to HOLD and drops the body move.
+            if (!std::isfinite(runtime_step) || runtime_step <= 0.0)
+            {
+                maintainCommandFromLastSent();
+                return;
+            }
             try
             {
-                if (!head_candidate_ || !std::isfinite(runtime_step) || runtime_step <= 0.0)
-                    throw std::invalid_argument("Invalid head execution candidate or control period");
+                if (!head_candidate_)
+                    throw std::invalid_argument("Invalid head execution candidate");
                 head_elapsed_ = std::min(head_elapsed_ + runtime_step, head_candidate_->duration());
                 head_point = head_candidate_->evaluateAt(head_elapsed_);
                 next_positions = head_point.positions;
