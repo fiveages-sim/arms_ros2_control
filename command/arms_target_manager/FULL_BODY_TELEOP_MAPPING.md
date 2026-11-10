@@ -24,6 +24,9 @@ VR 侧数据（`xr_target_node`，XRoboToolkit 后端）：
 - `/teleop/body_<关节名>_pose`（`geometry_msgs/Pose`，24 关节，头显开启 Whole Body Motion Tracking 且配对足部追踪器后动态出现，断流 5 s 销毁话题）；
 - `/teleop/human_footprint_pose`（`geometry_msgs/Pose`，人体基坐标系：骨盆地面投影 xy + 双足较低者 z + 双踝 x 轴平均 yaw，由 `vr_pose_publisher` 计算，同样动态增删）；
 - 与 `/teleop/head_pose`、手柄 pose **同一世界系、同一原点**（App 启动时头显位置），OpenXR→机器人轴转换已在上游 wrapper 完成。
+- **进入模式（事件 30）以此为前置条件**：上面这些话题必须已上线且在 `skeleton_timeout`（默认 0.2 s）内
+  仍有新数据（骨盆 / spine3 / 头 / 左右手 / human_footprint / 左右肩），否则**拒绝进入**并在告警中
+  列出缺失项——全模式的目标都来自这些话题，缺任何一项进入后都只会静默冻结。
 
 ## 1. 坐标系与数据语义
 

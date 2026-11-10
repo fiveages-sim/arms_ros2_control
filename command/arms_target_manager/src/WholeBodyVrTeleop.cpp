@@ -75,6 +75,20 @@ namespace arms_ros2_control::command
             }
             return current + (delta > 0.0 ? max_step : -max_step);
         }
+
+        std::string joinSources(const std::vector<std::string>& sources)
+        {
+            std::string joined;
+            for (const auto& name : sources)
+            {
+                if (!joined.empty())
+                {
+                    joined += ", ";
+                }
+                joined += name;
+            }
+            return joined;
+        }
     } // namespace
 
     WholeBodyVrTeleop::WholeBodyVrTeleop(
@@ -197,6 +211,20 @@ namespace arms_ros2_control::command
             RCLCPP_WARN(
                 node_->get_logger(),
                 "🔘 [case 30] 忽略全身遥操作开关：要求 VR enabled、FULL_BODY、OCS2");
+            return;
+        }
+
+        // 没有全身骨架数据时整个模式没有任何数据源，直接拒绝进入，
+        // 避免进入后既不报错也不下发目标（静默失效）。
+        const std::vector<std::string> missing = missingSkeletonSources();
+        if (!missing.empty())
+        {
+            RCLCPP_WARN(
+                node_->get_logger(),
+                "🔘 [case 30] 拒绝进入全身遥操作：缺少 VR 全身骨架数据（%s）。"
+                "请在头显中开启全身追踪，确认 /teleop/body_* 与 "
+                "/teleop/human_footprint_pose 已稳定发布后重试",
+                joinSources(missing).c_str());
             return;
         }
 
@@ -1028,6 +1056,40 @@ namespace arms_ros2_control::command
         return age <= std::max(0.0, absolute_options_.skeleton_timeout_sec);
     }
 
+    std::vector<std::string> WholeBodyVrTeleop::missingSkeletonSources() const
+    {
+        std::vector<std::string> missing;
+        const auto add = [this, &missing](const char* name, bool present,
+                                          const std::chrono::steady_clock::time_point& stamp)
+        {
+            if (!present)
+            {
+                missing.emplace_back(name);
+            }
+            else if (!skeletonJointFresh(stamp))
+            {
+                missing.emplace_back(std::string(name) + "（已超时）");
+            }
+        };
+
+        add("/teleop/body_pelvis_pose", has_body_pelvis_pose_, body_pelvis_stamp_);
+        add("/teleop/body_spine3_pose", has_body_spine3_pose_, body_spine3_stamp_);
+        add("/teleop/body_head_pose", has_body_head_pose_, body_head_stamp_);
+        add("左侧骨架手部话题", has_body_left_hand_pose_, body_left_hand_stamp_);
+        add("右侧骨架手部话题", has_body_right_hand_pose_, body_right_hand_stamp_);
+        // 人体基坐标系必须已由上游发布（骨盆 xy / 双踝朝向 / 双足地面 z），
+        // 否则所有目标位置都无意义。
+        add("/teleop/human_footprint_pose（人体基坐标系）",
+            has_human_footprint_pose_, human_footprint_stamp_);
+        // 肩部是「肩宽 / 臂长」两条尺度链的起点
+        add("/teleop/body_left_shoulder_pose（肩宽/臂长尺度）",
+            body_left_shoulder_.valid, body_left_shoulder_.stamp);
+        add("/teleop/body_right_shoulder_pose（肩宽/臂长尺度）",
+            body_right_shoulder_.valid, body_right_shoulder_.stamp);
+
+        return missing;
+    }
+
     Eigen::Quaterniond WholeBodyVrTeleop::dropRoll(const Eigen::Quaterniond& q)
     {
         // ZYX 分解 R = Rz(yaw)·Ry(pitch)·Rx(roll)，丢弃 roll。
@@ -1072,32 +1134,12 @@ namespace arms_ros2_control::command
         }
 
         // 目标不再以机器人当前姿态为基准，因此标定只需要人体骨架数据
-        std::vector<const char*> missing;
-        if (!has_body_pelvis_pose_) missing.push_back("/teleop/body_pelvis_pose");
-        if (!has_body_spine3_pose_) missing.push_back("/teleop/body_spine3_pose");
-        if (!has_body_head_pose_) missing.push_back("/teleop/body_head_pose");
-        if (!has_body_left_hand_pose_) missing.push_back("左侧骨架手部话题");
-        if (!has_body_right_hand_pose_) missing.push_back("右侧骨架手部话题");
-        // 人体基坐标系必须已由上游发布（骨盆 xy / 双踝朝向 / 双足地面 z），
-        // 否则所有目标位置都无意义。
-        if (!has_human_footprint_pose_)
-            missing.push_back("/teleop/human_footprint_pose（人体基坐标系）");
-        else if (!skeletonJointFresh(human_footprint_stamp_))
-            missing.push_back("/teleop/human_footprint_pose（已超时）");
-        // 肩部是「肩宽 / 臂长」两条尺度链的起点
-        if (!body_left_shoulder_.valid) missing.push_back("/teleop/body_left_shoulder_pose（肩宽/臂长尺度）");
-        if (!body_right_shoulder_.valid) missing.push_back("/teleop/body_right_shoulder_pose（肩宽/臂长尺度）");
+        const std::vector<std::string> missing = missingSkeletonSources();
         if (!missing.empty())
         {
-            std::string joined;
-            for (const auto* name : missing)
-            {
-                if (!joined.empty()) joined += ", ";
-                joined += name;
-            }
             RCLCPP_WARN_THROTTLE(
                 node_->get_logger(), *node_->get_clock(), 2000,
-                "🕹️🦴 全身绝对跟踪等待骨架数据：%s", joined.c_str());
+                "🕹️🦴 全身绝对跟踪等待骨架数据：%s", joinSources(missing).c_str());
             return false;
         }
 
