@@ -24,15 +24,10 @@ def launch_setup(context, *args, **kwargs):
 
     # 显示手部配置信息
     hand_side = "left" if direction == "1" else "right"
-    if hand_name == "freedom":
-        modbus_id = "0" if direction == "1" else "1"
-    elif hand_name == "inspire":
-        modbus_id = "2" if direction == "1" else "1"
-    elif hand_name == "theohand":
-        modbus_id = "2" if direction == "1" else "1"
-    else:
-        modbus_id = "0x28" if direction == "1" else "0x27"
-    print(f"[INFO] Hand configuration: {hand_side} hand (direction={direction}, Modbus ID={modbus_id})")
+    print(
+        f"[INFO] Hand configuration: {hand_name}/{hand_type}, {hand_side} hand "
+        f"(direction={direction}, hardware={hardware})"
+    )
 
     # 生成 ros2_control robot_description
     # 对于灵巧手，直接处理 hand.xacro 文件

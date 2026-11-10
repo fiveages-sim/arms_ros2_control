@@ -2038,9 +2038,9 @@ namespace arms_rviz_control_plugin
             const auto clipped = limits.clipPitch({getJointSpinboxSiValue(indices.yaw), requested});
             const auto pitch_display = display_range(range, joint_spinboxes_[indices.pitch].get());
             joint_spinboxes_[indices.pitch]->setRange(pitch_display.first, pitch_display.second);
-            setJointSpinboxFromSiValue(indices.pitch, clipped.value);
             if (clipped.clipped)
             {
+                setJointSpinboxFromSiValue(indices.pitch, clipped.value);
                 RCLCPP_INFO(node_->get_logger(), "Head pitch input clipped from %.9f to %.9f rad",
                             requested, clipped.value);
             }

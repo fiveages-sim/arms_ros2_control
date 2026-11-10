@@ -105,6 +105,21 @@ def build_ocs2_control_context(context) -> Ocs2ControlContext:
         robot_variant=robot_variant,
         hardware=hardware,
     )
+    config = config or {}
+    # Isaac: reuse CppAD cache (same default as FaSim emit_control).
+    if hardware == "isaac":
+        main_controller = (
+            "ocs2_arm_controller"
+            if launch_mode in ("demo", "split_body")
+            else "ocs2_wbc_controller"
+        )
+        ros_params = config.setdefault(main_controller, {}).setdefault(
+            "ros__parameters", {}
+        )
+        ros_params["recompile_libraries"] = False
+        print(
+            f"[INFO] Isaac: {main_controller}.recompile_libraries=false"
+        )
 
     return Ocs2ControlContext(
         robot_name=robot_name,
