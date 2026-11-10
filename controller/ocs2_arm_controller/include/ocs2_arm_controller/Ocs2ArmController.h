@@ -90,10 +90,6 @@ namespace ocs2::mobile_manipulator
         /** True while an async-exit state (OCS2) has beginExit()'d but not tryFinishExit()'d yet. */
         bool async_exit_started_{false};
 
-        // State machine parameters
-        std::vector<double> home_pos_;
-        std::vector<double> rest_pos_;  // Rest pose configuration
-
         // Waist lifting parameters
         bool waist_lifting_enabled_{false};
 

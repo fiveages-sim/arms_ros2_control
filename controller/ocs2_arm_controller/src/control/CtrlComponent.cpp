@@ -159,6 +159,28 @@ namespace ocs2::mobile_manipulator
                             param.as_bool() ? "true" : "false");
             }
         }
+        if (home_joint_ref_manager_.handleParameterUpdates(node_, parameters))
+        {
+            // Already in OCS2: push q_home immediately. Outside OCS2 MPC is stopped (harmless).
+            // Do not touch enable here — WBC may have toggled HOME_JOINT_OFF mid-session.
+            const auto& session = home_joint_ref_manager_.sessionJoints();
+            if (interface_ && interface_->hasHomeJointReference() && !session.empty())
+            {
+                try
+                {
+                    interface_->setHomeJointReferenceFromArmJoints(session);
+                    RCLCPP_INFO(node_->get_logger(),
+                                "HOME joint reference applied live from %s (%zu joints)",
+                                home_joint_ref_manager_.sourceDescription().c_str(),
+                                session.size());
+                }
+                catch (const std::exception& e)
+                {
+                    RCLCPP_WARN(node_->get_logger(),
+                                "Failed to apply HOME joint reference live: %s", e.what());
+                }
+            }
+        }
         if (traj_record_enabled_update.has_value())
         {
             arms_controller_common::TrajectoryRecorder::instance()
@@ -747,5 +769,67 @@ namespace ocs2::mobile_manipulator
             fsm_cmd.data = command;
             fsm_command_publisher_->publish(fsm_cmd);
         }
+    }
+
+    void CtrlComponent::setHomeJointReferenceJoints(const std::vector<double>& home_joints)
+    {
+        if (!interface_ || home_joints.empty())
+        {
+            return;
+        }
+        try
+        {
+            interface_->setHomeJointReferenceFromArmJoints(home_joints);
+            if (interface_->hasHomeJointReference())
+            {
+                interface_->setHomeJointReferenceEnabled(
+                    interface_->homeJointReferenceDefaultEnabled());
+            }
+            RCLCPP_INFO(node_->get_logger(),
+                        "HOME joint reference set from %s (%zu joints), enabled=%s",
+                        home_joint_ref_manager_.sourceDescription().c_str(),
+                        home_joints.size(),
+                        interface_->homeJointReferenceDefaultEnabled() ? "true" : "false");
+        }
+        catch (const std::exception& e)
+        {
+            RCLCPP_WARN(node_->get_logger(),
+                        "Failed to set HOME joint reference: %s", e.what());
+        }
+    }
+
+    void CtrlComponent::setHomeJointReferenceConfigs(
+        std::vector<std::vector<double>> home_configs)
+    {
+        home_joint_ref_manager_.setHomeConfigurations(std::move(home_configs));
+        applyConfiguredHomeJointReference();
+    }
+
+    void CtrlComponent::applyConfiguredHomeJointReference()
+    {
+        home_joint_ref_manager_.refreshFromParameters(node_);
+        const auto& session = home_joint_ref_manager_.sessionJoints();
+        if (!session.empty())
+        {
+            setHomeJointReferenceJoints(session);
+        }
+    }
+
+    void CtrlComponent::resetHomeJointReferenceToHome()
+    {
+        if (!interface_ || !interface_->hasHomeJointReference())
+        {
+            return;
+        }
+        const auto& home_1 = home_joint_ref_manager_.home1Joints();
+        if (!home_1.empty())
+        {
+            interface_->setHomeJointReferenceFromArmJoints(home_1);
+        }
+        interface_->setHomeJointReferenceEnabled(interface_->homeJointReferenceDefaultEnabled());
+        RCLCPP_INFO(node_->get_logger(),
+                    "HOME joint reference reset to home_1 (%zu joints), enabled=%s",
+                    home_1.size(),
+                    interface_->homeJointReferenceDefaultEnabled() ? "true" : "false");
     }
 } // namespace ocs2::mobile_manipulator

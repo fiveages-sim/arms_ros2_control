@@ -120,12 +120,9 @@ state_home->init([this](const std::string& name, const std::vector<double>& defa
 ### 手动设置
 
 ```cpp
-state_home->setHomePosition({0.0, 0.0, 0.0, 0.0, 0.0, 0.0});
-
-// 或设置多个构型
 state_home->setHomeConfigurations({
-    {0.0, 0.0, 0.0, 0.0, 0.0, 0.0},   // index 0
-    {0.5, 0.5, 0.5, 0.5, 0.5, 0.5},   // index 1
+    {0.0, 0.0, 0.0, 0.0, 0.0, 0.0},   // home_1 / index 0
+    {0.5, 0.5, 0.5, 0.5, 0.5, 0.5},   // home_2 / index 1
 });
 ```
 

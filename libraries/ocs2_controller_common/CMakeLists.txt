@@ -32,6 +32,7 @@ find_package(ocs2_wheel_humanoid QUIET)
 find_package(lina_planning QUIET)
 
 add_library(${PROJECT_NAME} SHARED
+    src/reference/HomeJointReferenceManager.cpp
     src/reference/PoseBasedReferenceManager.cpp
     src/visualization/Ocs2PinocchioVisualizer.cpp
 )

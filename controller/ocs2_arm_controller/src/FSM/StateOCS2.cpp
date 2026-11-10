@@ -78,6 +78,8 @@ namespace ocs2::mobile_manipulator
         }
 
         ctrl_comp_->resetMpc();
+        // Each OCS2 session starts from home_joint_reference (or home_1 fallback).
+        ctrl_comp_->applyConfiguredHomeJointReference();
         collision_detected_ = false;
         last_mpc_time_ = node_->now();
 
@@ -143,6 +145,7 @@ namespace ocs2::mobile_manipulator
         if (ctrl_comp_)
         {
             ctrl_comp_->clearTrajectoryVisualization();
+            ctrl_comp_->resetHomeJointReferenceToHome();
         }
         RCLCPP_INFO(node_->get_logger(), "OCS2 state exited successfully, MPC thread stopped");
         return true;
