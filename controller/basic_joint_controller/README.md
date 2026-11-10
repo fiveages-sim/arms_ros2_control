@@ -395,3 +395,14 @@ Both Home and MoveJ states support configurable interpolation:
 ### Thread Safety
 
 `StateMoveJ::setTargetPosition()` is protected by a mutex, safe to call from any ROS callback thread.
+
+## 通用关节轨迹 Action
+
+所有 BasicJointController 实例（包括 body、head）保留轨迹 Topic，
+`/<controller>/joint_trajectory_with_para` 现在为
+`arms_ros2_control_msgs/action/JointTrajectory`，不再提供同名业务 Service。
+旧 Service 客户端须迁移为 ActionClient。命名空间部署需添加前缀。
+复用公共 StateMoveJ 规划、反馈、取消和结果逻辑，要求 MOVEJ 且非 SERVO。
+DOUBLES 使用时间、速度、加速度和 jerk 约束；其他插值模式保持原有语义。
+旋转关节位置为 rad，升降关节为 m，其导数使用相应单位。
+腰部专用升降/旋转接口不变。分体腰部和双臂是独立 Action，不保证同步起动。
