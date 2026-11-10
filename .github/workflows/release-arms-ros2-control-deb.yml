@@ -1512,7 +1512,9 @@ jobs:
           ls -lh "$deps_dir"/*.deb
 
       - name: Install debs and verify package discovery
-        timeout-minutes: 10
+        # amd64 pulls a large Depends closure (rviz2 → LLVM/Mesa/HIP). Allow retries
+        # and a longer budget so a slow Azure mirror does not cancel mid-download.
+        timeout-minutes: 20
         shell: bash
         run: |
           set -eo pipefail
@@ -1520,7 +1522,28 @@ jobs:
 
           ros_distro="${{ steps.meta.outputs.ros_distro }}"
 
-          dpkg -i "$OCS2_DEB_PATH" "$COMMON_DEB_PATH" "$ARMS_DEB_PATH" || apt-get -f install -y
+          apt_get_install() {
+            local attempt=1
+            local max_attempts=3
+            while true; do
+              if apt-get install -y --no-install-recommends "$@"; then
+                return 0
+              fi
+              if (( attempt >= max_attempts )); then
+                echo "::error::apt-get install failed after ${max_attempts} attempts: $*" >&2
+                return 1
+              fi
+              echo "apt-get install failed (attempt ${attempt}/${max_attempts}); refreshing indexes and retrying..." >&2
+              apt-get update || true
+              attempt=$((attempt + 1))
+              sleep $((attempt * 5))
+            done
+          }
+
+          apt-get update
+          # Prefer apt over dpkg -i + apt-get -f so recommends/suggests stay off and
+          # dependency resolution happens in one pass with Acquire failover.
+          apt_get_install "$OCS2_DEB_PATH" "$COMMON_DEB_PATH" "$ARMS_DEB_PATH"
 
           set +u
           source "/opt/ros/${ros_distro}/setup.bash"
