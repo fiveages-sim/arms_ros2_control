@@ -247,6 +247,12 @@ FULL_BODY 下右握把+右摇杆方向组合仍会锁存并清零右轴（含预
 
 **组合键：左右握把 + 右摇杆按下**（事件码 30）。在 VR enabled + FULL_BODY（`ocs2_wbc_controller` active）+ FSM=OCS2 下开关：
 
+> **准入还要求全身骨架数据在线**：`/teleop/body_pelvis_pose`、`/teleop/body_spine3_pose`、
+> `/teleop/body_head_pose`、左右骨架手部话题、`/teleop/human_footprint_pose` 与左右
+> `body_*_shoulder_pose` 必须都已收到且在 `skeleton_timeout`（默认 0.2 s）内仍持续更新。
+> 缺任何一项直接**拒绝进入**并打印缺失清单，避免进入后静默不下发目标
+> （头显未开启 Whole Body Motion Tracking / 未配对足部追踪器时属正常情况）。
+
 - **开启（进入模式）**：自动请求身体模式「跟随」（`BODY_TRACKING`）与头部模式「跟踪」（`HEAD_TRACKING`）；
   此时**尚未下发胸/头/双臂目标**，需再按右摇杆（4）开启「全部跟踪」；
 - **手动关闭**：再次按组合键退出模式，同时关掉「全部跟踪」与「底盘跟踪」（WBC 保持当前目标）。

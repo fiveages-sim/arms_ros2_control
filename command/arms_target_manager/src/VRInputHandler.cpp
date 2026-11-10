@@ -4748,6 +4748,41 @@ namespace arms_ros2_control::command
                 }
                 break;
             }
+            case 29:  // 左握把 + 左摇杆按下（顺序触发）：切换镜像处理方案
+            {
+                if (!mirror_mode_.load())
+                {
+                    RCLCPP_INFO(node_->get_logger(),
+                                "🔘 [左握把+左摇杆顺序组合键] 按下 - 功能: 忽略（镜像模式当前未启用，需先通过左摇杆按钮启用）");
+                    break;
+                }
+
+                const auto current = static_cast<MirrorModeProfile>(mirror_mode_profile_.load());
+                const auto next = (current == MirrorModeProfile::MODE_A)
+                    ? MirrorModeProfile::MODE_B
+                    : MirrorModeProfile::MODE_A;
+                mirror_mode_profile_.store(static_cast<int>(next));
+                RCLCPP_INFO(node_->get_logger(),
+                            "🔘 [左握把+左摇杆顺序组合键] 按下 - 功能: 切换镜像处理方案 -> %s",
+                            next == MirrorModeProfile::MODE_A ? "MODE A（空白，等待自定义逻辑）" : "MODE B（原处理逻辑）");
+
+                if (is_update_mode_.load())
+                {
+                    is_update_mode_.store(false);
+                    stopHeadTracking();
+                    left_thumbstick_offset_ = Eigen::Vector3d::Zero();
+                    right_thumbstick_offset_ = Eigen::Vector3d::Zero();
+                    left_thumbstick_yaw_offset_ = 0.0;
+                    right_thumbstick_yaw_offset_ = 0.0;
+                    paused_left_position_ = Eigen::Vector3d::Zero();
+                    paused_left_orientation_ = Eigen::Quaterniond::Identity();
+                    paused_right_position_ = Eigen::Vector3d::Zero();
+                    paused_right_orientation_ = Eigen::Quaterniond::Identity();
+                    RCLCPP_WARN(node_->get_logger(),
+                                "   自动切换到STORAGE模式 - 请重新进入UPDATE模式以应用镜像处理方案切换");
+                }
+                break;
+            }
             case 7:  // 镜像模式切换（toggle）
             {
                 bool old_mirror_mode = mirror_mode_.load();

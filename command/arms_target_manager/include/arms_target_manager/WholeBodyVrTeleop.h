@@ -187,6 +187,13 @@ namespace arms_ros2_control::command
         bool humanFootprintTransform(Eigen::Isometry3d& T_H_world);
         void buildDeformedSkeleton(const Eigen::Isometry3d& T_H_world, DeformedSkeleton& out);
         bool skeletonJointFresh(const std::chrono::steady_clock::time_point& stamp) const;
+
+        /**
+         * 当前缺失或已超时的骨架数据源列表（空列表表示全身骨架齐全）。
+         * 全身遥操作的所有目标都来自这些话题，缺任何一项都无法工作，
+         * 因此既用于进入模式时的准入判断，也用于绝对跟踪标定前的就绪判断。
+         */
+        std::vector<std::string> missingSkeletonSources() const;
         bool geometryToleranceOk(bool is_left, const Eigen::Vector3d& hand_position) const;
         static Eigen::Quaterniond dropRoll(const Eigen::Quaterniond& q);
         void armAbsoluteRamps();
