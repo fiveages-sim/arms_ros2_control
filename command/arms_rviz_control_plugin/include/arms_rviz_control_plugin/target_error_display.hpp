@@ -4,6 +4,7 @@
 #include <rclcpp/rclcpp.hpp>
 #include <geometry_msgs/msg/pose_stamped.hpp>
 #include <std_msgs/msg/int32.hpp>
+#include <arms_ros2_control_msgs/msg/mpc_timing.hpp>
 #include <arms_ros2_control_msgs/msg/wbc_current_state.hpp>
 #include <memory>
 #include <array>
@@ -33,10 +34,17 @@ private:
         std::chrono::steady_clock::time_point received{};
         bool valid{false};
     };
+    struct MpcSample {
+        double solve_ms{0};
+        double period_ms{0};
+        std::chrono::steady_clock::time_point received{};
+        bool valid{false};
+    };
     struct Data {
         std::mutex mutex;
         std::array<std::array<Sample, 2>, 4> samples{};
         std::array<bool, 4> active{};
+        MpcSample mpc{};
         bool ocs2_active{false};
         bool wbc_state_received{false};
         uint64_t fsm_generation{0};
@@ -44,6 +52,7 @@ private:
     std::shared_ptr<Data> data_{std::make_shared<Data>()};
     std::array<rclcpp::Subscription<geometry_msgs::msg::PoseStamped>::SharedPtr, 8> subscriptions_;
     rclcpp::Subscription<arms_ros2_control_msgs::msg::WbcCurrentState>::SharedPtr mode_subscription_;
+    rclcpp::Subscription<arms_ros2_control_msgs::msg::MpcTiming>::SharedPtr mpc_timing_subscription_;
     rclcpp::Subscription<std_msgs::msg::Int32>::SharedPtr fsm_subscription_;
     std::unique_ptr<ErrorDashboard> dashboard_;
     rviz_common::properties::FloatProperty* scale_property_{};
