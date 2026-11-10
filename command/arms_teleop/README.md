@@ -1,155 +1,199 @@
-# Arms Teleop Package
+# Arms Teleop
 
-This package provides joystick and keyboard teleoperation for robotic arms and chassis.
+统一遥操包：手柄（`joystick_teleop`）、键盘（`keyboard_teleop`）、USB 脚踏板（`foot_pedal_teleop`）。
 
-## Features
+不要同时运行会抢同一批话题的手柄与键盘节点（如 `control_input`、`/cmd_vel`）。
 
-- **Joystick teleop**: game controllers via `sensor_msgs/Joy` and the `joystick_teleop` node
-- **Keyboard teleop**: terminal-based `keyboard_teleop` (stdin); publishes the same command topics as the joystick path except it does not publish `/fsm_command`
-- **Configurable** mappings and scaling (joystick YAML; keyboard ROS parameters)
+## 目录
 
-## Building
+- [1. 功能概览](#1-功能概览)
+- [2. 编译](#2-编译)
+- [3. 手柄遥操](#3-手柄遥操)
+- [4. 键盘遥操](#4-键盘遥操)
+- [5. 脚踏板遥操](#5-脚踏板遥操)
+- [6. 话题](#6-话题)
+- [7. 依赖](#7-依赖)
+
+## 1. 功能概览
+
+| 节点 | 输入 | 主要输出 | 说明 |
+|------|------|----------|------|
+| `joystick_teleop` | `sensor_msgs/Joy` | `control_input`、`teleop_mode`、`/cmd_vel`、腰部指令、`/fsm_command` | 经 launch 选 `game_controller_node` 或 `joy_node` |
+| `keyboard_teleop` | 终端 stdin（TTY） | 与手柄相同，**不发布** `/fsm_command` | 独立终端运行；参数可调 |
+| `foot_pedal_teleop` | Linux evdev 键盘设备 | `/teleop/controller_state`（`std_msgs/Int32`） | 事件流给 `VRInputHandler`；不发 `/fsm_command` |
+
+## 2. 编译
 
 ```bash
 cd ~/ros2_ws
 colcon build --packages-up-to arms_teleop --symlink-install
 ```
 
-## Usage
+## 3. 手柄遥操
 
-### Joystick teleop
-
-Launch the joystick teleop stack (`game_controller_node` or `joy_node` + `joystick_teleop`):
+### 3.1 启动
 
 ```bash
 source ~/ros2_ws/install/setup.bash
 ros2 launch arms_teleop joystick_teleop.launch.py
 ```
 
-By default `joy_driver:=auto` uses [`game_controller_node`](https://docs.ros.org/en/ros2_packages/jazzy/api/joy/index.html) when `joy_enumerate_devices` reports `Mapped: true`, with [`config/joy_mapping/generic_gamepad.yaml`](config/joy_mapping/generic_gamepad.yaml) (SDL standard layout). Most gamepads (F710, PS4, Xbox, Switch Pro, GameSir, etc.) take this path. Unmapped devices fall back to `joy_node` + `default.yaml`.
-
-Force raw joystick driver:
+默认 `joy_driver:=auto`：若 `joy_enumerate_devices` 报告 `Mapped: true`，用 [`game_controller_node`](https://docs.ros.org/en/ros2_packages/jazzy/api/joy/index.html) + [`config/joy_mapping/generic_gamepad.yaml`](config/joy_mapping/generic_gamepad.yaml)（SDL 标准布局，F710 / PS4 / Xbox / Switch Pro / GameSir 等大多走此路径）；否则回退 `joy_node` + `default.yaml`。
 
 ```bash
+# 强制原始 joy 驱动
 ros2 launch arms_teleop joystick_teleop.launch.py joy_driver:=joy
-```
 
-Use a different joystick device (default is `/dev/input/js0`):
-
-```bash
-source ~/ros2_ws/install/setup.bash
+# 指定设备（默认 /dev/input/js0）；多手柄时只传 joy_dev，launch 会按设备 ID 再枚举
 ros2 launch arms_teleop joystick_teleop.launch.py joy_dev:=/dev/input/js1
-```
 
-List connected controllers (ID, GUID, GamePad, Mapped, name):
-
-```bash
+# 列出已连接手柄（ID / GUID / GamePad / Mapped / 名称）
 ros2 run joy joy_enumerate_devices
 ```
 
-When multiple controllers are connected, pass `joy_dev` only; launch re-enumerates by device ID:
+`quick_start.sh`：仅 1 个手柄时自动启动；多个时选手柄 ID，只传 `joy_dev`。
 
-```bash
-ros2 launch arms_teleop joystick_teleop.launch.py joy_dev:=/dev/input/js1
-```
+### 3.2 Launch 参数
 
-#### Mapping files (`config/joy_mapping/`)
+| 参数 | 默认 | 说明 |
+|------|------|------|
+| `joy_driver` | `auto` | `auto` / `game_controller` / `joy` |
+| `joy_dev` | `/dev/input/js0` | 手柄设备路径（`/dev/input/jsN`） |
+| `config` | `auto` | `config/joy_mapping/` 下 YAML 文件名（无后缀），或 `auto` |
 
-| File | When used |
-|------|-----------|
+### 3.3 映射文件
+
+路径：`config/joy_mapping/`。
+
+| 文件 | 使用时机 |
+|------|----------|
 | `generic_gamepad.yaml` | `game_controller_node` + `config:=auto`（Mapped 手柄） |
-| `default.yaml` | `joy_node` + `config:=auto`（未 Mapped 设备） |
+| `default.yaml` | `joy_node` + `config:=auto`（未 Mapped） |
 
-`config:=auto`：`Mapped: true` → `generic_gamepad`；否则 `default`。
-
-Override:
+`config:=auto`：`Mapped: true` → `generic_gamepad`；否则 → `default`。
 
 ```bash
 ros2 launch arms_teleop joystick_teleop.launch.py config:=default joy_driver:=joy
 ```
 
-#### 新设备校准（仅未 Mapped 设备或强制 `joy_driver:=joy`）
+**F710 X/D：** 默认 `game_controller_node` 下 X/D 共用 `generic_gamepad.yaml`；若强制 `joy_driver:=joy`，用 `default.yaml`，切换模式后需重启 launch。
 
-1. `ros2 topic echo /joy` 记录按键/摇杆下标。
-2. 在 `config/joy_mapping/` 新建或修改 yaml，并用 `config:=<name>` 指定。
+### 3.4 新设备校准
 
-**F710 X/D：** 默认 `game_controller_node` 下 X/D 共用 `generic_gamepad.yaml`；若强制 `joy_driver:=joy`，用 `default.yaml` 并需在切换模式后重启 launch。
+仅针对未 Mapped 设备，或强制 `joy_driver:=joy` 时：
 
-### Keyboard teleop
+1. `ros2 topic echo /joy`，记录按键 / 摇杆下标。
+2. 在 `config/joy_mapping/` 新建或修改 YAML，启动时用 `config:=<name>`。
 
-Run in a **separate interactive terminal** so stdin is a real TTY (do not rely on embedding this node in a large launch file that steals stdin). Typical workflow: start your stack with `ros2 launch ...` in one terminal; in another:
+### 3.5 常用操作（节点启动日志摘要）
+
+- 默认**禁用**遥操；右摇杆按下启用 / 关闭。
+- `RB`：ARM ↔ CHASSIS；`Back`：镜像；左摇杆按下：高低速。
+- 普通模式：`A` 切臂，`X` 夹爪开关，`LT`/`RT` 夹爪开合比例。
+- FSM（按住 `LB`）：`LB+A` HOME，`LB+B` HOLD，`LB+Y` MOVEJ，`LB+START` OCS2。
+
+节点侧还有 `mirror_movement`、`speed.*`、`chassis.*`、`button_mapping.*`、`axes_mapping.*` 等 ROS 参数，一般由映射 YAML 提供。
+
+## 4. 键盘遥操
+
+### 4.1 启动
+
+必须在**独立交互终端**运行（stdin 需为真实 TTY），不要嵌进会抢走 stdin 的大 launch：
 
 ```bash
 source ~/ros2_ws/install/setup.bash
 ros2 run arms_teleop keyboard_teleop
-```
 
-Do not run `joystick_teleop` and `keyboard_teleop` at the same time if both publish to the same topics (`control_input`, `/cmd_vel`, etc.).
-
-Optional parameters example:
-
-```bash
-source ~/ros2_ws/install/setup.bash
+# 可选参数
 ros2 run arms_teleop keyboard_teleop --ros-args -p discrete_key_stale_ms:=350
 ```
 
-### USB foot-pedal teleoperation event control
+键盘节点不发布 `/fsm_command`；腰部 lift/turn 话题固定发 0。
 
-`foot_pedal_teleop` reads one Linux evdev keyboard device and publishes the same
-`std_msgs/Int32` event stream consumed from `/teleop/controller_state`. It does not publish
-`/fsm_command`; FSM transitions and teleoperation toggles are handled centrally by
-`VRInputHandler`.
+### 4.2 按键
 
-With exactly one supported pedal connected, device discovery is automatic:
+| 按键 | 作用 |
+|------|------|
+| WASD | 平移（ARM：`Inputs` x/y；CHASSIS：`/cmd_vel` 线速度） |
+| I / K | z（仅 ARM） |
+| J / L | yaw（ARM）或 yaw 角速度（CHASSIS） |
+| 方向键 | roll / pitch（仅 ARM） |
+| N | 松开时切换 ARM / CHASSIS |
+| M | 松开时切换镜像（底盘速度不受镜像影响） |
+| `-` / `+` 或 `=` | 速度档 1–10（×0.1），默认档 3 |
+| Space | 切换活动臂（仅 ARM） |
+| Enter | 夹爪开合（仅 ARM） |
+
+状态行用 `\033[2K\r` 原地刷新（`MODE`、速度、镜像、臂/夹爪）。节点日志级别为 **WARN**，避免 `[INFO]` 顶掉状态行。
+
+### 4.3 参数
+
+| 参数 | 默认 | 说明 |
+|------|------|------|
+| `update_rate` | `20.0` | 定时发布频率（Hz） |
+| `movement_key_stale_ms` | `120` | WASD / IK / JL / 方向键无刷新即视为松开；越小抬键停得越快 |
+| `discrete_key_stale_ms` | `320` | 离散键（N、M、Space、Enter、+/-）同理；须**大于**内核按键重复延迟（约 250 ms），否则会在首次 repeat 前误判松开导致开关连击 |
+| `chassis.linear_scale` | `0.25` | 底盘线速度比例 |
+| `chassis.angular_scale` | `0.5` | 底盘角速度比例 |
+| `arm_axes_activation_threshold` | `0.5` | 与手柄同名参数同义 |
+| `mirror_movement` | `false` | 与手柄同名；ARM 侧实际应用 `mir_apply = !mirror_movement`，使 WASD 与手柄一致；状态行显示该标志（`false` 时为 `OFF`）；运行中用 **M** 切换 |
+| `show_status_line` | `true` | `false` 关闭状态行 |
+
+## 5. 脚踏板遥操
+
+`foot_pedal_teleop` 读取一个 Linux evdev 键盘设备，向 `/teleop/controller_state` 发布与 VR 面键相同的 `std_msgs/Int32` 事件流。FSM / 遥操开关由 `VRInputHandler` 统一处理；本节点不发 `/fsm_command`。
+
+默认独占设备（`grab_device:=true`），事件不会进桌面；忽略内核 key-repeat；无事件时仍以 30 Hz 发布 `0`。不使用双击手势。
+
+### 5.1 启动与设备选择
+
+仅连接一台受支持脚踏板时自动发现：
 
 ```bash
 source ~/ros2_ws/install/setup.bash
 ros2 run arms_teleop foot_pedal_teleop
 ```
 
-If multiple CM6K pedals are connected, the node lists their serial numbers and exits instead of
-silently choosing the wrong device. Select the intended unit by serial:
+多台 CM6K 时会列出序列号并退出，避免误选；按序列号指定：
 
 ```bash
 ros2 run arms_teleop foot_pedal_teleop --ros-args \
   -p device_serial:=03CDAB4B081EBD3671FFFFFFFF0300
 ```
 
-An explicit stable `device` path remains available for diagnostics and overrides auto-discovery.
+也可显式传稳定 `device` 路径（覆盖自动发现，便于排查）。
 
-By default the node exclusively grabs that device (`grab_device:=true`), so pedal events do not
-reach the desktop or other applications. Linux key-repeat events are ignored. Zero (no event)
-continues to be published at 30 Hz.
+### 5.2 按键事件
 
-- F13: FSM down, event `12`.
-- F14: FSM up, event `11`.
-- F15 short press: toggle left-arm teleoperation, event `3`.
-- F15 long press (default 800 ms): toggle mirror mode, event `7`.
-- F16 short press: toggle right-arm teleoperation, event `6`.
-- F16 long press (default 800 ms): toggle whole teleoperation between STORAGE and UPDATE,
-  event `4`. A long press emits only event `4`; it does not also emit event `6`.
+| 按键 | 行为 | 事件值 |
+|------|------|--------|
+| F13 | FSM down | `12` |
+| F14 | FSM up | `11` |
+| F15 短按 | 切换左臂遥操 | `3` |
+| F15 长按（默认 800 ms） | 切换镜像 | `7` |
+| F16 短按 | 切换右臂遥操 | `6` |
+| F16 长按（默认 800 ms） | 整体遥操 STORAGE ↔ UPDATE | `4` |
 
-Double-click gestures are intentionally not used.
+F16 长按只发 `4`，不会再附带 `6`。
 
-Parameters:
+### 5.3 参数
 
-- `device` (default `auto`): automatically find the CM6K interface-00 keyboard, or use an explicit
-  stable evdev path.
-- `device_serial` (default empty): disambiguate multiple connected CM6K pedals in auto mode.
-- `grab_device` (default `true`): exclusively consume this input device.
-- `teleop.publish_rate_hz` (default `30.0`): `/teleop/controller_state` state-stream frequency.
-- `teleop.controller_state_topic` (default `/teleop/controller_state`): teleoperation event output topic.
-- `whole_teleop_long_press_ms` (default `800`): F16 hold duration required for event `4`.
-- `mirror_long_press_ms` (default `800`): F15 hold duration required for event `7`.
-- `keys.fsm_up/fsm_down/left_arm_toggle/right_arm_toggle`: Linux input key codes, default
-  F13-F16 (`183`-`186`).
+| 参数 | 默认 | 说明 |
+|------|------|------|
+| `device` | `auto` | 自动找 CM6K interface-00，或显式 evdev 路径 |
+| `device_serial` | 空 | auto 模式下区分多台 CM6K |
+| `grab_device` | `true` | 独占该输入设备 |
+| `teleop.publish_rate_hz` | `30.0` | `/teleop/controller_state` 发布频率 |
+| `teleop.controller_state_topic` | `/teleop/controller_state` | 事件话题 |
+| `whole_teleop_long_press_ms` | `800` | F16 触发事件 `4` 的按住时长 |
+| `mirror_long_press_ms` | `800` | F15 触发事件 `7` 的按住时长 |
+| `keys.fsm_up` / `fsm_down` / `left_arm_toggle` / `right_arm_toggle` | F13–F16（`183`–`186`） | Linux input key code |
 
-If opening the device fails with `Permission denied`, configure an input-device udev rule or run
-the node as a user with permission to read that evdev device. Do not use the ordinary keyboard's
-device path with exclusive grabbing enabled.
+### 5.4 udev 权限
 
-For the SayoDevice CM6K pedal (VID `8089`, PID `000c`, interface `00`), install the packaged udev
-rule once:
+若打开设备报 `Permission denied`，配置 udev，或使用有权读该 evdev 的用户。不要对普通键盘设备开启独占 grab。
+
+SayoDevice CM6K（VID `8089`，PID `000c`，interface `00`）可一次性安装包内规则：
 
 ```bash
 sudo install -m 0644 \
@@ -158,77 +202,38 @@ sudo install -m 0644 \
 sudo udevadm control --reload-rules
 ```
 
-Unplug and reconnect the pedal after reloading. `TAG+="uaccess"` grants the active local login
-session read access whenever the matching event device is created, so per-plug `setfacl` commands
-are no longer needed. The rule deliberately matches only USB interface `00`, not the auxiliary
-`if01` input interface.
+重载后重新插拔脚踏板。`TAG+="uaccess"` 会在匹配的 event 设备创建时给当前本地登录会话读权限，无需每次 `setfacl`。规则只匹配 USB interface `00`，不含辅助的 `if01`。
 
-### Keyboard parameters
+## 6. 话题
 
-| Parameter | Default | Description |
-|-----------|---------|-------------|
-| `update_rate` | 20.0 | Timer publish rate (Hz) |
-| `movement_key_stale_ms` | 120 | How long WASD / I K / J L / arrows count as held without a refresh (release inference). Lower = faster stop when you lift movement keys. |
-| `discrete_key_stale_ms` | 320 | Same for **discrete** keys (N, M, Space, Enter, +/-). Must be **greater than** the kernel key-repeat delay (~250 ms); otherwise the gap before the first repeat looks like a “release” and **toggle keys fire twice** (once falsely, once on real release). |
-| `chassis.linear_scale` | 0.25 | Chassis linear velocity scale |
-| `chassis.angular_scale` | 0.5 | Chassis angular velocity scale |
-| `arm_axes_activation_threshold` | 0.5 | Same role as in `joystick_teleop` |
-| `mirror_movement` | `false` | Stored toggle / ROS param (same name as `joystick_teleop`). ARM kinematics apply **`mir_apply = !mirror_movement`** so WASD maps like the joystick; the **status line shows this flag** (`OFF` when `false`). Toggle with **M** while running. |
-| `show_status_line` | `true` | When `true`, refresh one ANSI status line on stdout (`MODE`, speed, mirror, arm/gripper). Set `false` to disable. |
+### 6.1 发布
 
-Runtime status uses `\033[2K\r` so the same row updates in place. This node sets its logger severity to **WARN** so routine `[INFO]` lines do not push the status row aside.
+| 话题 | 类型 | 谁发 | 说明 |
+|------|------|------|------|
+| `control_input` | `arms_ros2_control_msgs/Inputs` | 手柄 / 键盘 | 高频轴；`target` 为活动臂（1=左，2=右） |
+| `teleop_mode` | `arms_ros2_control_msgs/TeleopMode` | 手柄 / 键盘 | 锁存模式快照（`Reliable` + `TransientLocal`）：`active`、`control_mode`、`mirror_movement`、`speed_level`、`speed_scale`、`stamp`；启动发一次，字段变化再发（切臂不触发，看 `Inputs.target`）。手柄默认 `active=false` 直至右摇杆启用；键盘始终 `active=true` |
+| `/cmd_vel` | `geometry_msgs/Twist` | 手柄 / 键盘 | 见 [6.3](#63-cmd_vel-与-wbc) |
+| `/body_joint_controller/waist_lifting_command` | `std_msgs/Float64` | 手柄 / 键盘 | 键盘固定发 0 |
+| `/body_joint_controller/waist_turning_command` | `std_msgs/Float64` | 手柄 / 键盘 | 键盘固定发 0 |
+| `/fsm_command` | `std_msgs/Int32` | **仅手柄** | 键盘 / 脚踏板不发 |
+| `/teleop/controller_state` | `std_msgs/Int32` | **仅脚踏板** | VR 面键事件流 |
 
-### Keyboard key map (summary)
+速度字段：键盘 `speed_level` 为 1–10，`speed_scale = level * 0.1`；手柄 `0`=LOW / `1`=HIGH，比例由配置的 low/high scale 决定。
 
-| Keys | Action |
-|------|--------|
-| WASD | Translation (ARM: `Inputs` x/y; CHASSIS: `cmd_vel` linear) |
-| I / K | z (ARM only) |
-| J / L | yaw (ARM) or yaw rate (CHASSIS) |
-| Arrow keys | roll / pitch (ARM only) |
-| N | Toggle ARM / CHASSIS (on key release) |
-| M | Toggle mirror (on release; chassis velocities ignore mirror) |
-| `-` / `+` or `=` | Speed level 1–10 (×0.1), default level 3 |
-| Space | Cycle active arm (ARM only) |
-| Enter | Gripper open/close (ARM only) |
+### 6.2 订阅
 
-Waist lift/turn topics are published as zero from the keyboard node. Keyboard teleop does not publish `/fsm_command`.
+| 话题 | 类型 | 谁订 | 说明 |
+|------|------|------|------|
+| `joy` | `sensor_msgs/Joy` | 仅手柄 | |
+| `/fsm_state` | `std_msgs/Int32`（锁存） | 手柄 / 键盘 | |
+| `/ocs2_wbc_controller/current_state` | `arms_ros2_control_msgs/WbcCurrentState` | 手柄 / 键盘 | 未收到时按底盘锁定处理 |
 
-## Topics
+### 6.3 `/cmd_vel` 与 WBC
 
-### Published topics
+仅当 **FSM=OCS2 且 `BASE_UNLOCKED`** 时，遥操节点向 WBC 让出 `/cmd_vel`。HOLD、底盘锁定的 OCS2、分体（无 WBC 状态）仍由本节点发布。离开 OCS2 时由 WBC `stopBase()` 清零，而不是本节点。键盘在 ARM 模式下发的零速度，在 WBC 占用话题时也会跳过。
 
-- `control_input` (`arms_ros2_control_msgs/msg/Inputs`) — high-rate axes; `target` is the active arm (1=left, 2=right)
-- `teleop_mode` (`arms_ros2_control_msgs/msg/TeleopMode`) — latched mode snapshot (`Reliable` + `TransientLocal`): `active`, `control_mode`, `mirror_movement`, `speed_level`, `speed_scale`, with `stamp`. Published once at startup and again when those fields change (not on target-arm switch; use `Inputs.target` for that). Joystick starts with `active=false` until right-stick enable; keyboard always `active=true`.
-- `/cmd_vel` (`geometry_msgs/msg/Twist`)
+## 7. 依赖
 
-Chassis `/cmd_vel` yields to WBC only when **FSM=OCS2 and `BASE_UNLOCKED`**. HOLD / locked-base OCS2 / split-body (no WBC state) keep publishing. Leaving OCS2 is zeroed by WBC `stopBase()`, not by these nodes. ARM-mode keyboard zeros are also skipped while WBC owns the topic.
-- `/body_joint_controller/waist_lifting_command` (`std_msgs/msg/Float64`)
-- `/body_joint_controller/waist_turning_command` (`std_msgs/msg/Float64`)
-
-The joystick stack also publishes `/fsm_command` (`std_msgs/msg/Int32`). The keyboard node does not.
-
-`TeleopMode.speed_level` / `speed_scale`: keyboard uses levels 1–10 with `speed_scale = level * 0.1`; joystick uses `0`=LOW / `1`=HIGH with the configured low/high scales.
-
-### Subscribed topics
-
-- `joy` (`sensor_msgs/msg/Joy`) — joystick only
-- `/fsm_state` (`std_msgs/msg/Int32`, latched) — both nodes
-- `/ocs2_wbc_controller/current_state` (`arms_ros2_control_msgs/msg/WbcCurrentState`) — both nodes; absent → treat base as locked
-
-## Parameters (joystick launch)
-
-| Parameter | Default | Description |
-|-----------|---------|-------------|
-| `joy_driver` | `auto` | `auto` / `game_controller` / `joy` — input node selection |
-| `joy_dev` | `/dev/input/js0` | Joystick device path (`/dev/input/jsN`) |
-| `config` | `auto` | Mapping YAML stem under `config/joy_mapping/`, or `auto` |
-
-`quick_start.sh`：仅 1 个手柄时自动启动；多个时选手柄 ID，只传 `joy_dev`。
-
-## Dependencies
-
-- `rclcpp`: ROS 2 C++ client library
-- `sensor_msgs`: sensor message types
-- `geometry_msgs`, `std_msgs`
-- `arms_ros2_control_msgs`: control input message definitions
+- `rclcpp`、`sensor_msgs`、`geometry_msgs`、`std_msgs`、`control_msgs`、`rclcpp_action`、`rcutils`
+- `arms_ros2_control_msgs`
+- 运行时：`joy`（`joy_node` / `game_controller_node` / `joy_enumerate_devices`）

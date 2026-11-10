@@ -14,6 +14,8 @@
 # Container apt: ros:jazzy images pin Canonical archive.ubuntu.com / ports.ubuntu.com,
 # which time out from GitHub-hosted Azure VMs. Jobs rewrite those URIs to Azure-first
 # mirror lists with short Acquire timeouts so apt fails over in seconds, not minutes.
+# Install steps use --no-install-recommends + up to 3 retries; full-only native deps
+# (libmodbus/libserialport/libacl) are skipped on the standard bundle.
 
 name: Build arms-ros2-control deb
 
@@ -119,11 +121,13 @@ jobs:
 
           # ros:* containers do not inherit the runner image's Azure apt mirrors.
           cat >/etc/apt/apt.conf.d/99-ci-acquire <<'EOF'
-          Acquire::Retries "1";
-          Acquire::http::Timeout "15";
-          Acquire::https::Timeout "15";
+          Acquire::Retries "2";
+          Acquire::http::Timeout "20";
+          Acquire::https::Timeout "20";
           Acquire::Languages "none";
           Acquire::IndexTargets::deb::DEP-11::DefaultEnabled "false";
+          APT::Install-Recommends "false";
+          APT::Install-Suggests "false";
           EOF
 
           mirrors_file=/etc/apt/ci-ubuntu-mirrors.txt
@@ -158,8 +162,26 @@ jobs:
           cat "$mirrors_file"
           grep -RInE 'URIs:|^deb ' /etc/apt/sources.list /etc/apt/sources.list.d 2>/dev/null || true
 
+          apt_get_install() {
+            local attempt=1
+            local max_attempts=3
+            while true; do
+              if apt-get install -y --no-install-recommends "$@"; then
+                return 0
+              fi
+              if (( attempt >= max_attempts )); then
+                echo "::error::apt-get install failed after ${max_attempts} attempts: $*" >&2
+                return 1
+              fi
+              echo "apt-get install failed (attempt ${attempt}/${max_attempts}); refreshing indexes and retrying..." >&2
+              apt-get update || true
+              attempt=$((attempt + 1))
+              sleep $((attempt * 5))
+            done
+          }
+
           apt-get update
-          apt-get install -y ca-certificates curl gnupg git
+          apt_get_install ca-certificates curl gnupg git
 
           mkdir -p -m 755 /etc/apt/keyrings
           curl -fsSL https://cli.github.com/packages/githubcli-archive-keyring.gpg \
@@ -169,7 +191,7 @@ jobs:
             > /etc/apt/sources.list.d/github-cli.list
 
           apt-get update
-          apt-get install -y gh
+          apt_get_install gh
 
       - name: Checkout repository
         uses: actions/checkout@v5
@@ -549,39 +571,68 @@ jobs:
           echo "is_prerelease=$is_prerelease" >> "$GITHUB_OUTPUT"
 
       - name: Install build tools
-        timeout-minutes: 10
+        timeout-minutes: 15
         shell: bash
+        env:
+          BUNDLE: ${{ matrix.bundle }}
+          ROS_DISTRO: ${{ steps.meta.outputs.ros_distro }}
         run: |
           set -eo pipefail
           export DEBIAN_FRONTEND=noninteractive
 
-          apt-get install -y \
-            python3-rosdep \
-            python3-colcon-core \
-            python3-colcon-common-extensions \
-            python3-vcstool \
-            python3-pip \
-            python3-catkin-pkg-modules \
-            sudo \
-            zstd \
-            fakeroot \
-            dpkg-dev \
-            rsync \
-            build-essential \
-            cmake \
-            libeigen3-dev \
-            libacl1-dev \
-            libmodbus-dev \
-            libserialport-dev \
-            libyaml-cpp-dev \
-            qtbase5-dev \
-            qttools5-dev \
-            libqt5svg5-dev \
-            ros-${{ steps.meta.outputs.ros_distro }}-ament-cmake \
-            ros-${{ steps.meta.outputs.ros_distro }}-ament-cmake-core \
-            ros-${{ steps.meta.outputs.ros_distro }}-ament-package
+          # Keep Acquire timeouts from the first apt step; refresh indexes before the
+          # large install so a stale cache cannot burn the whole step timeout.
+          apt-get update
 
-          source "/opt/ros/${{ steps.meta.outputs.ros_distro }}/setup.bash"
+          apt_get_install() {
+            local attempt=1
+            local max_attempts=3
+            while true; do
+              if apt-get install -y --no-install-recommends "$@"; then
+                return 0
+              fi
+              if (( attempt >= max_attempts )); then
+                echo "::error::apt-get install failed after ${max_attempts} attempts: $*" >&2
+                return 1
+              fi
+              echo "apt-get install failed (attempt ${attempt}/${max_attempts}); refreshing indexes and retrying..." >&2
+              apt-get update || true
+              attempt=$((attempt + 1))
+              sleep $((attempt * 5))
+            done
+          }
+
+          # Core build tools for both bundles. Only qtbase5-dev is required for
+          # arms_rviz_control_plugin (Widgets); skip qttools5/libqt5svg which pull a
+          # large recommended desktop stack and previously timed out on amd64.
+          pkgs=(
+            python3-rosdep
+            python3-colcon-core
+            python3-colcon-common-extensions
+            python3-vcstool
+            python3-pip
+            python3-catkin-pkg-modules
+            sudo
+            zstd
+            fakeroot
+            dpkg-dev
+            rsync
+            build-essential
+            cmake
+            libeigen3-dev
+            libyaml-cpp-dev
+            qtbase5-dev
+            "ros-${ROS_DISTRO}-ament-cmake"
+            "ros-${ROS_DISTRO}-ament-cmake-core"
+            "ros-${ROS_DISTRO}-ament-package"
+          )
+          if [[ "${BUNDLE}" == "full" ]]; then
+            pkgs+=(libacl1-dev libmodbus-dev libserialport-dev)
+          fi
+
+          apt_get_install "${pkgs[@]}"
+
+          source "/opt/ros/${ROS_DISTRO}/setup.bash"
           python3 -c "import ament_package; print('ament_package ready:', ament_package.__file__)"
 
       - name: Prepare rosdep user
@@ -1262,11 +1313,13 @@ jobs:
           export DEBIAN_FRONTEND=noninteractive
 
           cat >/etc/apt/apt.conf.d/99-ci-acquire <<'EOF'
-          Acquire::Retries "1";
-          Acquire::http::Timeout "15";
-          Acquire::https::Timeout "15";
+          Acquire::Retries "2";
+          Acquire::http::Timeout "20";
+          Acquire::https::Timeout "20";
           Acquire::Languages "none";
           Acquire::IndexTargets::deb::DEP-11::DefaultEnabled "false";
+          APT::Install-Recommends "false";
+          APT::Install-Suggests "false";
           EOF
 
           mirrors_file=/etc/apt/ci-ubuntu-mirrors.txt
@@ -1300,8 +1353,26 @@ jobs:
           echo "Ubuntu apt mirrors ($(dpkg --print-architecture)):"
           cat "$mirrors_file"
 
+          apt_get_install() {
+            local attempt=1
+            local max_attempts=3
+            while true; do
+              if apt-get install -y --no-install-recommends "$@"; then
+                return 0
+              fi
+              if (( attempt >= max_attempts )); then
+                echo "::error::apt-get install failed after ${max_attempts} attempts: $*" >&2
+                return 1
+              fi
+              echo "apt-get install failed (attempt ${attempt}/${max_attempts}); refreshing indexes and retrying..." >&2
+              apt-get update || true
+              attempt=$((attempt + 1))
+              sleep $((attempt * 5))
+            done
+          }
+
           apt-get update
-          apt-get install -y ca-certificates curl cmake build-essential
+          apt_get_install ca-certificates curl cmake build-essential
 
           mkdir -p -m 755 /etc/apt/keyrings
           curl -fsSL https://cli.github.com/packages/githubcli-archive-keyring.gpg \
@@ -1311,7 +1382,7 @@ jobs:
             > /etc/apt/sources.list.d/github-cli.list
 
           apt-get update
-          apt-get install -y gh
+          apt_get_install gh
 
       - name: Download debs from releases
         id: download-debs
