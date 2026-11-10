@@ -958,7 +958,11 @@ jobs:
           # Runtime/build helper libs for ht_ros2_control (motor_cpp). Use unversioned
           # *-dev package names (same as upstream SDK docs) so apt resolves the right
           # runtime SONAME for the install host; rosdep still handles CI build deps.
-          deb_depends="ros-${ROS_DISTRO}-ros-base, ros-dev-tools, ${OCS2_PACKAGE_NAME}, ${COMMON_PACKAGE_NAME}, ros-${ROS_DISTRO}-ament-index-cpp, ros-${ROS_DISTRO}-angles, ros-${ROS_DISTRO}-controller-interface, ros-${ROS_DISTRO}-controller-manager, ros-${ROS_DISTRO}-geometry-msgs, ros-${ROS_DISTRO}-hardware-interface, ros-${ROS_DISTRO}-joy, ros-${ROS_DISTRO}-joint-state-broadcaster, ros-${ROS_DISTRO}-pluginlib, ros-${ROS_DISTRO}-rclcpp-action, ros-${ROS_DISTRO}-rclcpp-lifecycle, ros-${ROS_DISTRO}-rviz2, ros-${ROS_DISTRO}-sensor-msgs, ros-${ROS_DISTRO}-std-msgs, ros-${ROS_DISTRO}-tf2, ros-${ROS_DISTRO}-tf2-geometry-msgs, ros-${ROS_DISTRO}-tf2-ros, ros-${ROS_DISTRO}-urdf, ros-${ROS_DISTRO}-visualization-msgs"
+          # Keep headless controller/hardware deps hard. Optional GUI / input / meta
+          # tooling go to Recommends so --no-install-recommends (and CI verify) skip the
+          # rviz2 → Mesa/HIP closure that timed out on amd64.
+          deb_depends="ros-${ROS_DISTRO}-ros-base, ${OCS2_PACKAGE_NAME}, ${COMMON_PACKAGE_NAME}, ros-${ROS_DISTRO}-ament-index-cpp, ros-${ROS_DISTRO}-angles, ros-${ROS_DISTRO}-controller-interface, ros-${ROS_DISTRO}-controller-manager, ros-${ROS_DISTRO}-geometry-msgs, ros-${ROS_DISTRO}-hardware-interface, ros-${ROS_DISTRO}-joint-state-broadcaster, ros-${ROS_DISTRO}-pluginlib, ros-${ROS_DISTRO}-rclcpp-action, ros-${ROS_DISTRO}-rclcpp-lifecycle, ros-${ROS_DISTRO}-sensor-msgs, ros-${ROS_DISTRO}-std-msgs, ros-${ROS_DISTRO}-tf2, ros-${ROS_DISTRO}-tf2-geometry-msgs, ros-${ROS_DISTRO}-tf2-ros, ros-${ROS_DISTRO}-urdf, ros-${ROS_DISTRO}-visualization-msgs"
+          deb_recommends="ros-dev-tools, ros-${ROS_DISTRO}-joy, ros-${ROS_DISTRO}-rviz2"
           if [[ "${BUNDLE}" == "full" ]]; then
             deb_depends+=", libacl1, libserialport-dev, libyaml-cpp-dev, ros-${ROS_DISTRO}-ruckig"
           fi
@@ -970,6 +974,7 @@ jobs:
           Priority: optional
           Architecture: ${DEB_ARCH}
           Depends: ${deb_depends}
+          Recommends: ${deb_recommends}
           ${deb_provides_line}Maintainer: ${GITHUB_REPOSITORY} maintainers <github-actions[bot]@users.noreply.github.com>
           Installed-Size: ${installed_size}
           Description: ${deb_description}
@@ -1512,10 +1517,13 @@ jobs:
           ls -lh "$deps_dir"/*.deb
 
       - name: Install debs and verify package discovery
-        # amd64 pulls a large Depends closure (rviz2 → LLVM/Mesa/HIP). Allow retries
-        # and a longer budget so a slow Azure mirror does not cancel mid-download.
-        timeout-minutes: 20
+        # Verify only needs ament/CMake discovery. Extract the three debs into the ROS
+        # prefix (same as the build job) and apt-install the hard headless Depends —
+        # never rviz2/joy/ros-dev-tools, which pull the amd64 Mesa/HIP stack.
+        timeout-minutes: 15
         shell: bash
+        env:
+          VERIFY_BUNDLE: ${{ matrix.bundle }}
         run: |
           set -eo pipefail
           export DEBIAN_FRONTEND=noninteractive
@@ -1540,10 +1548,41 @@ jobs:
             done
           }
 
+          extract_root="${RUNNER_TEMP}/verify-extract"
+          rm -rf "$extract_root"
+          mkdir -p "$extract_root"
+          dpkg-deb -x "$OCS2_DEB_PATH" "$extract_root"
+          dpkg-deb -x "$COMMON_DEB_PATH" "$extract_root"
+          dpkg-deb -x "$ARMS_DEB_PATH" "$extract_root"
+          rsync -a "${extract_root}${INSTALL_PREFIX}/" "${INSTALL_PREFIX}/"
+
+          # Mirror package Depends minus ros-base / private debs / Recommends (rviz2, joy, ros-dev-tools).
+          pkgs=(
+            libeigen3-dev
+            "ros-${ros_distro}-ament-index-cpp"
+            "ros-${ros_distro}-angles"
+            "ros-${ros_distro}-controller-interface"
+            "ros-${ros_distro}-controller-manager"
+            "ros-${ros_distro}-geometry-msgs"
+            "ros-${ros_distro}-hardware-interface"
+            "ros-${ros_distro}-joint-state-broadcaster"
+            "ros-${ros_distro}-pluginlib"
+            "ros-${ros_distro}-rclcpp-action"
+            "ros-${ros_distro}-rclcpp-lifecycle"
+            "ros-${ros_distro}-sensor-msgs"
+            "ros-${ros_distro}-std-msgs"
+            "ros-${ros_distro}-tf2"
+            "ros-${ros_distro}-tf2-geometry-msgs"
+            "ros-${ros_distro}-tf2-ros"
+            "ros-${ros_distro}-urdf"
+            "ros-${ros_distro}-visualization-msgs"
+          )
+          if [[ "${VERIFY_BUNDLE}" == "full" ]]; then
+            pkgs+=(libacl1 libserialport-dev libyaml-cpp-dev "ros-${ros_distro}-ruckig")
+          fi
+
           apt-get update
-          # Prefer apt over dpkg -i + apt-get -f so recommends/suggests stay off and
-          # dependency resolution happens in one pass with Acquire failover.
-          apt_get_install "$OCS2_DEB_PATH" "$COMMON_DEB_PATH" "$ARMS_DEB_PATH"
+          apt_get_install "${pkgs[@]}"
 
           set +u
           source "/opt/ros/${ros_distro}/setup.bash"
@@ -1584,8 +1623,6 @@ jobs:
           for package_name in packages:
               print(package_name, get_package_share_directory(package_name))
           """))'
-        env:
-          VERIFY_BUNDLE: ${{ matrix.bundle }}
 
       - name: Verify downstream CMake discovery
         shell: bash
