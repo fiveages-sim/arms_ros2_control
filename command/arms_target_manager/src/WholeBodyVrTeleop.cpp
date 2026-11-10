@@ -95,12 +95,14 @@ namespace arms_ros2_control::command
         rclcpp::Node::SharedPtr node,
         ArmsTargetManager* target_manager,
         rclcpp::Publisher<geometry_msgs::msg::Pose>::SharedPtr pub_head_target,
+        rclcpp::Publisher<geometry_msgs::msg::Pose>::SharedPtr pub_body_target,
         const std::string& vr_follow_frame,
         const AbsoluteTeleopOptions& options,
         Hooks hooks)
         : node_(std::move(node))
           , target_manager_(target_manager)
           , pub_head_target_(std::move(pub_head_target))
+          , pub_body_target_(std::move(pub_body_target))
           , vr_follow_frame_(vr_follow_frame)
           , absolute_options_(options)
           , hooks_(std::move(hooks))
@@ -641,11 +643,13 @@ namespace arms_ros2_control::command
         const Eigen::Quaterniond orientation_base = dropRoll(
             Eigen::Quaterniond(head_rot_in_H * abs_head_src_to_ee_).normalized());
 
-        const Eigen::Isometry3d T_base_world = currentBaseToWorld();
-        const Eigen::Vector3d position =
-            T_base_world.linear() * position_base + T_base_world.translation();
-        const Eigen::Quaterniond orientation(
-            T_base_world.linear() * orientation_base.toRotationMatrix());
+        // 目标以「机器人底座系」下发：W2 的 WBC 模型是 fixed_base
+        // （manipulatorModelType=0 → hasMobileBase()=false），参考管理器的
+        // base_frame_ 就是 baseFootprint（base_footprint），目标语义为“相对机器人底座”。
+        // 这里绝不能再乘底座位姿，否则会多加一次 base → world 的变换，
+        // 底盘不在原点时目标会被整体带走。
+        const Eigen::Vector3d position = position_base;
+        const Eigen::Quaterniond orientation = orientation_base;
 
         const double alpha = std::clamp(absolute_options_.filter_alpha, 0.0, 1.0);
         if (!abs_head_filter_primed_)
@@ -675,7 +679,7 @@ namespace arms_ros2_control::command
         }
 
         geometry_msgs::msg::PoseStamped target;
-        target.header.frame_id = hooks_.ee_frame_id();
+        target.header.frame_id = vr_follow_frame_;
         target.header.stamp = node_->now();
         target.pose.position.x = ramped_position.x();
         target.pose.position.y = ramped_position.y();
@@ -749,11 +753,9 @@ namespace arms_ros2_control::command
         const Eigen::Quaterniond orientation_base = dropRoll(
             Eigen::Quaterniond(spine_rot_in_H * abs_body_src_to_ee_).normalized());
 
-        const Eigen::Isometry3d T_base_world = currentBaseToWorld();
-        const Eigen::Vector3d position =
-            T_base_world.linear() * position_base + T_base_world.translation();
-        const Eigen::Quaterniond orientation(
-            T_base_world.linear() * orientation_base.toRotationMatrix());
+        // 同头部：目标以机器人底座系下发，不再叠加底座位姿（base → world）。
+        const Eigen::Vector3d position = position_base;
+        const Eigen::Quaterniond orientation = orientation_base;
 
         const double alpha = std::clamp(absolute_options_.filter_alpha, 0.0, 1.0);
         if (!abs_body_filter_primed_)
@@ -783,7 +785,7 @@ namespace arms_ros2_control::command
         }
 
         geometry_msgs::msg::PoseStamped target;
-        target.header.frame_id = hooks_.ee_frame_id();
+        target.header.frame_id = vr_follow_frame_;
         target.header.stamp = node_->now();
         target.pose.position.x = ramped_position.x();
         target.pose.position.y = ramped_position.y();
@@ -793,10 +795,28 @@ namespace arms_ros2_control::command
         target.pose.orientation.z = ramped_orientation.z();
         target.pose.orientation.w = ramped_orientation.w();
 
-        if (!target_manager_->setBodyMarkerPose(target.pose))
+        // 胸部目标直发（底座系、无 header）：与头部/双臂同一通道；
+        // RViz 交互 marker 显示在固定系（world）下，显示位姿单独从底座系抬到 world，
+        // 转换失败时退回原值（只影响调试图面，不影响控制）。
+        pub_body_target_->publish(target.pose);
+
+        geometry_msgs::msg::Pose marker_pose = target.pose;
+        Eigen::Vector3d marker_position;
+        Eigen::Quaterniond marker_orientation;
+        if (hooks_.transform_pose(
+                "body_marker", vr_follow_frame_, hooks_.ee_frame_id(),
+                ramped_position, ramped_orientation, marker_position, marker_orientation))
         {
-            return;
+            marker_pose.position.x = marker_position.x();
+            marker_pose.position.y = marker_position.y();
+            marker_pose.position.z = marker_position.z();
+            marker_pose.orientation.x = marker_orientation.x();
+            marker_pose.orientation.y = marker_orientation.y();
+            marker_pose.orientation.z = marker_orientation.z();
+            marker_pose.orientation.w = marker_orientation.w();
         }
+        target_manager_->setBodyMarkerPose(marker_pose);
+
         // 缓存本节点实际下发的胸部目标，供下次接管渐入取锚点
         has_last_body_target_ = true;
         last_body_target_position_ = ramped_position;
@@ -889,12 +909,9 @@ namespace arms_ros2_control::command
         const Eigen::Vector3d position_base = hand_in_H;
         const Eigen::Matrix3d rot_base = hand_rot_in_H * hand_to_ee;
 
-        // 底座 → world（优先 TF；无 TF 时用自下发 /cmd_vel 的积分估计）
-        const Eigen::Isometry3d T_base_world = currentBaseToWorld();
-        const Eigen::Vector3d position =
-            T_base_world.linear() * position_base + T_base_world.translation();
-        const Eigen::Quaterniond orientation(
-            T_base_world.linear() * rot_base);
+        // 目标直接表达在机器人底座系（下游 base_frame_ = base_footprint）
+        const Eigen::Vector3d position = position_base;
+        const Eigen::Quaterniond orientation(Eigen::Quaterniond(rot_base).normalized());
 
         // 一阶低通：绝对映射会把骨架抖动直接送进高增益末端约束，必须滤波
         const double alpha = std::clamp(absolute_options_.filter_alpha, 0.0, 1.0);
@@ -1310,56 +1327,6 @@ namespace arms_ros2_control::command
         head_ramp_.reset();
     }
 
-    Eigen::Isometry3d WholeBodyVrTeleop::currentBaseToWorld()
-    {
-        const std::string target_frame = hooks_.ee_frame_id();
-        Eigen::Vector3d position;
-        Eigen::Quaterniond rotation;
-        if (hooks_.ee_frame_ready() && !vr_follow_frame_.empty() && !target_frame.empty() &&
-            hooks_.transform_pose(
-                "chassis", vr_follow_frame_, target_frame,
-                Eigen::Vector3d::Zero(), Eigen::Quaterniond::Identity(),
-                position, rotation))
-        {
-            Eigen::Isometry3d transform = Eigen::Isometry3d::Identity();
-            transform.linear() = rotation.toRotationMatrix();
-            transform.translation() = position;
-            return transform;
-        }
-
-        RCLCPP_WARN_THROTTLE(
-            node_->get_logger(), *node_->get_clock(), 5000,
-            "🕹️🚗 无 %s → %s TF，改用「自下发 /cmd_vel 积分」估计底座位姿；"
-            "打滑、限速饱和或被外部（导航/手柄）驱动时会有偏差",
-            vr_follow_frame_.c_str(), target_frame.c_str());
-
-        Eigen::Isometry3d transform = Eigen::Isometry3d::Identity();
-        transform.linear() =
-            Eigen::AngleAxisd(base_est_yaw_, Eigen::Vector3d::UnitZ()).toRotationMatrix();
-        transform.translation() =
-            Eigen::Vector3d(base_est_pos_.x(), base_est_pos_.y(), 0.0);
-        return transform;
-    }
-
-    void WholeBodyVrTeleop::integrateBaseOdometry(const geometry_msgs::msg::Twist& velocity)
-    {
-        const auto now = std::chrono::steady_clock::now();
-        if (base_odom_valid_)
-        {
-            const double dt = std::clamp(
-                std::chrono::duration<double>(now - base_odom_last_tick_).count(),
-                0.0, 0.1);
-            base_est_yaw_ += velocity.angular.z * dt;
-            const Eigen::Vector2d v_body(velocity.linear.x, velocity.linear.y);
-            if (v_body.squaredNorm() > 0.0)
-            {
-                base_est_pos_ += yawRotation2d(base_est_yaw_) * v_body * dt;
-            }
-        }
-        base_odom_valid_ = true;
-        base_odom_last_tick_ = now;
-    }
-
     // ================= 底盘跟踪（位置外环 → /cmd_vel） =================
 
     void WholeBodyVrTeleop::toggleBaseTracking()
@@ -1574,8 +1541,6 @@ namespace arms_ros2_control::command
         }
 
         hooks_.publish_chassis_velocity(cmd_vel);
-        // 无 TF 时用这条积分当作底座位姿估计（绝对映射的手臂目标要转到 world 系）
-        integrateBaseOdometry(cmd_vel);
     }
 
 } // namespace arms_ros2_control::command

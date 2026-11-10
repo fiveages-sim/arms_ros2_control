@@ -9,6 +9,7 @@
 #include <mutex>
 #include <atomic>
 #include <array>
+#include <chrono>
 #include <functional>
 #include <rclcpp/rclcpp.hpp>
 #include <geometry_msgs/msg/pose.hpp>
@@ -87,7 +88,8 @@ namespace arms_ros2_control::command
         void togglePublishMode();
 
         MarkerState getCurrentMode() const;
-
+        /** RViz 交互 marker 的固定坐标系（与目标发布坐标系可能不同）。 */
+        const std::string& getMarkerFixedFrame() const { return marker_fixed_frame_; }
         void sendTargetPose(const std::string& marker_type = "arm");
 
         void sendDualArmTargetPose();
@@ -265,6 +267,9 @@ namespace arms_ros2_control::command
         rclcpp::Time last_marker_update_time_;
         double marker_update_interval_;
         rclcpp::Time last_publish_time_;
+        // 最近一次由外部（全身遥操作）直接下发胸部目标的时刻；
+        // 用于抑制控制器回显（body_current_target）对 RViz marker 显示的回灌。
+        std::chrono::steady_clock::time_point last_body_target_command_time_{};
 
         rclcpp::TimerBase::SharedPtr marker_update_timer_;
         std::atomic<bool> pending_changes_{false};

@@ -173,6 +173,9 @@ namespace arms_ros2_control::command
             "head_current_pose", 10,
             [this](geometry_msgs::msg::PoseStamped::ConstSharedPtr msg) { robotHeadPoseCallback(msg); });
         pub_head_target_ = node_->create_publisher<geometry_msgs::msg::Pose>("head_target", 10);
+        // 胸部目标：与头部/双臂同一通道直发（目标表达在机器人底座系，无 header）；
+        // marker 显示另走一层坐标转换。
+        pub_body_target_ = node_->create_publisher<geometry_msgs::msg::Pose>("body_target", 1);
 
         // 创建按钮事件订阅器（Int32类型）
         auto controllerStateCallback = [this](const std_msgs::msg::Int32::SharedPtr msg)
@@ -377,6 +380,9 @@ namespace arms_ros2_control::command
         };
         hooks.ee_frame_id = [this]() { return ee_frame_id_; };
         hooks.ee_frame_ready = [this]() { return ee_frame_id_initialized_; };
+        hooks.marker_frame = [this]() {
+            return target_manager_ ? target_manager_->getMarkerFixedFrame() : std::string();
+        };
         hooks.transform_pose = [this](
                                    const std::string& label,
                                    const std::string& source_frame,
@@ -395,7 +401,7 @@ namespace arms_ros2_control::command
         hooks.resume_normal_mode_state = [this]() { resumeNormalModeState(); };
 
         whole_body_ = std::make_unique<WholeBodyVrTeleop>(
-            node_, target_manager_, pub_head_target_,
+            node_, target_manager_, pub_head_target_, pub_body_target_,
             vr_follow_frame_, absolute_options, std::move(hooks));
     }
 
