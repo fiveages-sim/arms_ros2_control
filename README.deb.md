@@ -64,6 +64,8 @@ sudo dpkg -i ros-jazzy-arms-ros2-control_2.0.0_amd64.deb
 
 full 包额外声明 `ros-jazzy-ruckig` 依赖：`eyou_canfd_ros2_control` 的 CMake 配置导出了 `ruckig`，下游 `find_package` 时也需要安装该包。
 
+**Recommends（非硬依赖）**：`ros-dev-tools`、`ros-jazzy-joy`、`ros-jazzy-rviz2`。默认 `apt install` 仍会装上；`apt install --no-install-recommends` 或无桌面环境可跳过（避免拉起 rviz2 → Mesa/HIP 大依赖）。无 Recommends 时手柄遥操需自备 `joy`，RViz 面板需自备 `rviz2`。
+
 ## 已退役的独立 deb（请勿再打 tag）
 
 以下 workflow 已停用；功能由 **`ros-jazzy-arms-ros2-control-full`** 覆盖：
