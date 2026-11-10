@@ -43,12 +43,6 @@ namespace arms_controller_common
                           const std::shared_ptr<rclcpp_lifecycle::LifecycleNode>& node = nullptr);
 
         /**
-         * @brief Set single home configuration
-         * @param home_pos Home position vector
-         */
-        void setHomePosition(const std::vector<double>& home_pos);
-
-        /**
          * @brief Add multiple home configurations
          * @param home_configs Vector of home configurations
          */
@@ -146,18 +140,6 @@ namespace arms_controller_common
             return configs_loaded;
         }
 
-        /**
-         * @brief Set rest pose as the second configuration (index 1) in home_configs_
-         * 
-         * Rest pose is now integrated into the home configurations system.
-         * It will be added as the second configuration (index 1) in home_configs_.
-         * If only one home config exists, rest_pos will be added as the second config.
-         * If multiple configs exist, the second config (index 1) will be replaced with rest_pos.
-         * 
-         * @param rest_pos Rest position vector
-         */
-        void setRestPose(const std::vector<double>& rest_pos);
-
         void updateJointLimitsFromURDF(const std::string& description,
                                        const std::vector<std::string>& joint_names);
 
@@ -178,6 +160,11 @@ namespace arms_controller_common
          * @return Configuration vector, or empty vector if index is invalid
          */
         std::vector<double> getConfiguration(size_t config_index) const;
+
+        /** All loaded home_1..home_N configs (index 0 = home_1). */
+        [[nodiscard]] const std::vector<std::vector<double>>& homeConfigurations() const {
+            return home_configs_;
+        }
 
         /**
          * @brief Update parameters from ROS node
@@ -206,7 +193,7 @@ namespace arms_controller_common
         std::shared_ptr<GravityCompensation> gravity_compensation_;
 
         // Home configurations
-        std::vector<std::vector<double>> home_configs_;     // Multiple home configurations (rest pose is index 1)
+        std::vector<std::vector<double>> home_configs_;     // home_1 … home_N (index 0 = home_1)
         std::vector<double> start_pos_;                     // Starting position
         std::vector<double> current_target_;                // Current target configuration
         size_t current_config_index_{0};                    // Current configuration index

@@ -151,9 +151,10 @@ namespace ocs2::mobile_manipulator
             state_interface_types_ =
                 auto_declare<std::vector<std::string>>("state_interfaces", state_interface_types_);
 
-            // State machine parameters
-            home_pos_ = auto_declare<std::vector<double>>("home_pos", home_pos_);
-            rest_pos_ = auto_declare<std::vector<double>>("rest_pos", rest_pos_);
+            // State machine parameters (HOME configs: home_1 … home_N via StateHome::init)
+            // HOLD 可预置；进 OCS2 时由 HomeJointReferenceManager 重新读取。
+            auto_declare<std::vector<double>>("home_joint_reference", {});
+            auto_declare<int>("home_joint_reference_id", 0);
 
             // Force control parameters
             ctrl_interfaces_.default_gains_ = auto_declare<std::vector<double>>(
@@ -218,28 +219,21 @@ namespace ocs2::mobile_manipulator
             state_list_.home = std::make_shared<StateHome>(
                 ctrl_interfaces_, gravity_compensation, get_node());
 
-            bool configs_loaded = state_list_.home->init(
+            const bool configs_loaded = state_list_.home->init(
                 [this](const std::string& name, const std::vector<double>& default_value)
                 {
                     return this->auto_declare<std::vector<double>>(name, default_value);
                 });
-
-            // Fallback to legacy single home_pos configuration if no multi-home configs were loaded
-            if (!configs_loaded && !home_pos_.empty())
+            if (!configs_loaded)
             {
-                state_list_.home->setHomePosition(home_pos_);
+                RCLCPP_ERROR(get_node()->get_logger(),
+                             "No home_1 configuration found; set home_1 (and optional home_2…) in YAML");
             }
 
-            // Configure rest pose if available
-            if (!rest_pos_.empty())
+            if (ctrl_comp_ && state_list_.home &&
+                !state_list_.home->homeConfigurations().empty())
             {
-                state_list_.home->setRestPose(rest_pos_);
-                RCLCPP_INFO(get_node()->get_logger(),
-                            "Rest pose configured with %zu joints", rest_pos_.size());
-            }
-            else
-            {
-                RCLCPP_INFO(get_node()->get_logger(), "No rest pose configured, using home pose only");
+                ctrl_comp_->setHomeJointReferenceConfigs(state_list_.home->homeConfigurations());
             }
 
             state_list_.ocs2 = std::make_shared<StateOCS2>(ctrl_interfaces_, get_node(), ctrl_comp_);

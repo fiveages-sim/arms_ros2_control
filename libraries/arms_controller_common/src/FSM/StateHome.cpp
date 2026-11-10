@@ -97,16 +97,6 @@ namespace arms_controller_common
         return true;
     }
 
-    void StateHome::setHomePosition(const std::vector<double>& home_pos)
-    {
-        home_configs_.clear();
-        home_configs_.push_back(home_pos);
-        current_target_ = home_pos;
-        current_config_index_ = 0;
-        cycle_config_index_ = 0;
-        has_multiple_configs_ = false;
-    }
-
     void StateHome::setHomeConfigurations(const std::vector<std::vector<double>>& home_configs)
     {
         home_configs_ = home_configs;
@@ -116,29 +106,6 @@ namespace arms_controller_common
             current_config_index_ = 0;
             cycle_config_index_ = 0;
             has_multiple_configs_ = home_configs_.size() > 1;
-        }
-    }
-
-    void StateHome::setRestPose(const std::vector<double>& rest_pos)
-    {
-        if (rest_pos.empty())
-        {
-            return;
-        }
-
-        if (home_configs_.size() == 1)
-        {
-            home_configs_.push_back(rest_pos);
-            has_multiple_configs_ = true;
-            RCLCPP_INFO(node_->get_logger(),
-                        "Rest pose added as second configuration (index 1). Total configurations: %zu",
-                        home_configs_.size());
-        }
-        else
-        {
-            RCLCPP_ERROR(node_->get_logger(),
-                         "Cannot set rest pose: expected exactly 1 home configuration, but found %zu",
-                         home_configs_.size());
         }
     }
 

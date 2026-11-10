@@ -16,6 +16,7 @@
 #include <vector>
 
 #include <ament_index_cpp/get_package_share_directory.hpp>
+#include <ocs2_controller_common/reference/HomeJointReferenceManager.h>
 #include <ocs2_controller_common/reference/PoseBasedReferenceManager.h>
 #include <ocs2_controller_common/rt/RtCycleTiming.h>
 #include <ocs2_controller_common/visualization/Ocs2PinocchioVisualizer.h>
@@ -246,6 +247,18 @@ namespace ocs2::mobile_manipulator
         // @param command: FSM command value (typically 2 for HOLD)
         void publishFsmCommand(int32_t command) const;
 
+        /** Cache FSM home_1..N for id lookup (HOLD 预置 params，进 OCS2 时 refresh). */
+        void setHomeJointReferenceConfigs(std::vector<std::vector<double>> home_configs);
+
+        /**
+         * Like WBC mode preset: re-read home_joint_reference / home_joint_reference_id
+         * and inject session q_home (call on init and every OCS2 enter).
+         */
+        void applyConfiguredHomeJointReference();
+
+        /** Exit OCS2: q_home ← home_1, enable ← activateDefault (params themselves unchanged). */
+        void resetHomeJointReferenceToHome();
+
         // Get node reference
         std::shared_ptr<rclcpp_lifecycle::LifecycleNode> getNode() const { return node_; }
 
@@ -278,8 +291,11 @@ namespace ocs2::mobile_manipulator
         /** Split isolcpus: RT / MPC / DDP+viz, and pin DDP ThreadPool before GaussNewtonDDP_MPC construction. */
         void prepareThreadIsolation();
 
+        void setHomeJointReferenceJoints(const std::vector<double>& home_joints);
+
         std::shared_ptr<rclcpp_lifecycle::LifecycleNode> node_;
         CtrlInterfaces& ctrl_interfaces_;
+        controller_common::HomeJointReferenceManager home_joint_ref_manager_;
 
         rclcpp::Publisher<ocs2_msgs::msg::MpcObservation>::SharedPtr mpc_observation_publisher_;
         rclcpp::Publisher<std_msgs::msg::Int32>::SharedPtr fsm_command_publisher_;
