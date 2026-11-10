@@ -82,6 +82,7 @@ namespace arms_ros2_control::command
 
             std::function<bool(geometry_msgs::msg::PoseStamped&)> robot_head_pose;
             std::function<std::string()> ee_frame_id;
+            std::function<std::string()> marker_frame;
             std::function<bool()> ee_frame_ready;
             std::function<bool(const std::string& label,
                                const std::string& source_frame,
@@ -100,6 +101,7 @@ namespace arms_ros2_control::command
             rclcpp::Node::SharedPtr node,
             ArmsTargetManager* target_manager,
             rclcpp::Publisher<geometry_msgs::msg::Pose>::SharedPtr pub_head_target,
+            rclcpp::Publisher<geometry_msgs::msg::Pose>::SharedPtr pub_body_target,
             const std::string& vr_follow_frame,
             const AbsoluteTeleopOptions& options,
             Hooks hooks);
@@ -198,8 +200,6 @@ namespace arms_ros2_control::command
         static Eigen::Quaterniond dropRoll(const Eigen::Quaterniond& q);
         void armAbsoluteRamps();
         void resetAbsoluteRamps();
-        Eigen::Isometry3d currentBaseToWorld();
-        void integrateBaseOdometry(const geometry_msgs::msg::Twist& velocity);
 
         // ---- 底盘跟踪 ----
         void toggleBaseTracking();
@@ -212,6 +212,7 @@ namespace arms_ros2_control::command
         rclcpp::Node::SharedPtr node_;
         ArmsTargetManager* target_manager_;
         rclcpp::Publisher<geometry_msgs::msg::Pose>::SharedPtr pub_head_target_;
+        rclcpp::Publisher<geometry_msgs::msg::Pose>::SharedPtr pub_body_target_;
         std::string vr_follow_frame_;
         AbsoluteTeleopOptions absolute_options_;
         Hooks hooks_;
@@ -293,12 +294,6 @@ namespace arms_ros2_control::command
         Eigen::Vector3d last_body_target_position_ = Eigen::Vector3d::Zero();
         Eigen::Quaterniond last_body_target_orientation_ = Eigen::Quaterniond::Identity();
         std::chrono::steady_clock::time_point last_body_target_stamp_{};
-
-        // ---- 底座位姿估计（world 系，仅作 TF 不可用时的回退） ----
-        double base_est_yaw_{0.0};
-        Eigen::Vector2d base_est_pos_ = Eigen::Vector2d::Zero();
-        bool base_odom_valid_{false};
-        std::chrono::steady_clock::time_point base_odom_last_tick_{};
 
         // ---- 底盘跟踪状态 ----
         bool base_follow_active_{false};

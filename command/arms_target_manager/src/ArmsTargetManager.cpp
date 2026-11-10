@@ -509,7 +509,18 @@ namespace arms_ros2_control::command
             [this]() { return !shouldShowBodyMarker(); });
 
         body_marker_->setTargetStateCheckCallback(
-            [this]() { return shouldShowBodyMarker(); });
+            [this]() {
+                // 全身遥操作直接驱动 /body_target 期间，抑制控制器回显
+                // （body_current_target）对 marker 显示的回灌，避免 RViz 里的
+                // 胸部目标落后于实际下发的目标。
+                if (last_body_target_command_time_ != std::chrono::steady_clock::time_point{} &&
+                    std::chrono::duration<double>(
+                        std::chrono::steady_clock::now() - last_body_target_command_time_).count() < 0.5)
+                {
+                    return false;
+                }
+                return shouldShowBodyMarker();
+            });
 
         server_ = std::make_shared<interactive_markers::InteractiveMarkerServer>(
             "arms_target_manager", node_);
@@ -1681,7 +1692,11 @@ namespace arms_ros2_control::command
 
         if (shouldStreamPoseCommands())
         {
-            body_marker_->publishTargetPose();
+            // 胸部目标的发布由全身遥操作直接完成（与 left/right/head_target 同一通道，
+            // 目标在机器人底座系下），这里只刷新 RViz 交互 marker 的显示位姿。
+            // 若交给 BodyMarker::publishTargetPose()，它会再换算到 control_base_frame_
+            // 并重复发布同一话题。
+            last_body_target_command_time_ = std::chrono::steady_clock::now();
         }
 
         return true;
@@ -1702,11 +1717,10 @@ namespace arms_ros2_control::command
             markPendingChanges();
         }
 
-        if (shouldStreamPoseCommands())
-        {
-            body_marker_->publishTargetPose();
-        }
-
+        // 这里只刷新 RViz 交互 marker 的显示位姿（pose 已由调用方转到 marker 固定系）。
+        // 目标的实际发布由调用方（全身遥操作）直接完成：/body_target 不带 header，
+        // 下游按自己的 base_frame_（OCS2 模型根）解释，与 marker 固定系可能不同，
+        // 两者不能混用。
         return true;
     }
 

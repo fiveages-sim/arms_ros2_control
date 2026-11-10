@@ -796,6 +796,8 @@ namespace arms_ros2_control::command
         // All callbacks use the node's default mutually-exclusive callback group.
         rclcpp::Subscription<geometry_msgs::msg::PoseStamped>::SharedPtr sub_robot_head_;
         rclcpp::Publisher<geometry_msgs::msg::Pose>::SharedPtr pub_head_target_;
+        // 全身遥操作胸部目标：与 head/left/right 同一通道直发（机器人底座系，无 header）
+        rclcpp::Publisher<geometry_msgs::msg::Pose>::SharedPtr pub_body_target_;
         geometry_msgs::msg::PoseStamped robot_head_pose_;
         bool has_robot_head_pose_{false};
         bool has_vr_head_pose_{false};
