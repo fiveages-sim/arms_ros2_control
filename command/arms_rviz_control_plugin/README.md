@@ -209,10 +209,15 @@ HUD 作为 `arms_rviz_control_plugin/TargetErrorDisplay` 显示在 RViz 网格�
 已有用户配置可在 Displays → Add → TargetErrorDisplay 添加，用 Displays 复选框开关。
 该 Display 的 `Scale` 属性（0.5–2.0，默认 1.0）调节叠加层大小，并随 RViz 配置保存。
 
-独立订阅 left/right/body/head_current_pose 与对应的 current_target，以及
-`/ocs2_wbc_controller/current_state`。没有命令发布器，不影响机器人控制。
+独立订阅相对话题（跟随 RViz 节点 namespace，与控制器发布一致）：
+`fsm_state`、left/right/body/head_current_pose 与对应 current_target、
+`ocs2_wbc_controller/current_state`、以及 `mpc_timing`
+（`arms_ros2_control_msgs/MpcTiming`：`solve_us` / `period_us`）。
+带 namespace 时把 RViz 放在同一 namespace 即可（例如 `ros2 run rviz2 rviz2 --ros-args -r __ns:=/robot`）。没有命令发布器，不影响机器人控制。
 以最高 10 Hz 更新显示内容，仅在文字或颜色变化时更新 Ogre 文字元素、实测 1 秒超时，目标保留最后一帧；不同 frame 或无效位姿不计算误差。
-全身 WBC 收到 `/ocs2_wbc_controller/current_state` 后，只显示已启用的手臂（ARM_ENABLED）、位姿跟踪中的 BODY（BODY_TRACKING，且非 HEAD_FORWARD）和 HEAD（HEAD_TRACKING）。分体、双臂和单臂走 `ocs2_arm_controller`、没有这条状态时，OCS2 期间显示左臂；右臂、身体、头仅在收到对应 `current_target` 后显示。未启用部分隐藏并收拢空位，切换时清空对应曲线。模式订阅使用 transient-local，支持 RViz 晚于控制器启动。
+全身 WBC 收到 `ocs2_wbc_controller/current_state` 后，只显示已启用的手臂（ARM_ENABLED）、位姿跟踪中的 BODY（BODY_TRACKING，且非 HEAD_FORWARD）和 HEAD（HEAD_TRACKING）。分体、双臂和单臂走 `ocs2_arm_controller`、没有这条状态时，OCS2 期间显示左臂；右臂、身体、头仅在收到对应 `current_target` 后显示。未启用部分隐藏并收拢空位，切换时清空对应曲线。模式订阅使用 transient-local，支持 RViz 晚于控制器启动。
+
+HUD 顶部固定一张 **MPC** 卡片：大字为最近一次求解耗时（ms），单位 `MPC (ms)`，状态为 `OK` / `OVER PERIOD` / `Waiting for timing`；≤ `period` 为绿色，超过为红色，并叠加最近 5 秒耗时曲线（纵轴上限为 period 的两倍）。超周期不再打终端 WARN，改由此卡片观察跟踪是否会滞后。
 
 位置 ≤5 mm 为绿色、≥20 mm 为红色；姿态 ≤1°为绿色、≥5°为红色，中间黄色。
 无效或超时数值灰色，数值显示破折号。颜色阈值调整入口隐藏，Display 配置中仍保存阈值。
@@ -220,4 +225,4 @@ HUD 作为 `arms_rviz_control_plugin/TargetErrorDisplay` 显示在 RViz 网格�
 
 每个框的位置、姿态数字背后各叠加最近 5 秒的半透明误差曲线，最多 5 Hz 更新。横轴按实际时间滚动；纵轴固定为 0 到对应红色阈值的两倍，红色虚线表示红色阈值，超出上限时在顶部显示短标记。无效数据或采样间隔超过 0.6 秒时断线，RViz Reset 清空历史。不显示时间窗口标注，曲线不另占高度；数字保持不透明并在曲线上层显示，单位沿用下方标签。
 
-HUD 以控制器实际反馈 `/fsm_state`（transient-local）为总开关，仅状态 3（OCS2）计算和显示误差。HOME、HOLD、MOVEJ、未知状态或尚未收到状态时隐藏并跳过误差/曲线更新；状态切换清空曲线并等待新的实际位姿。保留目标缓存以兼容仅在目标变化时发布的话题；非 OCS2 模式直接丢弃实际位姿回调数据。
+HUD 以控制器实际反馈 `fsm_state`（transient-local）为总开关，仅状态 3（OCS2）计算和显示误差与 MPC 耗时。HOME、HOLD、MOVEJ、未知状态或尚未收到状态时隐藏并跳过误差/曲线更新；状态切换清空曲线并等待新的实际位姿。保留目标缓存以兼容仅在目标变化时发布的话题；非 OCS2 模式直接丢弃实际位姿与 `mpc_timing` 回调数据。

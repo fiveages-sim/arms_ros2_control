@@ -15,14 +15,16 @@ TargetErrorDisplay::TargetErrorDisplay() {
 TargetErrorDisplay::~TargetErrorDisplay() {
     fsm_subscription_.reset();
     mode_subscription_.reset();
+    mpc_timing_subscription_.reset();
     for (auto& subscription : subscriptions_) subscription.reset();
     dashboard_.reset();
 }
 void TargetErrorDisplay::onInitialize() {
     rviz_rendering::RenderSystem::get()->prepareOverlays(scene_manager_);
     auto node = context_->getRosNodeAbstraction().lock()->get_raw_node();
+    // Relative topics resolve under the RViz node's namespace (same as controller pubs).
     fsm_subscription_ = node->create_subscription<std_msgs::msg::Int32>(
-        "/fsm_state", rclcpp::QoS(1).transient_local(),
+        "fsm_state", rclcpp::QoS(1).transient_local(),
         [data = data_](std_msgs::msg::Int32::ConstSharedPtr message) {
             std::lock_guard<std::mutex> lock(data->mutex);
             // Actual controller state: HOME=1, HOLD=2, OCS2=3, MOVEJ=4.
@@ -32,6 +34,7 @@ void TargetErrorDisplay::onInitialize() {
                 ++data->fsm_generation;
                 // Keep cached targets, which may only be published on change.
                 for (auto& row : data->samples) row[0].valid = false;
+                data->mpc = {};
             }
         });
     const char* topics[4][2] = {
@@ -52,7 +55,7 @@ void TargetErrorDisplay::onInitialize() {
         }
     }
     mode_subscription_ = node->create_subscription<arms_ros2_control_msgs::msg::WbcCurrentState>(
-        "/ocs2_wbc_controller/current_state", rclcpp::QoS(1).transient_local(),
+        "ocs2_wbc_controller/current_state", rclcpp::QoS(1).transient_local(),
         [data = data_](arms_ros2_control_msgs::msg::WbcCurrentState::ConstSharedPtr message) {
             std::lock_guard<std::mutex> lock(data->mutex);
             using State = arms_ros2_control_msgs::msg::WbcCurrentState;
@@ -61,6 +64,16 @@ void TargetErrorDisplay::onInitialize() {
                             message->right_arm_state == State::ARM_ENABLED,
                             message->body_state == State::BODY_TRACKING && message->head_state != State::HEAD_FORWARD,
                             message->head_state == State::HEAD_TRACKING};
+        });
+    mpc_timing_subscription_ = node->create_subscription<arms_ros2_control_msgs::msg::MpcTiming>(
+        "mpc_timing", rclcpp::SensorDataQoS().keep_last(1),
+        [data = data_](arms_ros2_control_msgs::msg::MpcTiming::ConstSharedPtr message) {
+            std::lock_guard<std::mutex> lock(data->mutex);
+            if (!data->ocs2_active) return;
+            data->mpc.solve_ms = message->solve_us / 1000.0;
+            data->mpc.period_ms = message->period_us / 1000.0;
+            data->mpc.received = std::chrono::steady_clock::now();
+            data->mpc.valid = true;
         });
 }
 void TargetErrorDisplay::updateScale() {
@@ -73,6 +86,7 @@ void TargetErrorDisplay::reset() {
     if (dashboard_) dashboard_->clearHistory();
     std::lock_guard<std::mutex> lock(data_->mutex);
     data_->samples = {};
+    data_->mpc = {};
     elapsed_ = 1;
 }
 void TargetErrorDisplay::update(float wall_dt, float) {
@@ -107,6 +121,7 @@ void TargetErrorDisplay::update(float wall_dt, float) {
     dashboard_->refreshLayout();
     std::array<std::array<Sample, 2>, 4> samples;
     std::array<bool, 4> active;
+    MpcSample mpc;
     {
         std::lock_guard<std::mutex> lock(data_->mutex);
         if (!data_->ocs2_active || data_->fsm_generation != generation) {
@@ -114,6 +129,7 @@ void TargetErrorDisplay::update(float wall_dt, float) {
             return;
         }
         samples = data_->samples;
+        mpc = data_->mpc;
         if (data_->wbc_state_received) {
             active = data_->active;
         } else {
@@ -124,6 +140,8 @@ void TargetErrorDisplay::update(float wall_dt, float) {
     dashboard_->setActive(active);
     dashboard_->setArmTitle(active[1]);
     const auto now = std::chrono::steady_clock::now();
+    const bool mpc_fresh = mpc.valid && (now - mpc.received) <= std::chrono::seconds(1);
+    dashboard_->setMpcTiming(mpc.solve_ms, mpc.period_ms, mpc_fresh);
     for (size_t row = 0; row < 4; ++row) {
         if (!active[row]) continue;
         const auto& measured = samples[row][0];

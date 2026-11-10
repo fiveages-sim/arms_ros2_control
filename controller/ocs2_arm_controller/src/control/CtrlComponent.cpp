@@ -215,6 +215,8 @@ namespace ocs2::mobile_manipulator
 
         // Initialize FSM command publisher (for stopping all controllers)
         fsm_command_publisher_ = node_->create_publisher<std_msgs::msg::Int32>("fsm_command", 10);
+        mpc_timing_publisher_ = node_->create_publisher<arms_ros2_control_msgs::msg::MpcTiming>(
+            "mpc_timing", 1);
     }
 
     void CtrlComponent::updateObservation(const rclcpp::Time& time)
@@ -482,14 +484,14 @@ namespace ocs2::mobile_manipulator
         const auto us = std::chrono::duration_cast<std::chrono::microseconds>(
                             std::chrono::steady_clock::now() - t0)
                             .count();
-        const auto period_us = mpc_period_us_.load(std::memory_order_relaxed);
-        if (period_us > 0 && us > period_us)
+        if (!mpc_timing_publisher_)
         {
-            RCLCPP_WARN_THROTTLE(node_->get_logger(), *node_->get_clock(), 1000,
-                                 "MPC solve %ld us exceeds period %ld us (%.1f Hz); tracking will lag",
-                                 static_cast<long>(us), static_cast<long>(period_us),
-                                 1e6 / static_cast<double>(period_us));
+            return;
         }
+        arms_ros2_control_msgs::msg::MpcTiming msg;
+        msg.solve_us = us;
+        msg.period_us = mpc_period_us_.load(std::memory_order_relaxed);
+        mpc_timing_publisher_->publish(msg);
     }
 
     void CtrlComponent::startVisualizationThread(int thread_sleep_ms, double visualization_period_sec)

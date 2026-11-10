@@ -39,6 +39,19 @@ public:
         panel_->setMetricsMode(Ogre::GMM_PIXELS);
         panel_->setHorizontalAlignment(Ogre::GHA_RIGHT);
         overlay_->add2D(panel_);
+
+        mpc_card_ = static_cast<Ogre::BorderPanelOverlayElement*>(manager.createOverlayElement(
+            "BorderPanel", name_+"/mpc_card"));
+        mpc_card_->setMetricsMode(Ogre::GMM_PIXELS);
+        mpc_card_->setBorderMaterialName(name_+"/border");
+        panel_->addChild(mpc_card_);
+        text_parent_ = mpc_card_;
+        mpc_title_ = addText("MPC", 12, 8, 24, Ogre::ColourValue::Black);
+        mpc_chart_ = std::make_unique<ErrorSparkline>(name_+"/mpc_chart", mpc_card_, 12);
+        mpc_value_ = addText("--", 12, 38, 46, muted());
+        mpc_unit_ = addText("MPC (ms)", 12, 86, 20, Ogre::ColourValue::Black);
+        mpc_status_ = addText("Waiting for timing", 12, 112, 16, Ogre::ColourValue::Black);
+
         const char* names[] = {"ARM", "RIGHT ARM", "BODY", "HEAD"};
         for (size_t row = 0; row < 4; ++row) {
             auto* card = static_cast<Ogre::BorderPanelOverlayElement*>(manager.createOverlayElement(
@@ -62,6 +75,7 @@ public:
     ~ErrorDashboard() {
         auto& manager = Ogre::OverlayManager::getSingleton();
         overlay_->hide();
+        mpc_chart_.reset();
         for (auto& row : charts_) for (auto& chart : row) chart.reset();
         for (auto* text : texts_) {
             text->getParent()->removeChild(text->getName());
@@ -71,6 +85,8 @@ public:
             panel_->removeChild(card->getName());
             manager.destroyOverlayElement(card);
         }
+        panel_->removeChild(mpc_card_->getName());
+        manager.destroyOverlayElement(mpc_card_);
         overlay_->remove2D(panel_);
         manager.destroyOverlayElement(panel_);
         manager.destroy(overlay_);
@@ -101,7 +117,10 @@ public:
         titles_[0]->setCaption(caption);
         layout_pending_ = true;
     }
-    void clearHistory() { for (auto& row : charts_) for (auto& chart : row) chart->clear(); }
+    void clearHistory() {
+        mpc_chart_->clear();
+        for (auto& row : charts_) for (auto& chart : row) chart->clear();
+    }
     void show() { overlay_->show(); }
     void hide() { overlay_->hide(); }
     void refreshLayout() {
@@ -123,6 +142,16 @@ public:
             status == "参考坐标系不一致" ? "Frame mismatch" :
             status == "位姿数据无效" ? "Invalid pose" : "Waiting for poses";
         if (status_[row]->getCaption() != message) status_[row]->setCaption(message);
+    }
+    void setMpcTiming(double solve_ms, double period_ms, bool valid) {
+        const bool overrun = valid && period_ms > 0 && solve_ms > period_ms;
+        const double green = period_ms > 0 ? period_ms : 0;
+        // Sparkline red line at period; ceiling is 2x that (same as EE charts).
+        const double red = period_ms > 0 ? period_ms : 1;
+        mpc_chart_->update(solve_ms, valid, green, red);
+        setMpcReading(solve_ms, valid, period_ms);
+        const std::string message = !valid ? "Waiting for timing" : overrun ? "OVER PERIOD" : "OK";
+        if (mpc_status_->getCaption() != message) mpc_status_->setCaption(message);
     }
 private:
     void createMaterial(const std::string& suffix, const Ogre::ColourValue& color) {
@@ -162,6 +191,24 @@ private:
         const float card_h = 136.f * s;
         const float stride = 146.f * s;
         size_t visible = 0;
+
+        mpc_card_->setDimensions(card_w, card_h);
+        mpc_card_->setBorderSize(std::max(1.f, s));
+        mpc_card_->setPosition(0, stride * visible++);
+        mpc_card_->show();
+        mpc_title_->setPosition(12.f * s, 8.f * s);
+        mpc_title_->setCharHeight(24.f * s);
+        mpc_title_->setDimensions(170.f * s, 24.f * s + 2);
+        mpc_chart_->setLayout(12.f * s, 38.f * s, s);
+        mpc_value_->setPosition(12.f * s, 38.f * s);
+        mpc_value_->setDimensions(170.f * s, 46.f * s + 2);
+        mpc_unit_->setPosition(12.f * s, 86.f * s);
+        mpc_unit_->setCharHeight(20.f * s);
+        mpc_unit_->setDimensions(170.f * s, 20.f * s + 2);
+        mpc_status_->setPosition(12.f * s, 112.f * s);
+        mpc_status_->setCharHeight(16.f * s);
+        mpc_status_->setDimensions(card_w - 24.f * s, 16.f * s + 2);
+
         for (size_t row = 0; row < cards_.size(); ++row) {
             cards_[row]->setDimensions(card_w, card_h);
             cards_[row]->setBorderSize(std::max(1.f, s));
@@ -187,7 +234,7 @@ private:
             status_[row]->setCharHeight(16.f * s);
             status_[row]->setDimensions(card_w - 24.f * s, 16.f * s + 2);
         }
-        const float height = visible == 0 ? card_h : (visible - 1) * stride + card_h;
+        const float height = (visible - 1) * stride + card_h;
         panel_->setPosition(-(card_w + 16.f * s), 16.f * s);
         panel_->setDimensions(card_w, height);
         layout_pending_ = true;
@@ -205,7 +252,24 @@ private:
         const float height = (caption.size() > 7 ? 32.f : 46.f) * scale_;
         if (text->getCharHeight() != height) text->setCharHeight(height);
     }
+    void setMpcReading(double solve_ms, bool valid, double period_ms) {
+        valid = valid && std::isfinite(solve_ms) && solve_ms >= 0;
+        const auto caption = valid ? QString::number(solve_ms, 'f', 2).toStdString() : "--";
+        Ogre::ColourValue color = muted();
+        if (valid) {
+            if (period_ms > 0 && solve_ms > period_ms) {
+                color = Ogre::ColourValue(0.90, 0.34, 0.40);
+            } else {
+                color = Ogre::ColourValue(0.22, 0.72, 0.46);
+            }
+        }
+        if (mpc_value_->getCaption() != caption) mpc_value_->setCaption(caption);
+        if (mpc_value_->getColour() != color) mpc_value_->setColour(color);
+        const float height = (caption.size() > 7 ? 32.f : 46.f) * scale_;
+        if (mpc_value_->getCharHeight() != height) mpc_value_->setCharHeight(height);
+    }
     std::array<std::array<std::unique_ptr<ErrorSparkline>, 2>, 4> charts_{};
+    std::unique_ptr<ErrorSparkline> mpc_chart_;
     std::array<bool, 4> active_{};
     float scale_{1};
     bool layout_pending_{true};
@@ -214,9 +278,14 @@ private:
     Ogre::OverlayContainer* panel_{};
     Ogre::FontPtr font_;
     std::vector<Ogre::MaterialPtr> materials_;
+    Ogre::BorderPanelOverlayElement* mpc_card_{};
     std::array<Ogre::BorderPanelOverlayElement*, 4> cards_{};
     Ogre::OverlayContainer* text_parent_{};
     std::vector<Ogre::TextAreaOverlayElement*> texts_;
+    Ogre::TextAreaOverlayElement* mpc_title_{};
+    Ogre::TextAreaOverlayElement* mpc_value_{};
+    Ogre::TextAreaOverlayElement* mpc_unit_{};
+    Ogre::TextAreaOverlayElement* mpc_status_{};
     std::array<Ogre::TextAreaOverlayElement*, 4> titles_{};
     std::array<std::array<Ogre::TextAreaOverlayElement*, 2>, 4> values_{};
     std::array<std::array<Ogre::TextAreaOverlayElement*, 2>, 4> units_{};

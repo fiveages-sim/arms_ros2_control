@@ -24,6 +24,7 @@ set(CONTROLLER_INCLUDE_DEPENDS
         ocs2_mobile_manipulator
         ocs2_controller_common
         arms_controller_common
+        arms_ros2_control_msgs
 )
 
 find_package(ament_cmake REQUIRED)
@@ -59,6 +60,7 @@ target_link_libraries(${PROJECT_NAME} PUBLIC
         ${ocs2_mobile_manipulator_TARGETS}
         ${ocs2_controller_common_TARGETS}
         ${arms_controller_common_TARGETS}
+        ${arms_ros2_control_msgs_TARGETS}
 )
 
 pluginlib_export_plugin_description_file(controller_interface ocs2_arm_controller.xml)

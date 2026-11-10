@@ -26,6 +26,7 @@
 #include <ocs2_mobile_manipulator/MobileManipulatorInterface.h>
 #include <ocs2_mpc/MPC_BASE.h>
 #include <ocs2_mpc/MPC_MRT_Interface.h>
+#include <arms_ros2_control_msgs/msg/mpc_timing.hpp>
 #include <ocs2_msgs/msg/mpc_observation.hpp>
 #include <rcl_interfaces/msg/set_parameters_result.hpp>
 #include <rclcpp/rclcpp.hpp>
@@ -199,7 +200,7 @@ namespace ocs2::mobile_manipulator
         /** True once the first MPC policy after resetMpc() is available. */
         [[nodiscard]] bool initialPolicyReceived() const;
         void advanceMpc();
-        /** MPC request period; used to warn only when a solve overruns that period. */
+        /** MPC request period; published with solve timing for HUD overrun display. */
         void setMpcPeriodSec(double period_sec);
         /** Hold joints at last commanded positions (used while waiting for initial policy). */
         void holdLastSentPositions() const;
@@ -298,6 +299,7 @@ namespace ocs2::mobile_manipulator
 
         rclcpp::Publisher<ocs2_msgs::msg::MpcObservation>::SharedPtr mpc_observation_publisher_;
         rclcpp::Publisher<std_msgs::msg::Int32>::SharedPtr fsm_command_publisher_;
+        rclcpp::Publisher<arms_ros2_control_msgs::msg::MpcTiming>::SharedPtr mpc_timing_publisher_;
 
         // Visualization component
         std::unique_ptr<ocs2::controller_common::Ocs2PinocchioVisualizer> visualizer_;
