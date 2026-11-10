@@ -23,6 +23,7 @@ rosidl_generate_interfaces(${PROJECT_NAME}
         "srv/MovecUseIK.srv"
         "msg/WbcCapability.msg"
         "msg/WbcCurrentState.msg"
+        "msg/MpcTiming.msg"
         "msg/TeleopMode.msg"
         DEPENDENCIES builtin_interfaces std_msgs geometry_msgs nav_msgs
 )
