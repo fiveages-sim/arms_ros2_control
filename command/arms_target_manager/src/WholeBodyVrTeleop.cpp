@@ -30,50 +30,10 @@ namespace arms_ros2_control::command
                 .toRotationMatrix();
         }
 
-        double wrapPi(double angle)
-        {
-            while (angle > M_PI) angle -= 2.0 * M_PI;
-            while (angle < -M_PI) angle += 2.0 * M_PI;
-            return angle;
-        }
-
         double yawOfQuaternion(const Eigen::Quaterniond& q)
         {
             const Eigen::Matrix3d m = q.normalized().toRotationMatrix();
             return std::atan2(m(1, 0), m(0, 0));
-        }
-
-        Eigen::Matrix2d yawRotation2d(double yaw)
-        {
-            const double c = std::cos(yaw);
-            const double s = std::sin(yaw);
-            Eigen::Matrix2d r;
-            r << c, -s,
-                 s, c;
-            return r;
-        }
-
-        Eigen::Vector2d stepTowards(const Eigen::Vector2d& current,
-                                    const Eigen::Vector2d& target,
-                                    double max_step)
-        {
-            const Eigen::Vector2d delta = target - current;
-            const double norm = delta.norm();
-            if (norm <= max_step || norm < 1e-12)
-            {
-                return target;
-            }
-            return current + delta * (max_step / norm);
-        }
-
-        double stepTowards(double current, double target, double max_step)
-        {
-            const double delta = target - current;
-            if (std::abs(delta) <= max_step)
-            {
-                return target;
-            }
-            return current + (delta > 0.0 ? max_step : -max_step);
         }
 
         std::string joinSources(const std::vector<std::string>& sources)
@@ -95,14 +55,12 @@ namespace arms_ros2_control::command
         rclcpp::Node::SharedPtr node,
         ArmsTargetManager* target_manager,
         rclcpp::Publisher<geometry_msgs::msg::Pose>::SharedPtr pub_head_target,
-        rclcpp::Publisher<geometry_msgs::msg::Pose>::SharedPtr pub_body_target,
         const std::string& vr_follow_frame,
         const AbsoluteTeleopOptions& options,
         Hooks hooks)
         : node_(std::move(node))
           , target_manager_(target_manager)
           , pub_head_target_(std::move(pub_head_target))
-          , pub_body_target_(std::move(pub_body_target))
           , vr_follow_frame_(vr_follow_frame)
           , absolute_options_(options)
           , hooks_(std::move(hooks))
@@ -164,16 +122,6 @@ namespace arms_ros2_control::command
             "/teleop/body_right_shoulder_pose", 10,
             [this](const geometry_msgs::msg::Pose::SharedPtr msg) { bodyShoulderCallback(false, msg); });
 
-        // 底盘跟踪位置外环：常驻低频定时器，只在 base_tracking_enabled_ 时真正发布。
-        // 人体 footprint 帧率低于此频率时靠缓存补齐（updateBaseFollow 内做看门狗）。
-        {
-            const double rate = std::max(1.0, absolute_options_.base_follow_rate_hz);
-            base_follow_timer_ = node_->create_wall_timer(
-                std::chrono::duration_cast<std::chrono::nanoseconds>(
-                    std::chrono::duration<double>(1.0 / rate)),
-                [this]() { updateBaseFollow(); });
-        }
-
         RCLCPP_INFO(
             node_->get_logger(),
             "🕹️🦴 WholeBodyVrTeleop created: subscribed to /teleop/body_* "
@@ -181,8 +129,8 @@ namespace arms_ros2_control::command
             body_ee_joint.c_str());
         RCLCPP_INFO(
             node_->get_logger(),
-            "🕹️🦴 全身模式仅支持：FSM(11/12)、夹爪(9/10/13/14)、"
-            "右摇杆短按(4)=全部跟踪、左摇杆按键(7)=底盘跟踪、组合键(30)=退出；"
+            "🕹️🦴 全身模式仅支持：FSM(11/12)、夹爪(9/10/13/14)、右摇杆短按(4)=全部跟踪、"
+            "组合键(20)=底盘遥控、组合键(26)=底盘解锁/锁定、组合键(30)=退出；"
             "其余普通模式组合键在全身模式下不可用");
     }
 
@@ -244,8 +192,6 @@ namespace arms_ros2_control::command
         // 进入模式只开通“允许跟踪”；绝对位姿映射需再按右摇杆开启
         absolute_tracking_active_.store(false);
         resetAbsoluteTracking();
-        base_tracking_enabled_.store(false);
-        resetBaseFollow();
         stopHeadTracking();
 
         // 目标由骨架绝对映射发布，确保 marker 处于连续发布模式
@@ -264,8 +210,9 @@ namespace arms_ros2_control::command
             node_->get_logger(),
             "🕹️🦴 [case 30] 全身遥操作已开启：身体=跟随（BODY_TRACKING）、"
             "头部=跟踪（HEAD_TRACKING）；右摇杆短按(4)开/关「全部跟踪」，"
-            "左摇杆按键(7)开/关「底盘跟踪」；其余普通模式组合键不可用；"
-            "再次按左右握把+右摇杆按下退出");
+            "底盘锁定状态下的 marker 相对机器人底座；"
+            "组合键(26)解锁底盘后 marker 锚定世界系、由 OCS2 驱动底盘跟随；"
+            "组合键(20)可手动遥控底盘；再次按左右握把+右摇杆按下退出");
     }
 
     void WholeBodyVrTeleop::stopWholeBodyTeleop()
@@ -273,15 +220,13 @@ namespace arms_ros2_control::command
         const bool was_active = whole_body_teleop_active_.exchange(false);
         absolute_tracking_active_.store(false);
         resetAbsoluteTracking();
-        base_tracking_enabled_.store(false);
-        resetBaseFollow();
         stopHeadTracking();
 
         if (was_active)
         {
             RCLCPP_INFO(
                 node_->get_logger(),
-                "🕹️🦴 [case 30] 全身遥操作已关闭（「全部跟踪」与「底盘跟踪」一并关闭，"
+                "🕹️🦴 [case 30] 全身遥操作已关闭（「全部跟踪」已关闭，"
                 "WBC 保持当前目标）");
         }
     }
@@ -308,7 +253,7 @@ namespace arms_ros2_control::command
         RCLCPP_INFO(
             node_->get_logger(),
             "🕹️🦴 FSM 已离开 OCS2（状态=%d）：全身遥操作自动退出"
-            "（「全部跟踪」与「底盘跟踪」一并关闭，WBC 保持当前目标）；"
+            "（「全部跟踪」已关闭，WBC 保持当前目标）；"
             "回到 OCS2 后需重新按「左右握把+右摇杆按下」开启",
             fsm_state);
     }
@@ -346,9 +291,6 @@ namespace arms_ros2_control::command
         {
             case 4:  // 右摇杆短按：开/关「全部跟踪」
                 toggleAbsoluteTracking();
-                break;
-            case 7:  // 左摇杆按键：开/关「底盘跟踪」
-                toggleBaseTracking();
                 break;
             default:
                 RCLCPP_INFO_THROTTLE(
@@ -547,13 +489,14 @@ namespace arms_ros2_control::command
         RCLCPP_INFO(
             node_->get_logger(),
             "🕹️🦴 [case 4] 全身「全部跟踪」已关闭：停止下发胸/头/双臂目标"
-            "（WBC 保持当前目标；左摇杆按键的底盘跟踪开关独立不受影响）");
+            "（WBC 保持当前目标）");
     }
 
     void WholeBodyVrTeleop::resetAbsoluteTracking()
     {
         absolute_maps_captured_ = false;
         settle_pending_ = false;
+        anchor_valid_ = false;
         abs_left_filter_primed_ = false;
         abs_right_filter_primed_ = false;
         abs_body_filter_primed_ = false;
@@ -639,17 +582,20 @@ namespace arms_ros2_control::command
         const Eigen::Matrix3d head_rot_in_H =
             R_world_to_H * body_head_orientation_.toRotationMatrix();
 
-        const Eigen::Vector3d position_base = head_in_H;
-        const Eigen::Quaterniond orientation_base = dropRoll(
+        const Eigen::Vector3d position_H = head_in_H;
+        const Eigen::Quaterniond orientation_H = dropRoll(
             Eigen::Quaterniond(head_rot_in_H * abs_head_src_to_ee_).normalized());
 
-        // 目标以「机器人底座系」下发：W2 的 WBC 模型是 fixed_base
-        // （manipulatorModelType=0 → hasMobileBase()=false），参考管理器的
-        // base_frame_ 就是 baseFootprint（base_footprint），目标语义为“相对机器人底座”。
-        // 这里绝不能再乘底座位姿，否则会多加一次 base → world 的变换，
-        // 底盘不在原点时目标会被整体带走。
-        const Eigen::Vector3d position = position_base;
-        const Eigen::Quaterniond orientation = orientation_base;
+        // H 系 → 目标表达系（下游 WBC 的 base_frame_）/ marker 固定系（通常是 world）
+        Eigen::Isometry3d T_target_H;
+        Eigen::Isometry3d T_marker_H;
+        if (!resolveAnchorTransforms(T_H_world, T_target_H, T_marker_H))
+        {
+            return;
+        }
+        const Eigen::Vector3d position = T_target_H * position_H;
+        const Eigen::Quaterniond orientation(
+            T_target_H.linear() * orientation_H.toRotationMatrix());
 
         const double alpha = std::clamp(absolute_options_.filter_alpha, 0.0, 1.0);
         if (!abs_head_filter_primed_)
@@ -679,7 +625,7 @@ namespace arms_ros2_control::command
         }
 
         geometry_msgs::msg::PoseStamped target;
-        target.header.frame_id = vr_follow_frame_;
+        target.header.frame_id = controlFrame();
         target.header.stamp = node_->now();
         target.pose.position.x = ramped_position.x();
         target.pose.position.y = ramped_position.y();
@@ -748,14 +694,21 @@ namespace arms_ros2_control::command
         const Eigen::Vector3d anchor_in_H =
             skeleton.spine3 + lambda * (skeleton.pelvis - skeleton.spine3);
 
-        const Eigen::Vector3d position_base = anchor_in_H;
+        const Eigen::Vector3d position_H = anchor_in_H;
         // 再右乘源→目标固定偏置，最后按可达自由度（ZYX 分解）丢弃 roll
-        const Eigen::Quaterniond orientation_base = dropRoll(
+        const Eigen::Quaterniond orientation_H = dropRoll(
             Eigen::Quaterniond(spine_rot_in_H * abs_body_src_to_ee_).normalized());
 
-        // 同头部：目标以机器人底座系下发，不再叠加底座位姿（base → world）。
-        const Eigen::Vector3d position = position_base;
-        const Eigen::Quaterniond orientation = orientation_base;
+        // 同头部：目标表达在下游 WBC 的 base_frame_（移动底盘=world / 固定底盘=baseFootprint）
+        Eigen::Isometry3d T_target_H;
+        Eigen::Isometry3d T_marker_H;
+        if (!resolveAnchorTransforms(T_H_world, T_target_H, T_marker_H))
+        {
+            return;
+        }
+        const Eigen::Vector3d position = T_target_H * position_H;
+        const Eigen::Quaterniond orientation(
+            T_target_H.linear() * orientation_H.toRotationMatrix());
 
         const double alpha = std::clamp(absolute_options_.filter_alpha, 0.0, 1.0);
         if (!abs_body_filter_primed_)
@@ -785,7 +738,7 @@ namespace arms_ros2_control::command
         }
 
         geometry_msgs::msg::PoseStamped target;
-        target.header.frame_id = vr_follow_frame_;
+        target.header.frame_id = controlFrame();
         target.header.stamp = node_->now();
         target.pose.position.x = ramped_position.x();
         target.pose.position.y = ramped_position.y();
@@ -795,26 +748,24 @@ namespace arms_ros2_control::command
         target.pose.orientation.z = ramped_orientation.z();
         target.pose.orientation.w = ramped_orientation.w();
 
-        // 胸部目标直发（底座系、无 header）：与头部/双臂同一通道；
-        // RViz 交互 marker 显示在固定系（world）下，显示位姿单独从底座系抬到 world，
-        // 转换失败时退回原值（只影响调试图面，不影响控制）。
-        pub_body_target_->publish(target.pose);
-
-        geometry_msgs::msg::Pose marker_pose = target.pose;
-        Eigen::Vector3d marker_position;
-        Eigen::Quaterniond marker_orientation;
-        if (hooks_.transform_pose(
-                "body_marker", vr_follow_frame_, hooks_.ee_frame_id(),
-                ramped_position, ramped_orientation, marker_position, marker_orientation))
-        {
-            marker_pose.position.x = marker_position.x();
-            marker_pose.position.y = marker_position.y();
-            marker_pose.position.z = marker_position.z();
-            marker_pose.orientation.x = marker_orientation.x();
-            marker_pose.orientation.y = marker_orientation.y();
-            marker_pose.orientation.z = marker_orientation.z();
-            marker_pose.orientation.w = marker_orientation.w();
-        }
+        // RViz 交互 marker 显示在 marker_fixed_frame（通常是 world）下；
+        // /body_target 的发布由 BodyMarker::publishTargetPose() 统一换算到
+        // control_base_frame（下游 OCS2 base_frame_），两者不能混用。
+        // marker 显示「实际下发的渐入值」：先回到人体 footprint 系再换到 marker 固定系。
+        const Eigen::Isometry3d T_H_target = T_target_H.inverse();
+        const Eigen::Vector3d marker_position =
+            T_marker_H * (T_H_target * ramped_position);
+        const Eigen::Quaterniond marker_orientation(
+            T_marker_H.linear() * T_H_target.linear() *
+            ramped_orientation.toRotationMatrix());
+        geometry_msgs::msg::Pose marker_pose;
+        marker_pose.position.x = marker_position.x();
+        marker_pose.position.y = marker_position.y();
+        marker_pose.position.z = marker_position.z();
+        marker_pose.orientation.x = marker_orientation.x();
+        marker_pose.orientation.y = marker_orientation.y();
+        marker_pose.orientation.z = marker_orientation.z();
+        marker_pose.orientation.w = marker_orientation.w();
         target_manager_->setBodyMarkerPose(marker_pose);
 
         // 缓存本节点实际下发的胸部目标，供下次接管渐入取锚点
@@ -903,15 +854,23 @@ namespace arms_ros2_control::command
         const Eigen::Matrix3d hand_rot_in_H =
             R_world_to_H * hand_ori.toRotationMatrix();
 
-        // 机器人「底座系」里的目标 = 人体手相对人体根的当前位姿（固定映射，无按下时基准）
+        // 机器人目标 = 人体手相对人体根的当前位姿（固定映射，无按下时基准）；
+        // 再经锚定变换表达为下游 WBC 的 base_frame_（移动底盘=world / 固定底盘=baseFootprint）
         const Eigen::Matrix3d& hand_to_ee =
             is_left ? abs_hand_to_ee_left_ : abs_hand_to_ee_right_;
-        const Eigen::Vector3d position_base = hand_in_H;
-        const Eigen::Matrix3d rot_base = hand_rot_in_H * hand_to_ee;
+        const Eigen::Vector3d position_H = hand_in_H;
+        const Eigen::Quaterniond orientation_H(
+            Eigen::Quaterniond(hand_rot_in_H * hand_to_ee).normalized());
 
-        // 目标直接表达在机器人底座系（下游 base_frame_ = base_footprint）
-        const Eigen::Vector3d position = position_base;
-        const Eigen::Quaterniond orientation(Eigen::Quaterniond(rot_base).normalized());
+        Eigen::Isometry3d T_target_H;
+        Eigen::Isometry3d T_marker_H;
+        if (!resolveAnchorTransforms(T_H_world, T_target_H, T_marker_H))
+        {
+            return;
+        }
+        const Eigen::Vector3d position = T_target_H * position_H;
+        const Eigen::Quaterniond orientation(
+            T_target_H.linear() * orientation_H.toRotationMatrix());
 
         // 一阶低通：绝对映射会把骨架抖动直接送进高增益末端约束，必须滤波
         const double alpha = std::clamp(absolute_options_.filter_alpha, 0.0, 1.0);
@@ -1173,11 +1132,14 @@ namespace arms_ros2_control::command
             "🕹️🦴 全身绝对跟踪已生效：人体基坐标系 H 来自 /teleop/human_footprint_pose"
             "（xy 取骨盆地面投影 / 朝向取两踝 x 轴地平面投影均值 / z 取两足较低者，"
             "俯仰滚转恒为 0；低通与原点偏置在 vr_pose_publisher 侧配置），"
-            "发布系=%s，尺度[身长/肩宽/臂长]=%.2f/%.2f/%.2f，末端源=body_%s，胸部锚点 λ=%.2f；"
-            "人体参考臂长 L/R=%.3f/%.3f m。"
+            "目标系=%s，marker 固定系=%s，尺度[身长/肩宽/臂长]=%.2f/%.2f/%.2f，"
+            "末端源=body_%s，胸部锚点 λ=%.2f；人体参考臂长 L/R=%.3f/%.3f m。"
             "映射按「人体系」锚定：人体各量先表达在人体根自身坐标系里，故人体朝向 ≡ 机器人机头朝向"
-            "（无需人工偏航常数）；人体各部位相对人体根的当前位姿即为机器人对应部位相对底座的目标",
-            hooks_.ee_frame_id().c_str(),
+            "（无需人工偏航常数）；"
+            "底盘锁定时目标围绕机器人底座（人体走动不会拉离 marker），"
+            "事件 26 解锁底盘后 marker 锚定世界系并随人体走动远离机器人，由 OCS2 驱动底盘跟随",
+            controlFrame().c_str(),
+            markerFrame().c_str(),
             absolute_options_.body_length_scale,
             absolute_options_.shoulder_width_scale,
             absolute_options_.arm_length_scale,
@@ -1247,7 +1209,7 @@ namespace arms_ros2_control::command
             right_arm_ramp_.reset();
         }
 
-        // ---- 胸部：本节点最后一次实际下发的值（与发布系 ee_frame_id_ 一致）----
+        // ---- 胸部：本节点最后一次实际下发的值（与目标表达系 controlFrame() 一致）----
         if (has_last_body_target_ && isFresh(last_body_target_stamp_))
         {
             body_ramp_.armFrom(
@@ -1259,8 +1221,8 @@ namespace arms_ros2_control::command
         }
 
         // ---- 头部：最后一次下发的目标（可能来自普通模式的另一个 frame），
-        //      先转到发布系；不可用则退回实测头部位姿 ----
-        const std::string target_frame = hooks_.ee_frame_id();
+        //      先转到目标表达系；不可用则退回实测头部位姿 ----
+        const std::string target_frame = controlFrame();
         bool head_armed = false;
         const auto arm_head_from = [&](const Eigen::Vector3d& position,
                                        const Eigen::Quaterniond& orientation,
@@ -1327,220 +1289,149 @@ namespace arms_ros2_control::command
         head_ramp_.reset();
     }
 
-    // ================= 底盘跟踪（位置外环 → /cmd_vel） =================
+    // ================= 目标/显示坐标系与锚定 =================
 
-    void WholeBodyVrTeleop::toggleBaseTracking()
+    std::string WholeBodyVrTeleop::controlFrame() const
     {
-        if (!absolute_options_.base_follow_enable)
+        // 目标（/left_target、/right_target、/body_target、/head_target 均为无 header 的 Pose）
+        // 由下游 WBC 按自己的 base_frame_ 解释：移动底盘模型（manipulatorModelType 1/4）
+        // 为 world，固定底盘模型为模型根（如 base_footprint）。
+        if (target_manager_)
         {
-            RCLCPP_WARN(
-                node_->get_logger(),
-                "🔘 [case 7] 忽略底盘跟踪开关：base_follow_enable=false");
-            return;
-        }
-        if (!hooks_.vr_enabled() ||
-            !hooks_.is_full_body_topology() ||
-            hooks_.resolved_fsm_state() != 3)
-        {
-            RCLCPP_WARN(
-                node_->get_logger(),
-                "🔘 [case 7] 忽略底盘跟踪开关：要求 VR enabled、FULL_BODY、OCS2");
-            return;
-        }
-
-        if (base_tracking_enabled_.load())
-        {
-            base_tracking_enabled_.store(false);
-            resetBaseFollow();
-            RCLCPP_INFO(
-                node_->get_logger(),
-                "🔘 [case 7] 底盘跟踪已关闭（已发一次零速）");
-        }
-        else
-        {
-            base_tracking_enabled_.store(true);
-            RCLCPP_INFO(
-                node_->get_logger(),
-                "🔘 [case 7] 底盘跟踪已开启：人体 footprint → 位置外环 → /cmd_vel"
-                "（BASE_UNLOCKED 时冻结跟随并让路给 WBC）");
-        }
-    }
-
-    bool WholeBodyVrTeleop::baseFollowReady() const
-    {
-        if (!absolute_options_.base_follow_enable || !base_tracking_enabled_.load())
-        {
-            return false;
-        }
-        if (!hooks_.vr_enabled() || !hooks_.is_full_body_topology())
-        {
-            return false;
-        }
-        if (hooks_.resolved_fsm_state() != 3)
-        {
-            return false;
-        }
-        if (!has_human_footprint_pose_ ||
-            human_footprint_stamp_ == std::chrono::steady_clock::time_point{})
-        {
-            return false;
-        }
-        const double age =
-            std::chrono::duration<double>(
-                std::chrono::steady_clock::now() - human_footprint_stamp_).count();
-        return age <= std::max(0.0, absolute_options_.base_follow_data_timeout);
-    }
-
-    void WholeBodyVrTeleop::captureBaseFollowBase()
-    {
-        base_follow_footprint_ref_ = human_footprint_position_;
-        base_follow_yaw_ref_ = yawOfQuaternion(human_footprint_orientation_);
-        base_follow_yaw_offset_ = 0.0;
-        base_follow_p_ref_.setZero();
-        base_follow_v_cmd_.setZero();
-        base_follow_w_cmd_ = 0.0;
-        base_follow_v_out_.setZero();
-        base_follow_w_out_ = 0.0;
-        base_follow_last_tick_ = std::chrono::steady_clock::now();
-        RCLCPP_INFO(
-            node_->get_logger(),
-            "🕹️🚗 底盘跟踪基准已建立（人体 footprint yaw=%.1f°）",
-            base_follow_yaw_ref_ * 180.0 / M_PI);
-    }
-
-    void WholeBodyVrTeleop::resetBaseFollow()
-    {
-        const bool was_active = base_follow_active_;
-        base_follow_active_ = false;
-        base_follow_p_ref_.setZero();
-        base_follow_v_cmd_.setZero();
-        base_follow_w_cmd_ = 0.0;
-        base_follow_v_out_.setZero();
-        base_follow_w_out_ = 0.0;
-        base_follow_yaw_offset_ = 0.0;
-        if (was_active)
-        {
-            // 只在真正跟过的时候补一次零速，避免无关场景向 /cmd_vel 发零
-            hooks_.publish_chassis_velocity(geometry_msgs::msg::Twist());
-        }
-    }
-
-    void WholeBodyVrTeleop::updateBaseFollow()
-    {
-        // FSM 可能由 RViz/手柄/控制器异常等非 /fsm_command 来源切换；
-        // 外环以 50Hz 运行，这里做一次兜底退出。
-        if (whole_body_teleop_active_.load() && hooks_.resolved_fsm_state() != 3)
-        {
-            onFsmStateChanged();
-            return;
-        }
-
-        if (!base_tracking_enabled_.load())
-        {
-            return;
-        }
-
-        if (!baseFollowReady())
-        {
-            if (base_follow_active_)
+            const std::string& frame = target_manager_->getControlBaseFrame();
+            if (!frame.empty())
             {
-                resetBaseFollow();
-            }
-            return;
-        }
-
-        const auto now = std::chrono::steady_clock::now();
-        if (!base_follow_active_)
-        {
-            captureBaseFollowBase();
-            base_follow_active_ = true;
-            return;
-        }
-
-        double dt = std::chrono::duration<double>(now - base_follow_last_tick_).count();
-        base_follow_last_tick_ = now;
-        dt = std::clamp(dt, 1e-3, 0.1);
-
-        // yaw 补偿：用自己下发的 ω 积分出机器人自身的转向量，
-        // 使 VR「人体前方」始终对应机头前方（不依赖外部 TF）
-        base_follow_yaw_offset_ += base_follow_w_out_ * dt;
-
-        // 人体 footprint 位移：转到「接管时刻机器人本体系」F（人体 yaw 在接管时与机头对齐）
-        const Eigen::Vector3d footprint_delta =
-            human_footprint_position_ - base_follow_footprint_ref_;
-        const Eigen::Vector2d delta_F =
-            yawRotation2d(-base_follow_yaw_ref_) * footprint_delta.head<2>();
-
-        // 软参考「跑步机」：p_ref 以 τ 追赶人体位置，避免人走出追踪区
-        const double tau = std::max(1e-3, absolute_options_.base_follow_tau);
-        base_follow_p_ref_ += (delta_F - base_follow_p_ref_) * std::min(1.0, dt / tau);
-        const Eigen::Vector2d error_F = delta_F - base_follow_p_ref_;
-
-        // 水平速度：死区内为零；稳态增益 ≈ Kp·τ
-        const double deadband = std::max(0.0, absolute_options_.base_follow_deadband);
-        Eigen::Vector2d v_des_F = Eigen::Vector2d::Zero();
-        if (error_F.norm() > deadband)
-        {
-            v_des_F = absolute_options_.base_follow_kp * error_F;
-            const double vmax = std::max(0.0, absolute_options_.base_vmax);
-            if (v_des_F.norm() > vmax)
-            {
-                v_des_F *= vmax / v_des_F.norm();
+                return frame;
             }
         }
-
-        // 偏航：绝对跟踪（人体转身多少，机头转多少），死区 + 限幅
-        const double delta_yaw =
-            wrapPi(yawOfQuaternion(human_footprint_orientation_) - base_follow_yaw_ref_);
-        const double error_yaw = wrapPi(delta_yaw - base_follow_yaw_offset_);
-        double w_des = 0.0;
-        if (std::abs(error_yaw) > std::max(0.0, absolute_options_.base_follow_yaw_deadband))
+        if (hooks_.control_frame)
         {
-            w_des = absolute_options_.base_follow_kpsi * error_yaw;
-            const double wmax = std::max(0.0, absolute_options_.base_wmax);
-            w_des = std::clamp(w_des, -wmax, wmax);
+            const std::string frame = hooks_.control_frame();
+            if (!frame.empty())
+            {
+                return frame;
+            }
+        }
+        return hooks_.ee_frame_id ? hooks_.ee_frame_id() : std::string();
+    }
+
+    std::string WholeBodyVrTeleop::markerFrame() const
+    {
+        if (hooks_.marker_frame)
+        {
+            const std::string frame = hooks_.marker_frame();
+            if (!frame.empty())
+            {
+                return frame;
+            }
+        }
+        return controlFrame();
+    }
+
+    bool WholeBodyVrTeleop::basePoseInFrame(
+        const std::string& frame, Eigen::Isometry3d& T_frame_base)
+    {
+        T_frame_base.setIdentity();
+        if (frame.empty() || frame == vr_follow_frame_)
+        {
+            // vr_follow_frame_ 本身即机器人底座（base_footprint）
+            return true;
+        }
+        if (!hooks_.ee_frame_ready() || !hooks_.transform_pose)
+        {
+            return false;
         }
 
-        // 一阶低通 + 速率限幅
-        const double cmd_tau = std::max(1e-3, absolute_options_.base_cmd_tau);
-        const double lp_alpha = std::min(1.0, dt / cmd_tau);
-        base_follow_v_cmd_ += lp_alpha * (v_des_F - base_follow_v_cmd_);
-        base_follow_w_cmd_ += lp_alpha * (w_des - base_follow_w_cmd_);
-        base_follow_v_out_ = stepTowards(
-            base_follow_v_out_, base_follow_v_cmd_,
-            std::max(0.0, absolute_options_.base_acc_max) * dt);
-        base_follow_w_out_ = stepTowards(
-            base_follow_w_out_, base_follow_w_cmd_,
-            std::max(0.0, absolute_options_.base_alpha_max) * dt);
-
-        // F 系速度 → 机体系速度
-        const Eigen::Vector2d v_B =
-            yawRotation2d(-base_follow_yaw_offset_) * base_follow_v_out_;
-
-        geometry_msgs::msg::Twist cmd_vel;
-        cmd_vel.linear.x = v_B.x();
-        cmd_vel.linear.y = v_B.y();
-        cmd_vel.linear.z = 0.0;
-        cmd_vel.angular.x = 0.0;
-        cmd_vel.angular.y = 0.0;
-        cmd_vel.angular.z = base_follow_w_out_;
-
-        if (hooks_.wbc_owns_chassis_velocity())
+        Eigen::Vector3d position;
+        Eigen::Quaterniond orientation;
+        if (!hooks_.transform_pose(
+                "chassis", vr_follow_frame_, frame,
+                Eigen::Vector3d::Zero(), Eigen::Quaterniond::Identity(),
+                position, orientation))
         {
-            // 让路给 WBC：不发指令，但把软参考与人体同步，回到 BASE_LOCK 时不产生冲击
-            base_follow_p_ref_ = delta_F;
-            base_follow_v_cmd_.setZero();
-            base_follow_v_out_.setZero();
-            base_follow_w_cmd_ = 0.0;
-            base_follow_w_out_ = 0.0;
-            base_follow_yaw_offset_ = delta_yaw;
-            RCLCPP_DEBUG_THROTTLE(
-                node_->get_logger(), *node_->get_clock(), 2000,
-                "🕹️🚗 底盘跟踪让路给 WBC（BASE_UNLOCKED），保持软参考同步");
+            RCLCPP_WARN_THROTTLE(
+                node_->get_logger(), *node_->get_clock(), 3000,
+                "🕹️🦴 无 %s → %s TF，冻结全身目标（底盘锁定场景可改用 base_footprint 作为目标系）",
+                vr_follow_frame_.c_str(), frame.c_str());
+            return false;
+        }
+        T_frame_base.linear() = orientation.normalized().toRotationMatrix();
+        T_frame_base.translation() = position;
+        return true;
+    }
+
+    bool WholeBodyVrTeleop::resolveAnchorTransforms(
+        const Eigen::Isometry3d& T_H_world,
+        Eigen::Isometry3d& T_target_H,
+        Eigen::Isometry3d& T_marker_H)
+    {
+        const std::string marker_frame = markerFrame();
+        const std::string target_frame = controlFrame();
+        if (marker_frame.empty() || target_frame.empty())
+        {
+            RCLCPP_WARN_THROTTLE(
+                node_->get_logger(), *node_->get_clock(), 3000,
+                "🕹️🦴 等待目标/marker 坐标系（control='%s', marker='%s'）",
+                target_frame.c_str(), marker_frame.c_str());
+            return false;
+        }
+
+        // marker 固定系下机器人底座的位姿
+        Eigen::Isometry3d T_M_base;
+        if (!basePoseInFrame(marker_frame, T_M_base))
+        {
+            return false;
+        }
+
+        const bool base_unlocked = hooks_.base_unlocked && hooks_.base_unlocked();
+        const bool fresh_anchor = !anchor_valid_;
+        if (!base_unlocked || fresh_anchor)
+        {
+            // 底盘锁定（或首次锚定）：锚定随机器人底座实时刷新（T = base ⊗ H⁻¹），
+            // 于是「目标 = 底座 ⊗ 人体相对 footprint 的位姿」。
+            // 人体原地走动只改变其相对自身 footprint 的位姿，期望 marker 不会被拉离机器人。
+            anchor_M_ = T_M_base * T_H_world.inverse();
+            anchor_valid_ = true;
+        }
+        // 解锁期间 anchor_M_ 冻结：marker 锚定在世界系，人体走动时远离机器人，
+        // 由 OCS2 的底盘自由度（BASE_UNLOCKED）自动把底座挪到可达的位置。
+
+        const bool state_changed = !fresh_anchor && (anchor_base_unlocked_ != base_unlocked);
+        anchor_base_unlocked_ = base_unlocked;
+        if (state_changed)
+        {
+            // 锁定 ↔ 解锁切换时目标语义变化，重新布置接管渐入，把可能的位姿差
+            // 按速度约束过渡掉（解锁瞬间本身连续，重排不产生额外滞后）。
+            applyAnchorTransition();
+        }
+
+        T_marker_H = anchor_M_ * T_H_world;
+
+        if (target_frame == marker_frame)
+        {
+            T_target_H = T_marker_H;
+            return true;
+        }
+
+        // 目标表达系与 marker 固定系不同：目标 = 目标系下同一世界位姿
+        Eigen::Isometry3d T_C_base;
+        if (!basePoseInFrame(target_frame, T_C_base))
+        {
+            return false;
+        }
+        T_target_H = T_C_base * T_M_base.inverse() * T_marker_H;
+        return true;
+    }
+
+    void WholeBodyVrTeleop::applyAnchorTransition()
+    {
+        if (!absolute_tracking_active_.load())
+        {
             return;
         }
-
-        hooks_.publish_chassis_velocity(cmd_vel);
+        // 底盘锁定状态变化后，目标语义从「相对底盘」切到「世界系锚定」（或反过来），
+        // 重新从最后一次实际下发的目标开始按速度约束过渡，避免直接跳变。
+        armAbsoluteRamps();
     }
 
 } // namespace arms_ros2_control::command

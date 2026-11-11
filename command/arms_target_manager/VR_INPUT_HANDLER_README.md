@@ -75,8 +75,10 @@ VRInputHandler是基于VRMarkerWrapper功能开发的VR输入处理器，专门�
 - `enable_vr`: 是否启用VR控制，默认true
 - `vr_update_rate`: VR更新频率，默认500.0Hz
 - `vr_follow_frame`: VR 增量参考轴系，恢复时冻结 F → C 旋转，FULL_BODY / SPLIT_BODY 均生效，默认 `base_footprint`
-- 全身绝对映射 / 底盘跟踪参数（`body_ee_source`、`absolute_*`、`capture_settle_ms`、`skeleton_*`、
-  `base_follow_*`）见 `README.md` 的参数表，均只影响全身遥操作模式内部行为
+- 全身绝对映射参数（`body_ee_source`、`absolute_*`、`capture_settle_ms`、`skeleton_*`）
+  见 `README.md` 的参数表，均只影响全身遥操作模式内部行为。
+- 底盘跟随不再由本节点做速度外环（`base_follow_*` 已删除）：由 OCS2 在 `BASE_UNLOCKED` 时
+  用底盘自由度去追世界系 marker。
 
 ### VR 目标坐标系
 
@@ -108,7 +110,8 @@ R_target_C = R_C_F * delta_R_F * inverse(R_C_F) * R_anchor_C
 VR 操作分为两套**互斥**模式：
 
 - **普通 VR 遥操作**：UPDATE/STORAGE、镜像、单臂启用/暂停、身体模式、WBC 开关、CHASSIS 遥控等；
-- **全身遥操作**（组合键 30）：只保留 FSM（11/12）、夹爪（9/10/13/14）、事件 4（全部跟踪）、事件 7（底盘跟踪）。
+- **全身遥操作**（组合键 30）：只保留 FSM（11/12）、夹爪（9/10/13/14）、事件 4（全部跟踪）、
+  事件 20（手动底盘遥控）；底盘跟随由 OCS2 负责（事件 26 解锁底盘）。
 
 以下普通模式组合键仅在控制拓扑为 **FULL_BODY**（`ocs2_wbc_controller` active）、VR 已启用、且 FSM = **OCS2** 时生效。SPLIT_BODY 下按这些组合会被忽略；**进入全身遥操作后也全部不可用**，需先按组合键 30 退出。
 
@@ -122,7 +125,7 @@ VR 操作分为两套**互斥**模式：
 4. **（全身绝对映射路径）**按 **左右握把 + 右摇杆按下**（30）进入全身遥操作模式，再按 **右摇杆短按**（4）开启「全部跟踪」（骨架绝对位姿驱动胸/头/双臂）；需要底盘跟随时按 **左摇杆按键**（7）开关「底盘跟踪」。
 5. **（普通模式）**用 **左握把 + 左摇杆四方向** 切换身体模式；用 **右握把 + 右摇杆上/下/右** 切换双臂耦合 / 底盘锁 / 参考关节。单臂启用默认用左 Y / 右 B；**左右握把 + 左 Y + 右 B**（事件 16）可把 Y/B 切到 VR 暂停语义。
 6. **（普通模式）**进入 **跟随（BODY_TRACKING）** 后，左摇杆改控腰部，右摇杆仍控右臂。
-7. **（普通模式）**需要底盘遥控时，同时按下左右摇杆进入 CHASSIS 模式。全身模式下没有手动底盘遥控，只有事件 7 的底盘跟踪。
+7. **（普通模式）**需要底盘遥控时，同时按下左右摇杆进入 CHASSIS 模式；全身模式下同样可用（`BASE_UNLOCKED` 时自动让路给 WBC）。
 
 > 以下“身体模式 / 腰部跟随 / WBC 开关 / 单臂启用 / 底盘遥控”各节均为**普通模式**行为，全身模式下不可用。
 
@@ -405,47 +408,37 @@ FULL_BODY 下右握把+右摇杆方向组合仍会锁存并清零右轴（含预
 - 标定需要全部 5 个数据源就位（3 个机器人位姿 + pelvis/spine3/head/hand×2），
   未就位时按 2 s 节流日志列出缺失项；标定完成后才真正下发目标。
 
-### 模式内开关：底盘跟踪（左摇杆按键，事件 7）
+### 模式内开关：底盘（事件 26 解锁 + OCS2 跟随；事件 20 手动遥控）
 
-左摇杆按键（松开沿，上游发事件 `7`）在全身模式内 **开/关「底盘跟踪」**，
-**独立于「全部跟踪」**（不要求后者已开）。普通模式下同一个 `7` 仍是镜像切换。
+本节点**不再做底盘速度外环**（旧的「左摇杆按键（事件 7）→ 位置外环 → `/cmd_vel`」与
+`base_follow_*` 参数已删除）。底盘跟随由 OCS2 负责：
 
-- 数据源：`/teleop/human_footprint_pose` 的水平位置 + 偏航（上游已完成低通与原点偏置）；
-- 外环（默认 50 Hz）：
+- **底盘锁定**（`BASE_LOCKED`）：marker / 目标 = 机器人底座 ⊗ 人体相对 footprint 的位姿，
+  人体原地走动不会把期望 marker 拉离机器人；
+- **底盘解锁**（事件 26 → `BASE_UNLOCKED`）：marker 锚定世界系（解锁瞬间冻结基准，不跳变），
+  人体走动时 marker 远离机器人；双腕/胸部 marker 超出机械臂工作空间时，OCS2 会自动移动底盘
+  使其到达 marker 位姿；
+- **事件 20（左右摇杆同时按下）** 在全身模式下也可用：`BASE_LOCKED` 时 VR 直发 `/cmd_vel`，
+  `BASE_UNLOCKED` 时 `publishChassisVelocity()` 让路给 WBC（不发指令）。
 
-  ```
-  Δp_human → R_z(-ψ_pelvis0) · Δp_human            # 转到接管时刻的机器人本体系 F
-  p_ref    += (p_F - p_ref) · dt/τ                 # 软参考「跑步机」
-  e        = p_F - p_ref
-  v_F      = |e| > deadband ? clamp(kp·e, vmax) : 0
-  ψ_err    = wrap(Δyaw_human - ψ_offset)           # 绝对偏航跟踪，ψ_offset 由自下发 ω 积分
-  ω        = |ψ_err| > deadband ? clamp(kpsi·ψ_err, wmax) : 0
-  → 一阶低通 + 速率限幅 → v_B = R_z(-ψ_offset)·v_F
-  ```
+目标表达系：`/left_target`、`/right_target`、`/body_target`、`/head_target` 都是无 header 的
+`geometry_msgs/Pose`，按下游 WBC 的 `base_frame_` 解释——移动底盘模型（`manipulatorModelType 1/4`）
+为 `world`，固定底盘模型为模型根（如 `base_footprint`）；RViz marker 则表达在
+`marker_fixed_frame`（通常是 `world`）。
 
-- 稳态速度增益 ≈ `base_follow_kp * base_follow_tau`（默认 0.5×2.0 = 1:1）；
-- 输出全向 `/cmd_vel`：`linear.x`、`linear.y`、`angular.z`；
-- 零速退出：关闭开关、人体 footprint 数据超时（`base_follow_data_timeout`）、离开 OCS2 / FULL_BODY、
-  `disable()` 各发一次零 Twist；
-- 与普通模式的手动底盘遥控（case 20）**不会同时生效**：进入全身模式时 CHASSIS 会被强制退出并零速；全身模式内不提供手动底盘遥控；
-- **`BASE_UNLOCKED` 时让路给 WBC**：不发 `/cmd_vel`，但把 `p_ref` 与人体同步，
-  回到 `BASE_LOCKED` 时不产生冲击。
-
-> 已知限制：`ψ_offset` 靠积分自己下发的 ω，打滑或限速饱和时会漂移；
-> 底盘跟踪关闭时**上肢目标仍然以底座为基准**，所以人走动不会再拖动手臂；但若底盘被锁定且人走得
-> 太远，手的目标仍会超出机械臂工作空间（此时应开启底盘跟踪）。
+> 锁定 ↔ 解锁切换会重新布置「接管渐入」，把目标语义变化造成的位姿差按速度约束过渡掉。
 
 ### 其余行为
 
 - 全身遥操开启期间：
-  - **只保留 FSM、夹爪、事件 4、事件 7**；`3`/`6`/`16`/`20`/`21–28` 等其他组合键不可用；
-  - **左右摇杆都不再微调末端/腰部**（thumbstickAxesCallback 在全身模式下直接早退）：
+  - **只保留 FSM、夹爪、事件 4、事件 20、事件 26**；`3`/`6`/`16`/`21–28` 等其他组合键不可用；
+  - **左右摇杆不再微调末端/腰部**（thumbstickAxesCallback 在全身模式下只处理事件 20 的底盘轴）：
     本模式下双臂末端与腰部目标全部由骨架绝对映射给出，若容许摇杆累加偏移，
     会表现为“拨右摇杆就推着右臂走”。进入模式时会把已有摇杆偏移清零；
   - 进入模式时强制关闭镜像并退出 CHASSIS（零速），退出后普通模式从 STORAGE 开始，
     镜像保持关闭，需重新按事件 7 开启。
 - 数据失效（骨架断流/关节非法）时目标保持不动（冻结，不清零）；
-  离开 OCS2（或拓扑变为 SPLIT_BODY）时**整个全身遥操作模式自动退出**（「全部跟踪」「底盘跟踪」一并关闭），
+  离开 OCS2（或拓扑变为 SPLIT_BODY）时**整个全身遥操作模式自动退出**（「全部跟踪」一并关闭），
   回到 OCS2 后需重新按组合键恢复。
 - 依赖头显端开启全身追踪（Whole Body Motion Tracking + 足部追踪器）：
   `/teleop/body_*` 话题不存在时开关仍可切换，但不会有任何目标更新（日志提示）。

@@ -97,20 +97,6 @@ int main(int argc, char** argv)
         node->declare_parameter("absolute_ramp_max_duration", 3.0);
     absolute_options.pose_ramp_resume_gap_sec =
         node->declare_parameter("absolute_ramp_resume_gap", 0.3);
-    absolute_options.base_follow_enable = node->declare_parameter("base_follow_enable", true);
-    absolute_options.base_follow_rate_hz = node->declare_parameter("base_follow_rate", 50.0);
-    absolute_options.base_follow_tau = node->declare_parameter("base_follow_tau", 2.0);
-    absolute_options.base_follow_tau_yaw = node->declare_parameter("base_follow_tau_yaw", 2.0);
-    absolute_options.base_follow_kp = node->declare_parameter("base_follow_kp", 0.5);
-    absolute_options.base_follow_kpsi = node->declare_parameter("base_follow_kpsi", 1.0);
-    absolute_options.base_follow_deadband = node->declare_parameter("base_follow_deadband", 0.02);
-    absolute_options.base_follow_yaw_deadband = node->declare_parameter("base_follow_yaw_deadband", 0.05);
-    absolute_options.base_vmax = node->declare_parameter("base_vmax", 0.4);
-    absolute_options.base_wmax = node->declare_parameter("base_wmax", 0.8);
-    absolute_options.base_acc_max = node->declare_parameter("base_acc_max", 1.0);
-    absolute_options.base_alpha_max = node->declare_parameter("base_alpha_max", 2.0);
-    absolute_options.base_cmd_tau = node->declare_parameter("base_cmd_tau", 0.2);
-    absolute_options.base_follow_data_timeout = node->declare_parameter("base_follow_data_timeout", 0.2);
     bool enable_movej_cartesian_markers = node->declare_parameter(
         "enable_movej_cartesian_markers",
 #ifdef HAS_LINA_PLANNING

@@ -173,9 +173,6 @@ namespace arms_ros2_control::command
             "head_current_pose", 10,
             [this](geometry_msgs::msg::PoseStamped::ConstSharedPtr msg) { robotHeadPoseCallback(msg); });
         pub_head_target_ = node_->create_publisher<geometry_msgs::msg::Pose>("head_target", 10);
-        // 胸部目标：与头部/双臂同一通道直发（目标表达在机器人底座系，无 header）；
-        // marker 显示另走一层坐标转换。
-        pub_body_target_ = node_->create_publisher<geometry_msgs::msg::Pose>("body_target", 1);
 
         // 创建按钮事件订阅器（Int32类型）
         auto controllerStateCallback = [this](const std_msgs::msg::Int32::SharedPtr msg)
@@ -370,18 +367,22 @@ namespace arms_ros2_control::command
         hooks.publish_mode_command = [this](const std::string& command) {
             publishHumanoidModeCommand(command);
         };
-        hooks.publish_chassis_velocity = [this](const geometry_msgs::msg::Twist& velocity) {
-            publishChassisVelocity(velocity);
-        };
-        hooks.wbc_owns_chassis_velocity = [this]() { return wbcOwnsChassisVelocity(); };
 
         hooks.robot_head_pose = [this](geometry_msgs::msg::PoseStamped& pose) {
             return robotHeadPose(pose);
         };
         hooks.ee_frame_id = [this]() { return ee_frame_id_; };
         hooks.ee_frame_ready = [this]() { return ee_frame_id_initialized_; };
+        hooks.control_frame = [this]() {
+            return target_manager_ ? target_manager_->getControlBaseFrame() : std::string();
+        };
         hooks.marker_frame = [this]() {
             return target_manager_ ? target_manager_->getMarkerFixedFrame() : std::string();
+        };
+        hooks.base_unlocked = [this]() {
+            return target_manager_ &&
+                   target_manager_->getCurrentBaseState() ==
+                       arms_ros2_control_msgs::msg::WbcCurrentState::BASE_UNLOCKED;
         };
         hooks.transform_pose = [this](
                                    const std::string& label,
@@ -401,7 +402,7 @@ namespace arms_ros2_control::command
         hooks.resume_normal_mode_state = [this]() { resumeNormalModeState(); };
 
         whole_body_ = std::make_unique<WholeBodyVrTeleop>(
-            node_, target_manager_, pub_head_target_, pub_body_target_,
+            node_, target_manager_, pub_head_target_,
             vr_follow_frame_, absolute_options, std::move(hooks));
     }
 
@@ -2685,11 +2686,21 @@ namespace arms_ros2_control::command
         right_grip_active_.store(rightGripNow);
 
         // 全身模式：只同步轴值与握把 bit，不跑握把短按/方向抑制/WBC pending/
-        // 底盘/腰部/末端任何普通模式逻辑。
+        // 腰部/末端任何普通模式逻辑；事件 20 的手动底盘遥控仍可用。
         if (isWholeBodyActive())
         {
             // FSM 可能由外部来源切走，摇杆消息是高频入口，这里顺带做一次兜底退出
             whole_body_->onFsmStateChanged();
+            if (isWholeBodyActive() && chassis_mode_.load())
+            {
+                // 全身模式下右握把属于 WBC/全身组合键的修饰符，不作为腰部修饰符；
+                // 按住时屏蔽右摇杆，避免组合键动作同时驱动底盘转向。
+                if (right_grip_active_.load())
+                {
+                    right_thumbstick_axes_.setZero();
+                }
+                processChassisAxes();
+            }
             return;
         }
 
@@ -3894,7 +3905,7 @@ namespace arms_ros2_control::command
 
     void VRInputHandler::processChassisAxes()
     {
-        // 普通模式专用：全身模式的手动底盘遥控已移除，底盘跟踪由 WholeBodyVrTeleop 独占。
+        // 普通模式与全身模式共用的事件 20 手动底盘遥控（全身模式的底盘跟随由 OCS2 负责）。
         // VR 手柄轴值约定（Pico）：Y 轴往前推是负数，与机器人"正数=向前/向右"相反，
         // 因此 chassis 模式下对四个轴值统一取负，使方向语义与 joystick_teleop.cpp 对齐。
         // 非 FULL_BODY 下按住右握把可作为腰部控制修饰符；
@@ -4126,11 +4137,6 @@ namespace arms_ros2_control::command
     bool VRInputHandler::isAbsoluteTrackingActive() const
     {
         return whole_body_ && whole_body_->absoluteTrackingActive();
-    }
-
-    bool VRInputHandler::isBaseTrackingEnabled() const
-    {
-        return whole_body_ && whole_body_->baseTrackingActive();
     }
 
     void VRInputHandler::toggleWholeBodyMode()
@@ -4469,9 +4475,16 @@ namespace arms_ros2_control::command
             return;
         }
 
-        // ---- 全身模式：只认 4（全部跟踪）与 7（底盘跟踪） ----
+        // ---- 全身模式：只认 4（全部跟踪）与 20（手动底盘遥控） ----
         if (isWholeBodyActive())
         {
+            if (code == 20)
+            {
+                // 与普通模式一致：左摇杆→底盘 XY，右摇杆→转向；
+                // BASE_UNLOCKED 时由 publishChassisVelocity 让路给 WBC。
+                handleNormalButtonEvent(code);
+                return;
+            }
             whole_body_->handleButtonEvent(code);
             return;
         }
