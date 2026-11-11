@@ -34,12 +34,14 @@ namespace arms_ros2_control::command
     class WholeBodyVrTeleop;
 
     /**
-     * 全身骨架绝对位姿映射与底盘跟随的可调参数。
+     * 全身骨架绝对位姿映射的可调参数。
      *
      * 这些开关只在「全身遥操作模式」（case 30 已开启）内部生效：
      *   - 右摇杆短按（事件 4） = 开/关「全部跟踪」→ 胸/头/双臂末端改为 /teleop/body_* 绝对位姿映射
-     *   - 左摇杆按键（事件 7） = 开/关「底盘跟踪」→ 人体 footprint 经位置外环转成 /cmd_vel
-     * 非全身模式下的一切既有行为（UPDATE/STORAGE、摇杆微调、镜像、case 20 底盘模式等）不受影响。
+     * 底盘跟随不由本节点做速度外环：由 OCS2 负责
+     * （事件 26 解锁底盘后，MPC 用底盘自由度去追世界系 marker）。
+     * 非全身模式下的一切既有行为（UPDATE/STORAGE、摇杆微调、镜像等）不受影响；
+     * 事件 20 的手动底盘遥控在两种模式下都可用。
      */
     struct AbsoluteTeleopOptions
     {
@@ -93,22 +95,6 @@ namespace arms_ros2_control::command
         double pose_ramp_max_duration_sec{3.0};       // [s]
         // 目标输出中断超过该时长后再恢复（如骨架超时冻结）时，重新渐入 [s]
         double pose_ramp_resume_gap_sec{0.3};
-
-        // ---- 底盘跟踪（位置外环 → /cmd_vel） ----
-        bool base_follow_enable{true};
-        double base_follow_rate_hz{50.0};
-        double base_follow_tau{2.0};
-        double base_follow_tau_yaw{2.0};
-        double base_follow_kp{0.8};
-        double base_follow_kpsi{1.0};
-        double base_follow_deadband{0.02};
-        double base_follow_yaw_deadband{0.05};
-        double base_vmax{0.4};
-        double base_wmax{0.8};
-        double base_acc_max{1.0};
-        double base_alpha_max{2.0};
-        double base_cmd_tau{0.2};
-        double base_follow_data_timeout{0.2};
     };
 
     /**
@@ -226,11 +212,6 @@ namespace arms_ros2_control::command
          * 「全部跟踪」是否已开启（全身模式内右摇杆短按 toggle）。
          */
         bool isAbsoluteTrackingActive() const;
-
-        /**
-         * 「底盘跟踪」是否已开启（全身模式内左摇杆按键 toggle）。
-         */
-        bool isBaseTrackingEnabled() const;
 
         /**
          * FSM命令回调函数（用于跟踪FSM状态）
@@ -796,8 +777,6 @@ namespace arms_ros2_control::command
         // All callbacks use the node's default mutually-exclusive callback group.
         rclcpp::Subscription<geometry_msgs::msg::PoseStamped>::SharedPtr sub_robot_head_;
         rclcpp::Publisher<geometry_msgs::msg::Pose>::SharedPtr pub_head_target_;
-        // 全身遥操作胸部目标：与 head/left/right 同一通道直发（机器人底座系，无 header）
-        rclcpp::Publisher<geometry_msgs::msg::Pose>::SharedPtr pub_body_target_;
         geometry_msgs::msg::PoseStamped robot_head_pose_;
         bool has_robot_head_pose_{false};
         bool has_vr_head_pose_{false};

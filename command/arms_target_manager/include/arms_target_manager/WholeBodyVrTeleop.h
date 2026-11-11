@@ -8,10 +8,11 @@
 //   - /teleop/human_footprint_pose
 // 并且只提供以下用户功能：
 //   - case 4：开/关「全部跟踪」（骨架绝对位姿映射）
-//   - case 7：开/关「底盘跟踪」（人体 footprint → 位置外环 → /cmd_vel）
 //   - case 30：退出全身模式
-// FSM（11/12）与夹爪（9/10/13/14 + /teleop/trigger_values）由 VRInputHandler
-// 作为共享功能处理，本类不接触。
+// FSM（11/12）、夹爪（9/10/13/14 + /teleop/trigger_values）与底盘遥控（case 20）
+// 由 VRInputHandler 作为共享功能处理，本类不接触。
+//
+// 底盘跟随由 OCS2 负责：事件 26 解锁底盘后，mpc 用底盘自由度去追世界系 marker。
 //
 #pragma once
 
@@ -52,8 +53,9 @@ namespace arms_ros2_control::command
         /**
          * 与 VRInputHandler 的唯一交互面。
          *
-         * 这里只暴露 FSM/使能/拓扑查询、目标发布与 WBC 安全层、以及普通模式
-         * 清场/恢复；不暴露镜像、UPDATE/STORAGE、底盘遥控、WBC 组合键等普通模式功能。
+         * 这里只暴露 FSM/使能/拓扑查询、目标发布与 WBC 安全层、坐标系查询与
+         * 普通模式清场/恢复；不暴露镜像、UPDATE/STORAGE、底盘遥控、WBC 组合键等
+         * 普通模式功能。
          */
         struct Hooks
         {
@@ -77,12 +79,14 @@ namespace arms_ros2_control::command
             std::function<void()> reset_stale_catch_up_ramp;
 
             std::function<void(const std::string&)> publish_mode_command;
-            std::function<void(const geometry_msgs::msg::Twist&)> publish_chassis_velocity;
-            std::function<bool()> wbc_owns_chassis_velocity;
 
             std::function<bool(geometry_msgs::msg::PoseStamped&)> robot_head_pose;
             std::function<std::string()> ee_frame_id;
+            /** 目标表达系：下游 WBC 的 base_frame_（移动底盘=world，固定底盘=baseFrame）。 */
+            std::function<std::string()> control_frame;
+            /** RViz 交互 marker 的固定坐标系（通常是 world）。 */
             std::function<std::string()> marker_frame;
+            std::function<bool()> base_unlocked;
             std::function<bool()> ee_frame_ready;
             std::function<bool(const std::string& label,
                                const std::string& source_frame,
@@ -101,7 +105,6 @@ namespace arms_ros2_control::command
             rclcpp::Node::SharedPtr node,
             ArmsTargetManager* target_manager,
             rclcpp::Publisher<geometry_msgs::msg::Pose>::SharedPtr pub_head_target,
-            rclcpp::Publisher<geometry_msgs::msg::Pose>::SharedPtr pub_body_target,
             const std::string& vr_follow_frame,
             const AbsoluteTeleopOptions& options,
             Hooks hooks);
@@ -110,12 +113,11 @@ namespace arms_ros2_control::command
 
         bool active() const { return whole_body_teleop_active_.load(); }
         bool absoluteTrackingActive() const { return absolute_tracking_active_.load(); }
-        bool baseTrackingActive() const { return base_tracking_enabled_.load(); }
 
         /** case 30：进入/退出全身遥操作模式（普通模式下进入）。 */
         void toggleMode();
 
-        /** 全身模式内的事件入口：只认 4（全部跟踪）与 7（底盘跟踪）。 */
+        /** 全身模式内的事件入口：只认 4（全部跟踪）。 */
         void handleButtonEvent(int32_t code);
 
         /** 权威 FSM 变化：离开 OCS2 时自动退出整个模式。 */
@@ -190,6 +192,30 @@ namespace arms_ros2_control::command
         void buildDeformedSkeleton(const Eigen::Isometry3d& T_H_world, DeformedSkeleton& out);
         bool skeletonJointFresh(const std::chrono::steady_clock::time_point& stamp) const;
 
+        // ---- 目标/显示坐标系与锚定 ----
+        /**
+         * 人体 footprint 系 H → 目标表达系 / marker 固定系 的锚定变换。
+         *
+         * - 底盘锁定（OCS2 BASE_LOCKED / 未解锁底盘）：锚定随机器人底座实时刷新，
+         *   T = T_frame_base(t) · T_H_world(t)⁻¹，于是「目标 = 底座 ⊗ 人体相对footprint位姿」。
+         *   人体走动只改变人体相对自身 footprint 的位姿，不会把期望 marker 拉离机器人。
+         * - 底盘解锁（事件 26 → BASE_UNLOCKED）：锚定冻结在解锁瞬间，
+         *   marker 因此锚定在世界系并随人体走动远离机器人，由 OCS2 驱动底盘跟随。
+         *   冻结保证解锁瞬间 marker 不跳变（人体相对解锁时刻的位移从 0 开始）。
+         *
+         * @param T_H_world   当前人体 footprint 位姿
+         * @param T_target_H  人体 footprint 系 → 目标表达系（/left_target 等无 header 的 Pose）
+         * @param T_marker_H  人体 footprint 系 → marker 固定系（RViz 交互 marker）
+         */
+        bool resolveAnchorTransforms(const Eigen::Isometry3d& T_H_world,
+                                     Eigen::Isometry3d& T_target_H,
+                                     Eigen::Isometry3d& T_marker_H);
+        /** 某坐标系下机器人底座（vr_follow_frame_）的位姿；同名时直接返回单位阵。 */
+        bool basePoseInFrame(const std::string& frame, Eigen::Isometry3d& T_frame_base);
+        std::string controlFrame() const;
+        std::string markerFrame() const;
+        void applyAnchorTransition();
+
         /**
          * 当前缺失或已超时的骨架数据源列表（空列表表示全身骨架齐全）。
          * 全身遥操作的所有目标都来自这些话题，缺任何一项都无法工作，
@@ -201,18 +227,10 @@ namespace arms_ros2_control::command
         void armAbsoluteRamps();
         void resetAbsoluteRamps();
 
-        // ---- 底盘跟踪 ----
-        void toggleBaseTracking();
-        bool baseFollowReady() const;
-        void captureBaseFollowBase();
-        void resetBaseFollow();
-        void updateBaseFollow();
-
         // ---- 依赖 ----
         rclcpp::Node::SharedPtr node_;
         ArmsTargetManager* target_manager_;
         rclcpp::Publisher<geometry_msgs::msg::Pose>::SharedPtr pub_head_target_;
-        rclcpp::Publisher<geometry_msgs::msg::Pose>::SharedPtr pub_body_target_;
         std::string vr_follow_frame_;
         AbsoluteTeleopOptions absolute_options_;
         Hooks hooks_;
@@ -220,7 +238,12 @@ namespace arms_ros2_control::command
         // ---- 模式状态 ----
         std::atomic<bool> whole_body_teleop_active_{false};
         std::atomic<bool> absolute_tracking_active_{false};
-        std::atomic<bool> base_tracking_enabled_{false};
+
+        // ---- 目标锚定（底盘锁定 = 跟随机器人；解锁 = 冻结在世界系）----
+        bool anchor_valid_{false};
+        bool anchor_base_unlocked_{false};
+        /** T_frame_Hworld：VR/机器人世界系 → marker 固定系（锁定期间实时刷新）。 */
+        Eigen::Isometry3d anchor_M_{Eigen::Isometry3d::Identity()};
 
         // ---- 全身骨架缓存（机器人世界坐标系） ----
         Eigen::Vector3d body_pelvis_position_ = Eigen::Vector3d::Zero();
@@ -294,19 +317,6 @@ namespace arms_ros2_control::command
         Eigen::Vector3d last_body_target_position_ = Eigen::Vector3d::Zero();
         Eigen::Quaterniond last_body_target_orientation_ = Eigen::Quaterniond::Identity();
         std::chrono::steady_clock::time_point last_body_target_stamp_{};
-
-        // ---- 底盘跟踪状态 ----
-        bool base_follow_active_{false};
-        Eigen::Vector3d base_follow_footprint_ref_ = Eigen::Vector3d::Zero();
-        double base_follow_yaw_ref_{0.0};
-        double base_follow_yaw_offset_{0.0};
-        Eigen::Vector2d base_follow_p_ref_ = Eigen::Vector2d::Zero();
-        Eigen::Vector2d base_follow_v_cmd_ = Eigen::Vector2d::Zero();
-        double base_follow_w_cmd_{0.0};
-        Eigen::Vector2d base_follow_v_out_ = Eigen::Vector2d::Zero();
-        double base_follow_w_out_{0.0};
-        std::chrono::steady_clock::time_point base_follow_last_tick_{};
-        rclcpp::TimerBase::SharedPtr base_follow_timer_;
 
         // ---- ROS 订阅 ----
         rclcpp::Subscription<geometry_msgs::msg::Pose>::SharedPtr sub_body_pelvis_;

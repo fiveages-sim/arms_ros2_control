@@ -298,55 +298,42 @@ $$
 - $\Delta T_w$：平移增益 $s_{head}$（默认 1.0，保持现有 1:1 手感）；旋转仅保留机器人头 2 关节可达分量（yaw/pitch），分轴限幅（超出部分丢弃）。
 - 门控沿用现状：FULL_BODY + UPDATE + FSM=OCS2 + `head_state=HEAD_TRACKING`。
 
-### 3.5 底盘（v1 已实现：位置外环 → `/cmd_vel`）
+### 3.5 底盘（v2：由 OCS2 解锁底盘负责跟随）
 
-> **已实现**：全身遥操作模式内**左摇杆按键**（上游事件 7，普通模式下为镜像切换）开/关「底盘跟踪」，独立于「全部跟踪」。
-> 实现要点（与下面公式的差异已标注）：
-> - 坐标系：接管时刻冻结 `R_{F←VR} = R_z(-ψ_pelvis(t_0))`（F = 接管时刻机器人本体系），
->   机器人自身转向用**积分自己下发的 ω** 补偿（不依赖外部 TF）；
-> - 偏航：**绝对跟踪** `e_ψ = wrap(Δψ_human − ψ_offset)`、`ω = clamp(kψ·e_ψ, wmax)`，
->   不使用软参考（因此 `base_follow_tau_yaw` 目前为预留参数）；
-> - 平移：软参考「跑步机」（下面公式），稳态速度增益 ≈ `base_follow_kp · base_follow_tau`；
-> - 输出全向 `linear.x / linear.y / angular.z`，共享现有 VR 让路规则：
->   **仅 `BASE_LOCKED` 下发**，`BASE_UNLOCKED` 时冻结跟随并把软参考与人体同步（不报错）；
-> - 普通模式的手动底盘遥控（case 20）在全身模式下不可用；进入全身模式时 CHASSIS 会被强制退出并零速。
+> **已实现**：本节点**不再自己做底盘速度外环**（旧的「左摇杆按键（事件 7）→ 位置外环 → `/cmd_vel`」
+> 与全部 `base_follow_*` 参数已删除）。底盘跟随完全交给 OCS2：
+> 事件 26（右握把 + 右摇杆向下）解锁底盘后，MPC 用底盘自由度把双腕/胸部送到世界系 marker，
+> 双腕 marker 超出机械臂工作空间时底盘会自动移动（胸部 marker 同理）。
 
-人体 footprint（`/teleop/human_footprint_pose`：骨盆地面投影 + 双踝 yaw + 双足地面 z）提供水平位置 $p^h_p$ 与偏航 $\psi_h = \mathrm{yaw}(R^h_{H})$。采用**位置外环 → 速度**方案（不需要 MPC 改动即可闭环）：
+目标/marker 的坐标系与锚定：
 
-**软参考（"跑步机"机制，防止用户走出追踪区）**：
+- 目标（`/left_target`、`/right_target`、`/body_target`、`/head_target` 均为无 header 的
+  `geometry_msgs/Pose`）表达在下游 WBC 的 `base_frame_`：
+  - 移动底盘模型（`manipulatorModelType = 1/4`）→ `world`（launch 会把
+    `control_base_frame` / `marker_fixed_frame` 自动覆盖成 `world`）；
+  - 固定底盘模型（`manipulatorModelType = 0`）→ 模型根（如 `base_footprint`）。
+- RViz marker 表达在 `marker_fixed_frame`（通常是 `world`）。
 
-$$
-\dot p_{ref} = (p^h_p - p_{ref})/\tau,\qquad
-\dot\psi_{ref} = \mathrm{wrap}(\psi_h - \psi_{ref})/\tau_\psi
-\qquad (\tau \approx 2.0\,\mathrm{s})
-$$
-
-**误差与速度**：
+**锚定规则**（`WholeBodyVrTeleop::resolveAnchorTransforms`）。记人体 footprint 位姿 $T^w_H(t)$、
+机器人底座在 marker 固定系下的位姿 $T^M_B(t)$，锚定变换
 
 $$
-e = p^h_p - p_{ref},\qquad e_\psi = \mathrm{wrap}(\psi_h - \psi_{ref})
+T^M_{\text{anchor}} = \begin{cases}
+T^M_B(t)\,{T^w_H(t)}^{-1}, & \text{底盘锁定（每帧刷新）} \\
+T^M_B(t_0)\,{T^w_H(t_0)}^{-1}, & \text{底盘解锁（冻结在解锁瞬间 } t_0\text{）}
+\end{cases}
 $$
 
-$$
-v^{W} = \begin{cases} \mathrm{clamp}(K_p\,e,\; v_{max}), & \|e\| > \delta \\ 0, & \text{否则} \end{cases}
-\qquad
-\omega = \mathrm{clamp}(K_\psi\,e_\psi,\; \omega_{max})
-$$
+于是 marker / 目标为 $T^M_{\text{anchor}}\,T^w_H(t)\,m_H$（$m_H$ = 人体各部位相对人体 footprint 的位姿）：
 
-$$
-v^{B} = R_z(\psi_{base})^{\top} v^{W}
-$$
+- **底盘锁定**：等价于「底座 ⊗ 人体相对 footprint 的位姿」。人体原地走动只改变其相对自身
+  footprint 的位姿，期望 marker 始终围绕机器人，不会远离；
+- **底盘解锁**：锚定冻结在解锁瞬间（解锁帧连续，不跳变），人体走动时 marker 随人体在世界里
+  远离机器人，OCS2 把底盘挪到可达位置；再次锁定后锚定恢复实时刷新。
+- 锁定 ↔ 解锁切换时重新布置「接管渐入」，把可能的位姿差按速度约束过渡掉。
 
-- 输出 `/cmd_vel`：差速底盘 `linear.x = v^B_x`、`angular.z = ω`；全向底盘加 `linear.y = v^B_y`。
-- 一阶低通（τ ≈ 0.2 s）+ 速率限幅 + 零速退出（失能瞬间发一次 0，沿用现有清零逻辑）。
-- **使能策略**（需确认）：建议显式使能（组合键/状态），仅 `FSM=OCS2` 下可用；`BASE_UNLOCKED` 时与 WBC 底盘控制权冲突，需要与 WBC 的 `/cmd_vel` 让路规则统一（短期：仅在 `BASE_LOCKED` 下允许跟随；长期：接入 MPC base 目标）。
-- 已知限制：骨盆在行走中的上下起伏与左右摆动不进映射（低通/只取水平分量）；站立转身时臀部后摆会被误读为位移——τ、死区、增益需要在真机上调。
-
-**MPC 接入草案**（当前未实现）：
-
-- wheel-humanoid 的 state 前 3 维已是 base `[x, y, yaw]`；需要把 teleop 目标作为 **base 段参考轨迹**加入（`WheelHumanoidTargetNode` / `PoseBasedReferenceManager` 的布局扩展），并在 cost 中加 base tracking 权重。
-- 接口草案：`base_target`（`geometry_msgs/PoseStamped`，frame = world/odom），或直接由 reference manager 消费外环输出。
-- 接入后可去掉 τ 软参考或保留为"期望轨迹生成器"。
+事件 20（左右摇杆同时按下）的手动底盘遥控在全身模式下同样可用：`BASE_UNLOCKED` 时
+`publishChassisVelocity()` 让路给 WBC（不发 `/cmd_vel`），`BASE_LOCKED` 时照常直发。
 
 ## 4. 任务依赖与优先级
 
@@ -367,14 +354,14 @@ $$
 ## 5. 状态机、门控与安全
 
 沿用**普通模式**现有语义：STORAGE/UPDATE、右摇杆接管、单臂禁用/rebase、镜像、暂停、事件 16 语义锁存。
-**全身遥操作模式内**：右摇杆短按（事件 4）= 「全部跟踪」开关、
-左摇杆按键（事件 7）= 「底盘跟踪」开关；其余普通模式组合键全部不可用（只共享 FSM 与夹爪）。
+**全身遥操作模式内**：右摇杆短按（事件 4）= 「全部跟踪」开关，事件 20 = 手动底盘遥控；
+底盘跟随由 OCS2 负责（事件 26 解锁底盘）；其余普通模式组合键不可用（只共享 FSM 与夹爪）。
 
 **模式的自动退出（与普通遥操作一致）**：全身遥操作是「OCS2 会话级」开关，权威 FSM
 （`ArmsTargetManager`）一离开 OCS2（HOLD / HOME / MOVEJ，含控制器侧异常自动回 HOLD）就退出
-整个模式，「全部跟踪」与「底盘跟踪」一并关闭（WBC 保持当前目标），回到 OCS2 后需重新按
-组合键开启；控制拓扑不再是 FULL_BODY 时同理。判定同时放在 FSM 命令回调、按键/摇杆入口与
-50 Hz 底盘外环里，因此非 FSM 命令来源的切换也能触发。
+整个模式，「全部跟踪」关闭（WBC 保持当前目标），回到 OCS2 后需重新按
+组合键开启；控制拓扑不再是 FULL_BODY 时同理。判定同时放在 FSM 命令回调与按键/摇杆入口，
+因此非 FSM 命令来源的切换也能触发。
 
 逐任务门控与失效行为（已实现）：
 
@@ -384,7 +371,7 @@ $$
 | 肘 | 末端任务有效 + 肘关节几何合格 | 冻结（**本版未实现**） |
 | 胸 | WBC `bodyTrackingEE` + `BODY_TRACKING` + 全部跟踪 | 冻结（不发 `body_target`） |
 | 头 | `HEAD_TRACKING` + 全部跟踪 | 冻结 |
-| 底盘 | 底盘跟踪开 + FSM=OCS2 + 人体 footprint 数据未超时；`BASE_UNLOCKED` 让路 | 发一次 0 后停止 |
+| 底盘 | —（由 OCS2 在 `BASE_UNLOCKED` 时用底盘自由度跟随世界系 marker） | — |
 
 所有上肢任务共用「人体根 H」前置条件：`has_body_pelvis_pose_` 且骨盆数据未超时；
 H 无效（看门狗超时）时上肢目标一并冻结。
@@ -454,17 +441,7 @@ H 无效（看门狗超时）时上肢目标一并冻结。
 | `body_src_to_ee_rpy_deg` / `head_src_to_ee_rpy_deg` | [0,0,0] | 胸部/头部源→目标固定旋转偏置（度） |
 | `absolute_filter_alpha` | 0.3 | 绝对目标一阶低通系数 |
 | `capture_settle_ms` | 200 | 标定前稳定窗口 (ms) |
-| `base_follow_enable` | true | 底盘跟踪总开关（左摇杆按键） |
-| `base_follow_rate` | 50.0 | 外环频率 (Hz) |
-| `base_follow_tau` | 2.0 | 软参考时间常数 (s) |
-| `base_follow_kp` | 0.5 | 位置增益（稳态增益 ≈ kp·tau = 1.0） |
-| `base_follow_kpsi` | 1.0 | 偏航增益（绝对跟踪） |
-| `base_follow_deadband` / `base_follow_yaw_deadband` | 0.02 / 0.05 | 死区 (m / rad) |
-| `base_vmax` / `base_wmax` | 0.4 / 0.8 | 速度限幅 (m/s / rad/s) |
-| `base_acc_max` / `base_alpha_max` | 1.0 / 2.0 | 加速度限幅 (m/s² / rad/s²) |
-| `base_cmd_tau` | 0.2 | 指令低通 (s) |
-| `base_follow_data_timeout` | 0.2 | 人体 footprint 数据看门狗 (s) |
-| `base_follow_tau_yaw` | 2.0 | **预留**（偏航为绝对跟踪，不使用软参考） |
+| ~~`base_follow_*` / `base_vmax` / `base_cmd_tau` 等~~ | — | **已删除**：底盘跟随改由 OCS2 解锁底盘实现，本节点不再做速度外环 |
 | `absolute_ramp_enable` | true | 接管渐入总开关（关掉即旧行为） |
 | `absolute_ramp_max_linear_velocity` | 0.15 | 过渡段线速度上限 (m/s) |
 | `absolute_ramp_max_angular_velocity` | 0.4 | 过渡段角速度上限 (rad/s) |
@@ -472,7 +449,7 @@ H 无效（看门狗超时）时上肢目标一并冻结。
 | `absolute_ramp_resume_gap` | 0.3 | 输出中断超过该时长后重新渐入 (s) |
 
 上游 `xr_target_node`：右摇杆只有松开沿短按事件 `4`（长按与事件 `31` 已删除）。
-全身模式下事件 `7` 由下游重解释为底盘跟踪；普通模式下仍为镜像切换。
+全身模式下事件 `20` 为手动底盘遥控、事件 `26` 为底盘解锁/锁定；普通模式下 `7` 仍为镜像切换。
 
 ## 8. 仿真验证清单
 
@@ -497,8 +474,8 @@ H 无效（看门狗超时）时上肢目标一并冻结。
 
 1. ~~骨架频率/延迟是否足以驱动末端~~ → **已定**：双臂末端改为骨架绝对映射（`body_*_hand_pose`），
    手柄仅保留非全身模式的相对增量路径与 `enable()` / 尺度校准触发。
-2. ~~底盘跟随的使能方式与 `BASE_UNLOCKED` 冲突策略~~ → **已定**：全身模式内**左摇杆按键**开关；
-   `BASE_UNLOCKED` 时冻结跟随、软参考与人体同步、让路给 WBC。
+2. ~~底盘跟随的使能方式与 `BASE_UNLOCKED` 冲突策略~~ → **已定**：底盘跟随由 OCS2 解锁底盘实现
+   （事件 26）；本节点旧的「位置外环 → `/cmd_vel`」与 `base_follow_*` 参数已删除。
 3. ~~胸部是否需要位置映射~~ → **已定**：位置取沿脊柱轴的锚点（λ=1 即骨盆位置），roll 丢弃。
 4. 肘任务 MPC 权重、以及是否先做可视化验证（**仍未实现**）。
 5. PICO 骨架是否提供逐关节有效位/速度（当前用「手–脊柱距离几何一致性 + 超时看门狗」替代）。
