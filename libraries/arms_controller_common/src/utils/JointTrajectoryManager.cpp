@@ -4,6 +4,7 @@
 #include "arms_controller_common/utils/JointTrajectoryManager.h"
 #include <algorithm>
 #include <cmath>
+#include <numeric>
 #include <utility>
 #include <stdexcept>
 
@@ -711,6 +712,7 @@ namespace arms_controller_common
         timed_evaluation_ready_ = false;
 #ifdef HAS_LINA_PLANNING
         evaluation_planner_.reset();
+        timed_sections_.clear();
 #endif
 
         mode_ = TrajectoryMode::NONE;
@@ -1024,6 +1026,29 @@ namespace arms_controller_common
 #ifdef HAS_LINA_PLANNING
     std::vector<double> JointTrajectoryManager::computeMultiNodeAdvanced()
     {
+        if (!timed_sections_.empty())
+        {
+            double remaining = period_;
+            std::vector<double> result = waypoints_.back();
+            while (remaining > 0.0 && current_segment_ < timed_sections_.size())
+            {
+                auto& section = *timed_sections_[current_segment_];
+                const double step = std::min(remaining,
+                    segment_durations_[current_segment_] - segment_progress_[current_segment_]);
+                result = section.getNextPoint(step);
+                last_velocities_ = section.lastVelocities();
+                last_accelerations_ = section.lastAccelerations();
+                segment_progress_[current_segment_] += step;
+                remaining -= step;
+                if (segment_progress_[current_segment_] >= segment_durations_[current_segment_] - 1e-12)
+                    ++current_segment_;
+                else break;
+            }
+            completed_ = current_segment_ == timed_sections_.size();
+            percent_ = completed_ ? 1.0 : std::min(1.0,
+                std::accumulate(segment_progress_.begin(), segment_progress_.end(), 0.0) / planningTime_);
+            return result;
+        }
         if (!multi_node_planner_)
         {
             RCLCPP_ERROR(logger_, "Multi-node planner not initialized for DOUBLES interpolation");
@@ -1216,8 +1241,13 @@ namespace arms_controller_common
 
     bool JointTrajectoryManager::planSingleTarget(
         const std::vector<double>& start_pos,
-        const arms_ros2_control_msgs::msg::JointWaypoint& waypoint)
+        const arms_ros2_control_msgs::msg::JointWaypoint& waypoint,
+        bool time_mode, double segment_duration)
     {
+        if (time_mode && (!std::isfinite(segment_duration) || segment_duration <= 0.0)) return false;
+        if (time_mode && areJointPositionsSame(start_pos, waypoint.position))
+            return initSingleNode(start_pos, waypoint.position, segment_duration,
+                                  InterpolationType::LINEAR, controller_frequency_, tanh_scale_);
         clearPlan();
 #ifdef HAS_LINA_PLANNING
         interpolation_type_ = InterpolationType::DOUBLES;
@@ -1235,7 +1265,7 @@ namespace arms_controller_common
 
         // 规划参数
         planning::TrajectoryParameter param;
-        if (!getTrajectoryParameter(waypoint, param))
+        if (!getTrajectoryParameter(waypoint, param, time_mode, segment_duration))
         {
             RCLCPP_ERROR(logger_, "Failed to resolve joint trajectory parameters for single target");
             return false;
@@ -1279,6 +1309,8 @@ namespace arms_controller_common
 #else
         (void)start_pos;
         (void)waypoint;
+        (void)time_mode;
+        (void)segment_duration;
         RCLCPP_ERROR(logger_, "lina_planning not available");
         return false;
 #endif
@@ -1286,12 +1318,17 @@ namespace arms_controller_common
 
     bool JointTrajectoryManager::planMultiTrajectory(const std::vector<double>& start_pos,
                                                      const std::vector<arms_ros2_control_msgs::msg::JointWaypoint>&
-                                                     waypoints)
+                                                     waypoints,
+                                                     bool time_mode, const std::vector<double>& segment_durations)
     {
         clearPlan();
 #ifndef HAS_LINA_PLANNING
         (void)start_pos;
 #endif
+
+        if (segment_durations.size() != waypoints.size() ||
+            (time_mode && !std::all_of(segment_durations.begin(), segment_durations.end(),
+                [](double t) { return std::isfinite(t) && t > 0.0; }))) return false;
 
         if (waypoints.size() < 2)
         {
@@ -1299,6 +1336,60 @@ namespace arms_controller_common
             return false;
         }
 #ifdef HAS_LINA_PLANNING
+        bool has_dwell = false;
+        auto previous = start_pos;
+        for (const auto& wp : waypoints)
+        {
+            has_dwell = has_dwell || areJointPositionsSame(previous, wp.position);
+            previous = wp.position;
+        }
+        if (time_mode && has_dwell)
+        {
+            // Split only at holds: moving runs still use the existing blending planner.
+            std::vector<std::unique_ptr<JointTrajectoryManager>> sections;
+            std::vector<double> section_times;
+            previous = start_pos;
+            for (size_t i = 0; i < waypoints.size();)
+            {
+                auto section = std::make_unique<JointTrajectoryManager>(logger_);
+                section->setControllerFrequency(controller_frequency_);
+                section->setDefaultJointMotionLimits(default_max_velocity_, default_max_acceleration_, default_max_jerk_);
+                bool ok = false;
+                if (areJointPositionsSame(previous, waypoints[i].position))
+                {
+                    ok = section->initSingleNode(previous, previous, segment_durations[i],
+                        InterpolationType::LINEAR, controller_frequency_, tanh_scale_);
+                    ++i;
+                }
+                else
+                {
+                    const auto start = previous;
+                    const size_t first = i;
+                    do { previous = waypoints[i++].position; }
+                    while (i < waypoints.size() && !areJointPositionsSame(previous, waypoints[i].position));
+                    if (i - first == 1)
+                        ok = section->planSingleTarget(start, waypoints[first], true, segment_durations[first]);
+                    else
+                        ok = section->planMultiTrajectory(start,
+                            std::vector<arms_ros2_control_msgs::msg::JointWaypoint>(waypoints.begin()+first, waypoints.begin()+i),
+                            true, std::vector<double>(segment_durations.begin()+first, segment_durations.begin()+i));
+                }
+                if (!ok) { reset(); return false; }
+                section_times.push_back(section->getPlanningTime());
+                sections.push_back(std::move(section));
+            }
+            reset();
+            interpolation_type_ = InterpolationType::DOUBLES;
+            mode_ = TrajectoryMode::MULTI_NODE_ADVANCED;
+            waypoints_.push_back(start_pos);
+            for (const auto& wp : waypoints) waypoints_.push_back(wp.position);
+            timed_sections_ = std::move(sections);
+            segment_durations_ = std::move(section_times);
+            segment_progress_.assign(timed_sections_.size(), 0.0);
+            planningTime_ = std::accumulate(segment_durations_.begin(), segment_durations_.end(), 0.0);
+            initialized_ = true;
+            return true;
+        }
         interpolation_type_ = InterpolationType::DOUBLES;
         size_t num_joints = start_pos.size();
         size_t num_waypoints = waypoints.size();
@@ -1323,7 +1414,7 @@ namespace arms_controller_common
 
         // 2. 创建公共参数（使用第一个路点的参数）
         planning::TrajectoryParameter first_param;
-        if (!getTrajectoryParameter(waypoints[0], first_param))
+        if (!getTrajectoryParameter(waypoints[0], first_param, time_mode, segment_durations[0]))
         {
             return false;
         }
@@ -1334,7 +1425,7 @@ namespace arms_controller_common
         for (size_t i = 1; i < num_waypoints; i++)
         {
             planning::TrajectoryParameter param;
-            if (!getTrajectoryParameter(waypoints[i], param))
+            if (!getTrajectoryParameter(waypoints[i], param, time_mode, segment_durations[i]))
             {
                 all_waypoints_has_parameter = false;
                 break;
@@ -1402,12 +1493,13 @@ namespace arms_controller_common
 #ifdef HAS_LINA_PLANNING
         movej_planner_.reset();
         multi_node_planner_.reset();
+        timed_sections_.clear();
 #endif
     }
 
 #ifdef HAS_LINA_PLANNING
     bool JointTrajectoryManager::getTrajectoryParameter(const arms_ros2_control_msgs::msg::JointWaypoint& waypoint,
-                                                        planning::TrajectoryParameter& res)
+                                                        planning::TrajectoryParameter& res, bool time_mode, double segment_duration)
     {
         const size_t num_joints = waypoint.position.size();
         const auto fillFromMessageOrDefault =
@@ -1421,9 +1513,9 @@ namespace arms_controller_common
                 return use_message;
             };
 
-        if (waypoint.time_mode)
+        if (time_mode)
         {
-            const double total_time = waypoint.total_time > 0 ? waypoint.total_time : 3.0;
+            const double total_time = segment_duration;
             planning::TrajectoryParameter param(total_time, num_joints);
             const bool used_vel = fillFromMessageOrDefault(
                 waypoint.max_velocity, default_max_velocity_, param.joint_max_vel);
@@ -1476,7 +1568,9 @@ namespace arms_controller_common
          }
          else
          {
-             return trajectory_duration_;
+             return mode_ == TrajectoryMode::MULTI_NODE_BASIC
+                 ? std::accumulate(segment_durations_.begin(), segment_durations_.end(), 0.0)
+                 : trajectory_duration_;
          }
         }
 

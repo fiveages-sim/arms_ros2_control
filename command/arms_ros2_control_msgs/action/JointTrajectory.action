@@ -1,6 +1,11 @@
 # Goal
 string[] joint_names
 arms_ros2_control_msgs/JointWaypoint[] waypoints
+# True: timed trajectory; False: constraint mode (DOUBLES only).
+bool time_mode
+# Seconds, 0 = unspecified. Positive values persist to movej_trajectory_duration.
+# Mutually exclusive with nonzero waypoint time_from_start.
+float64 movej_trajectory_duration
 ---
 # Result
 bool success

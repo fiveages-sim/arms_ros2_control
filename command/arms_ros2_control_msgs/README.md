@@ -137,15 +137,22 @@ ROS 2 接口包：[`arms_ros2_control`](../..) 系统所使用的 **msg / srv / 
 | `velocity` | `float64[]` | 关节速度 |
 | `blend_ratio_percent` | `float64` | 多点转接比例 `0~1` |
 | `max_velocity` / `max_acceleration` / `max_jerk` | `float64[]` | 规划上限；空或长度不匹配时，控制器用 `movej_max_velocity` / `movej_max_acceleration` / `movej_max_jerk`（默认 2.0 / 4.0 / 20.0，与 lina 关节默认一致） |
-| `time_mode` | `bool` | 是否时间模式 |
-| `total_time` | `float64` | 总时间 |
+| `time_from_start` | `builtin_interfaces/Duration` | 从真实轨迹起点到该目标的累计到达时间；全零表示未指定 |
 
 ### 执行接口
 
 | 接口 | 类型 | 请求 / Goal | 结果要点 |
 |------|------|-------------|----------|
-| `JointTrajectory` | srv | `joint_names` + `JointWaypoint[]` | `success`, `message`, `planned_duration` |
-| `JointTrajectory` | action | 同上 | 另含 `actual_duration`；反馈进度与时间 |
+| `JointTrajectory` | action | `joint_names` + `JointWaypoint[]` + `time_mode` + `movej_trajectory_duration` | 另含 `actual_duration`；反馈进度与时间 |
+
+`time_mode` 和 `movej_trajectory_duration` 现在位于 Goal 层。时间模式需显式设为 true：
+总时长为正且路点时间全零时统一分配段时间，并持久更新控制器
+`movej_trajectory_duration`；仅提供非负且非递减的累计时间时按差值规划，不改参数。
+两者皆空则沿用控制器总时长，两者同时提供则拒绝。
+累计时间相同只允许相同位置并跳过；正时间零位移执行定时停留。
+约束模式仅支持 DOUBLES，所有时间必须未提供（零值）。
+旧 JointTrajectory Service 类型和公共实现已删除。旧路点字段不兼容，须重新构建所有依赖并迁移客户端。
+
 
 ---
 

@@ -30,7 +30,6 @@
 #include "arms_controller_common/utils/WaistLiftingPlaner.h"
 #include "arms_ros2_control_msgs/action/joint_trajectory.hpp"
 #include "arms_ros2_control_msgs/msg/joint_waypoint.hpp"
-#include "arms_ros2_control_msgs/srv/joint_trajectory.hpp"
 #include "arms_controller_common/utils/Kinematics.h"
 #include "arms_controller_common/utils/CartesianTrajectoryManager.h"
 #include "arms_ros2_control_msgs/action/execute_linear.hpp"
@@ -200,11 +199,6 @@ namespace arms_controller_common
         bool setWaistPhiFactor(double factor);
 
 
-        /**
-         * @brief Setup joint trajectory service
-         * @param service_name Service name (default: "joint_trajectory")
-         */
-        void setupJointTrajectoryService(const std::string& service_name = "joint_trajectory");
         void setupJointTrajectoryAction(const std::string& action_name = "joint_trajectory");
         void setupWaistLiftingPoseAction(const std::string& action_name = "waist_lifting_pose");
 
@@ -307,6 +301,9 @@ namespace arms_controller_common
         bool beginStopToZero();
         bool validatePositionRequest(const std::vector<std::string>& names,
                                      const std::vector<double>& positions) const;
+        bool validateTrajectoryTiming(
+            const std::vector<arms_ros2_control_msgs::msg::JointWaypoint>& waypoints,
+            bool time_mode, double movej_trajectory_duration, std::string& message) const;
         bool validateWaypointRequest(const std::vector<std::string>& names,
             const std::vector<arms_ros2_control_msgs::msg::JointWaypoint>& waypoints) const;
         void clearPendingMotion();
@@ -360,6 +357,7 @@ namespace arms_controller_common
         bool startJointTrajectoryRequestImpl(
             const std::vector<std::string>& request_joint_names,
             const std::vector<arms_ros2_control_msgs::msg::JointWaypoint>& request_waypoints,
+            bool time_mode, double movej_trajectory_duration,
             std::string& message,
             double& planned_duration);
         bool startLinearTrajectoryImpl(
@@ -545,7 +543,6 @@ namespace arms_controller_common
 
 
         // Service server
-        rclcpp::Service<arms_ros2_control_msgs::srv::JointTrajectory>::SharedPtr joint_trajectory_service_;
 
         using JointTrajectoryAction = arms_ros2_control_msgs::action::JointTrajectory;
         using JointTrajectoryGoalHandle = rclcpp_action::ServerGoalHandle<JointTrajectoryAction>;
@@ -555,11 +552,6 @@ namespace arms_controller_common
         double joint_trajectory_planned_duration_{0.0};
         bool joint_trajectory_action_active_{false};
 
-        // Service handler
-        void handleJointTrajectory(
-            const std::shared_ptr<rmw_request_id_t> request_header,
-            const std::shared_ptr<arms_ros2_control_msgs::srv::JointTrajectory::Request> request,
-            const std::shared_ptr<arms_ros2_control_msgs::srv::JointTrajectory::Response> response);
         rclcpp_action::GoalResponse handleJointTrajectoryGoal(
             const rclcpp_action::GoalUUID& uuid,
             std::shared_ptr<const JointTrajectoryAction::Goal> goal);
@@ -567,11 +559,6 @@ namespace arms_controller_common
             const std::shared_ptr<JointTrajectoryGoalHandle> goal_handle);
         void handleJointTrajectoryAccepted(
             const std::shared_ptr<JointTrajectoryGoalHandle> goal_handle);
-        bool startJointTrajectoryRequest(
-            const std::vector<std::string>& joint_names,
-            const std::vector<arms_ros2_control_msgs::msg::JointWaypoint>& waypoints,
-            std::string& message,
-            double& planned_duration);
         void publishJointTrajectoryFeedback();
         void finishJointTrajectoryAction(bool success, bool canceled, const std::string& message);
 
