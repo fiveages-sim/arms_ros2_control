@@ -2,6 +2,7 @@
 // Common StateHold Implementation
 //
 #include "arms_controller_common/FSM/StateHold.h"
+#include <algorithm>
 #include <cmath>
 #include <utility>
 
@@ -12,8 +13,7 @@ namespace arms_controller_common
                         const std::shared_ptr<GravityCompensation>& gravity_compensation)
         : FSMState(FSMStateName::HOLD, "HOLD", ctrl_interfaces),
           node_(std::move(node)),
-          gravity_compensation_(gravity_compensation),
-          first_threshold_check_passed_(false)
+          gravity_compensation_(gravity_compensation)
     {
     }
 
@@ -26,123 +26,66 @@ namespace arms_controller_common
     void StateHold::enter()
     {
         updateParam();
-        size_t num_joints = ctrl_interfaces_.joint_position_state_interface_.size();
-        hold_positions_.resize(num_joints);
-        first_threshold_check_passed_ = false;
-        for (size_t i = 0; i < num_joints; ++i)
+        hold_positions_ = ctrl_interfaces_.last_sent_joint_positions_;
+
+        // Resolve the startup discrepancy once, before the first HOLD output.
+        // Later tracking deviations must never move this captured reference.
+        bool use_measured_positions = false;
+        if (first_check_position_threshold_ > 0.0)
         {
-            hold_positions_[i] = ctrl_interfaces_.last_sent_joint_positions_[i];
+            for (size_t i = 0; i < hold_positions_.size() &&
+                 i < ctrl_interfaces_.joint_position_state_interface_.size(); ++i)
+            {
+                const auto value = ctrl_interfaces_.joint_position_state_interface_[i].get().get_optional();
+                if (value && std::isfinite(*value) &&
+                    std::abs(*value - hold_positions_[i]) > first_check_position_threshold_)
+                {
+                    use_measured_positions = true;
+                    break;
+                }
+            }
         }
-        
+        if (use_measured_positions)
+        {
+            for (size_t i = 0; i < hold_positions_.size() &&
+                 i < ctrl_interfaces_.joint_position_state_interface_.size(); ++i)
+            {
+                const auto value = ctrl_interfaces_.joint_position_state_interface_[i].get().get_optional();
+                if (value && std::isfinite(*value))
+                {
+                    hold_positions_[i] = *value;
+                }
+            }
+        }
+        ctrl_interfaces_.setJointHoldCommands(hold_positions_);
         RCLCPP_INFO(node_->get_logger(),
-                   "HOLD state entered, using last sent joint positions for %zu joints (avoids jumps)", 
-                   hold_positions_.size());
+                    "HOLD entered: captured %zu %s positions; zero velocity feed-forward",
+                    hold_positions_.size(), use_measured_positions ? "measured" : "last commanded");
     }
 
-    void StateHold::run(const rclcpp::Time& time, const rclcpp::Duration& /* period */)
+    void StateHold::run(const rclcpp::Time& /* time */, const rclcpp::Duration& /* period */)
     {
         updateParam();
-        if (first_check_position_threshold_ > 0.0 || joint_position_diff_threshold_ > 0.0)
+        ctrl_interfaces_.setJointHoldCommands(hold_positions_);
+        if (joint_position_diff_threshold_ > 0.0)
         {
             double max_diff = 0.0;
-            bool exceeds_first_check_threshold = false;
-            bool exceeds_diff_threshold = false;
-
-            for (size_t i = 0; i < ctrl_interfaces_.joint_position_state_interface_.size() && 
-                 i < hold_positions_.size(); ++i)
+            for (size_t i = 0; i < hold_positions_.size() &&
+                 i < ctrl_interfaces_.joint_position_state_interface_.size(); ++i)
             {
-                auto value = ctrl_interfaces_.joint_position_state_interface_[i].get().get_optional();
-                double current_pos = value.value_or(0.0);
-                double diff = std::abs(current_pos - hold_positions_[i]);
-
-                if (diff > max_diff)
+                const auto value = ctrl_interfaces_.joint_position_state_interface_[i].get().get_optional();
+                if (value && std::isfinite(*value))
                 {
-                    max_diff = diff;
-                }
-
-                if (first_check_position_threshold_ > 0.0 && diff > first_check_position_threshold_)
-                {
-                    exceeds_first_check_threshold = true;
-                }
-
-                if (joint_position_diff_threshold_ > 0.0 && diff > joint_position_diff_threshold_)
-                {
-                    exceeds_diff_threshold = true;
+                    max_diff = std::max(max_diff, std::abs(*value - hold_positions_[i]));
                 }
             }
-
-            if (!first_threshold_check_passed_)
+            if (max_diff > joint_position_diff_threshold_)
             {
-                if (first_check_position_threshold_ <= 0.0)
-                {
-                    first_threshold_check_passed_ = true;
-                    RCLCPP_INFO(node_->get_logger(),
-                               "HOLD state: first threshold check disabled. Automatic adjustment %s.",
-                               joint_position_diff_threshold_ > 0.0 ? "enabled" : "disabled");
-                }
-                else if (!exceeds_first_check_threshold)
-                {
-                    first_threshold_check_passed_ = true;
-                    RCLCPP_INFO(node_->get_logger(),
-                               "HOLD state: first threshold check passed (max diff: %.4f rad <= first check threshold: %.4f rad). "
-                               "Automatic adjustment %s.",
-                               max_diff, first_check_position_threshold_,
-                               joint_position_diff_threshold_ > 0.0 ? "enabled" : "disabled");
-                }
-                else
-                {
-                    size_t num_joints = ctrl_interfaces_.joint_position_state_interface_.size();
-                    hold_positions_.resize(num_joints);
-                    for (size_t i = 0; i < num_joints; ++i)
-                    {
-                        auto value = ctrl_interfaces_.joint_position_state_interface_[i].get().get_optional();
-                        hold_positions_[i] = value.value_or(0.0);
-                    }
-                    first_threshold_check_passed_ = true;
-                    RCLCPP_WARN_THROTTLE(node_->get_logger(), *node_->get_clock(), 1000,
-                                       "HOLD state: first threshold check failed (max diff: %.4f rad > first check threshold: %.4f rad). "
-                                       "Updating hold positions to current positions to avoid a startup jump.",
-                                       max_diff, first_check_position_threshold_);
-                }
+                RCLCPP_WARN_THROTTLE(node_->get_logger(), *node_->get_clock(), 1000,
+                    "HOLD position difference %.4f rad exceeds threshold %.4f rad; "
+                    "keeping the captured reference unchanged",
+                    max_diff, joint_position_diff_threshold_);
             }
-            else
-            {
-                if (exceeds_diff_threshold)
-                {
-                    size_t num_joints = ctrl_interfaces_.joint_position_state_interface_.size();
-                    hold_positions_.resize(num_joints);
-                    for (size_t i = 0; i < num_joints; ++i)
-                    {
-                        auto value = ctrl_interfaces_.joint_position_state_interface_[i].get().get_optional();
-                        hold_positions_[i] = value.value_or(0.0);
-                    }
-
-                    static rclcpp::Time last_warn_time(0, 0, RCL_ROS_TIME);
-                    static bool first_warn = true;
-                    
-                    rclcpp::Duration time_since_last_warn = time - last_warn_time;
-                    
-                    if (first_warn || time_since_last_warn.seconds() >= 1.0)
-                    {
-                        RCLCPP_WARN(node_->get_logger(),
-                                   "HOLD state: position difference (max: %.4f rad) exceeds threshold (%.4f rad). "
-                                   "Updating hold positions to current positions for safety.",
-                                   max_diff, joint_position_diff_threshold_);
-                        last_warn_time = time;
-                        first_warn = false;
-                    }
-                }
-            }
-        }
-        else
-        {
-            first_threshold_check_passed_ = true;
-        }
-
-        for (size_t i = 0; i < ctrl_interfaces_.joint_position_command_interface_.size() &&
-             i < hold_positions_.size(); ++i)
-        {
-            ctrl_interfaces_.setJointPositionCommand(i, hold_positions_[i]);
         }
 
         if (ctrl_interfaces_.control_mode_ == ControlMode::MIX && gravity_compensation_)

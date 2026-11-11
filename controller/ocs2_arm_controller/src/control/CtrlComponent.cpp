@@ -454,10 +454,7 @@ namespace ocs2::mobile_manipulator
 
     void CtrlComponent::holdLastSentPositions() const
     {
-        for (size_t i = 0; i < joint_names_.size() && i < ctrl_interfaces_.last_sent_joint_positions_.size(); ++i)
-        {
-            ctrl_interfaces_.setJointPositionCommand(i, ctrl_interfaces_.last_sent_joint_positions_[i]);
-        }
+        ctrl_interfaces_.setJointHoldCommands(ctrl_interfaces_.last_sent_joint_positions_);
     }
 
     void CtrlComponent::publishCachedCurrentTargets() const

@@ -202,7 +202,7 @@ namespace ocs2::mobile_manipulator
         void advanceMpc();
         /** MPC request period; published with solve timing for HUD overrun display. */
         void setMpcPeriodSec(double period_sec);
-        /** Hold joints at last commanded positions (used while waiting for initial policy). */
+        /** Hold last commanded positions with zero velocity (waiting for initial policy). */
         void holdLastSentPositions() const;
         /** Publish left/right(/body) current_target from cache (call on OCS2 enter for marker sync). */
         void publishCachedCurrentTargets() const;
