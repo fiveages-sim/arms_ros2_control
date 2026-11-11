@@ -30,8 +30,7 @@ arms_ros2_control/
 │   ├── arms_ros2_control_msgs/  # 控制输入消息定义
 │   ├── arms_rviz_control_plugin/ # RViz控制插件
 │   ├── arms_target_manager/     # 目标管理系统
-│   └── arms_teleop/             # 统一遥操作包
-│       └── joystick_teleop      # 基于手柄的控制
+│   └── arms_teleop/             # 统一遥操作包（手柄 / 键盘 / 脚踏板）
 └── README.md
 ```
 
@@ -253,16 +252,17 @@ colcon build --packages-up-to ocs2_arm_controller cr5_description arms_teleop ad
 - RViz中的3D交互式标记
 - 单臂/双臂支持
 - VR遥操作
-- 手柄遥操作
+- 手柄 / 键盘 / 脚踏板遥操作
 
 #### Arms遥操作
 
-`arms_teleop`包为机械臂提供统一的遥操作功能。
+`arms_teleop`包为机械臂提供统一的遥操作功能（可经 `quick_start.sh` 辅助功能菜单启动）。
 
 **特性：**
 
 - 基于手柄的控制
 - 基于键盘的控制
+- 基于 USB 脚踏板的控制（`/teleop/controller_state`）
 - 不同输入方法的统一接口
 
 ## 配置

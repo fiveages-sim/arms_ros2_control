@@ -35,8 +35,7 @@ arms_ros2_control/
 │   ├── arms_ros2_control_msgs/  # Control input message definitions
 │   ├── arms_rviz_control_plugin/ # RViz control plugin
 │   ├── arms_target_manager/     # Target management system
-│   └── arms_teleop/             # Unified teleoperation package
-│       └── joystick_teleop      # Joystick-based control
+│   └── arms_teleop/             # Unified teleoperation (joystick / keyboard / foot pedal)
 └── README.md
 ```
 
@@ -266,16 +265,17 @@ The `arms_target_manager` provides 3D interactive markers for setting robotic ar
 - 3D interactive markers in RViz
 - Single/dual arm support
 - VR Teleop Support
-- Joystick Teleop Support
+- Joystick / Keyboard / Foot-pedal Teleop Support
 
 #### Arms Teleop
 
-The `arms_teleop` package provides unified teleoperation capabilities for robotic arms.
+The `arms_teleop` package provides unified teleoperation capabilities for robotic arms (also available from the `quick_start.sh` auxiliary menu).
 
 **Features:**
 
 - Joystick-based control
 - Keyboard-based control
+- USB foot-pedal control (`/teleop/controller_state`)
 - Unified interface for different input methods
 
 ## Configuration

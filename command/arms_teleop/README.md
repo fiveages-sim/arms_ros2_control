@@ -51,7 +51,7 @@ ros2 launch arms_teleop joystick_teleop.launch.py joy_dev:=/dev/input/js1
 ros2 run joy joy_enumerate_devices
 ```
 
-`quick_start.sh`：仅 1 个手柄时自动启动；多个时选手柄 ID，只传 `joy_dev`。
+`quick_start.sh` 辅助功能菜单可直接启动；仅 1 个手柄时自动启动，多个时选手柄 ID，只传 `joy_dev`。
 
 ### 3.2 Launch 参数
 
@@ -108,6 +108,8 @@ ros2 run arms_teleop keyboard_teleop
 ros2 run arms_teleop keyboard_teleop --ros-args -p discrete_key_stale_ms:=350
 ```
 
+也可在 `quick_start.sh` → 启动 → 辅助功能 → **键盘遥操作** 启动（同样占用当前 TTY）。请勿与手柄遥操作同时运行。
+
 键盘节点不发布 `/fsm_command`；腰部 lift/turn 话题固定发 0。
 
 ### 4.2 按键
@@ -160,6 +162,8 @@ ros2 run arms_teleop foot_pedal_teleop
 ros2 run arms_teleop foot_pedal_teleop --ros-args \
   -p device_serial:=03CDAB4B081EBD3671FFFFFFFF0300
 ```
+
+也可在 `quick_start.sh` → 启动 → 辅助功能 → **脚踏板遥操作** 启动：单台自动发现，多台时选序列号。脚踏板可与手柄/键盘并存。
 
 也可显式传稳定 `device` 路径（覆盖自动发现，便于排查）。
 
