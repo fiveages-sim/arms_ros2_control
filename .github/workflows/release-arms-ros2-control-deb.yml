@@ -1377,7 +1377,9 @@ jobs:
           }
 
           apt-get update
-          apt_get_install ca-certificates curl cmake build-essential
+          # rsync is required by "Install debs and verify package discovery" to merge
+          # extracted deb contents into ${INSTALL_PREFIX} without apt-installing the debs.
+          apt_get_install ca-certificates curl cmake build-essential rsync
 
           mkdir -p -m 755 /etc/apt/keyrings
           curl -fsSL https://cli.github.com/packages/githubcli-archive-keyring.gpg \
