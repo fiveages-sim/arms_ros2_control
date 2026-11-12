@@ -362,6 +362,18 @@ namespace ocs2::mobile_manipulator
             auto* const reference_manager = ctrl_comp_->pose_reference_manager_.get();
             auto* const movej = state_list_.movej.get();
             movej->setCartesianTfBuffer(reference_manager->getTfBuffer());
+            std::weak_ptr<controller_common::PoseBasedReferenceManager> feedback_manager =
+                ctrl_comp_->pose_reference_manager_;
+            movej->setStampedFeedbackPreparer(
+                [feedback_manager](const arms_ros2_control_msgs::msg::LinearMessage& params)
+                    -> std::function<void()>
+                {
+                    auto manager = feedback_manager.lock();
+                    if (!manager) return {};
+                    auto commit = manager->prepareMoveJTargetFeedback(params);
+                    if (!commit) return {};
+                    return [manager, commit]() { commit(); };
+                });
             reference_manager->setStampedTargetHandlers(
                 [movej](const geometry_msgs::msg::PoseStamped& msg)
                 {

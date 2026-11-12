@@ -4,6 +4,7 @@
 #pragma once
 
 #include <arms_ros2_control_msgs/msg/circle_message.hpp>
+#include <arms_ros2_control_msgs/msg/linear_message.hpp>
 #include <arms_ros2_control_msgs/srv/execute_circle.hpp>
 #include <arms_ros2_control_msgs/srv/execute_path.hpp>
 #include <atomic>
@@ -105,6 +106,12 @@ public:
     void setHeadPoseTargetOnly(const vector_t& head_pose_xyzw_7, bool update_target_trajectory = true);
     /** Publish cached current targets for visualization/marker refresh, without modifying MPC targets. */
     void publishCurrentTargetsFromCache();
+
+    // Resolve both endpoints before planning; returned commit updates feedback only.
+    // Caller serializes MOVEJ requests; no MPC trajectory/reference buffers are modified.
+    std::function<void()> prepareMoveJTargetFeedback(
+        const arms_ros2_control_msgs::msg::LinearMessage& params);
+
 
     /**
      * Under wheel-humanoid COUPLED: update only the right-arm marker/cache from a left pose + captured

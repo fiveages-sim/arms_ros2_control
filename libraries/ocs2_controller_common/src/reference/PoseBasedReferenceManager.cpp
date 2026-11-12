@@ -1846,6 +1846,38 @@ namespace ocs2::controller_common
         }
     }
 
+    std::function<void()> PoseBasedReferenceManager::prepareMoveJTargetFeedback(
+        const arms_ros2_control_msgs::msg::LinearMessage& params)
+    {
+        const bool left = params.arm_name == "left" || params.arm_name == "both";
+        const bool right = params.arm_name == "right" || params.arm_name == "both";
+        if ((!left && !right) || (right && !dual_arm_mode_))
+        {
+            return {};
+        }
+        geometry_msgs::msg::PoseStamped pose;
+        pose.header.frame_id = params.frame_id;
+        vector_t left_state, right_state;
+        if (left)
+        {
+            pose.pose = params.endpoint;
+            if (!parsePoseStampedToState(pose, "MOVEJ left", left_state)) return {};
+        }
+        if (right)
+        {
+            pose.pose = params.arm_name == "both" ? params.right_endpoint : params.endpoint;
+            if (!parsePoseStampedToState(pose, "MOVEJ right", right_state)) return {};
+        }
+        return [this, left, right, left_state, right_state]()
+        {
+            // Keep OCS2 interpolation buffers and TargetTrajectories untouched.
+            if (left) left_target_state_ = left_state;
+            if (right) right_target_state_ = right_state;
+            if (left) publishCurrentTargets("left");
+            if (right) publishCurrentTargets("right");
+        };
+    }
+
     void PoseBasedReferenceManager::leftPoseStampedCallback(
         const geometry_msgs::msg::PoseStamped::SharedPtr msg)
     {
