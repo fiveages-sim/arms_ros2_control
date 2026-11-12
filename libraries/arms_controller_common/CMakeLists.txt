@@ -123,4 +123,12 @@ if(lina_planning_FOUND)
 endif()
 ament_export_targets(export_${PROJECT_NAME} HAS_LIBRARY_TARGET)
 
+if(BUILD_TESTING)
+    find_package(ament_cmake_gtest REQUIRED)
+    ament_add_gtest(test_state_hold test/test_state_hold.cpp TIMEOUT 30)
+    target_link_libraries(test_state_hold ${PROJECT_NAME})
+    ament_add_gtest(test_hold_commands test/test_hold_commands.cpp TIMEOUT 30)
+    target_link_libraries(test_hold_commands ${PROJECT_NAME})
+endif()
+
 ament_package()
