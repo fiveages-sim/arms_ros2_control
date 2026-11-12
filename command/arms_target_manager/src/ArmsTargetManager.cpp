@@ -182,6 +182,16 @@ namespace arms_ros2_control::command
         updateHeadMarkerVisibility();
     }
 
+    void ArmsTargetManager::setArmVrActive(bool is_left, bool active)
+    {
+        bool& flag = is_left ? left_arm_vr_active_ : right_arm_vr_active_;
+        if (flag == active)
+        {
+            return;
+        }
+        flag = active;
+    }
+
     void ArmsTargetManager::updateHeadMarkerVisibility()
     {
         if (!server_ || !head_marker_)
@@ -1669,6 +1679,32 @@ namespace arms_ros2_control::command
             markPendingChanges();
         }
 
+        if (shouldStreamPoseCommands())
+        {
+            body_marker_->publishTargetPose();
+        }
+
+        return true;
+    }
+
+    bool ArmsTargetManager::setBodyMarkerPose(const geometry_msgs::msg::Pose& pose)
+    {
+        if (!body_marker_ || !shouldShowBodyMarker())
+        {
+            return false;
+        }
+
+        body_marker_->setPose(pose);
+
+        if (server_)
+        {
+            setServerPose(body_marker_->getMarkerName(), pose);
+            markPendingChanges();
+        }
+
+        // pose 由调用方给出，表达在 marker 固定系（marker_fixed_frame_，通常是 world）。
+        // 发布 /body_target 时由 BodyMarker::publishTargetPose() 换算到
+        // control_base_frame_（下游 OCS2 模型的 base_frame_），两者不能混用。
         if (shouldStreamPoseCommands())
         {
             body_marker_->publishTargetPose();

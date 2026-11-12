@@ -3,6 +3,7 @@
 //
 
 #include "arms_target_manager/VRInputHandler.h"
+#include "arms_target_manager/WholeBodyVrTeleop.h"
 #include "arms_target_manager/ArmsTargetManager.h"
 #include "arms_controller_common/utils/FSMStateTransitionValidator.h"
 #include <rclcpp/rclcpp.hpp>
@@ -41,7 +42,8 @@ namespace arms_ros2_control::command
         double vr_thumbstick_angular_scale,
         double vr_pose_scale,
         const std::string& reference_link,
-        const std::string& vr_follow_frame)
+        const std::string& vr_follow_frame,
+        const AbsoluteTeleopOptions& absolute_options)
         : node_(std::move(node))
           , target_manager_(targetManager)
           , pub_left_target_(std::move(pub_left_target))
@@ -82,6 +84,7 @@ namespace arms_ros2_control::command
             [this]() { detectControlTopology(); });
 
         // Relative tf/tf_static (same as ATM/WBC) — multi-robot Isaac publishes /<ns>/tf.
+        // 初始化 TF 组件（用于在 reference_link 与末端 frame 之间进行坐标变换）
         tf_buffer_ = std::make_shared<tf2_ros::Buffer>(node_->get_clock());
         std::string tf_topic = "tf";
         std::string tf_static_topic = "tf_static";
@@ -274,7 +277,7 @@ namespace arms_ros2_control::command
                     "🕹️🕶️🕹️ Chassis mode (case 20 = L+R thumbstick): L.stick→chassis XY, R.stick→waist lift/turn");
         RCLCPP_INFO(
             node_->get_logger(),
-            "🕹️ FULL_BODY directions: "
+            "🕹️ FULL_BODY directions (normal mode only): "
             "left grip + left stick cases 21-24; "
             "right grip + right stick cases 25-26, 28 (27 unused)");
         RCLCPP_INFO(node_->get_logger(), "🕹️🕶️🕹️ Subscribed to button event topic: /teleop/controller_state (Int32)");
@@ -291,7 +294,7 @@ namespace arms_ros2_control::command
         RCLCPP_INFO(node_->get_logger(), "🕹️🕶️🕹️ Right thumbstick toggles between STORAGE and UPDATE modes.");
         RCLCPP_INFO(node_->get_logger(), "🕹️🕶️🕹️ STORAGE mode: Store VR and robot base poses (no marker update)");
         RCLCPP_INFO(node_->get_logger(), "🕹️🕶️🕹️ UPDATE mode: Calculate pose differences and update markers");
-        RCLCPP_INFO(node_->get_logger(), "🕹️🕶️🕹️ MIRROR mode: Synced from xr_target_node (left thumbstick toggles)");
+        RCLCPP_INFO(node_->get_logger(), "🕹️🕶️🕹️ MIRROR mode: toggled by left thumbstick button (normal mode only)");
         
         // 输出检测到的控制器信息
         if (!left_gripper_controller_name_.empty())
@@ -306,6 +309,101 @@ namespace arms_ros2_control::command
         {
             RCLCPP_INFO(node_->get_logger(), "🕹️🕶️🕹️ No gripper controllers detected - gripper control disabled");
         }
+
+        // 全身遥操作独立组件：只共享 FSM/夹爪/发布基础设施，不暴露普通模式功能。
+        // 所有 hook 均在本类作用域内构造，WholeBodyVrTeleop 只看到下面列出的能力。
+        WholeBodyVrTeleop::Hooks hooks;
+        hooks.vr_enabled = [this]() { return enabled_.load(); };
+        hooks.resolved_fsm_state = [this]() { return resolvedFsmState(); };
+        hooks.is_full_body_topology = [this]() { return isFullBodyMode(); };
+
+        hooks.publish_arm_target = [this](
+                                       bool is_left,
+                                       const Eigen::Vector3d& position,
+                                       const Eigen::Quaterniond& orientation)
+        {
+            return publishArmTargetForWholeBody(is_left, position, orientation);
+        };
+        hooks.last_published_target = [this](bool is_left) {
+            WholeBodyVrTeleop::LastArmTarget target;
+            if (is_left)
+            {
+                target.valid = has_last_published_left_target_;
+                target.position = last_published_left_position_;
+                target.orientation = last_published_left_orientation_;
+                target.stamp = last_published_left_stamp_;
+            }
+            else
+            {
+                target.valid = has_last_published_right_target_;
+                target.position = last_published_right_position_;
+                target.orientation = last_published_right_orientation_;
+                target.stamp = last_published_right_stamp_;
+            }
+            return target;
+        };
+        hooks.robot_current_pose = [this](
+                                       bool is_left,
+                                       Eigen::Vector3d& position,
+                                       Eigen::Quaterniond& orientation)
+        {
+            return robotCurrentPose(is_left, position, orientation);
+        };
+        hooks.is_arm_vr_suppressed = [this](bool is_left) {
+            return isArmVrInputSuppressed(
+                is_left ? WbcToggleTarget::LEFT_ARM : WbcToggleTarget::RIGHT_ARM);
+        };
+        hooks.prepare_arm_vr_input = [this](bool is_left) {
+            return prepareWholeBodyArmInput(is_left);
+        };
+        hooks.set_arm_vr_active = [this](bool is_left, bool active) {
+            if (target_manager_)
+            {
+                target_manager_->setArmVrActive(is_left, active);
+            }
+        };
+        hooks.reset_stale_catch_up_ramp = [this]() { resetStaleCatchUpRamp(); };
+
+        hooks.publish_mode_command = [this](const std::string& command) {
+            publishHumanoidModeCommand(command);
+        };
+
+        hooks.robot_head_pose = [this](geometry_msgs::msg::PoseStamped& pose) {
+            return robotHeadPose(pose);
+        };
+        hooks.ee_frame_id = [this]() { return ee_frame_id_; };
+        hooks.ee_frame_ready = [this]() { return ee_frame_id_initialized_; };
+        hooks.control_frame = [this]() {
+            return target_manager_ ? target_manager_->getControlBaseFrame() : std::string();
+        };
+        hooks.marker_frame = [this]() {
+            return target_manager_ ? target_manager_->getMarkerFixedFrame() : std::string();
+        };
+        hooks.base_unlocked = [this]() {
+            return target_manager_ &&
+                   target_manager_->getCurrentBaseState() ==
+                       arms_ros2_control_msgs::msg::WbcCurrentState::BASE_UNLOCKED;
+        };
+        hooks.transform_pose = [this](
+                                   const std::string& label,
+                                   const std::string& source_frame,
+                                   const std::string& target_frame,
+                                   const Eigen::Vector3d& input_position,
+                                   const Eigen::Quaterniond& input_orientation,
+                                   Eigen::Vector3d& output_position,
+                                   Eigen::Quaterniond& output_orientation)
+        {
+            return transformPoseBetweenFrames(
+                label, input_position, input_orientation,
+                source_frame, target_frame, output_position, output_orientation);
+        };
+
+        hooks.suspend_normal_mode_state = [this]() { suspendNormalModeState(); };
+        hooks.resume_normal_mode_state = [this]() { resumeNormalModeState(); };
+
+        whole_body_ = std::make_unique<WholeBodyVrTeleop>(
+            node_, target_manager_, pub_head_target_,
+            vr_follow_frame_, absolute_options, std::move(hooks));
     }
 
     void VRInputHandler::detectGripperControllers(const std::vector<std::string>& hand_controllers)
@@ -1491,9 +1589,16 @@ namespace arms_ros2_control::command
         RCLCPP_INFO(node_->get_logger(), "🕹️🕶️🕹️ VR control ENABLED!");
     }
 
+    VRInputHandler::~VRInputHandler() = default;
+
     void VRInputHandler::disable()
     {
         enabled_.store(false);
+        // 全身遥操随 VR 禁用一起退出（只做全身侧清理）
+        if (whole_body_)
+        {
+            whole_body_->deactivate();
+        }
         left_robot_base_valid_ = false;
         right_robot_base_valid_ = false;
         stopHeadTracking();
@@ -1563,6 +1668,12 @@ namespace arms_ros2_control::command
 
     void VRInputHandler::vrHeadCallback(const geometry_msgs::msg::Pose::SharedPtr msg)
     {
+        // 全身模式的头部由骨架 /teleop/body_head_pose 驱动，头显不参与
+        if (isWholeBodyActive())
+        {
+            return;
+        }
+
         const Eigen::Vector3d position(msg->position.x, msg->position.y, msg->position.z);
         const Eigen::Quaterniond orientation(
             msg->orientation.w, msg->orientation.x, msg->orientation.y, msg->orientation.z);
@@ -1587,7 +1698,10 @@ namespace arms_ros2_control::command
             !orientation.coeffs().allFinite() || orientation.norm() < 1e-9)
         {
             has_robot_head_pose_ = false;
-            stopHeadTracking();
+            if (!isWholeBodyActive())
+            {
+                stopHeadTracking();
+            }
             return;
         }
         robot_head_pose_ = *msg;
@@ -1625,6 +1739,10 @@ namespace arms_ros2_control::command
             stopHeadTracking();
             return;
         }
+
+        // 普通遥操作：头显（/teleop/head_pose）驱动 WBC 头部目标的相对增量路径
+        const Eigen::Vector3d vr_head_position = vr_head_position_;
+        const Eigen::Quaterniond vr_head_orientation = vr_head_orientation_;
         if (!head_tracking_active_)
         {
             const auto& base = last_head_target_ ? *last_head_target_ : robot_head_pose_;
@@ -1636,15 +1754,15 @@ namespace arms_ros2_control::command
             {
                 return;
             }
-            vr_head_base_position_ = vr_head_position_;
-            vr_head_base_orientation_ = vr_head_orientation_;
+            vr_head_base_position_ = vr_head_position;
+            vr_head_base_orientation_ = vr_head_orientation;
         }
 
         // Both upstream wrappers already convert OpenXR axes to robot axes.
         // Align those axes with vr_follow_frame, independently of hand scale/mirror settings.
         const Eigen::Vector3d position = robot_head_base_position_ +
-            (vr_head_position_ - vr_head_base_position_);
-        const Eigen::Quaterniond orientation = (vr_head_orientation_ *
+            (vr_head_position - vr_head_base_position_);
+        const Eigen::Quaterniond orientation = (vr_head_orientation *
             vr_head_base_orientation_.inverse() * robot_head_base_orientation_).normalized();
         Eigen::Vector3d publishedPosition;
         Eigen::Quaterniond publishedOrientation;
@@ -1668,8 +1786,13 @@ namespace arms_ros2_control::command
         target_manager_->setHeadVrActive(true);
         pub_head_target_->publish(target.pose);
         last_head_target_ = target;
+        last_head_target_stamp_ = std::chrono::steady_clock::now();
         head_tracking_active_ = true;
     }
+
+    // ================= 全身遥操（case 30）=================
+
+    // ================= 全身遥操已迁移至 WholeBodyVrTeleop =================
 
     void VRInputHandler::vrLeftCallback(const geometry_msgs::msg::Pose::SharedPtr msg)
     {
@@ -1689,8 +1812,18 @@ namespace arms_ros2_control::command
         left_position_ *= vr_pose_scale_;
 
         has_vr_left_pose_.store(true);
+
+        // 光学 R0 握手：待完成的 UPDATE 进入 / 单臂恢复靠手柄帧推进，
+        // 与全身模式无关，必须保持在早退之前。
         tryCompleteOpticalUpdateEnter();
         tryCompleteOpticalResumes();
+
+        // 全身模式的目标由骨架绝对映射发布，普通手柄不参与
+        if (isWholeBodyActive())
+        {
+            return;
+        }
+
         const WbcToggleTarget controlledArm = mirror_mode_.load()
             ? WbcToggleTarget::RIGHT_ARM
             : WbcToggleTarget::LEFT_ARM;
@@ -1707,6 +1840,7 @@ namespace arms_ros2_control::command
             bool is_mirror = mirror_mode_.load();
             bool arm_paused = is_mirror ? right_arm_paused_.load() : left_arm_paused_.load();
 
+            // 全身「全部跟踪」已迁移到 WholeBodyVrTeleop；此处只处理普通模式。
             if (is_update_mode_.load())
             {
                 // 更新模式：基于差值计算pose并更新marker
@@ -1719,7 +1853,7 @@ namespace arms_ros2_control::command
                     // 如果暂停，使用暂停时刻的VR位姿；否则使用当前VR位姿
                     Eigen::Vector3d vr_position = arm_paused ? paused_left_position_ : left_position_;
                     Eigen::Quaterniond vr_orientation = arm_paused ? paused_left_orientation_ : left_orientation_;
-                    
+
                     // 将右摇杆累积偏移转换到世界坐标系（与手柄移动保持一致）
                     Eigen::Vector3d thumbstick_offset_world = vr_base_left_orientation_ * right_thumbstick_offset_;
                     // 应用右摇杆累积偏移到VR位姿（暂停时使用暂停时刻的位姿）
@@ -1754,7 +1888,7 @@ namespace arms_ros2_control::command
                     // 如果暂停，使用暂停时刻的VR位姿；否则使用当前VR位姿
                     Eigen::Vector3d vr_position = arm_paused ? paused_left_position_ : left_position_;
                     Eigen::Quaterniond vr_orientation = arm_paused ? paused_left_orientation_ : left_orientation_;
-                    
+
                     // 将左摇杆累积偏移（局部坐标系）转换到世界坐标系（与手柄移动保持一致）
                     // 摇杆偏移量是在局部坐标系下的（相对于进入UPDATE时手柄的朝向）
                     Eigen::Vector3d thumbstick_offset_world = vr_base_left_orientation_ * left_thumbstick_offset_;
@@ -1804,8 +1938,18 @@ namespace arms_ros2_control::command
         right_position_ *= vr_pose_scale_;
 
         has_vr_right_pose_.store(true);
+
+        // 光学 R0 握手：待完成的 UPDATE 进入 / 单臂恢复靠手柄帧推进，
+        // 与全身模式无关，必须保持在早退之前。
         tryCompleteOpticalUpdateEnter();
         tryCompleteOpticalResumes();
+
+        // 全身模式的目标由骨架绝对映射发布，普通手柄不参与
+        if (isWholeBodyActive())
+        {
+            return;
+        }
+
         const WbcToggleTarget controlledArm = mirror_mode_.load()
             ? WbcToggleTarget::LEFT_ARM
             : WbcToggleTarget::RIGHT_ARM;
@@ -1822,6 +1966,7 @@ namespace arms_ros2_control::command
             bool is_mirror = mirror_mode_.load();
             bool arm_paused = is_mirror ? left_arm_paused_.load() : right_arm_paused_.load();
 
+            // 全身「全部跟踪」已迁移到 WholeBodyVrTeleop；此处只处理普通模式。
             if (is_update_mode_.load())
             {
                 // 更新模式：基于差值计算pose并更新marker
@@ -1919,6 +2064,7 @@ namespace arms_ros2_control::command
             last_published_left_position_ = position;
             last_published_left_orientation_ = orientation;
             last_published_left_orientation_.normalize();
+            last_published_left_stamp_ = std::chrono::steady_clock::now();
         }
         else if (armType == "right")
         {
@@ -1926,6 +2072,7 @@ namespace arms_ros2_control::command
             last_published_right_position_ = position;
             last_published_right_orientation_ = orientation;
             last_published_right_orientation_.normalize();
+            last_published_right_stamp_ = std::chrono::steady_clock::now();
         }
     }
 
@@ -1934,15 +2081,22 @@ namespace arms_ros2_control::command
         has_last_published_left_target_ = false;
         last_published_left_position_ = Eigen::Vector3d::Zero();
         last_published_left_orientation_ = Eigen::Quaterniond::Identity();
+        last_published_left_stamp_ = std::chrono::steady_clock::time_point{};
 
         has_last_published_right_target_ = false;
         last_published_right_position_ = Eigen::Vector3d::Zero();
         last_published_right_orientation_ = Eigen::Quaterniond::Identity();
+        last_published_right_stamp_ = std::chrono::steady_clock::time_point{};
 
         left_robot_base_valid_ = false;
         right_robot_base_valid_ = false;
 
         resetStaleCatchUpRamp();
+        // 坐标系/拓扑发生变化：同步清掉全身组件的渐入锚点
+        if (whole_body_)
+        {
+            whole_body_->onSharedTargetCacheCleared();
+        }
     }
 
     bool VRInputHandler::transformPoseBetweenFrames(
@@ -2175,6 +2329,7 @@ namespace arms_ros2_control::command
         right_thumbstick_yaw_offset_ = 0.0;
 
         has_last_published_right_target_ = false;
+        last_published_right_stamp_ = std::chrono::steady_clock::time_point{};
         right_robot_base_valid_ = false;
         const bool rightBaseReady =
             setRobotBase("right", /*preferLastCommand=*/true);
@@ -2529,6 +2684,26 @@ namespace arms_ros2_control::command
         const bool rightGripWas = right_grip_active_.load();
         left_grip_active_.store(leftGripNow);
         right_grip_active_.store(rightGripNow);
+
+        // 全身模式：只同步轴值与握把 bit，不跑握把短按/方向抑制/WBC pending/
+        // 腰部/末端任何普通模式逻辑；事件 20 的手动底盘遥控仍可用。
+        if (isWholeBodyActive())
+        {
+            // FSM 可能由外部来源切走，摇杆消息是高频入口，这里顺带做一次兜底退出
+            whole_body_->onFsmStateChanged();
+            if (isWholeBodyActive() && chassis_mode_.load())
+            {
+                // 全身模式下右握把属于 WBC/全身组合键的修饰符，不作为腰部修饰符；
+                // 按住时屏蔽右摇杆，避免组合键动作同时驱动底盘转向。
+                if (right_grip_active_.load())
+                {
+                    right_thumbstick_axes_.setZero();
+                }
+                processChassisAxes();
+            }
+            return;
+        }
+
         if (leftGripNow != leftGripWas)
         {
             handleGripActiveEdge(true, leftGripNow);
@@ -2916,7 +3091,7 @@ namespace arms_ros2_control::command
 
         RCLCPP_INFO(
             node_->get_logger(),
-            "🔘 [case %d] 左握把+左摇杆%s：已请求%s（%s），等待 WBC 确认和左摇杆回中",
+            "🔘 [case %d] %s：已请求%s（%s），等待 WBC 确认和左摇杆回中",
             eventCase, direction, modeName, command);
     }
 
@@ -3141,7 +3316,14 @@ namespace arms_ros2_control::command
 
         if (msg->head_state != arms_ros2_control_msgs::msg::WbcCurrentState::HEAD_TRACKING)
         {
-            stopHeadTracking();
+            if (!isWholeBodyActive())
+            {
+                stopHeadTracking();
+            }
+            if (whole_body_)
+            {
+                whole_body_->onHeadStateChanged(msg->head_state);
+            }
         }
         home_joint_reference_enabled_.store(msg->home_joint_reference_enabled);
 
@@ -3262,6 +3444,7 @@ namespace arms_ros2_control::command
             has_last_published_left_target_ = false;
             last_published_left_position_.setZero();
             last_published_left_orientation_.setIdentity();
+            last_published_left_stamp_ = std::chrono::steady_clock::time_point{};
             resetStaleCatchUpRamp(true);
         }
         else if (armType == "right")
@@ -3269,6 +3452,7 @@ namespace arms_ros2_control::command
             has_last_published_right_target_ = false;
             last_published_right_position_.setZero();
             last_published_right_orientation_.setIdentity();
+            last_published_right_stamp_ = std::chrono::steady_clock::time_point{};
             resetStaleCatchUpRamp(false);
         }
     }
@@ -3721,6 +3905,7 @@ namespace arms_ros2_control::command
 
     void VRInputHandler::processChassisAxes()
     {
+        // 普通模式与全身模式共用的事件 20 手动底盘遥控（全身模式的底盘跟随由 OCS2 负责）。
         // VR 手柄轴值约定（Pico）：Y 轴往前推是负数，与机器人"正数=向前/向右"相反，
         // 因此 chassis 模式下对四个轴值统一取负，使方向语义与 joystick_teleop.cpp 对齐。
         // 非 FULL_BODY 下按住右握把可作为腰部控制修饰符；
@@ -3729,7 +3914,6 @@ namespace arms_ros2_control::command
         const double left_y = -left_thumbstick_axes_.y();
         const double right_x = -right_thumbstick_axes_.x();
         const double right_y = -right_thumbstick_axes_.y();
-
         // 底盘平移：左摇杆 Y → linear.x（前后），左摇杆 X → linear.y（左右，全向底盘）
         auto cmd_vel = geometry_msgs::msg::Twist();
         cmd_vel.linear.x  = left_y * chassis_linear_scale_;
@@ -3798,8 +3982,10 @@ namespace arms_ros2_control::command
     bool VRInputHandler::wbcOwnsChassisVelocity() const
     {
         // 仅全身 OCS2 且底盘规划解锁时让路；HOLD / 锁底盘由 VR 直发 /cmd_vel。
+        // 用权威 FSM（resolvedFsmState）而非本地缓存，避免缓存落后时
+        // 退出全身模式该发的零速被吞掉。
         return isFullBodyMode() &&
-               current_fsm_state_.load() == 3 &&
+               resolvedFsmState() == 3 &&
                target_manager_ &&
                target_manager_->getCurrentBaseState() ==
                    arms_ros2_control_msgs::msg::WbcCurrentState::BASE_UNLOCKED;
@@ -3936,12 +4122,380 @@ namespace arms_ros2_control::command
         }
     }
 
+    // ================= 模式路由与共享功能 =================
+
+    bool VRInputHandler::isWholeBodyActive() const
+    {
+        return whole_body_ && whole_body_->active();
+    }
+
+    bool VRInputHandler::isWholeBodyTeleopActive() const
+    {
+        return whole_body_ && whole_body_->active();
+    }
+
+    bool VRInputHandler::isAbsoluteTrackingActive() const
+    {
+        return whole_body_ && whole_body_->absoluteTrackingActive();
+    }
+
+    void VRInputHandler::toggleWholeBodyMode()
+    {
+        if (whole_body_)
+        {
+            whole_body_->toggleMode();
+        }
+    }
+
+    void VRInputHandler::handleFsmButtonEvent(int32_t code)
+    {
+        // 与 ATM 共用校验后的状态，避免 RViz 切到 MOVEJ 后 VR 仍以为在 HOLD
+        const int32_t current_state = resolvedFsmState();
+
+        if (code == 11)
+        {
+            // 右A：FSM 前进
+            if (current_state == 2)  // HOLD
+            {
+                sendFsmCommand(3);
+                RCLCPP_INFO(node_->get_logger(), "🔘 [右A按钮] 按下 - 功能: FSM状态前进 - 操作: HOLD → OCS2");
+            }
+            else if (current_state == 1)  // HOME
+            {
+                sendFsmCommand(2);
+                RCLCPP_INFO(node_->get_logger(), "🔘 [右A按钮] 按下 - 功能: FSM状态前进 - 操作: HOME → HOLD");
+            }
+            else if (current_state == 3)  // OCS2
+            {
+                RCLCPP_WARN(node_->get_logger(), "🔘 [右A按钮] 按下 - 功能: FSM状态前进 - 操作: 失败（已在OCS2状态，无法继续前进）");
+            }
+            else if (current_state == 4)  // MOVEJ
+            {
+                RCLCPP_WARN(node_->get_logger(), "🔘 [右A按钮] 按下 - 功能: FSM状态前进 - 操作: 失败（MOVEJ 需先回 HOLD，不能直接进 OCS2）");
+            }
+            return;
+        }
+
+        // 左X：FSM 后退/切换
+        if (current_state == 3)  // OCS2
+        {
+            sendFsmCommand(2);
+            RCLCPP_INFO(node_->get_logger(), "🔘 [左X按钮] 按下 - 功能: FSM状态后退/切换 - 操作: OCS2 → HOLD");
+        }
+        else if (current_state == 4)  // MOVEJ
+        {
+            sendFsmCommand(2);
+            RCLCPP_INFO(node_->get_logger(), "🔘 [左X按钮] 按下 - 功能: FSM状态后退/切换 - 操作: MOVEJ → HOLD");
+        }
+        else if (current_state == 2)  // HOLD
+        {
+            sendFsmCommand(1);
+            RCLCPP_INFO(node_->get_logger(), "🔘 [左X按钮] 按下 - 功能: FSM状态后退/切换 - 操作: HOLD → HOME");
+        }
+        else if (current_state == 1)  // HOME
+        {
+            sendFsmCommand(100);
+            RCLCPP_INFO(node_->get_logger(), "🔘 [左X按钮] 按下 - 功能: FSM状态后退/切换 - 操作: 在HOME状态切换姿态 (HOME ↔ REST)");
+        }
+    }
+
+    void VRInputHandler::handleGripperButtonEvent(int32_t code)
+    {
+        if (code == 9 || code == 10)
+        {
+            const bool is_left_trigger = (code == 9);
+            std::string controller_name;
+            bool is_target_left_arm = true;
+            resolveTriggerTarget(is_left_trigger, controller_name, is_target_left_arm);
+            if (isGripperPercentMode(is_target_left_arm))
+            {
+                RCLCPP_DEBUG(node_->get_logger(),
+                             "🔘 [%s扳机按钮] 目标%s夹爪为比例控制(0~1)，忽略开关事件%s",
+                             is_left_trigger ? "左" : "右",
+                             is_target_left_arm ? "左" : "右",
+                             mirror_mode_.load() ? " [镜像模式]" : "");
+            }
+            else
+            {
+                toggleGripperByTrigger(is_left_trigger);
+            }
+            return;
+        }
+
+        // 13/14：握把+扳机，切换该侧夹爪百分比/开合
+        const bool is_left_trigger = (code == 13);
+        markGripComboConsumed(is_left_trigger, !is_left_trigger);
+        toggleGripperPercentMode(is_left_trigger);
+    }
+
+    void VRInputHandler::suspendNormalModeState()
+    {
+        // 进入全身模式前，把普通模式的运行态全部清掉，避免全身模式下继续生效或退出时残留。
+        is_update_mode_.store(false);
+        // 镜像关掉后必须同步发给下游（灵巧手 / DualHand 依赖该 latch），
+        // 否则全身模式下手的映射仍保持镜像。
+        mirror_mode_.store(false);
+        publishMirrorMode();
+        mirror_mode_profile_.store(static_cast<int>(MirrorModeProfile::MODE_A));
+
+        // 光学 R0 握手：待完成的 UPDATE 进入 / 单臂恢复在全身模式内不会再有推进时机，
+        // 必须显式取消（否则 100ms 监管器会在全身模式内把 is_update_mode_ 拉回 true）。
+        cancelOpticalPending("entering whole-body teleop");
+
+        chassis_mode_.store(false);
+        // 无论之前是否处于 CHASSIS，都向 /cmd_vel 与腰部话题各发一次 0
+        resetChassisAndWaistCommands();
+
+        right_wbc_toggle_request_pending_.store(false);
+        requested_wbc_toggle_target_.store(WbcToggleTarget::NONE);
+        body_mode_request_pending_.store(false);
+        requested_body_state_.store(-1);
+        resetYbModeLatchAndConversions();
+
+        left_thumbstick_offset_.setZero();
+        right_thumbstick_offset_.setZero();
+        left_thumbstick_yaw_offset_ = 0.0;
+        right_thumbstick_yaw_offset_ = 0.0;
+        body_thumbstick_z_yaw_mode_.store(false);
+        waist_stick_axis_.store(WaistStickAxis::NONE);
+        left_grip_mode_.store(false);
+        right_grip_mode_.store(false);
+        left_arm_paused_.store(false);
+        right_arm_paused_.store(false);
+        left_grip_press_armed_.store(false);
+        right_grip_press_armed_.store(false);
+        left_grip_combo_consumed_.store(false);
+        right_grip_combo_consumed_.store(false);
+        left_grip_direction_suppressed_.store(false);
+        right_grip_direction_suppressed_.store(false);
+        left_robot_base_valid_ = false;
+        right_robot_base_valid_ = false;
+        right_vr_target_suppressed_by_bimanual_ = false;
+        resetStaleCatchUpRamp();
+        stopHeadTracking();
+    }
+
+    void VRInputHandler::resumeNormalModeState()
+    {
+        // 退出全身模式后，普通模式从 STORAGE 开始；镜像按设计保持关闭。
+        is_update_mode_.store(false);
+        right_wbc_toggle_request_pending_.store(false);
+        requested_wbc_toggle_target_.store(WbcToggleTarget::NONE);
+        body_mode_request_pending_.store(false);
+        requested_body_state_.store(-1);
+        resetYbModeLatchAndConversions();
+
+        left_thumbstick_offset_.setZero();
+        right_thumbstick_offset_.setZero();
+        left_thumbstick_yaw_offset_ = 0.0;
+        right_thumbstick_yaw_offset_ = 0.0;
+        body_thumbstick_z_yaw_mode_.store(false);
+        waist_stick_axis_.store(WaistStickAxis::NONE);
+        left_grip_mode_.store(false);
+        right_grip_mode_.store(false);
+        left_arm_paused_.store(false);
+        right_arm_paused_.store(false);
+        left_grip_press_armed_.store(false);
+        right_grip_press_armed_.store(false);
+        left_grip_combo_consumed_.store(false);
+        right_grip_combo_consumed_.store(false);
+        left_grip_direction_suppressed_.store(false);
+        right_grip_direction_suppressed_.store(false);
+        left_robot_base_valid_ = false;
+        right_robot_base_valid_ = false;
+        right_vr_target_suppressed_by_bimanual_ = false;
+        resetStaleCatchUpRamp();
+        stopHeadTracking();
+    }
+
+    bool VRInputHandler::publishArmTargetForWholeBody(
+        bool is_left,
+        const Eigen::Vector3d& position,
+        const Eigen::Quaterniond& orientation)
+    {
+        if (!ee_frame_id_initialized_)
+        {
+            return false;
+        }
+        if ((is_left && !pub_left_target_) || (!is_left && !pub_right_target_))
+        {
+            RCLCPP_WARN(
+                node_->get_logger(),
+                "🕹️ Invalid arm publisher for whole-body target: %s",
+                is_left ? "left" : "right");
+            return false;
+        }
+
+        // 全身模式不与普通模式的“双臂解耦右臂重建”交互：直接发布骨架目标。
+        Eigen::Vector3d rampedPosition = position;
+        Eigen::Quaterniond rampedOrientation = orientation;
+        applyStaleCatchUpRamp(is_left, rampedPosition, rampedOrientation);
+
+        geometry_msgs::msg::Pose pose;
+        pose.position.x = rampedPosition.x();
+        pose.position.y = rampedPosition.y();
+        pose.position.z = rampedPosition.z();
+        pose.orientation.x = rampedOrientation.x();
+        pose.orientation.y = rampedOrientation.y();
+        pose.orientation.z = rampedOrientation.z();
+        pose.orientation.w = rampedOrientation.w();
+
+        if (is_left)
+        {
+            pub_left_target_->publish(pose);
+            prev_calculated_left_position_ = rampedPosition;
+            prev_calculated_left_orientation_ = rampedOrientation.normalized();
+        }
+        else
+        {
+            pub_right_target_->publish(pose);
+            prev_calculated_right_position_ = rampedPosition;
+            prev_calculated_right_orientation_ = rampedOrientation.normalized();
+        }
+
+        recordLastPublishedTarget(is_left ? "left" : "right", rampedPosition, rampedOrientation);
+        return true;
+    }
+
+    bool VRInputHandler::prepareWholeBodyArmInput(bool is_left)
+    {
+        const WbcToggleTarget arm =
+            is_left ? WbcToggleTarget::LEFT_ARM : WbcToggleTarget::RIGHT_ARM;
+        if (!isArmVrInputSuppressed(arm))
+        {
+            return true;
+        }
+
+        std::atomic<bool>* pending = is_left
+            ? &left_wbc_rebase_pending_
+            : &right_wbc_rebase_pending_;
+        std::atomic<bool>* suppressed = is_left
+            ? &left_wbc_vr_suppressed_
+            : &right_wbc_vr_suppressed_;
+        if (!pending->load())
+        {
+            return false;
+        }
+
+        // 全身模式不依赖手柄 pose：直接用实测末端位姿建立基准
+        const std::string armType = is_left ? "left" : "right";
+        if (!setRobotBase(armType, /*preferLastCommand=*/false))
+        {
+            return false;
+        }
+        resetStaleCatchUpRamp(is_left);
+        clearLastPublishedTarget(armType);
+        if (is_left)
+        {
+            prev_calculated_left_position_ = robot_current_left_position_;
+            prev_calculated_left_orientation_ = robot_current_left_orientation_.normalized();
+        }
+        else
+        {
+            prev_calculated_right_position_ = robot_current_right_position_;
+            prev_calculated_right_orientation_ = robot_current_right_orientation_.normalized();
+        }
+
+        pending->store(false);
+        suppressed->store(false);
+        // desiredOpticalR0RequestBits() 会把 WBC rebase pending 也算进 request，
+        // 全身模式在这里自己完成 rebase，仍须刷新一次把该位清掉（ACK 给 fa-py）。
+        refreshOpticalR0Request();
+        RCLCPP_INFO(
+            node_->get_logger(),
+            "🕹️ %s WBC arm VR control rebased from current pose (whole-body)",
+            is_left ? "left" : "right");
+        return true;
+    }
+
+    bool VRInputHandler::robotCurrentPose(
+        bool is_left,
+        Eigen::Vector3d& position,
+        Eigen::Quaterniond& orientation) const
+    {
+        if (is_left)
+        {
+            if (!has_robot_current_left_pose_.load())
+            {
+                return false;
+            }
+            position = robot_current_left_position_;
+            orientation = robot_current_left_orientation_;
+            return true;
+        }
+        if (!has_robot_current_right_pose_.load())
+        {
+            return false;
+        }
+        position = robot_current_right_position_;
+        orientation = robot_current_right_orientation_;
+        return true;
+    }
+
+    bool VRInputHandler::robotHeadPose(geometry_msgs::msg::PoseStamped& pose) const
+    {
+        if (!has_robot_head_pose_)
+        {
+            return false;
+        }
+        pose = robot_head_pose_;
+        return true;
+    }
+
     void VRInputHandler::processButtonEvent(const std_msgs::msg::Int32::SharedPtr msg)
     {
-        // 处理按钮事件（button_event: 0=无事件, 1-6=按钮按下, 7=镜像模式切换, 9=左扳机, 10=右扳机）
-        // xr_target_node 对多数按键做上升沿检测；握把 case 2/5 不再切换摇杆模式，改由短按松开判定。
+        const int32_t code = msg->data;
+        // /teleop/controller_state 每帧都发 0（无事件）；直接返回，避免全身模式把它当成未知事件。
+        if (code == 0)
+        {
+            return;
+        }
 
-        switch (msg->data)
+        // FSM 可能由外部来源切走，按键是低频入口，这里顺带做一次兜底退出
+        if (whole_body_)
+        {
+            whole_body_->onFsmStateChanged();
+        }
+
+        // ---- 共享功能：FSM 与夹爪（普通/全身模式都可用） ----
+        if (code == 11 || code == 12)
+        {
+            handleFsmButtonEvent(code);
+            return;
+        }
+        if (code == 9 || code == 10 || code == 13 || code == 14)
+        {
+            handleGripperButtonEvent(code);
+            return;
+        }
+        if (code == 30)
+        {
+            markGripComboConsumed(true, true);
+            toggleWholeBodyMode();
+            return;
+        }
+
+        // ---- 全身模式：只认 4（全部跟踪）与 20（手动底盘遥控） ----
+        if (isWholeBodyActive())
+        {
+            if (code == 20)
+            {
+                // 与普通模式一致：左摇杆→底盘 XY，右摇杆→转向；
+                // BASE_UNLOCKED 时由 publishChassisVelocity 让路给 WBC。
+                handleNormalButtonEvent(code);
+                return;
+            }
+            whole_body_->handleButtonEvent(code);
+            return;
+        }
+
+        // ---- 普通 VR 遥操作模式 ----
+        handleNormalButtonEvent(code);
+    }
+
+    void VRInputHandler::handleNormalButtonEvent(int32_t code)
+    {
+        switch (code)
         {
             case 1:  // 左摇杆按钮
             {
@@ -4020,7 +4574,7 @@ namespace arms_ros2_control::command
                 }
                 break;
             }
-            case 4:  // 右摇杆按钮
+            case 4:  // 右摇杆按钮（短按松开沿）：普通模式 UPDATE/STORAGE
             {
                 // 只在OCS2状态下执行（状态值为3）
                 if (current_fsm_state_.load() != 3)
@@ -4287,111 +4841,6 @@ namespace arms_ros2_control::command
                 }
                 break;
             }
-            case 9:  // 左扳机按钮
-            {
-                std::string controller_name;
-                bool is_target_left_arm = true;
-                resolveTriggerTarget(true, controller_name, is_target_left_arm);
-                if (isGripperPercentMode(is_target_left_arm))
-                {
-                    RCLCPP_DEBUG(node_->get_logger(),
-                                 "🔘 [左扳机按钮] 目标%s夹爪为比例控制(0~1)，忽略开关事件%s",
-                                 is_target_left_arm ? "左" : "右",
-                                 mirror_mode_.load() ? " [镜像模式]" : "");
-                }
-                else
-                {
-                    toggleGripperByTrigger(true);
-                }
-                break;
-            }
-            case 10: // 右扳机按钮
-            {
-                std::string controller_name;
-                bool is_target_left_arm = true;
-                resolveTriggerTarget(false, controller_name, is_target_left_arm);
-                if (isGripperPercentMode(is_target_left_arm))
-                {
-                    RCLCPP_DEBUG(node_->get_logger(),
-                                 "🔘 [右扳机按钮] 目标%s夹爪为比例控制(0~1)，忽略开关事件%s",
-                                 is_target_left_arm ? "左" : "右",
-                                 mirror_mode_.load() ? " [镜像模式]" : "");
-                }
-                else
-                {
-                    toggleGripperByTrigger(false);
-                }
-                break;
-            }
-            case 11: // 右A按钮（FSM状态控制）
-            {
-                // 与 ATM 共用校验后的状态，避免 RViz 切到 MOVEJ 后 VR 仍以为在 HOLD
-                const int32_t current_state = resolvedFsmState();
-
-                if (current_state == 2)  // HOLD
-                {
-                    // HOLD → OCS2
-                    sendFsmCommand(3);
-                    RCLCPP_INFO(node_->get_logger(), "🔘 [右A按钮] 按下 - 功能: FSM状态前进 - 操作: HOLD → OCS2");
-                }
-                else if (current_state == 1)  // HOME
-                {
-                    // HOME → HOLD
-                    sendFsmCommand(2);
-                    RCLCPP_INFO(node_->get_logger(), "🔘 [右A按钮] 按下 - 功能: FSM状态前进 - 操作: HOME → HOLD");
-                }
-                else if (current_state == 3)  // OCS2
-                {
-                    RCLCPP_WARN(node_->get_logger(), "🔘 [右A按钮] 按下 - 功能: FSM状态前进 - 操作: 失败（已在OCS2状态，无法继续前进）");
-                }
-                else if (current_state == 4)  // MOVEJ
-                {
-                    RCLCPP_WARN(node_->get_logger(), "🔘 [右A按钮] 按下 - 功能: FSM状态前进 - 操作: 失败（MOVEJ 需先回 HOLD，不能直接进 OCS2）");
-                }
-                break;
-            }
-            case 12: // 左X按钮（FSM状态控制）
-            {
-                const int32_t current_state = resolvedFsmState();
-
-                if (current_state == 3)  // OCS2
-                {
-                    // OCS2 → HOLD
-                    sendFsmCommand(2);
-                    RCLCPP_INFO(node_->get_logger(), "🔘 [左X按钮] 按下 - 功能: FSM状态后退/切换 - 操作: OCS2 → HOLD");
-                }
-                else if (current_state == 4)  // MOVEJ
-                {
-                    // MOVEJ → HOLD（不能直接 HOME）
-                    sendFsmCommand(2);
-                    RCLCPP_INFO(node_->get_logger(), "🔘 [左X按钮] 按下 - 功能: FSM状态后退/切换 - 操作: MOVEJ → HOLD");
-                }
-                else if (current_state == 2)  // HOLD
-                {
-                    // HOLD → HOME
-                    sendFsmCommand(1);
-                    RCLCPP_INFO(node_->get_logger(), "🔘 [左X按钮] 按下 - 功能: FSM状态后退/切换 - 操作: HOLD → HOME");
-                }
-                else if (current_state == 1)  // HOME
-                {
-                    // HOME状态下，X按钮切换姿态 (HOME ↔ REST)
-                    sendFsmCommand(100);
-                    RCLCPP_INFO(node_->get_logger(), "🔘 [左X按钮] 按下 - 功能: FSM状态后退/切换 - 操作: 在HOME状态切换姿态 (HOME ↔ REST)");
-                }
-                break;
-            }
-            case 13: // 左握把+左扳机：切换左扳机所映射夹爪的百分比/开合
-            {
-                markGripComboConsumed(true, false);
-                toggleGripperPercentMode(true);
-                break;
-            }
-            case 14: // 右握把+右扳机：切换右扳机所映射夹爪的百分比/开合
-            {
-                markGripComboConsumed(false, true);
-                toggleGripperPercentMode(false);
-                break;
-            }
             case 15: // 左Y+右B：尺度对齐（功能未完善，暂时禁用）
             {
                 // runScaleCalibration(true);
@@ -4416,25 +4865,25 @@ namespace arms_ros2_control::command
             case 21: // 左握把 + 左摇杆向上：竖直
                 markGripComboConsumed(true, false);
                 requestBodyMode(
-                    21, "向上", "竖直", "BODY_RELATIVE",
+                    21, "左握把+左摇杆向上", "竖直", "BODY_RELATIVE",
                     arms_ros2_control_msgs::msg::WbcCurrentState::BODY_VERTICAL);
                 break;
             case 22: // 左握把 + 左摇杆向下：锁定
                 markGripComboConsumed(true, false);
                 requestBodyMode(
-                    22, "向下", "锁定", "BODY_LOCK",
+                    22, "左握把+左摇杆向下", "锁定", "BODY_LOCK",
                     arms_ros2_control_msgs::msg::WbcCurrentState::BODY_LOCKED);
                 break;
             case 23: // 左握把 + 左摇杆向左：跟随
                 markGripComboConsumed(true, false);
                 requestBodyMode(
-                    23, "向左", "跟随", "BODY_TRACKING",
+                    23, "左握把+左摇杆向左", "跟随", "BODY_TRACKING",
                     arms_ros2_control_msgs::msg::WbcCurrentState::BODY_TRACKING);
                 break;
             case 24: // 左握把 + 左摇杆向右：自定义
                 markGripComboConsumed(true, false);
                 requestBodyMode(
-                    24, "向右", "自定义", "BODY_CUSTOM_LOCK",
+                    24, "左握把+左摇杆向右", "自定义", "BODY_CUSTOM_LOCK",
                     arms_ros2_control_msgs::msg::WbcCurrentState::BODY_CUSTOM_LOCKED);
                 break;
             case 25: // 右握把 + 右摇杆向上：双臂耦合
@@ -4528,6 +4977,11 @@ namespace arms_ros2_control::command
                         {
                             resetYbModeLatchAndConversions();
                         }
+                        // 全身遥操只在 FULL_BODY 下有效：由全身组件自行退出并恢复普通模式
+                        if (whole_body_)
+                        {
+                            whole_body_->onTopologyChanged(next == ControlTopology::FULL_BODY);
+                        }
                         const char* name =
                             next == ControlTopology::FULL_BODY ? "FULL_BODY" :
                             next == ControlTopology::SPLIT_BODY ? "SPLIT_BODY" :
@@ -4540,10 +4994,8 @@ namespace arms_ros2_control::command
                             "🕹️ Control topology changed; VR frame caches invalidated");
                     }
 
-                    if (next != ControlTopology::UNKNOWN)
-                    {
-                        control_topology_timer_->cancel();
-                    }
+                    // 保持 1 Hz 轮询：运行期切换 arms/wbc 控制器时也要能触发拓扑变化处理
+                    // （全身模式自动退出、腰部发布器重建等）。
                 }
                 catch (const std::exception& error)
                 {
@@ -4635,6 +5087,12 @@ namespace arms_ros2_control::command
             RCLCPP_DEBUG(node_->get_logger(),
                          "🕹️🕶️🕹️ Ignore invalid FSM transition: %s + command=%d",
                          current_name.c_str(), command);
+            // 本地缓存与权威状态分歧时这条命令会被丢弃，但全身遥操作的退出判定必须
+            // 依据权威状态走（否则模式会一直残留），这里兜底一次。
+            if (whole_body_)
+            {
+                whole_body_->onFsmStateChanged();
+            }
             return;
         }
 
@@ -4688,6 +5146,13 @@ namespace arms_ros2_control::command
                     RCLCPP_INFO(node_->get_logger(), "🕹️🕶️🕹️ Thumbstick offsets reset!");
                 }
             }
+        }
+
+        // 全身遥操作只在 OCS2 内有效：权威 FSM 一离开 OCS2（HOLD / HOME / MOVEJ，含控制器
+        // 异常自动回退）就退出整个模式，与上面普通遥操作自动回 STORAGE 保持一致。
+        if (whole_body_)
+        {
+            whole_body_->onFsmStateChanged();
         }
     }
 } // namespace arms_ros2_control::command

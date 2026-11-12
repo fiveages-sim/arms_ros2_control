@@ -23,7 +23,86 @@
     vr_pose_scale: 1.0
 
     # VR 末端目标保持所在的机器人跟随坐标系（FULL_BODY / SPLIT_BODY 均生效）
+    # 全身遥操作还把它当作「机器人底座」：目标 = 底座 ⊗ 人体相对 footprint 的位姿
+    # （底盘锁定时），并据此查询 底座 → world / control_base_frame 的 TF。
     vr_follow_frame: base_footprint
+
+    # ================= 全身骨架绝对位姿映射 =================
+    # 以下参数只在「全身遥操作模式」（左右握把+右摇杆按下开启）内部生效：
+    #   右摇杆短按（事件 4） = 开/关「全部跟踪」（胸/头/双臂末端改为 /teleop/body_* 绝对位姿映射）
+    # 底盘跟随由 OCS2 负责（事件 26 解锁底盘 → MPC 用底盘自由度去追世界系 marker）：
+    #   - 底盘锁定：marker/目标 = 机器人底座 ⊗ 人体相对 footprint 的位姿，
+    #     人体原地走动不会把期望 marker 拉离机器人；
+    #   - 底盘解锁：marker 锚定世界系（解锁瞬间冻结基准），人体走动时 marker 远离机器人，
+    #     由 OCS2 自动驱动底盘跟随。
+    # 事件 20（手动底盘遥控）在两种模式下都可用。
+
+    # 双臂末端数据源：hand / wrist（对应 /teleop/body_{left,right}_<源>_pose）
+    body_ee_source: wrist
+
+    # ===== 骨架分段尺度（在人体根坐标系里对「段向量」缩放；只改位置，姿态完全不变）=====
+    # 1.0 = 与人体等比；>1 表示机器人的对应尺寸比人体大。
+    # 实现：沿骨架链逐段缩放后重新累加（段向量之和 = 链端点之差）：
+    #   身长 body_length_scale     : pelvis → spine3（并同样作用于 spine3 → head）
+    #   肩宽 shoulder_width_scale  : spine3 → shoulder(L/R)
+    #   臂长 arm_length_scale      : shoulder → 末端(hand/wrist)
+    # 效果举例：胳膊向前伸直时，人手间距 = 人体肩宽 → 机器人末端间距 = 机器人肩宽（调肩宽）；
+    #           人臂完全伸直时机器人臂也完全伸直（调臂长 = 机器人臂长/人体臂长）。
+    # 注意：胸部锚点 λ=1 时胸部位置取骨盆，所以“身长”不影响胸目标，只影响头与手臂根。
+    body_length_scale: 1.0
+    shoulder_width_scale: 1.2
+    arm_length_scale: 1.4
+
+    # 注：人体根坐标系本身就是「人体系」（x 前 / y 左 / z 上），各部位先表达在该系里，
+    # 因此人体朝向即机器人机头朝向——这是构造成立的，不需要人工偏航常数。
+    # （早期有一个 absolute_map_yaw_deg 做“人体根轴向 → 底座轴向”的手工补偿，已删除。）
+
+    # 「数据源坐标系 → 机器人目标坐标系」的固定旋转偏置（固定轴 RPY，度，R = Rz·Ry·Rx）。
+    # 手柄面朝上时：人手 x 轴上、左手 z 轴左 / 右手 z 轴右；而 tcp x 轴上、z 轴前，
+    # 所以需要绕手部 x 轴 ∓90°。换 ee_source=wrist、换机型（eeFrame 为 *_eef 等）时必须重调。
+    # 现场校准：人体保持标准姿态，看 RViz 里末端目标 axes 与人体朝向的偏差，调这三个角。
+    hand_to_ee_rpy_deg_left: [-90.0, 0.0, 0.0]
+    hand_to_ee_rpy_deg_right: [90.0, 0.0, 0.0]
+    body_src_to_ee_rpy_deg: [0.0, 0.0, 0.0]
+    head_src_to_ee_rpy_deg: [0.0, 0.0, 0.0]
+
+    # 绝对目标一阶低通系数：0=不滤波（噪声最大），越大跟随越紧
+    absolute_filter_alpha: 0.3
+
+    # 标定前等待姿态稳定的时长 (ms)：先取机器人当前实际位姿与骨架对准，稳定后才锁定
+    capture_settle_ms: 200.0
+
+    # 骨架单关节数据看门狗 (s)：超时只冻结对应任务，其余正常
+    skeleton_timeout: 0.2
+
+    # 人体基坐标系 H（human footprint）由 vr_pose_publisher 统一计算并发布：
+    #   /teleop/human_footprint_pose
+    #   xy = 骨盆地面投影，z = 双足较低者（地面），yaw = 双踝 x 轴平均。
+    # 低通系数与原点偏置也迁到发布端，通过环境变量或 XRTargetNode 构造参数配置：
+    #   XR_HUMAN_FOOTPRINT_FILTER_ALPHA / XR_HUMAN_FOOTPRINT_OFFSET
+    #   human_footprint_filter_alpha / human_footprint_offset
+    # 本节点只订阅结果，不再声明 human_root_filter_alpha / human_root_offset。
+
+    # 胸部位置沿「脊柱轴」（spine3 → pelvis）的锚点比例：
+    #   0 = 取 spine3 位置，1 = 取 pelvis 位置（机器人的 body_link4 比人体 spine3 偏下、
+    #   大致在骨盆高度）。姿态始终由 spine3 决定，不受本参数影响。
+    body_anchor_lambda: 1.0
+
+    # 骨架几何一致性容差（手–脊柱距离相对参考臂长的允许偏差比例）
+    # <=0 表示关闭该过滤
+    skeleton_geometry_tolerance: 0.2
+
+    # ================= 接管渐入（仅过渡段限速） =================
+    # 全新开启「全部跟踪」时，胸/头/双臂目标从机器人当前保持的位姿，按下面速度上限
+    # 缓慢过渡到实时 VR 期望位姿；过渡结束后恢复直通，不影响稳态跟随手感。
+    # 过渡时长由距离反算：T = 1.875 * max(|Δp|/v, Δθ/ω)，再钳到 [min, max]。
+    # 骨架超时冻结后恢复（输出中断 > resume_gap）也会重新渐入，避免阶跃。
+    absolute_ramp_enable: true
+    absolute_ramp_max_linear_velocity: 0.15   # 过渡段线速度上限 (m/s)
+    absolute_ramp_max_angular_velocity: 0.4   # 过渡段角速度上限 (rad/s)
+    absolute_ramp_min_duration: 0.2           # 最短过渡时长 (s)
+    absolute_ramp_max_duration: 3.0           # 最长过渡时长 (s)；触顶时峰值速度会超上限
+    absolute_ramp_resume_gap: 0.3             # 输出中断超过该时长后重新渐入 (s)
 
     # 是否启用VR输入处理
     enable_vr: false

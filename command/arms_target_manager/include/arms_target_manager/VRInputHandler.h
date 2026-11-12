@@ -31,6 +31,72 @@
 
 namespace arms_ros2_control::command
 {
+    class WholeBodyVrTeleop;
+
+    /**
+     * 全身骨架绝对位姿映射的可调参数。
+     *
+     * 这些开关只在「全身遥操作模式」（case 30 已开启）内部生效：
+     *   - 右摇杆短按（事件 4） = 开/关「全部跟踪」→ 胸/头/双臂末端改为 /teleop/body_* 绝对位姿映射
+     * 底盘跟随不由本节点做速度外环：由 OCS2 负责
+     * （事件 26 解锁底盘后，MPC 用底盘自由度去追世界系 marker）。
+     * 非全身模式下的一切既有行为（UPDATE/STORAGE、摇杆微调、镜像等）不受影响；
+     * 事件 20 的手动底盘遥控在两种模式下都可用。
+     */
+    struct AbsoluteTeleopOptions
+    {
+        // 双臂末端数据源：hand / wrist（对应 /teleop/body_left_hand_pose 等话题）
+        std::string ee_source{"hand"};
+
+        // 「数据源坐标系 → 机器人目标坐标系」的固定旋转偏置（在手部体坐标系里右乘），
+        // 固定轴 RPY（度，R = Rz(yaw)·Ry(pitch)·Rx(roll)）。
+        // 手柄面朝上时：人手 x 轴上、左手 z 轴左 / 右手 z 轴右；而 tcp x 轴上、z 轴前，
+        // 因此需要绕手部 x 轴 ∓90°。 换 ee_source=wrist / 换机型（eeFrame=\_eef 等）时必须重调。
+        std::vector<double> hand_to_ee_rpy_deg_left{-90.0, 0.0, 0.0};
+        std::vector<double> hand_to_ee_rpy_deg_right{90.0, 0.0, 0.0};
+        // 胸部（数据源 spine3 → body_link4）与头部（数据源 body_head → head_link2）的同名偏置
+        std::vector<double> body_src_to_ee_rpy_deg{0.0, 0.0, 0.0};
+        std::vector<double> head_src_to_ee_rpy_deg{0.0, 0.0, 0.0};
+        // ===== 骨架分段尺度（在人体根 H 里对「段向量」缩放；只改位置，姿态完全不变）=====
+        // 1.0 = 与人体等比；>1 表示机器人的对应尺寸比人体大。
+        // 等价于沿链逐段缩放后重新累加（段向量之和 = 链端点之差）：
+        //   s_body     : pelvis → spine3（并同样作用于 spine3 → head）
+        //   s_shoulder : spine3 → shoulder(L/R)
+        //   s_arm      : shoulder → 末端(hand/wrist)
+        double body_length_scale{1.0};
+        double shoulder_width_scale{1.0};
+        double arm_length_scale{1.0};
+        // VR 世界系 → 机器人世界系的对齐偏航（度）。
+        // 标准摆放（人站在机器人正后方、面朝机器人前方启动头显）下为 0。
+        // 注：早期有一个 absolute_map_yaw_deg（人体根轴向 → 底座轴向的固定偏航），
+        // 已删除。映射现在按「人体系」锚定：人体朝向即机器人机头朝向，
+        // 该关系由「把人体各量先表达在人体根 H 自身坐标系里」自动建立，无需人工常数。
+        // 绝对目标的一阶低通系数（0=不滤波，越大越跟随）
+        double filter_alpha{0.3};
+        // 标定前等待姿态稳定的时长 [s]
+        double capture_settle_sec{0.2};
+        // 骨架单关节数据看门狗 [s]；超时只冻结对应任务
+        double skeleton_timeout_sec{0.2};
+        // 注：人体基坐标系 H 的低通系数与原点偏置已迁到 vr_pose_publisher
+        // （/teleop/human_footprint_pose 的发布端），本节点只消费结果。
+        // 胸部位置沿「脊柱轴」的锚点比例：0 = 取 spine3 位置，1 = 取 pelvis 位置。
+        // 机器人的 body_link4 比人体 spine3 偏下、大致在骨盆高度，所以默认取 1。
+        double body_anchor_lambda{1.0};
+        // 骨架几何一致性容差（臂长偏离比例）
+        double geometry_tolerance{0.2};
+
+        // ---- 接管渐入（仅「开启跟踪」与「数据恢复」的过渡段） ----
+        // 全新开启「全部跟踪」时，目标位姿从机器人当前保持的位姿按速度约束缓慢过渡到
+        // 实时 VR 期望位姿；过渡结束后恢复直通，不影响稳态跟随手感。
+        bool pose_ramp_enable{true};
+        double pose_ramp_max_linear_velocity{0.15};   // [m/s]
+        double pose_ramp_max_angular_velocity{0.4};   // [rad/s]
+        double pose_ramp_min_duration_sec{0.2};       // [s]
+        double pose_ramp_max_duration_sec{3.0};       // [s]
+        // 目标输出中断超过该时长后再恢复（如骨架超时冻结）时，重新渐入 [s]
+        double pose_ramp_resume_gap_sec{0.3};
+    };
+
     /**
      * VRInputHandler - VR输入处理器Wrapper
      * 
@@ -58,6 +124,7 @@ namespace arms_ros2_control::command
          * @param vr_pose_scale 手柄位姿位置缩放因子（左右共用；事件 15 左Y+右B 固定按左侧 Z 距校准）
          * @param reference_link 参考link名称（例如 head_link2），用于VR/头显关联
          * @param vr_follow_frame VR 增量参考轴系，恢复时冻结到控制器系的旋转（默认 base_footprint）
+         * @param absolute_options 全身骨架绝对映射 / 底盘跟随参数
          */
         VRInputHandler(
             rclcpp::Node::SharedPtr node,
@@ -69,9 +136,10 @@ namespace arms_ros2_control::command
             double vr_thumbstick_angular_scale,
             double vr_pose_scale,
             const std::string& reference_link,
-            const std::string& vr_follow_frame);
+            const std::string& vr_follow_frame,
+            const AbsoluteTeleopOptions& absolute_options = AbsoluteTeleopOptions{});
 
-        ~VRInputHandler() = default;
+        ~VRInputHandler();
 
         /**
          * 启用VR控制
@@ -134,6 +202,16 @@ namespace arms_ros2_control::command
         {
             return controlTopology() == ControlTopology::FULL_BODY;
         }
+
+        /**
+         * 检查全身骨架遥操作是否已开启（case 30 组合键开关）。
+         */
+        bool isWholeBodyTeleopActive() const;
+
+        /**
+         * 「全部跟踪」是否已开启（全身模式内右摇杆短按 toggle）。
+         */
+        bool isAbsoluteTrackingActive() const;
 
         /**
          * FSM命令回调函数（用于跟踪FSM状态）
@@ -309,6 +387,27 @@ namespace arms_ros2_control::command
          * @param msg Int32消息，包含按钮事件数字 (0=无事件, 1-6=按钮按下, 7=镜像模式切换, 9=左扳机, 10=右扳机)
          */
         void processButtonEvent(const std_msgs::msg::Int32::SharedPtr msg);
+
+        // ---- 模式路由 ----
+        void toggleWholeBodyMode();
+        void handleNormalButtonEvent(int32_t code);
+        void handleFsmButtonEvent(int32_t code);
+        void handleGripperButtonEvent(int32_t code);
+        bool isWholeBodyActive() const;
+
+        // ---- 全身模式与普通模式的清场/恢复（供 WholeBodyVrTeleop 通过 hooks 调用） ----
+        void suspendNormalModeState();
+        void resumeNormalModeState();
+
+        // ---- 全身模式专用基础设施 hook ----
+        bool publishArmTargetForWholeBody(bool is_left,
+                                          const Eigen::Vector3d& position,
+                                          const Eigen::Quaterniond& orientation);
+        bool prepareWholeBodyArmInput(bool is_left);
+        bool robotCurrentPose(bool is_left,
+                              Eigen::Vector3d& position,
+                              Eigen::Quaterniond& orientation) const;
+        bool robotHeadPose(geometry_msgs::msg::PoseStamped& pose) const;
 
         void handleGripActiveEdge(bool isLeft, bool pressed);
         void applyGripShortPress(bool isLeft);
@@ -591,6 +690,7 @@ namespace arms_ros2_control::command
         // ROS组件
         rclcpp::Node::SharedPtr node_;
         ArmsTargetManager* target_manager_;
+        std::unique_ptr<WholeBodyVrTeleop> whole_body_;
 
         // 发布器（用于直接发布到left_target/right_target）
         rclcpp::Publisher<geometry_msgs::msg::Pose>::SharedPtr pub_left_target_;
@@ -687,6 +787,7 @@ namespace arms_ros2_control::command
         Eigen::Quaterniond robot_head_base_orientation_ = Eigen::Quaterniond::Identity();
         // Last published command with its current-pose frame, not measured pose.
         std::optional<geometry_msgs::msg::PoseStamped> last_head_target_;
+        std::chrono::steady_clock::time_point last_head_target_stamp_{};
 
         // 最后实际发布 frame（ee_frame_id_）的 Pose，仅用于变化检测
         Eigen::Vector3d prev_calculated_left_position_ = Eigen::Vector3d::Zero();
@@ -701,6 +802,10 @@ namespace arms_ros2_control::command
         bool has_last_published_right_target_ = false;
         Eigen::Vector3d last_published_right_position_ = Eigen::Vector3d::Zero();
         Eigen::Quaterniond last_published_right_orientation_ = Eigen::Quaterniond::Identity();
+        // 最后一次下发时刻，用于判断锚点是否仍然有效（旧缓存只说明「曾经的意图」
+        // 已可能被 RViz marker / control_input 改写过，此时应退回实测位姿）。
+        std::chrono::steady_clock::time_point last_published_left_stamp_{};
+        std::chrono::steady_clock::time_point last_published_right_stamp_{};
 
         // 冻结追赶斜坡状态（每臂一份），语义见 applyStaleCatchUpRamp()。
         struct StaleCatchUpRamp

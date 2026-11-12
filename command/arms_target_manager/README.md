@@ -108,7 +108,22 @@ RViz Joint Panel：绝对 / 相对基座 / 相对末端（手臂）或相对身�
 | `enable_movej_cartesian_markers` | MOVEJ 下是否显示可拖手臂 marker（发 stamped → IK MoveL）。`full_body.launch.py` 在 `ocs2_wbc_controller` 下设为 `false` | 有 `lina_planning` 时 `true`，否则 `false` | 仅启动 |
 | `enable_wbc_head_tracking_marker` | 是否具备 full-body WBC Head 6D Marker 启动能力；仍需 OCS2 + `HEAD_TRACKING` | `false` | 仅启动 |
 
-### YAML 配置（`config/default.yaml` 或 task 旁 `target_manager.yaml`）
+### YAML 配置（`config/default.yaml` 打底 + task 旁 `target_manager.yaml` 覆盖）
+
+启动参数由 `robot_common_launch` 的 `prepare_arms_target_manager_parameters()` 组装，
+**按以下顺序**（ROS 2 后加载的覆盖先加载的）：
+
+1. `arms_target_manager/config/default.yaml` —— **基底**，所有可调项的默认值都写在这里；
+2. task `.info` 同目录下的 `target_manager.yaml`（如 `w2_description/config/ocs2/target_manager.yaml`）
+   —— 只写该机型要改的项；也可用 `config_file_path` 显式指定替代它；
+3. launch 侧强制覆盖的字典（`dual_arm_mode` / `control_base_frame` / `marker_fixed_frame` /
+   `hand_controllers` / `enable_movej_cartesian_markers` / `enable_wbc_head_tracking_marker` / `use_sim_time`）。
+
+> ⚠️ 因此：
+> - 改**所有机型通用**的默认值 → 改 `config/default.yaml`；
+> - 改**某个机型**的值 → 改该机型的 `target_manager.yaml`（它会覆盖基底）；
+> - 如果某机型**没有** task 旁的 `target_manager.yaml`，则只用基底文件。
+> - 用 `ros2 param get /arms_target_manager <name>` 可以确认实际生效值（避免改错文件）。
 
 | 参数 | 含义 | 默认 | 生效时机 |
 |------|------|------|------|
@@ -117,7 +132,59 @@ RViz Joint Panel：绝对 / 相对基座 / 相对末端（手臂）或相对身�
 | `control_input_rate` | 上游 `control_input` 典型频率 Hz（仅手感估算，不参与实时换算） | `50.0` | 仅启动 |
 | `vr_thumbstick_linear_scale` | VR 摇杆线位移步进 m/step | `0.005` | 仅启动 |
 | `vr_thumbstick_angular_scale` | VR 摇杆角位移步进 rad/step | `0.05` | 仅启动 |
+| `vr_pose_scale` | VR 手柄位姿缩放（可由组合键 15 校准） | `1.0` | 仅启动 |
+| `vr_follow_frame` | 相对增量路径冻结旋转所用的跟随系 | `"base_footprint"` | 仅启动 |
+| `body_ee_source` | 全身绝对跟踪的末端数据源：`hand` / `wrist` | `"hand"` | 仅启动 |
+| `body_length_scale` | 身长尺度：`pelvis→spine3`（并同尺度推 `spine3→head`） | `1.0` | 仅启动 |
+| `shoulder_width_scale` | 肩宽尺度：`spine3→shoulder(L/R)` | `1.0` | 仅启动 |
+| `arm_length_scale` | 臂长尺度：`shoulder→末端(hand/wrist)` | `1.0` | 仅启动 |
+| ~~`absolute_map_yaw_deg`~~ | **已删除**：映射按「人体系」锚定——人体各量先表达在人体根自身坐标系里，人体朝向 ≡ 机器人机头朝向，无需人工偏航常数 | — | — |
+| `hand_to_ee_rpy_deg_left` / `_right` | 手部坐标系 → 末端坐标系的固定偏置（固定轴 RPY，度） | `[-90,0,0]` / `[90,0,0]` | 仅启动 |
+| `body_src_to_ee_rpy_deg` / `head_src_to_ee_rpy_deg` | 胸部/头部数据源 → 目标坐标系的固定偏置（度） | `[0,0,0]` | 仅启动 |
+| `absolute_filter_alpha` | 绝对目标一阶低通系数（0=不滤波） | `0.3` | 仅启动 |
+| `capture_settle_ms` | 标定前等待姿态稳定时长 (ms) | `200.0` | 仅启动 |
+| `skeleton_timeout` | 骨架单关节数据看门狗 (s)，超时只冻结对应任务 | `0.2` | 仅启动 |
+| ~~`human_root_filter_alpha`~~ / ~~`human_root_offset`~~ | **已迁移**到 `vr_pose_publisher`：`XR_HUMAN_FOOTPRINT_FILTER_ALPHA` / `XR_HUMAN_FOOTPRINT_OFFSET`（或 `XRTargetNode` 构造参数） | — | — |
+| `body_length_scale` | 身长尺度：`pelvis→spine3`（并同尺度推 `spine3→head`） | `1.0` | 仅启动 |
+| `shoulder_width_scale` | 肩宽尺度：`spine3→shoulder(L/R)` | `1.0` | 仅启动 |
+| `arm_length_scale` | 臂长尺度：`shoulder→末端(hand/wrist)` | `1.0` | 仅启动 |
+| `skeleton_geometry_tolerance` | 手–脊柱距离相对参考臂长的允许偏差；`<=0` 关闭 | `0.2` | 仅启动 |
+| `absolute_ramp_enable` | 接管渐入总开关；关掉后行为与旧版完全一致 | `true` | 仅启动 |
+| `absolute_ramp_max_linear_velocity` | 过渡段线速度上限 (m/s) | `0.15` | 仅启动 |
+| `absolute_ramp_max_angular_velocity` | 过渡段角速度上限 (rad/s) | `0.4` | 仅启动 |
+| `absolute_ramp_min_duration` | 最短过渡时长 (s) | `0.2` | 仅启动 |
+| `absolute_ramp_max_duration` | 最长过渡时长 (s)；触顶时实际峰值速度会高于上限 | `3.0` | 仅启动 |
+| `absolute_ramp_resume_gap` | 目标输出中断超过该时长后重新渐入 (s) | `0.3` | 仅启动 |
 | `enable_vr` | 是否启用 VR | `false` | 仅启动 |
+
+> 底盘跟随不再由本节点做速度外环（旧的 `base_follow_*` / `base_vmax` 等参数已删除）：
+> 全身遥操作的目标按下游 WBC 的 `base_frame_` 下发（移动底盘模型为 `world`，
+> 固定底盘模型为模型根如 `base_footprint`），底盘运动由 OCS2 在 `BASE_UNLOCKED` 时实现。
+
+### 全身遥操作模式（组合键 30）内的允许操作
+
+| 操作 | 事件 | 行为 |
+|------|------|------|
+| 左右握把 + 右摇杆按下 | `30` | 进入/退出全身遥操作模式（发 `BODY_TRACKING` + `HEAD_TRACKING`） |
+| 右摇杆短按 | `4` | 开/关「全部跟踪」：胸/头/双臂末端改为 `/teleop/body_*` 绝对位姿映射 |
+| 左摇杆 + 右摇杆同时按下 | `20` | 开/关手动底盘遥控（左摇杆→底盘 XY，右摇杆→转向） |
+| 右握把 + 右摇杆向下 | `26` | 底盘解锁/锁定（WBC 层）：解锁后由 OCS2 驱动底盘跟随世界系 marker |
+| 右 A / 左 X | `11` / `12` | FSM 前进 / 后退（与普通模式共享） |
+| 扳机 / 握把+扳机 | `9` / `10` / `13` / `14` | 夹爪控制（与普通模式共享） |
+| FSM 离开 OCS2 / 拓扑离开 FULL_BODY | — | **自动退出整个模式**（「全部跟踪」一并关闭），回到 OCS2 后需重新按组合键开启 |
+
+**普通模式的其他组合键在全身模式下不可用**（含 `3`/`6` 单臂、`16` Y/B 语义、
+`21–28` 身体/WBC 开关）。需要这些功能时先按 `30` 退出全身模式。
+
+非全身模式下 `4` 仍是 UPDATE/STORAGE 切换、`7` 仍是镜像切换；`31` 已随上游长按功能删除。
+
+全身模式的 marker / 目标语义：
+
+- **底盘锁定**：目标 = 机器人底座 ⊗ 人体相对 footprint 的位姿（marker 显示在世界系，
+  但始终围绕机器人），人体原地走动不会把期望 marker 拉离机器人；
+- **底盘解锁（事件 26）**：marker 锚定世界系（解锁瞬间冻结基准，避免跳变），
+  人体走动时 marker 远离机器人，OCS2 自动用底盘自由度把双腕/胸部送到 marker。
+自动退出与普通遥操作「离开 OCS2 自动回 STORAGE」保持一致。
 
 ### 手柄 / 键盘 scale（速度，不是每帧位移）
 
@@ -134,6 +201,8 @@ twist.angular.{x,y,z} = Inputs.{roll,pitch,yaw} * angular_scale  # 单位：rad/
 - OCS2 对 `*/twist` 做 latch + `dt` 积分；需要更快/更慢时直接调大/调小这两个 scale。
 
 ## VR 面键的单臂控制
+
+> 本节仅适用于**普通 VR 遥操作模式**。进入全身遥操作（组合键 30）后，`3`/`6`/`16`/`20`/`21–28` 全部不可用，只剩 FSM、夹爪、`4`、`7`。
 
 | 控制拓扑 | 非镜像：左 Y | 非镜像：右 B | 镜像：左 Y | 镜像：右 B |
 |---|---|---|---|---|

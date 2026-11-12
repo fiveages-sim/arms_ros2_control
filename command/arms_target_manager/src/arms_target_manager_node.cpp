@@ -43,6 +43,60 @@ int main(int argc, char** argv)
     }
 
     bool enable_vr = node->declare_parameter("enable_vr", true);
+
+    // ---- 全身骨架绝对位姿映射 / 底盘跟踪（仅全身遥操作模式内生效） ----
+    AbsoluteTeleopOptions absolute_options;
+    absolute_options.ee_source = node->declare_parameter("body_ee_source", std::string("hand"));
+    if (absolute_options.ee_source != "hand" && absolute_options.ee_source != "wrist")
+    {
+        RCLCPP_WARN(node->get_logger(),
+                    "body_ee_source='%s' 非法（可选 hand/wrist），回退到 hand",
+                    absolute_options.ee_source.c_str());
+        absolute_options.ee_source = "hand";
+    }
+    absolute_options.body_length_scale = node->declare_parameter("body_length_scale", 1.0);
+    absolute_options.shoulder_width_scale = node->declare_parameter("shoulder_width_scale", 1.0);
+    absolute_options.arm_length_scale = node->declare_parameter("arm_length_scale", 1.0);
+    absolute_options.hand_to_ee_rpy_deg_left = node->declare_parameter(
+        "hand_to_ee_rpy_deg_left", std::vector<double>{-90.0, 0.0, 0.0});
+    absolute_options.hand_to_ee_rpy_deg_right = node->declare_parameter(
+        "hand_to_ee_rpy_deg_right", std::vector<double>{90.0, 0.0, 0.0});
+    absolute_options.body_src_to_ee_rpy_deg = node->declare_parameter(
+        "body_src_to_ee_rpy_deg", std::vector<double>{0.0, 0.0, 0.0});
+    absolute_options.head_src_to_ee_rpy_deg = node->declare_parameter(
+        "head_src_to_ee_rpy_deg", std::vector<double>{0.0, 0.0, 0.0});
+    auto warn_bad_rpy = [&node](const char* name, const std::vector<double>& rpy) {
+        if (rpy.size() != 3)
+        {
+            RCLCPP_WARN(node->get_logger(),
+                        "%s 需要 3 个元素 [roll,pitch,yaw]（度），当前 %zu 个 → 按单位旋转处理",
+                        name, rpy.size());
+        }
+    };
+    warn_bad_rpy("hand_to_ee_rpy_deg_left", absolute_options.hand_to_ee_rpy_deg_left);
+    warn_bad_rpy("hand_to_ee_rpy_deg_right", absolute_options.hand_to_ee_rpy_deg_right);
+    warn_bad_rpy("body_src_to_ee_rpy_deg", absolute_options.body_src_to_ee_rpy_deg);
+    warn_bad_rpy("head_src_to_ee_rpy_deg", absolute_options.head_src_to_ee_rpy_deg);
+    absolute_options.filter_alpha = node->declare_parameter("absolute_filter_alpha", 0.3);
+    absolute_options.capture_settle_sec = node->declare_parameter("capture_settle_ms", 200.0) / 1000.0;
+    absolute_options.skeleton_timeout_sec = node->declare_parameter("skeleton_timeout", 0.2);
+    // 人体基坐标系 H 的低通系数/原点偏置已迁到 vr_pose_publisher
+    // （/teleop/human_footprint_pose 的发布端），此处不再声明。
+    absolute_options.body_anchor_lambda = node->declare_parameter("body_anchor_lambda", 1.0);
+    absolute_options.geometry_tolerance = node->declare_parameter("skeleton_geometry_tolerance", 0.2);
+    // 接管渐入：只在「开启全部跟踪」与「数据恢复」的过渡段限速，收敛后直通。
+    absolute_options.pose_ramp_enable =
+        node->declare_parameter("absolute_ramp_enable", true);
+    absolute_options.pose_ramp_max_linear_velocity =
+        node->declare_parameter("absolute_ramp_max_linear_velocity", 0.15);
+    absolute_options.pose_ramp_max_angular_velocity =
+        node->declare_parameter("absolute_ramp_max_angular_velocity", 0.4);
+    absolute_options.pose_ramp_min_duration_sec =
+        node->declare_parameter("absolute_ramp_min_duration", 0.2);
+    absolute_options.pose_ramp_max_duration_sec =
+        node->declare_parameter("absolute_ramp_max_duration", 3.0);
+    absolute_options.pose_ramp_resume_gap_sec =
+        node->declare_parameter("absolute_ramp_resume_gap", 0.3);
     bool enable_movej_cartesian_markers = node->declare_parameter(
         "enable_movej_cartesian_markers",
 #ifdef HAS_LINA_PLANNING
@@ -186,7 +240,7 @@ int main(int argc, char** argv)
             vr_handler = std::make_unique<VRInputHandler>(
                 node, target_manager.get(), pub_left_target, pub_right_target, hand_controllers,
                 vr_thumbstick_linear_scale, vr_thumbstick_angular_scale,
-                vr_pose_scale, reference_link, vr_follow_frame);
+                vr_pose_scale, reference_link, vr_follow_frame, absolute_options);
         }
 
         // 创建 control input 订阅器（用于增量控制）
