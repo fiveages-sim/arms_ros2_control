@@ -66,6 +66,8 @@ full 包额外声明 `ros-jazzy-ruckig` 依赖：`eyou_canfd_ros2_control` 的 C
 
 **Recommends（非硬依赖）**：`ros-dev-tools`、`ros-jazzy-joy`、`ros-jazzy-rviz2`。默认 `apt install` 仍会装上；`apt install --no-install-recommends` 或无桌面环境可跳过（避免拉起 rviz2 → Mesa/HIP 大依赖）。无 Recommends 时手柄遥操需自备 `joy`，RViz 面板需自备 `rviz2`。
 
+**CI verify**：对 ocs2 / common / arms 三份本地 deb 执行 `apt-get install --no-install-recommends`，由 apt 解析完整 `Depends` 闭包（含 ocs2 的 `pinocchio`、`interactive-markers` 等），再跑 ament 索引与下游 `find_package`。不要再维护一份残缺的手工依赖列表。
+
 ## 已退役的独立 deb（请勿再打 tag）
 
 以下 workflow 已停用；功能由 **`ros-jazzy-arms-ros2-control-full`** 覆盖：
