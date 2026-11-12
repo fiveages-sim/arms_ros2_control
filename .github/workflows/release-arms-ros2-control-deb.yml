@@ -1378,9 +1378,7 @@ jobs:
           }
 
           apt-get update
-          # rsync is required by "Install debs and verify package discovery" to merge
-          # extracted deb contents into ${INSTALL_PREFIX} without apt-installing the debs.
-          apt_get_install ca-certificates curl cmake build-essential rsync
+          apt_get_install ca-certificates curl cmake build-essential
 
           mkdir -p -m 755 /etc/apt/keyrings
           curl -fsSL https://cli.github.com/packages/githubcli-archive-keyring.gpg \
@@ -1520,9 +1518,12 @@ jobs:
           ls -lh "$deps_dir"/*.deb
 
       - name: Install debs and verify package discovery
-        # Verify only needs ament/CMake discovery. Extract the three debs into the ROS
-        # prefix (same as the build job) and apt-install the hard headless Depends —
-        # never rviz2/joy/ros-dev-tools, which pull the amd64 Mesa/HIP stack.
+        # Install the three local debs with apt so the full Depends closure is
+        # resolved (pinocchio, interactive-markers, kdl-parser, … from ocs2;
+        # controller stacks from arms/common). --no-install-recommends skips
+        # arms Recommends (rviz2/joy/ros-dev-tools → Mesa/HIP); same pattern as
+        # ocs2_ros2 scripts/consume_release_deb.sh. Do not hand-maintain a
+        # partial mirror of Depends — that regressed after #135/#139.
         timeout-minutes: 15
         shell: bash
         env:
@@ -1551,45 +1552,10 @@ jobs:
             done
           }
 
-          extract_root="${RUNNER_TEMP}/verify-extract"
-          rm -rf "$extract_root"
-          mkdir -p "$extract_root"
-          dpkg-deb -x "$OCS2_DEB_PATH" "$extract_root"
-          dpkg-deb -x "$COMMON_DEB_PATH" "$extract_root"
-          dpkg-deb -x "$ARMS_DEB_PATH" "$extract_root"
-          rsync -a "${extract_root}${INSTALL_PREFIX}/" "${INSTALL_PREFIX}/"
-
-          # Mirror package Depends minus ros-base / private debs / Recommends (rviz2, joy, ros-dev-tools).
-          # pinocchio/nav-msgs: arms_controller_common exports these; extract-only verify
-          # no longer gets them via apt-installing ocs2 / ros-base.
-          pkgs=(
-            libeigen3-dev
-            "ros-${ros_distro}-ament-index-cpp"
-            "ros-${ros_distro}-angles"
-            "ros-${ros_distro}-controller-interface"
-            "ros-${ros_distro}-controller-manager"
-            "ros-${ros_distro}-geometry-msgs"
-            "ros-${ros_distro}-hardware-interface"
-            "ros-${ros_distro}-joint-state-broadcaster"
-            "ros-${ros_distro}-nav-msgs"
-            "ros-${ros_distro}-pinocchio"
-            "ros-${ros_distro}-pluginlib"
-            "ros-${ros_distro}-rclcpp-action"
-            "ros-${ros_distro}-rclcpp-lifecycle"
-            "ros-${ros_distro}-sensor-msgs"
-            "ros-${ros_distro}-std-msgs"
-            "ros-${ros_distro}-tf2"
-            "ros-${ros_distro}-tf2-geometry-msgs"
-            "ros-${ros_distro}-tf2-ros"
-            "ros-${ros_distro}-urdf"
-            "ros-${ros_distro}-visualization-msgs"
-          )
-          if [[ "${VERIFY_BUNDLE}" == "full" ]]; then
-            pkgs+=(libacl1 libserialport-dev libyaml-cpp-dev "ros-${ros_distro}-ruckig")
-          fi
-
           apt-get update
-          apt_get_install "${pkgs[@]}"
+          # Pass all three local debs together so apt can satisfy arms→ocs2/common
+          # without looking them up in a remote apt index.
+          apt_get_install "$OCS2_DEB_PATH" "$COMMON_DEB_PATH" "$ARMS_DEB_PATH"
 
           set +u
           source "/opt/ros/${ros_distro}/setup.bash"
