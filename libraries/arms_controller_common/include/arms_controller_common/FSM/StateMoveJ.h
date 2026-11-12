@@ -221,6 +221,14 @@ namespace arms_controller_common
          */
         void setCartesianTfBuffer(std::shared_ptr<tf2_ros::Buffer> buffer);
 
+        // Prepare feedback before planning; invoke the returned commit only after success.
+        using StampedFeedbackPreparer = std::function<std::function<void()>(
+            const arms_ros2_control_msgs::msg::LinearMessage&)>;
+        void setStampedFeedbackPreparer(StampedFeedbackPreparer prepare)
+        {
+            stamped_feedback_preparer_ = std::move(prepare);
+        }
+
         /**
          * Consume left/right_target/stamped (MOVEJ IK MoveL). Called from the shared OCS2 subscriber.
          * No-op when MOVEJ is not active or lina_planning is unavailable.
@@ -363,7 +371,7 @@ namespace arms_controller_common
         bool startLinearTrajectoryImpl(
             const arms_ros2_control_msgs::msg::LinearMessage& linear_params,
             std::string& message,
-            double& estimated_duration);
+            double& estimated_duration, bool stamped = false);
         bool startCircleTrajectoryImpl(
             const arms_ros2_control_msgs::msg::CircleMessage& circle_params,
             std::string& message,
@@ -641,7 +649,7 @@ namespace arms_controller_common
         bool startLinearTrajectory(
             const arms_ros2_control_msgs::msg::LinearMessage& linear_params,
             std::string& message,
-            double& estimated_duration);
+            double& estimated_duration, bool stamped = false);
         void publishLinearFeedback();
         void finishLinearAction(bool success, bool canceled, const std::string& message);
 
@@ -649,6 +657,7 @@ namespace arms_controller_common
         bool validateLinearRequest(const arms_ros2_control_msgs::msg::LinearMessage& linear_params,
                                    std::string& error_msg);
 
+        StampedFeedbackPreparer stamped_feedback_preparer_;
         bool move_cartesian_active_{false};
         std::vector<std::string> move_cartesian_joint_names_;
         //Service for movec

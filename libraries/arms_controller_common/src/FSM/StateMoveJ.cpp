@@ -4714,7 +4714,7 @@ namespace arms_controller_common
         std::lock_guard lock(target_mutex_);
         std::string message;
         double estimated_duration = 0.0;
-        if (!startLinearTrajectory(linear_params, message, estimated_duration))
+        if (!startLinearTrajectory(linear_params, message, estimated_duration, true))
         {
             RCLCPP_WARN(node_->get_logger(),
                         "MOVEJ stamped MoveL rejected (%s): %s",
@@ -4777,7 +4777,7 @@ namespace arms_controller_common
         std::lock_guard lock(target_mutex_);
         std::string message;
         double estimated_duration = 0.0;
-        if (!startLinearTrajectory(linear_params, message, estimated_duration))
+        if (!startLinearTrajectory(linear_params, message, estimated_duration, true))
         {
             RCLCPP_WARN(node_->get_logger(),
                         "MOVEJ dual stamped MoveL rejected: %s", message.c_str());
@@ -4902,19 +4902,22 @@ namespace arms_controller_common
     bool StateMoveJ::startLinearTrajectory(
         const arms_ros2_control_msgs::msg::LinearMessage& linear_params,
         std::string& message,
-        double& estimated_duration)
+        double& estimated_duration, bool stamped)
     {
         if (!isMotionBusy() && !stop_to_zero_active_)
         {
-            return startLinearTrajectoryImpl(linear_params, message, estimated_duration);
+            return startLinearTrajectoryImpl(linear_params, message, estimated_duration, stamped);
         }
 
         const arms_ros2_control_msgs::msg::LinearMessage captured_params = linear_params;
-        const bool accepted = requestMotionOrDefer([this, captured_params]()
+        const bool accepted = requestMotionOrDefer([this, captured_params, stamped]()
         {
             std::string deferred_message;
             double deferred_duration = 0.0;
-            startLinearTrajectoryImpl(captured_params, deferred_message, deferred_duration);
+            if (!startLinearTrajectoryImpl(captured_params, deferred_message, deferred_duration, stamped))
+            {
+                RCLCPP_WARN(node_->get_logger(), "Deferred MoveL rejected: %s", deferred_message.c_str());
+            }
         });
         if (!accepted)
         {
@@ -4932,7 +4935,7 @@ namespace arms_controller_common
     bool StateMoveJ::startLinearTrajectoryImpl(
         const arms_ros2_control_msgs::msg::LinearMessage& linear_params,
         std::string& message,
-        double& estimated_duration)
+        double& estimated_duration, bool stamped)
     {
         if (!state_active_)
         {
@@ -4969,6 +4972,19 @@ namespace arms_controller_common
             return false;
         }
 
+        // Resolve feedback TF before starting motion, including deferred requests.
+        std::function<void()> commit_feedback;
+        if (stamped && stamped_feedback_preparer_)
+        {
+            commit_feedback = stamped_feedback_preparer_(resolved_linear_params);
+            if (!commit_feedback)
+            {
+                message = "Cannot prepare stamped target feedback";
+                estimated_duration = 0.0;
+                return false;
+            }
+        }
+
         // 4. 规划 MoveL 轨迹
         double period = 1.0 / ctrl_interfaces_.frequency_;
 
@@ -4996,6 +5012,10 @@ namespace arms_controller_common
 
         motion_mode_ = MotionMode::MOVECARTESIAN;
         move_cartesian_active_ = true;
+        if (commit_feedback)
+        {
+            commit_feedback();
+        }
 
         message = "MoveL trajectory accepted";
         estimated_duration = cartesian_manager_.getPlanningTime();
