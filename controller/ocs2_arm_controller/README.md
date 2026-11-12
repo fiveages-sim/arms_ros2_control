@@ -254,3 +254,13 @@ waypoints:
 
 若只要整条轨迹共 5 秒，改为 movej_trajectory_duration: 5.0，且两个路点 time_from_start 都留零。
 Python 接口及其示例需要另行迁移后才能使用本版消息。
+
+### Action 路点转接默认值
+
+`JointTrajectory.Goal.use_waypoint_blend_ratio=false`（默认）时，在实际开始规划时读取控制器
+`movej_trajectory_blend_ratio`，作为本次轨迹的默认值。为 `true` 时使用各路点的
+`blend_ratio_percent`（范围 `[0, 1]`），其中 `0` 显式关闭转接。
+逐点覆盖不修改 ROS 参数；该规则与总时长/逐点累计时间选择无关。
+只有 DOUBLES 使用转接比例，linear/tanh 不使用；停留边界不转接。
+旧客户端若需保留显式比例（包括零），必须在 Goal 上设置新布尔字段为 `true`。
+消息定义发生变化，需重建消息包、公共库及相关控制器/客户端，并重启并重新 source 工作空间。

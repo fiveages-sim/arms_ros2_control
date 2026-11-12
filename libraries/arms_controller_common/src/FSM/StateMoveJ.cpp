@@ -1946,7 +1946,7 @@ namespace arms_controller_common
     }
 
     bool StateMoveJ::validateWaypointRequest(const std::vector<std::string>& names,
-        const std::vector<arms_ros2_control_msgs::msg::JointWaypoint>& waypoints) const
+        const std::vector<arms_ros2_control_msgs::msg::JointWaypoint>& waypoints, bool use_waypoint_blend_ratio) const
     {
         if (waypoints.empty()) return false;
         for (const auto& wp : waypoints)
@@ -1954,7 +1954,8 @@ namespace arms_controller_common
             if (!validatePositionRequest(names, wp.position) ||
                 (!wp.velocity.empty() && wp.velocity.size() != names.size()) ||
                 !std::all_of(wp.velocity.begin(), wp.velocity.end(), [](double v) { return std::isfinite(v); }) ||
-                !std::isfinite(wp.blend_ratio_percent) || wp.blend_ratio_percent < 0 || wp.blend_ratio_percent > 1) return false;
+                (use_waypoint_blend_ratio && (!std::isfinite(wp.blend_ratio_percent) ||
+                    wp.blend_ratio_percent < 0 || wp.blend_ratio_percent > 1))) return false;
             for (const auto* values : {&wp.max_velocity, &wp.max_acceleration, &wp.max_jerk})
                 if ((!values->empty() && values->size() != 1 && values->size() != names.size()) ||
                     !std::all_of(values->begin(), values->end(), [](double v) { return std::isfinite(v) && v > 0; }))
@@ -4004,7 +4005,7 @@ namespace arms_controller_common
             RCLCPP_WARN(node_->get_logger(), "Rejecting joint trajectory goal: %s", timing_error.c_str());
             return rclcpp_action::GoalResponse::REJECT;
         }
-        if (!state_active_ || !validateWaypointRequest(goal->joint_names, goal->waypoints))
+        if (!state_active_ || !validateWaypointRequest(goal->joint_names, goal->waypoints, goal->use_waypoint_blend_ratio))
         {
             RCLCPP_WARN(node_->get_logger(), "Rejecting joint trajectory action goal: StateMoveJ is not active");
             return rclcpp_action::GoalResponse::REJECT;
@@ -4039,7 +4040,7 @@ namespace arms_controller_common
             }
             std::string message;
             double planned_duration = 0.0;
-            if (!startJointTrajectoryRequestImpl(joint_names, waypoints, goal->time_mode, goal->movej_trajectory_duration, message, planned_duration))
+            if (!startJointTrajectoryRequestImpl(joint_names, waypoints, goal->time_mode, goal->movej_trajectory_duration, goal->use_waypoint_blend_ratio, message, planned_duration))
             {
                 auto result = std::make_shared<JointTrajectoryAction::Result>();
                 result->success = false;
@@ -4175,7 +4176,7 @@ namespace arms_controller_common
     bool StateMoveJ::startJointTrajectoryRequestImpl(
         const std::vector<std::string>& request_joint_names,
         const std::vector<arms_ros2_control_msgs::msg::JointWaypoint>& request_waypoints,
-        bool time_mode, double movej_trajectory_duration,
+        bool time_mode, double movej_trajectory_duration, bool use_waypoint_blend_ratio,
         std::string& message,
         double& planned_duration)
     {
@@ -4186,7 +4187,7 @@ namespace arms_controller_common
             return false;
         }
 
-        if (!validateWaypointRequest(request_joint_names, request_waypoints) ||
+        if (!validateWaypointRequest(request_joint_names, request_waypoints, use_waypoint_blend_ratio) ||
             !validateTrajectoryTiming(request_waypoints, time_mode, movej_trajectory_duration, message))
         {
             if (message.empty()) message = "Invalid joint trajectory request";
@@ -4297,6 +4298,18 @@ namespace arms_controller_common
         }
 
         full_waypoints = request_waypoints;
+        // Resolve defaults once, at actual planning time (also for deferred goals).
+        double default_blend_ratio = 0.0;
+        if (!use_waypoint_blend_ratio)
+        {
+            default_blend_ratio = node_->get_parameter("movej_trajectory_blend_ratio").as_double();
+            if (!std::isfinite(default_blend_ratio) || default_blend_ratio < 0.0 || default_blend_ratio > 1.0)
+            { message = "movej_trajectory_blend_ratio must be finite and within [0, 1]"; planned_duration = 0.0; return false; }
+        }
+        for (auto& wp : full_waypoints)
+        {
+            if (!use_waypoint_blend_ratio) wp.blend_ratio_percent = default_blend_ratio;
+        }
         const auto map_array = [&](const std::vector<double>& values, double default_value)
         {
             if (values.empty())

@@ -1,19 +1,34 @@
 # Goal
+
 string[] joint_names
 arms_ros2_control_msgs/JointWaypoint[] waypoints
-# True: timed trajectory; False: constraint mode (DOUBLES only).
+
+# Blend ratio source
+# true:  use each waypoint blend_ratio_percent, including zero
+# false: snapshot controller movej_trajectory_blend_ratio when planning starts
+bool use_waypoint_blend_ratio
+
+# Trajectory mode
+# true:  timed trajectory
+# false: constraint mode (DOUBLES only)
 bool time_mode
-# Seconds, 0 = unspecified. Positive values persist to movej_trajectory_duration.
-# Mutually exclusive with nonzero waypoint time_from_start.
+
+# Seconds, 0 = unspecified
+# Positive values persist to movej_trajectory_duration
+# Mutually exclusive with nonzero waypoint time_from_start
 float64 movej_trajectory_duration
 ---
 # Result
+
 bool success
 string message
+
 float64 planned_duration
 float64 actual_duration
+
 ---
 # Feedback
+
 float64 progress
 float64 elapsed_time
 float64 remaining_time

@@ -305,7 +305,7 @@ namespace arms_controller_common
             const std::vector<arms_ros2_control_msgs::msg::JointWaypoint>& waypoints,
             bool time_mode, double movej_trajectory_duration, std::string& message) const;
         bool validateWaypointRequest(const std::vector<std::string>& names,
-            const std::vector<arms_ros2_control_msgs::msg::JointWaypoint>& waypoints) const;
+            const std::vector<arms_ros2_control_msgs::msg::JointWaypoint>& waypoints, bool use_waypoint_blend_ratio) const;
         void clearPendingMotion();
         bool runStopToZero(const rclcpp::Duration& period);
 
@@ -357,7 +357,7 @@ namespace arms_controller_common
         bool startJointTrajectoryRequestImpl(
             const std::vector<std::string>& request_joint_names,
             const std::vector<arms_ros2_control_msgs::msg::JointWaypoint>& request_waypoints,
-            bool time_mode, double movej_trajectory_duration,
+            bool time_mode, double movej_trajectory_duration, bool use_waypoint_blend_ratio,
             std::string& message,
             double& planned_duration);
         bool startLinearTrajectoryImpl(
