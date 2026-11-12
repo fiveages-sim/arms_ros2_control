@@ -11,5 +11,6 @@ float64[] max_velocity
 float64[] max_acceleration
 float64[] max_jerk
 
-bool time_mode
-float64 total_time
+# Cumulative arrival time from the real trajectory start; all zero = unspecified.
+# Specified times must be nonnegative and nondecreasing; equal times only for equal positions.
+builtin_interfaces/Duration time_from_start

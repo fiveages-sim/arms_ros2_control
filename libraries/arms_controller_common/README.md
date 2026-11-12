@@ -188,10 +188,10 @@ state_movej->setupSubscriptions("target_joint_position", /*enable_prefix_topics=
 state_movej->setupTrajectorySubscription("target_joint_trajectory");
 ```
 
-### 注册关节轨迹服务
+### 注册关节轨迹 Action
 
 ```cpp
-state_movej->setupJointTrajectoryService("joint_trajectory_with_para");
+state_movej->setupJointTrajectoryAction("joint_trajectory_with_para");
 ```
 
 ### 编程方式设置目标（线程安全）
@@ -294,7 +294,7 @@ state_home_->init([this](auto name, auto def){ return auto_declare<std::vector<d
 // on_configure()
 state_movej_->setupSubscriptions("target_joint_position");
 state_movej_->setupTrajectorySubscription();
-state_movej_->setupJointTrajectoryService("joint_trajectory_with_para");
+state_movej_->setupJointTrajectoryAction("joint_trajectory_with_para");
 ```
 
 ### OCS2 Arm Controller（MIX 控制 + 重力补偿）
@@ -400,3 +400,62 @@ movej_max_jerk: 20.0          # rad/s³
   不能视为严格运动约束保证。无效或超限目标直接拒绝，保留原目标。每个积分子步裁剪输出到位置限位，
   触限时清零该关节滤波速度和加速度；这是位置截断，不保证触限时导数连续，也不保证实机关节无超调。
   此模式不增加遥操作消息超时机制；停止发送后会继续追踪最后目标。
+
+## Action 时间输入（新版消息，不兼容旧生成代码）
+
+JointTrajectory Goal 使用整条任务的 `time_mode` 和 `movej_trajectory_duration`（秒，0 表示未指定），
+JointWaypoint 使用 `builtin_interfaces/Duration time_from_start` 累计到达时间，
+不再有逐点 time_mode/movej_trajectory_duration。Result/Feedback 不变。
+
+时间模式需显式设置 `time_mode: true`（ROS bool 默认 false）：
+
+- 正 movej_trajectory_duration + 各点时间全零：按路径长度分配总时长，并在任务实际开始规划时
+  更新 ROS 参数 movej_trajectory_duration；新值持续影响后续默认时间任务。
+- movej_trajectory_duration=0 + 各点非负且非递减的累计时间：相邻时间相减得到段时长，不更新参数。
+- movej_trajectory_duration=0 + 全零路点时间：使用当前 movej_trajectory_duration 分配。
+- 总时间和逐点时间同时提供、累计时间倒序或非法 Duration：拒绝。
+
+所有插值器接收同一组移动段时长。只给总时长/约束时合并相邻重复位置后规划；
+逐点累计时间允许相等，但零时间只能对应零位移并被跳过；零时间有位移拒绝。
+逐点时间中的正时间零位移表示停留，按指定时长保持。DOUBLES 在停留边界停车，
+不跨停留转接；运动块内部继续使用原有 blending。全部段被跳过时立即成功，
+planned_duration=actual_duration=0，不启动运动。DOUBLES 移动段必须长于一个控制周期。
+首点是目标；若首点 t=0，仅当其与真实当前位置相同时跳过。
+约束模式 `time_mode: false` 仅支持 DOUBLES，所有时间字段须为零；
+linear/tanh 明确拒绝约束模式，时间模式也不新增 max_* 约束保证。
+DOUBLES 非零 blending 可能改变实际轨迹时间及经过中间点的行为，查看 planned_duration。
+
+Goal 拒绝、执行前取消或被替换不更新参数。延后 Goal 在实际应用时才更新；
+更新成功但随后规划失败时，参数仍保留新值，无事务回滚。正在执行的轨迹使用
+已生成的时间快照，后续外部参数更新不重新定时。持久设置失败会返回失败结果。
+
+旧客户端每段 [2,3] 秒应迁移为累计 [2,5] 秒，不可只重命名字段。
+旧 JointTrajectory Service 类型、生成配置和公共实现已删除。
+需要重建消息包及所有依赖消费者并重启，禁止混用新旧类型生成代码。
+本次只改 Action，Topic 现有时间机制保持原样。
+
+例如原生 Goal（两个关节、两个目标，2 秒和 5 秒到达）：
+
+```yaml
+joint_names: [joint1, joint2]
+time_mode: true
+movej_trajectory_duration: 0.0
+waypoints:
+  - position: [0.1, 0.2]
+    time_from_start: {sec: 2, nanosec: 0}
+  - position: [0.3, 0.4]
+    time_from_start: {sec: 5, nanosec: 0}
+```
+
+若只要整条轨迹共 5 秒，改为 movej_trajectory_duration: 5.0，且两个路点 time_from_start 都留零。
+Python 接口及其示例需要另行迁移后才能使用本版消息。
+
+### Action 路点转接默认值
+
+`JointTrajectory.Goal.use_waypoint_blend_ratio=false`（默认）时，在实际开始规划时读取控制器
+`movej_trajectory_blend_ratio`，作为本次轨迹的默认值。为 `true` 时使用各路点的
+`blend_ratio_percent`（范围 `[0, 1]`），其中 `0` 显式关闭转接。
+逐点覆盖不修改 ROS 参数；该规则与总时长/逐点累计时间选择无关。
+只有 DOUBLES 使用转接比例，linear/tanh 不使用；停留边界不转接。
+旧客户端若需保留显式比例（包括零），必须在 Goal 上设置新布尔字段为 `true`。
+消息定义发生变化，需重建消息包、公共库及相关控制器/客户端，并重启并重新 source 工作空间。

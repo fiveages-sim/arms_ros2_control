@@ -229,7 +229,8 @@ namespace arms_controller_common
              */
         bool planSingleTarget(
             const std::vector<double>& start_pos,
-            const arms_ros2_control_msgs::msg::JointWaypoint& waypoint);
+            const arms_ros2_control_msgs::msg::JointWaypoint& waypoint,
+            bool time_mode, double segment_duration);
 
         /**
          * @brief Plan multi-point trajectory using lina_planning
@@ -239,7 +240,8 @@ namespace arms_controller_common
          * @return True if planning successful, false otherwise
          */
         bool planMultiTrajectory(const std::vector<double>& start_pos,
-                                 const std::vector<arms_ros2_control_msgs::msg::JointWaypoint>& waypoints);
+                                 const std::vector<arms_ros2_control_msgs::msg::JointWaypoint>& waypoints,
+                                 bool time_mode, const std::vector<double>& segment_durations);
 
         double getPlanningTime() const;
 
@@ -323,7 +325,7 @@ namespace arms_controller_common
         void clearPlan();
 #ifdef HAS_LINA_PLANNING
         bool getTrajectoryParameter(const arms_ros2_control_msgs::msg::JointWaypoint& waypoint,
-                                    planning::TrajectoryParameter& res);
+                                    planning::TrajectoryParameter& res, bool time_mode, double segment_duration);
 #endif
         double planningTime_{0.0};
         bool timed_evaluation_ready_{false};
@@ -331,6 +333,9 @@ namespace arms_controller_common
         // Advanced mode (lina_planning) - conditionally compiled
 #ifdef HAS_LINA_PLANNING
         // Single-node DOUBLES planner
+        // Only populated for explicit dwell trajectories. Each moving block keeps
+        // its original DOUBLES blending; holds are separate timed constant sections.
+        std::vector<std::unique_ptr<JointTrajectoryManager>> timed_sections_;
         std::unique_ptr<planning::moveJ> movej_planner_;
         // Random-access calls mutate planner completion state; isolate them from run().
         std::unique_ptr<planning::moveJ> evaluation_planner_;

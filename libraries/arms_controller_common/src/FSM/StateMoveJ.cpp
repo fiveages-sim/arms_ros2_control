@@ -1907,8 +1907,46 @@ namespace arms_controller_common
         return true;
     }
 
+    bool StateMoveJ::validateTrajectoryTiming(
+        const std::vector<arms_ros2_control_msgs::msg::JointWaypoint>& waypoints,
+        bool time_mode, double movej_trajectory_duration, std::string& message) const
+    {
+        if (!std::isfinite(movej_trajectory_duration) || movej_trajectory_duration < 0.0)
+        { message = "movej_trajectory_duration must be finite and nonnegative"; return false; }
+        bool specified = false;
+        for (const auto& wp : waypoints)
+        {
+            if (wp.time_from_start.sec < 0 || wp.time_from_start.nanosec >= 1000000000u)
+            { message = "Invalid time_from_start Duration"; return false; }
+            specified = specified || wp.time_from_start.sec != 0 || wp.time_from_start.nanosec != 0;
+        }
+        if (!time_mode)
+        {
+            if (specified || movej_trajectory_duration > 0.0)
+            { message = "Constraint mode does not accept timing fields"; return false; }
+            const auto type = parseInterpolationType(node_->get_parameter("movej_interpolation_type").as_string());
+            if (type != InterpolationType::DOUBLES || !JointTrajectoryManager::isDoublesAvailable())
+            { message = "Constraint mode requires DOUBLES"; return false; }
+        }
+        if (specified && movej_trajectory_duration > 0.0)
+        { message = "movej_trajectory_duration and time_from_start are mutually exclusive"; return false; }
+        if (specified)
+        {
+            int64_t previous = 0;
+            for (const auto& wp : waypoints)
+            {
+                const int64_t current = static_cast<int64_t>(wp.time_from_start.sec) * 1000000000LL +
+                                        wp.time_from_start.nanosec;
+                if (current < previous)
+                { message = "time_from_start must be nonnegative and nondecreasing"; return false; }
+                previous = current;
+            }
+        }
+        return true;
+    }
+
     bool StateMoveJ::validateWaypointRequest(const std::vector<std::string>& names,
-        const std::vector<arms_ros2_control_msgs::msg::JointWaypoint>& waypoints) const
+        const std::vector<arms_ros2_control_msgs::msg::JointWaypoint>& waypoints, bool use_waypoint_blend_ratio) const
     {
         if (waypoints.empty()) return false;
         for (const auto& wp : waypoints)
@@ -1916,8 +1954,8 @@ namespace arms_controller_common
             if (!validatePositionRequest(names, wp.position) ||
                 (!wp.velocity.empty() && wp.velocity.size() != names.size()) ||
                 !std::all_of(wp.velocity.begin(), wp.velocity.end(), [](double v) { return std::isfinite(v); }) ||
-                !std::isfinite(wp.blend_ratio_percent) || wp.blend_ratio_percent < 0 || wp.blend_ratio_percent > 1 ||
-                !std::isfinite(wp.total_time) || (wp.time_mode && wp.total_time <= 0)) return false;
+                (use_waypoint_blend_ratio && (!std::isfinite(wp.blend_ratio_percent) ||
+                    wp.blend_ratio_percent < 0 || wp.blend_ratio_percent > 1))) return false;
             for (const auto* values : {&wp.max_velocity, &wp.max_acceleration, &wp.max_jerk})
                 if ((!values->empty() && values->size() != 1 && values->size() != names.size()) ||
                     !std::all_of(values->begin(), values->end(), [](double v) { return std::isfinite(v) && v > 0; }))
@@ -3799,19 +3837,6 @@ namespace arms_controller_common
         return clamped_positions;
     }
 
-    void StateMoveJ::setupJointTrajectoryService(const std::string& service_name)
-    {
-        std::string full_service_name = node_->get_name() + std::string("/") + service_name;
-
-        joint_trajectory_service_ = node_->create_service<arms_ros2_control_msgs::srv::JointTrajectory>(
-            full_service_name,
-            std::bind(&StateMoveJ::handleJointTrajectory, this,
-                      std::placeholders::_1, std::placeholders::_2, std::placeholders::_3));
-
-        RCLCPP_DEBUG(node_->get_logger(), "Created joint trajectory service at %s",
-                     full_service_name.c_str());
-    }
-
     void StateMoveJ::setupJointTrajectoryAction(const std::string& action_name)
     {
         std::string full_action_name = node_->get_name() + std::string("/") + action_name;
@@ -3974,7 +3999,13 @@ namespace arms_controller_common
             RCLCPP_WARN(node_->get_logger(), "Joint trajectory actions do not support servo");
             return rclcpp_action::GoalResponse::REJECT;
         }
-        if (!state_active_ || !validateWaypointRequest(goal->joint_names, goal->waypoints))
+        std::string timing_error;
+        if (!validateTrajectoryTiming(goal->waypoints, goal->time_mode, goal->movej_trajectory_duration, timing_error))
+        {
+            RCLCPP_WARN(node_->get_logger(), "Rejecting joint trajectory goal: %s", timing_error.c_str());
+            return rclcpp_action::GoalResponse::REJECT;
+        }
+        if (!state_active_ || !validateWaypointRequest(goal->joint_names, goal->waypoints, goal->use_waypoint_blend_ratio))
         {
             RCLCPP_WARN(node_->get_logger(), "Rejecting joint trajectory action goal: StateMoveJ is not active");
             return rclcpp_action::GoalResponse::REJECT;
@@ -3997,7 +4028,7 @@ namespace arms_controller_common
         const std::vector<std::string> joint_names = goal->joint_names;
         const std::vector<arms_ros2_control_msgs::msg::JointWaypoint> waypoints = goal->waypoints;
 
-        const bool accepted = requestMotionOrDefer([this, goal_handle, joint_names, waypoints]()
+        const bool accepted = requestMotionOrDefer([this, goal_handle, joint_names, waypoints, goal]()
         {
             if (goal_handle->is_canceling())
             {
@@ -4009,7 +4040,7 @@ namespace arms_controller_common
             }
             std::string message;
             double planned_duration = 0.0;
-            if (!startJointTrajectoryRequestImpl(joint_names, waypoints, message, planned_duration))
+            if (!startJointTrajectoryRequestImpl(joint_names, waypoints, goal->time_mode, goal->movej_trajectory_duration, goal->use_waypoint_blend_ratio, message, planned_duration))
             {
                 auto result = std::make_shared<JointTrajectoryAction::Result>();
                 result->success = false;
@@ -4017,6 +4048,18 @@ namespace arms_controller_common
                 result->planned_duration = 0.0;
                 result->actual_duration = 0.0;
                 goal_handle->abort(result);
+                return;
+            }
+
+            if (planned_duration == 0.0)
+            {
+                auto feedback = std::make_shared<JointTrajectoryAction::Feedback>();
+                feedback->progress = 1.0;
+                goal_handle->publish_feedback(feedback);
+                auto result = std::make_shared<JointTrajectoryAction::Result>();
+                result->success = true;
+                result->message = message;
+                goal_handle->succeed(result);
                 return;
             }
 
@@ -4130,71 +4173,10 @@ namespace arms_controller_common
         return full_positions;
     }
 
-    void StateMoveJ::handleJointTrajectory(
-        const std::shared_ptr<rmw_request_id_t> request_header,
-        const std::shared_ptr<arms_ros2_control_msgs::srv::JointTrajectory::Request> request,
-        const std::shared_ptr<arms_ros2_control_msgs::srv::JointTrajectory::Response> response)
-    {
-        (void)request_header;
-
-        std::lock_guard lock(target_mutex_);
-        std::string message;
-        double planned_duration = 0.0;
-        if (!startJointTrajectoryRequest(request->joint_names, request->waypoints, message, planned_duration))
-        {
-            response->success = false;
-            response->message = message;
-            response->planned_duration = 0.0;
-            return;
-        }
-
-        response->success = true;
-        response->message = message;
-        response->planned_duration = planned_duration;
-    }
-
-    bool StateMoveJ::startJointTrajectoryRequest(
-        const std::vector<std::string>& request_joint_names,
-        const std::vector<arms_ros2_control_msgs::msg::JointWaypoint>& request_waypoints,
-        std::string& message,
-        double& planned_duration)
-    {
-        if (!state_active_ || !validateWaypointRequest(request_joint_names, request_waypoints))
-        {
-            message = "Invalid joint trajectory request"; planned_duration = 0.0; return false;
-        }
-        updateParam();
-        if (interpolation_type_ == InterpolationType::SERVO)
-        {
-            message = "servo accepts target_joint_position, not timed trajectories";
-            planned_duration = 0.0;
-            return false;
-        }
-        if (!isMotionBusy() && !stop_to_zero_active_)
-        {
-            return startJointTrajectoryRequestImpl(
-                request_joint_names, request_waypoints, message, planned_duration);
-        }
-
-        const std::vector<std::string> captured_joint_names = request_joint_names;
-        const std::vector<arms_ros2_control_msgs::msg::JointWaypoint> captured_waypoints = request_waypoints;
-        const bool accepted = requestMotionOrDefer([this, captured_joint_names, captured_waypoints]()
-        {
-            std::string deferred_message;
-            double deferred_duration = 0.0;
-            startJointTrajectoryRequestImpl(
-                captured_joint_names, captured_waypoints, deferred_message, deferred_duration);
-        });
-
-        if (!accepted) { message = "No feasible stop; current motion retained"; planned_duration = 0; return false; }
-        message = "Joint trajectory deferred until stop-to-zero completes";
-        planned_duration = 0.0;
-        return true;
-    }
-
     bool StateMoveJ::startJointTrajectoryRequestImpl(
         const std::vector<std::string>& request_joint_names,
         const std::vector<arms_ros2_control_msgs::msg::JointWaypoint>& request_waypoints,
+        bool time_mode, double movej_trajectory_duration, bool use_waypoint_blend_ratio,
         std::string& message,
         double& planned_duration)
     {
@@ -4205,6 +4187,13 @@ namespace arms_controller_common
             return false;
         }
 
+        if (!validateWaypointRequest(request_joint_names, request_waypoints, use_waypoint_blend_ratio) ||
+            !validateTrajectoryTiming(request_waypoints, time_mode, movej_trajectory_duration, message))
+        {
+            if (message.empty()) message = "Invalid joint trajectory request";
+            planned_duration = 0.0;
+            return false;
+        }
         updateParam();
 
         if (interpolation_type_ == InterpolationType::SERVO)
@@ -4309,6 +4298,18 @@ namespace arms_controller_common
         }
 
         full_waypoints = request_waypoints;
+        // Resolve defaults once, at actual planning time (also for deferred goals).
+        double default_blend_ratio = 0.0;
+        if (!use_waypoint_blend_ratio)
+        {
+            default_blend_ratio = node_->get_parameter("movej_trajectory_blend_ratio").as_double();
+            if (!std::isfinite(default_blend_ratio) || default_blend_ratio < 0.0 || default_blend_ratio > 1.0)
+            { message = "movej_trajectory_blend_ratio must be finite and within [0, 1]"; planned_duration = 0.0; return false; }
+        }
+        for (auto& wp : full_waypoints)
+        {
+            if (!use_waypoint_blend_ratio) wp.blend_ratio_percent = default_blend_ratio;
+        }
         const auto map_array = [&](const std::vector<double>& values, double default_value)
         {
             if (values.empty())
@@ -4336,12 +4337,88 @@ namespace arms_controller_common
             wp.max_jerk = map_limit(wp.max_jerk, movej_max_jerk_);
         }
 
+        // Resolve explicit times against the original point sequence before filtering.
+        // Equal positions with an explicit positive duration mean a dwell, not a duplicate.
+        const auto& last_time = request_waypoints.back().time_from_start;
+        const bool explicit_times = last_time.sec != 0 || last_time.nanosec != 0;
+        std::vector<arms_ros2_control_msgs::msg::JointWaypoint> filtered_waypoints;
+        std::vector<double> segment_durations;
+        auto previous_position = current_positions;
+        int64_t previous_time = 0;
+        for (size_t i = 0; i < full_waypoints.size(); ++i)
+        {
+            const auto& wp = full_waypoints[i];
+            const bool same_position = areJointPositionsSame(previous_position, wp.position);
+            const auto& t = wp.time_from_start;
+            const int64_t current_time = static_cast<int64_t>(t.sec) * 1000000000LL + t.nanosec;
+            const double dt = explicit_times ? static_cast<double>(current_time - previous_time) * 1e-9 : 0.0;
+            if (explicit_times && dt == 0.0 && !same_position)
+            {
+                message = "Waypoint " + std::to_string(i) + ": nonzero displacement requires positive duration";
+                planned_duration = 0.0;
+                return false;
+            }
+            if (!same_position || (explicit_times && dt > 0.0))
+            {
+                filtered_waypoints.push_back(wp);
+                segment_durations.push_back(dt);
+            }
+            previous_position = wp.position;
+            previous_time = current_time;
+        }
+        full_waypoints = std::move(filtered_waypoints);
+        num_waypoints = full_waypoints.size();
+        if (time_mode && !explicit_times && num_waypoints > 0)
+        {
+            const double requested_total = movej_trajectory_duration > 0.0
+                ? movej_trajectory_duration : trajectory_manager_.getTrajectoryDuration();
+            if (!std::isfinite(requested_total) || requested_total <= 0.0)
+            { message = "Default trajectory duration must be finite and positive"; planned_duration = 0.0; return false; }
+            std::vector<std::vector<double>> positions{current_positions};
+            for (const auto& wp : full_waypoints) positions.push_back(wp.position);
+            segment_durations = calculateSegmentDurations(positions, requested_total);
+        }
+        if (time_mode && (segment_durations.size() != num_waypoints ||
+            !std::all_of(segment_durations.begin(), segment_durations.end(),
+                [](double t) { return std::isfinite(t) && t > 0.0; })))
+        { message = "Cannot allocate positive durations for moving segments"; planned_duration = 0.0; return false; }
+        if (use_doubles && time_mode)
+        {
+            const double period = ctrl_interfaces_.frequency_ > 0 ? 1.0 / ctrl_interfaces_.frequency_ : 0.01;
+            auto previous = current_positions;
+            for (size_t i = 0; i < full_waypoints.size(); ++i)
+            {
+                if (!areJointPositionsSame(previous, full_waypoints[i].position) && segment_durations[i] <= period)
+                { message = "DOUBLES moving segment duration must exceed one controller period"; planned_duration = 0.0; return false; }
+                previous = full_waypoints[i].position;
+            }
+        }
+        if (time_mode && movej_trajectory_duration > 0.0)
+        {
+            // These controllers do not register parameter callbacks that acquire target_mutex_.
+            const auto result = node_->set_parameter(rclcpp::Parameter("movej_trajectory_duration", movej_trajectory_duration));
+            if (!result.successful)
+            { message = "Failed to update movej_trajectory_duration: " + result.reason; planned_duration = 0.0; return false; }
+            trajectory_manager_.setTrajectoryDuration(movej_trajectory_duration);
+        }
+
         refreshHoldPositions();
         use_prefix_filter_ = true;
         joint_mask_.assign(joint_names_.size(), false);
         for (size_t idx : joint_indices)
             joint_mask_[idx] = true;
         start_pos_ = current_positions;
+        if (num_waypoints == 0)
+        {
+            trajectory_manager_.reset();
+            target_pos_ = current_positions;
+            has_target_ = false;
+            interpolation_active_ = false;
+            publishCurrentTargetJoint(target_pos_);
+            message = "Target already satisfied; duplicate segments skipped";
+            planned_duration = 0.0;
+            return true;
+        }
 
         // 6. 根据waypoints数量处理
         if (num_waypoints == 1)
@@ -4349,7 +4426,7 @@ namespace arms_controller_common
             // ========== 单点目标运动 ==========
             if (use_doubles)
             {
-                if (!trajectory_manager_.planSingleTarget(current_positions, full_waypoints[0]))
+                if (!trajectory_manager_.planSingleTarget(current_positions, full_waypoints[0], time_mode, segment_durations[0]))
                 {
                     message = "Failed to plan single target trajectory";
                     planned_duration = 0.0;
@@ -4358,11 +4435,7 @@ namespace arms_controller_common
             }
             else
             {
-                double requested_duration = duration_;
-                if (request_waypoints[0].time_mode && request_waypoints[0].total_time > 1.0e-6)
-                {
-                    requested_duration = request_waypoints[0].total_time;
-                }
+                const double requested_duration = segment_durations[0];
 
                 if (!trajectory_manager_.initSingleNode(
                     start_pos_,
@@ -4385,7 +4458,7 @@ namespace arms_controller_common
             message = "Single target motion accepted";
             planned_duration = trajectory_manager_.getPlanningTime();
             RCLCPP_INFO(node_->get_logger(),
-                        "Joint trajectory service (single): %zu joints to target, duration=%.3f",
+                        "Joint trajectory action (single): %zu joints to target, duration=%.3f",
                         num_joints, planned_duration);
         }
         else if (num_waypoints >= 2)
@@ -4393,7 +4466,7 @@ namespace arms_controller_common
             // ========== 多点轨迹规划 ==========
             if (use_doubles)
             {
-                if (!trajectory_manager_.planMultiTrajectory(current_positions, full_waypoints))
+                if (!trajectory_manager_.planMultiTrajectory(current_positions, full_waypoints, time_mode, segment_durations))
                 {
                     message = "Failed to plan multi-point trajectory";
                     planned_duration = 0.0;
@@ -4409,8 +4482,7 @@ namespace arms_controller_common
                 positions.push_back(current_positions);
                 for (const auto& wp : full_waypoints)
                     positions.push_back(wp.position);
-                const auto durations = calculateSegmentDurations(
-                    positions, trajectory_manager_.getTrajectoryDuration());
+                const auto& durations = segment_durations;
                 if (!trajectory_manager_.initMultiNode(
                     positions, {}, durations, interpolation_type_,
                     ctrl_interfaces_.frequency_, tanh_scale_))
@@ -4429,7 +4501,7 @@ namespace arms_controller_common
 
 
             RCLCPP_INFO(node_->get_logger(),
-                        "Joint trajectory service (multi): %zu waypoints, %zu joints, total_time=%.3f",
+                        "Joint trajectory action (multi): %zu waypoints, %zu joints, movej_trajectory_duration=%.3f",
                         num_waypoints, num_joints, planned_duration);
 
             // 打印轨迹信息（调试用）
