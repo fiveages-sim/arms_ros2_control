@@ -55,8 +55,6 @@
 #include <tf2/exceptions.hpp>
 #include <tf2_geometry_msgs/tf2_geometry_msgs.hpp>
 
-#include <arms_controller_common/utils/FSMStateTransitionValidator.h>
-
 namespace arms_ros2_control::command
 {
 
@@ -102,8 +100,6 @@ namespace arms_ros2_control::command
     VRInputHandler::VRInputHandler(
         rclcpp::Node::SharedPtr node,
         ArmsTargetManager* targetManager,
-        rclcpp::Publisher<geometry_msgs::msg::Pose>::SharedPtr pub_left_target,
-        rclcpp::Publisher<geometry_msgs::msg::Pose>::SharedPtr pub_right_target,
         const std::vector<std::string>& handControllers,
         double vr_thumbstick_linear_scale,
         double vr_thumbstick_angular_scale,
@@ -113,8 +109,6 @@ namespace arms_ros2_control::command
         const AbsoluteTeleopOptions& absolute_options)
         : node_(std::move(node))
           , target_manager_(targetManager)
-          , pub_left_target_(std::move(pub_left_target))
-          , pub_right_target_(std::move(pub_right_target))
           , enabled_(false)
           , is_update_mode_(false)
           , mirror_mode_(false)
@@ -123,7 +117,6 @@ namespace arms_ros2_control::command
           , left_grip_mode_(false)
           , right_grip_mode_(false)
           , chassis_mode_(false)
-          , current_fsm_state_(2)  // 默认HOLD状态
           , hand_controllers_(handControllers)
           , left_gripper_open_(false)
           , right_gripper_open_(false)
@@ -240,7 +233,7 @@ namespace arms_ros2_control::command
         sub_robot_head_ = node_->create_subscription<geometry_msgs::msg::PoseStamped>(
             "head_current_pose", 10,
             [this](geometry_msgs::msg::PoseStamped::ConstSharedPtr msg) { robotHeadPoseCallback(msg); });
-        pub_head_target_ = node_->create_publisher<geometry_msgs::msg::Pose>("head_target", 10);
+        // 头部目标统一经 TargetRouter 发布，这里不再建自己的 head_target 发布器。
 
         // 创建按钮事件订阅器（Int32类型）
         auto controllerStateCallback = [this](const std_msgs::msg::Int32::SharedPtr msg)
@@ -297,16 +290,13 @@ namespace arms_ros2_control::command
 
         // 双臂目标由 ArmsTargetManager 的 TargetRouter 统一发布，这里不再重复创建。
 
-        // Relative names → /<ns>/fsm_command|cmd_vel|mode_command (multi-robot)
-        auto pub_fsm_command = node_->create_publisher<std_msgs::msg::Int32>("fsm_command", 10);
-        fsm_command_publisher_ = std::make_unique<arms_controller_common::FSMCommandPublisher>(
-            node_, pub_fsm_command);
+        // FSM 命令不再由本类发布：统一走 FsmClient（节点注入）。
 
         // 底盘控制模式相关发布器（case 20 触发）
         pub_cmd_vel_ = node_->create_publisher<geometry_msgs::msg::Twist>("cmd_vel", 10);
 
-        // WBC 模式切换命令发布器（case 21–24 请求身体模式）
-        pub_mode_command_ = node_->create_publisher<std_msgs::msg::String>("mode_command", 10);
+        // 注意：mode_command 发布器与 wbc_capabilities 订阅已统一到 HumanoidModeClient，
+        // 本类不再自己建（避免同进程重复订阅与两份缓存）。
 
         // Hand sinks / DualHand follow this latch (same bit as EE/trigger mirror).
         pub_mirror_mode_ = node_->create_publisher<std_msgs::msg::Bool>(
@@ -317,18 +307,8 @@ namespace arms_ros2_control::command
             node_->get_logger(),
             "🕹️🕶️🕹️ Publishing /teleop/mirror_mode (Bool, transient_local)");
 
-        sub_wbc_capability_ =
-            node_->create_subscription<arms_ros2_control_msgs::msg::WbcCapability>(
-                "ocs2_wbc_controller/wbc_capabilities",
-                rclcpp::QoS(1).transient_local(),
-                [this](const arms_ros2_control_msgs::msg::WbcCapability::ConstSharedPtr msg)
-                {
-                    this->wbcCapabilityCallback(msg);
-                });
-
-        // 注意：FSM命令订阅已移除，改为在 arms_target_manager_node 中统一处理
-        // 这样可以避免与 ArmsTargetManager 的订阅冲突
-        // FSM状态更新现在通过 fsmCommandCallback() 方法由外部调用
+        // FSM 与 WBC 模式的订阅/发布都由统一入口接管（见 attachFsmClient /
+        // attachHumanoidModeClient），本类只保留设备侧输入与映射。
 
         RCLCPP_INFO(node_->get_logger(), "🕹️🕶️🕹️ VRInputHandler created（普通 + 全身同一份状态）");
         RCLCPP_INFO(
@@ -417,6 +397,11 @@ namespace arms_ros2_control::command
 
     VRInputHandler::~VRInputHandler() = default;
 
+    /**
+     * @brief 使能 VR 控制
+     *
+     * 同时通知会话层，并把目标发布切到连续模式以获得更好的跟随性。
+     */
     void VRInputHandler::enable()
     {
         enabled_.store(true);
@@ -430,6 +415,12 @@ namespace arms_ros2_control::command
         RCLCPP_INFO(node_->get_logger(), "🕹️🕶️🕹️ VR control ENABLED!");
     }
 
+    /**
+     * @brief 失能 VR 控制
+     *
+     * 交还所有目标控制权、停止头部跟踪、退出底盘/全身类运行态，
+     * 避免失能后机器人还沿着上一条命令跑。
+     */
     void VRInputHandler::disable()
     {
         enabled_.store(false);
@@ -480,6 +471,16 @@ namespace arms_ros2_control::command
     //   本区             加一个 case 调用新的处理函数
     //
     // 处理函数请只接收“动作”，不要再判断编号；编号到动作的翻译只发生在 ①。
+    /**
+     * @brief 按键事件总入口
+     *
+     * 处理顺序固定为三步，新增组合键只改第一步的绑定表与第三步的分发：
+     *   ① decodeAction() 把设备编号翻成动作；
+     *   ② VrSession::allows() 判断当前模式是否允许该动作；
+     *   ③ switch 分发给具体处理函数。
+     *
+     * @param msg 事件编号（0 表示无事件）
+     */
     void VRInputHandler::processButtonEvent(const std_msgs::msg::Int32::SharedPtr msg)
     {
         const int32_t code = msg->data;
@@ -570,6 +571,13 @@ namespace arms_ros2_control::command
     }
 
 
+    /**
+     * @brief 普通模式的动作分发
+     *
+     * 只处理“普通模式独有”的动作；FSM、夹爪、全身开关等共用动作在上一级处理。
+     *
+     * @param action 已通过会话层允许性检查的动作
+     */
     void VRInputHandler::handleNormalAction(Action action)
     {
         switch (action)
@@ -644,8 +652,8 @@ namespace arms_ros2_control::command
             }
             case Action::UpdateToggle:  // 原事件 4
             {
-                // 只在OCS2状态下执行（状态值为3）
-                if (current_fsm_state_.load() != 3)
+                // 只在OCS2状态下执行
+                if (!isOcs2State())
                 {
                     RCLCPP_DEBUG(node_->get_logger(), "🔘 [右摇杆按钮] 按下 - 功能: 切换UPDATE/STORAGE模式 - 操作: 忽略（当前FSM状态不是OCS2）");
                     break;
@@ -974,6 +982,14 @@ namespace arms_ros2_control::command
     }
 
 
+    /**
+     * @brief 全身模式内的事件分发
+     *
+     * 全身模式下只保留 FSM、夹爪、事件 4（全部跟踪）等少数功能，
+     * 其余编号会打一条限频提示，告诉用户要先退出全身模式。
+     *
+     * @param code 原始事件编号
+     */
     void VRInputHandler::handleWholeBodyButtonEvent(int32_t code)
     {
         switch (code)
@@ -992,59 +1008,44 @@ namespace arms_ros2_control::command
     }
 
 
+    /**
+     * @brief FSM 前进/后退
+     *
+     * 设备编号只在这里翻译成意图；“当前状态能不能走”由 FsmClient 统一判定，
+     * 因此不会再出现各处规则表不一致的情况。
+     *
+     * @param code 11=右A（前进），其它按左X（后退/切换）处理
+     */
     void VRInputHandler::handleFsmButtonEvent(int32_t code)
     {
-        // 与 ATM 共用校验后的状态，避免 RViz 切到 MOVEJ 后 VR 仍以为在 HOLD
-        const int32_t current_state = resolvedFsmState();
-
+        // 设备编号只在这里翻译成意图；"这个状态下能不能走"由 FsmClient 统一判定，
+        // 因此不会再出现 VR 用一份规则表、ATM 用另一份的情况。
         if (code == 11)
         {
             // 右A：FSM 前进
-            if (current_state == 2)  // HOLD
-            {
-                sendFsmCommand(3);
-                RCLCPP_INFO(node_->get_logger(), "🔘 [右A按钮] 按下 - 功能: FSM状态前进 - 操作: HOLD → OCS2");
-            }
-            else if (current_state == 1)  // HOME
-            {
-                sendFsmCommand(2);
-                RCLCPP_INFO(node_->get_logger(), "🔘 [右A按钮] 按下 - 功能: FSM状态前进 - 操作: HOME → HOLD");
-            }
-            else if (current_state == 3)  // OCS2
-            {
-                RCLCPP_WARN(node_->get_logger(), "🔘 [右A按钮] 按下 - 功能: FSM状态前进 - 操作: 失败（已在OCS2状态，无法继续前进）");
-            }
-            else if (current_state == 4)  // MOVEJ
-            {
-                RCLCPP_WARN(node_->get_logger(), "🔘 [右A按钮] 按下 - 功能: FSM状态前进 - 操作: 失败（MOVEJ 需先回 HOLD，不能直接进 OCS2）");
-            }
+            RCLCPP_INFO(node_->get_logger(),
+                        "🔘 [右A按钮] 按下 - 功能: FSM状态前进（当前 %s）",
+                        fsm_ ? fsm_->stateName() : "HOLD");
+            requestFsmIntent(FsmIntent::Next);
             return;
         }
 
-        // 左X：FSM 后退/切换
-        if (current_state == 3)  // OCS2
-        {
-            sendFsmCommand(2);
-            RCLCPP_INFO(node_->get_logger(), "🔘 [左X按钮] 按下 - 功能: FSM状态后退/切换 - 操作: OCS2 → HOLD");
-        }
-        else if (current_state == 4)  // MOVEJ
-        {
-            sendFsmCommand(2);
-            RCLCPP_INFO(node_->get_logger(), "🔘 [左X按钮] 按下 - 功能: FSM状态后退/切换 - 操作: MOVEJ → HOLD");
-        }
-        else if (current_state == 2)  // HOLD
-        {
-            sendFsmCommand(1);
-            RCLCPP_INFO(node_->get_logger(), "🔘 [左X按钮] 按下 - 功能: FSM状态后退/切换 - 操作: HOLD → HOME");
-        }
-        else if (current_state == 1)  // HOME
-        {
-            sendFsmCommand(100);
-            RCLCPP_INFO(node_->get_logger(), "🔘 [左X按钮] 按下 - 功能: FSM状态后退/切换 - 操作: 在HOME状态切换姿态 (HOME ↔ REST)");
-        }
+        // 左X：FSM 后退/切换（HOME 下再按一次 = 切换预设姿态）
+        RCLCPP_INFO(node_->get_logger(),
+                    "🔘 [左X按钮] 按下 - 功能: FSM状态后退/切换（当前 %s）",
+                    fsm_ ? fsm_->stateName() : "HOLD");
+        requestFsmIntent(FsmIntent::Back);
     }
 
 
+    /**
+     * @brief 夹爪相关按键分发
+     *
+     * 9/10 是扳机开关命令，13/14 是握把+扳机切比例/开关模式。
+     * 比例模式下的 9/10 会被忽略，因为连续量由 triggerValuesCallback 驱动。
+     *
+     * @param code 原始事件编号
+     */
     void VRInputHandler::handleGripperButtonEvent(int32_t code)
     {
         if (code == 9 || code == 10)
@@ -1259,7 +1260,7 @@ namespace arms_ros2_control::command
     bool VRInputHandler::headTrackingReady() const
     {
         return target_manager_ && isFullBodyMode() && enabled_.load() && is_update_mode_.load() &&
-            resolvedFsmState() == 3 &&
+            isOcs2State() &&
             target_manager_->getCurrentHeadState() ==
                 arms_ros2_control_msgs::msg::WbcCurrentState::HEAD_TRACKING &&
             has_vr_head_pose_ && has_robot_head_pose_;
@@ -1355,6 +1356,11 @@ namespace arms_ros2_control::command
         head_tracking_active_ = true;
     }
 
+    /**
+     * @brief VR 左手柄位姿输入
+     *
+     * 镜像模式下这里的数据驱动右臂，因此不要在下游再按左右重新判断。
+     */
     void VRInputHandler::vrLeftCallback(const geometry_msgs::msg::Pose::SharedPtr msg)
     {
         if (!enabled_.load())
@@ -1488,6 +1494,9 @@ namespace arms_ros2_control::command
         }
     }
 
+    /**
+     * @brief VR 右手柄位姿输入（镜像语义与左手对称）
+     */
     void VRInputHandler::vrRightCallback(const geometry_msgs::msg::Pose::SharedPtr msg)
     {
         // 右话题接收的是右手柄数据
@@ -1615,6 +1624,11 @@ namespace arms_ros2_control::command
         }
     }
 
+    /**
+     * @brief 摇杆轴值输入（linear.x/y = 左摇杆，angular.x/y = 右摇杆）
+     *
+     * 根据当前模式分发给底盘遥控、身体模式或末端微调，本身不做积分。
+     */
     void VRInputHandler::thumbstickAxesCallback(const geometry_msgs::msg::Twist::SharedPtr msg)
     {
         // 存储左摇杆轴值（从 linear.x/y 读取）
@@ -1766,6 +1780,11 @@ namespace arms_ros2_control::command
         processRightThumbstickAxes();
     }
 
+    /**
+     * @brief 扳机模拟量输入（linear.x = 左扳机，angular.x = 右扳机）
+     *
+     * 比例模式下驱动夹爪百分比；开关模式只取上升沿做开/关，避免持续发指令。
+     */
     void VRInputHandler::triggerValuesCallback(const geometry_msgs::msg::Twist::SharedPtr msg)
     {
         const double left_trigger_pull = std::clamp(msg->linear.x, 0.0, 1.0);
@@ -1828,6 +1847,11 @@ namespace arms_ros2_control::command
         publishIfPercent(false, right_hand_percent);
     }
 
+    /**
+     * @brief 把摇杆增量叠加到某条手臂的 marker 上
+     *
+     * 内部维护累积偏移（平移 + 偏航），重启时清零，避免增量丢失或跳变。
+     */
     void VRInputHandler::processLeftThumbstickAxes()
     {
         // 在UPDATE模式下累积摇杆输入
@@ -1915,6 +1939,9 @@ namespace arms_ros2_control::command
         }
     }
 
+    /**
+     * @brief 右摇杆末端微调（语义与左侧对称，镜像时作用于另一条臂）
+     */
     void VRInputHandler::processRightThumbstickAxes()
     {
         // 在UPDATE模式下累积摇杆输入
@@ -2002,6 +2029,11 @@ namespace arms_ros2_control::command
         }
     }
 
+    /**
+     * @brief BODY_TRACKING 下用左摇杆微调腰部 marker
+     *
+     * XY 模式：Y→X、X→Y；Z+Yaw 模式：Y→Z、X→Yaw。
+     */
     void VRInputHandler::processBodyThumbstickAxes()
     {
         // 腰部增量直接改 BodyMarker 绝对目标，不依赖双臂 UPDATE/STORAGE 的 VR base pose，
@@ -2057,6 +2089,11 @@ namespace arms_ros2_control::command
         pub_mirror_mode_->publish(msg);
     }
 
+    /**
+     * @brief 尺度校准（事件 15，当前入口固定用左侧）
+     *
+     * 用头显与手柄的实际距离校正比例，使虚拟位移和机器人末端位移一致。
+     */
     void VRInputHandler::runScaleCalibration(bool use_left_z)
     {
         const char* tag = use_left_z ? "左组合键" : "右组合键";
@@ -2272,7 +2309,7 @@ namespace arms_ros2_control::command
                                 "🕹️🕶️🕹️ [%s] 校准目标未能全部下发（可能被手动拖动占用）",
                                 tag);
                 }
-                if (pub_right_target_)
+                if (router->hasPublisher(Channel::ArmRight))
                 {
                     target_manager_->sendDualArmTargetPose();
                 }
@@ -2493,6 +2530,13 @@ namespace arms_ros2_control::command
         return true;
     }
 
+    /**
+     * @brief 按当前 VR 与机器人基准计算相对目标并交给发布函数
+     *
+     * 基准因 TF 缺失尚未就绪时会自动重试建立，因此调试期丢 TF 不会永久卡死。
+     *
+     * @return false 表示本次没有发布
+     */
     bool VRInputHandler::calculateAndPublishTarget(
         const std::string& armType,
         const Eigen::Vector3d& vrCurrentPosition,
@@ -2642,6 +2686,14 @@ namespace arms_ros2_control::command
                     armType.c_str());
     }
 
+    /**
+     * @brief 把控制器坐标系下的目标经平滑后发表
+     *
+     * @param armType "left" 或 "right"
+     * @param position 控制器坐标系下的位置
+     * @param orientation 控制器坐标系下的姿态
+     * @return false 表示首次重建、TF 失败或发布器不可用
+     */
     bool VRInputHandler::publishTargetPoseDirect(
         const std::string& armType,
         const Eigen::Vector3d& position,
@@ -2667,9 +2719,9 @@ namespace arms_ros2_control::command
 
         const bool isLeft = armType == "left";
         const bool isRight = armType == "right";
-        if ((!isLeft && !isRight) ||
-            (isLeft && !pub_left_target_) ||
-            (isRight && !pub_right_target_))
+        TargetRouter* router = target_manager_ ? target_manager_->router() : nullptr;
+        if ((!isLeft && !isRight) || !router ||
+            !router->hasPublisher(isLeft ? Channel::ArmLeft : Channel::ArmRight))
         {
             RCLCPP_WARN(
                 node_->get_logger(),
@@ -2702,11 +2754,6 @@ namespace arms_ros2_control::command
         applyStaleCatchUpRamp(isLeft, rampedPosition, rampedOrientation);
 
         if (!ee_frame_id_initialized_ || !target_manager_)
-        {
-            return false;
-        }
-        TargetRouter* router = target_manager_->router();
-        if (!router)
         {
             return false;
         }
@@ -2916,6 +2963,12 @@ namespace arms_ros2_control::command
                                   : right_gripper_percent_mode_.load();
     }
 
+    /**
+     * @brief 切到比例/开关夹爪模式
+     *
+     * 切比例：不发任何指令，夹爪停在当前位，等扳机回扣到该位置才接管；
+     * 切开关：把开关标志对齐到当前位置，否则下一次 9/10 方向会反。
+     */
     void VRInputHandler::prepareGripperForModeSwitch(bool is_target_left_arm, bool percent_mode)
     {
         const std::string& controller_name = is_target_left_arm
@@ -2983,6 +3036,9 @@ namespace arms_ros2_control::command
         }
     }
 
+    /**
+     * @brief 切换夹爪控制模式（事件 13/14，带 500 ms 防抖）
+     */
     void VRInputHandler::toggleGripperPercentMode(bool is_left_trigger)
     {
         std::string controller_name;
@@ -3190,6 +3246,9 @@ namespace arms_ros2_control::command
                 .count();
     }
 
+    /**
+     * @brief 取消所有光学握手 pending，但不回滚手臂暂停状态
+     */
     void VRInputHandler::cancelOpticalPending(const char* reason)
     {
         const bool hadUpdate = optical_update_enter_pending_.exchange(false);
@@ -3229,6 +3288,12 @@ namespace arms_ros2_control::command
             optical_r0_caps_version_);
     }
 
+    /**
+     * @brief 光学 R0 握手 100 ms 监管器
+     *
+     * 即使 VR 位姿一帧也不来（头显断流），也要能把 pending 推完或超时放弃，
+     * 否则 pending 会一直卡住，false 地挡住后续操作。
+     */
     void VRInputHandler::superviseOpticalHandshake()
     {
         const bool anyPending = optical_update_enter_pending_.load() ||
@@ -3318,13 +3383,19 @@ namespace arms_ros2_control::command
         return true;
     }
 
+    /**
+     * @brief 尝试完成“进入 UPDATE”的光学握手
+     *
+     * 收到 ready 后把 R0 定在“手柄当前位姿”，使进入更新模式时不会因为
+     * 话题回路里的偏置而跳一段距离；超时则退回主话题路径。
+     */
     void VRInputHandler::tryCompleteOpticalUpdateEnter()
     {
         if (!optical_update_enter_pending_.load() || is_update_mode_.load())
         {
             return;
         }
-        if (current_fsm_state_.load() != 3)
+        if (!isOcs2State())
         {
             // Leaving OCS2 is not a handshake fault: drop the pending silently
             // and keep the handshake armed for the next attempt.
@@ -3559,6 +3630,15 @@ namespace arms_ros2_control::command
         }
     }
 
+    /**
+     * @brief 恢复一条手臂的 VR 控制
+     *
+     * 优先走光学 R0 握手（重新对齐起始位姿），握手不可用时退回到主话题直接接管。
+     *
+     * @param arm 哪条手臂
+     * @param buttonTag 触发来源，仅用于日志
+     * @return true 表示已恢复
+     */
     bool VRInputHandler::resumeArmVrControl(
         WbcToggleTarget arm,
         const char* buttonTag)
@@ -3702,6 +3782,18 @@ namespace arms_ros2_control::command
     // 7. WBC 门控与身体模式
     // =====================================================================
 
+    /**
+     * @brief 请求身体约束模式（事件 21–24）
+     *
+     * 发出命令后进入 pending：只有 WBC 确认且左摇杆回中才认为生效，
+     * 否则会在 2 秒后超时并放弃，避免“按了没反应又卡在 pending”
+     *
+     * @param eventCase 原始事件编号，仅用于日志
+     * @param direction 方向描述，仅用于日志
+     * @param modeName 模式中文名，仅用于日志
+     * @param command 发送给控制器的模式命令字符串
+     * @param expectedBodyState 期望的 WbcCurrentState::body_state 取值
+     */
     void VRInputHandler::requestBodyMode(
         int32_t eventCase,
         const char* direction,
@@ -3725,7 +3817,7 @@ namespace arms_ros2_control::command
             return;
         }
 
-        if (current_fsm_state_.load() != 3)
+        if (!isOcs2State())
         {
             RCLCPP_WARN(node_->get_logger(),
                         "🔘 [case %d] 忽略%s模式：当前 FSM 不是 OCS2",
@@ -3796,6 +3888,11 @@ namespace arms_ros2_control::command
         return false;
     }
 
+    /**
+     * @brief 请求 WBC 开关翻转（单臂使能/底盘锁定/双臂耦合/参考关节）
+     *
+     * 先读当前状态取反，再发命令；同样走 pending + 摇杆回中确认。
+     */
     void VRInputHandler::requestWbcToggle(
         int32_t eventCase,
         const char* sourceDescription,
@@ -3803,7 +3900,7 @@ namespace arms_ros2_control::command
     {
         if (!enabled_.load() ||
             !isFullBodyMode() ||
-            current_fsm_state_.load() != 3)
+            !isOcs2State())
         {
             RCLCPP_WARN(
                 node_->get_logger(),
@@ -3928,7 +4025,7 @@ namespace arms_ros2_control::command
             requested_wbc_toggle_target_.load(),
             actualEnabled);
         const bool confirmed =
-            current_fsm_state_.load() == 3 &&
+            isOcs2State() &&
             stateAvailable &&
             actualEnabled ==
                 requested_wbc_toggle_enabled_.load();
@@ -3963,6 +4060,11 @@ namespace arms_ros2_control::command
         return true;
     }
 
+    /**
+     * @brief 收到 WBC 模式状态
+     *
+     * 跟踪单臂可用性并驱动 rebase / 暂停/恢复相位，不做模式推断。
+     */
     void VRInputHandler::wbcStateCallback(
         arms_ros2_control_msgs::msg::WbcCurrentState::ConstSharedPtr msg)
     {
@@ -3987,6 +4089,11 @@ namespace arms_ros2_control::command
             WbcToggleTarget::RIGHT_ARM, msg->right_arm_state);
     }
 
+    /**
+     * @brief 收到 WBC 能力声明
+     *
+     * 能力是静态配置，用于提前判断这台机器支不支持全身/底盘等功能。
+     */
     void VRInputHandler::wbcCapabilityCallback(
         arms_ros2_control_msgs::msg::WbcCapability::ConstSharedPtr msg)
     {
@@ -4257,16 +4364,49 @@ namespace arms_ros2_control::command
         return true;
     }
 
-    void VRInputHandler::publishHumanoidModeCommand(const std::string& command)
+    /**
+     * @brief 接入 WBC 模式统一入口
+     *
+     * 接入后 mode_command 与能力声明都走 client；未接入时相关命令会被忽略并打 WARN。
+     */
+    void VRInputHandler::attachHumanoidModeClient(HumanoidModeClient* client)
     {
-        if (!pub_mode_command_)
+        mode_client_ = client;
+        if (!mode_client_)
         {
             return;
         }
 
-        std_msgs::msg::String msg;
-        msg.data = command;
-        pub_mode_command_->publish(msg);
+        // 能力声明（静态）：先同步一次，再订变化。
+        if (mode_client_->hasCapability())
+        {
+            wbcCapabilityCallback(
+                std::make_shared<arms_ros2_control_msgs::msg::WbcCapability>(
+                    mode_client_->capability()));
+        }
+
+        capability_observer_token_ = mode_client_->observeCapability(
+            [this](const arms_ros2_control_msgs::msg::WbcCapability& msg)
+            {
+                wbcCapabilityCallback(
+                    std::make_shared<arms_ros2_control_msgs::msg::WbcCapability>(msg));
+            });
+
+        RCLCPP_INFO(node_->get_logger(),
+                    "🕹️ VRInputHandler 已接入 HumanoidModeClient（%s）",
+                    mode_client_->hasCapability() ? "已收到能力声明" : "等待能力声明");
+    }
+
+    void VRInputHandler::publishHumanoidModeCommand(const std::string& command)
+    {
+        if (!mode_client_)
+        {
+            RCLCPP_WARN(node_->get_logger(),
+                        "🕹️ WBC 模式命令 %s 被忽略：未接入 HumanoidModeClient",
+                        command.c_str());
+            return;
+        }
+        mode_client_->publishCommand(command);
     }
 
     bool VRInputHandler::isYbModeConversionPending() const
@@ -4380,7 +4520,7 @@ namespace arms_ros2_control::command
     bool VRInputHandler::handleCase16YbModeToggle()
     {
         if (!enabled_.load() || !isFullBodyMode() ||
-            current_fsm_state_.load() != 3)
+            !isOcs2State())
         {
             RCLCPP_WARN(node_->get_logger(),
                         "🔘 [case 16] 忽略：要求 VR enabled、FULL_BODY、OCS2");
@@ -4467,7 +4607,7 @@ namespace arms_ros2_control::command
             std::abs(left_thumbstick_axes_raw_.y()) <= 0.3;
         const int expectedState = requested_body_state_.load();
         const bool confirmed =
-            current_fsm_state_.load() == 3 &&
+            isOcs2State() &&
             target_manager_ &&
             target_manager_->getCurrentBodyState() == expectedState;
 
@@ -4502,6 +4642,12 @@ namespace arms_ros2_control::command
     // 8. 底盘与腰部遥控
     // =====================================================================
 
+    /**
+     * @brief 底盘/腰部摇杆遥控
+     *
+     * 普通模式与全身模式共用的事件 20。非全身拓扑下按住右握把可作为腰部修饰键；
+     * 全身拓扑下右轴方向由 WBC 四开关组合消费，进入这里前已被清零。
+     */
     void VRInputHandler::processChassisAxes()
     {
         // 普通模式与全身模式共用的事件 20 手动底盘遥控（全身模式的底盘跟随由 OCS2 负责）。
@@ -4581,10 +4727,10 @@ namespace arms_ros2_control::command
     bool VRInputHandler::wbcOwnsChassisVelocity() const
     {
         // 仅全身 OCS2 且底盘规划解锁时让路；HOLD / 锁底盘由 VR 直发 /cmd_vel。
-        // 用权威 FSM（resolvedFsmState）而非本地缓存，避免缓存落后时
-        // 退出全身模式该发的零速被吞掉。
+        // 用 FsmClient 订阅到的权威状态（fsm_state），而不是本地缓存，
+        // 避免缓存落后时退出全身模式该发的零速被吞掉。
         return isFullBodyMode() &&
-               resolvedFsmState() == 3 &&
+               isOcs2State() &&
                target_manager_ &&
                target_manager_->getCurrentBaseState() ==
                    arms_ros2_control_msgs::msg::WbcCurrentState::BASE_UNLOCKED;
@@ -4613,6 +4759,12 @@ namespace arms_ros2_control::command
         if (pub_waist_turning_) pub_waist_turning_->publish(zero_float);
     }
 
+    /**
+     * @brief 切换底盘遥控模式（事件 20）
+     *
+     * 进入前清零末端摇杆累积偏移，退出时清零底盘/腰部命令，
+     * 避免切换瞬间出现跳变或残留速度。
+     */
     void VRInputHandler::toggleChassisMode()
     {
         const bool new_mode = !chassis_mode_.load();
@@ -4645,6 +4797,11 @@ namespace arms_ros2_control::command
     // 9. 全身模式：模式开关与骨架输入
     // =====================================================================
 
+    /**
+     * @brief 全身遥操作的初始化（只做一次）
+     *
+     * 包含接管渐入参数、骨架订阅与目标通道绑定。
+     */
     void VRInputHandler::initializeWholeBodyTeleop()
     {
         // 接管渐入参数：四条目标链路（左/右臂、胸、头）共用一套速度约束。
@@ -4716,6 +4873,9 @@ namespace arms_ros2_control::command
             "其余普通模式组合键在全身模式下不可用");
     }
 
+    /**
+     * @brief 开关全身遥操作（事件 30）
+     */
     void VRInputHandler::toggleWholeBodyTeleop()
     {
         if (whole_body_teleop_active_.load())
@@ -4731,7 +4891,7 @@ namespace arms_ros2_control::command
 
         if (!vrEnabled() ||
             !fullBodyTopology() ||
-            fsmState() != 3)
+            !isOcs2State())
         {
             RCLCPP_WARN(
                 node_->get_logger(),
@@ -4756,6 +4916,12 @@ namespace arms_ros2_control::command
         startWholeBodyTeleop();
     }
 
+    /**
+     * @brief 进入全身遥操作
+     *
+     * 先把普通模式的运行态全部暂停（UPDATE/镜像/底盘/各类 pending），
+     * 再请求身体跟随与头部跟踪；绝对位姿映射还需另按右摇杆开启。
+     */
     void VRInputHandler::startWholeBodyTeleop()
     {
         // 进入模式前先清掉普通模式的所有运行态：
@@ -4782,6 +4948,19 @@ namespace arms_ros2_control::command
         // 全身模式摇杆不参与请求确认，因此直接发命令，不走普通模式的 pending/回中逻辑。
         publishHumanoidModeCommand("BODY_TRACKING");
         publishHumanoidModeCommand("HEAD_TRACKING");
+        // 控制器可能因为不支持 BODY_TRACKING 而静默忽略，这里登记一次期望，
+        // 超时会打 WARN，避免"开了全身模式但机器人不动"却没有线索。
+        if (mode_client_)
+        {
+            mode_client_->expect(
+                HumanoidModeClient::Expectation{
+                    "全身模式进入：BODY_TRACKING",
+                    [](const arms_ros2_control_msgs::msg::WbcCurrentState& state)
+                    {
+                        return state.body_state ==
+                               arms_ros2_control_msgs::msg::WbcCurrentState::BODY_TRACKING;
+                    }});
+        }
 
         RCLCPP_INFO(
             node_->get_logger(),
@@ -4792,6 +4971,9 @@ namespace arms_ros2_control::command
             "组合键(20)可手动遥控底盘；再次按左右握把+右摇杆按下退出");
     }
 
+    /**
+     * @brief 退出全身遥操作并恢复普通模式的可用状态
+     */
     void VRInputHandler::stopWholeBodyTeleop()
     {
         const bool was_active = whole_body_teleop_active_.exchange(false);
@@ -4815,6 +4997,9 @@ namespace arms_ros2_control::command
         stopWholeBodyTeleop();
     }
 
+    /**
+     * @brief 权威 FSM 变化时的兜底：离开 OCS2 就退出全身模式
+     */
     void VRInputHandler::onWholeBodyFsmStateChanged()
     {
         if (!whole_body_teleop_active_.load())
@@ -4822,7 +5007,7 @@ namespace arms_ros2_control::command
             return;
         }
         const int32_t fsm_state = fsmState();
-        if (fsm_state == 3)  // 3 = OCS2
+        if (isOcs2State())
         {
             return;
         }
@@ -5060,7 +5245,7 @@ namespace arms_ros2_control::command
     {
         if (!vrEnabled() ||
             !fullBodyTopology() ||
-            fsmState() != 3)
+            !isOcs2State())
         {
             RCLCPP_WARN(
                 node_->get_logger(),
@@ -5145,7 +5330,7 @@ namespace arms_ros2_control::command
                fullBodyTopology() &&
                vrEnabled() &&
                absolute_tracking_active_.load() &&
-               fsmState() == 3 &&
+               isOcs2State() &&
                target_manager_->getCurrentBodyState() ==
                    arms_ros2_control_msgs::msg::WbcCurrentState::BODY_TRACKING &&
                has_body_pelvis_pose_ && has_body_spine3_pose_;
@@ -5157,7 +5342,7 @@ namespace arms_ros2_control::command
                fullBodyTopology() &&
                vrEnabled() &&
                absolute_tracking_active_.load() &&
-               fsmState() == 3 &&
+               isOcs2State() &&
                target_manager_->getCurrentHeadState() ==
                    arms_ros2_control_msgs::msg::WbcCurrentState::HEAD_TRACKING &&
                has_body_head_pose_ &&
@@ -5421,7 +5606,7 @@ namespace arms_ros2_control::command
         }
         if (!vrEnabled() ||
             !fullBodyTopology() ||
-            fsmState() != 3)
+            !isOcs2State())
         {
             return;
         }
@@ -6087,38 +6272,102 @@ namespace arms_ros2_control::command
     // 11. 模式查询与共享工具
     // =====================================================================
 
-    void VRInputHandler::sendFsmCommand(int32_t command)
+    /**
+     * @brief 接入 FSM 统一入口
+     *
+     * 接入后本类不再缓存 FSM 状态、也不再自己发 fsm_command；
+     * 状态读 `fsm_->isOcs2()`，命令发 `fsm_->request(意图)`。
+     */
+    void VRInputHandler::attachFsmClient(FsmClient* client)
     {
-        // 使用通用工具类发布FSM命令（自动处理command=100的特殊情况）
-        if (fsm_command_publisher_)
+        fsm_ = client;
+        if (!fsm_)
         {
-            fsm_command_publisher_->publishCommand(command);
+            return;
         }
+
+        // 状态变化后的业务反应全部集中在这里，不再散在 fsmCommandCallback 里。
+        fsm_observer_token_ = fsm_->observe(
+            [this](FsmState from, FsmState to)
+            {
+                onFsmTransition(from, to);
+            });
+
+        RCLCPP_INFO(node_->get_logger(),
+                    "🕹️ VRInputHandler 已接入 FsmClient（当前 %s，%s）",
+                    fsm_->stateName(),
+                    fsm_->hasReceivedState() ? "已收到控制器状态" : "等待控制器状态");
     }
 
-    int32_t VRInputHandler::resolvedFsmState() const
+    /**
+     * @brief FSM 状态变化后的业务反应
+     *
+     * 这里只做“反应”，不再做任何状态推断：状态本身已由 FsmClient 给好。
+     */
+    void VRInputHandler::onFsmTransition(FsmState from, FsmState to)
     {
-        if (target_manager_)
+        // ① HOLD → OCS2：清空上一轮缓存的 command target，下一次 UPDATE 从当前位姿重新锚定
+        if (from == FsmState::Hold && to == FsmState::Ocs2)
         {
-            const std::string& name = target_manager_->getCurrentFsmState();
-            if (name == "HOME")
+            clearLastPublishedTargets();
+            RCLCPP_INFO(node_->get_logger(),
+                        "🕹️🕶️🕹️ HOLD → OCS2: 已清空缓存的 command target；"
+                        "下一次 UPDATE 将从当前位姿重新锚定");
+        }
+
+        // ② 离开 OCS2：自动回 STORAGE、停头部跟踪、清摇杆累积
+        if (to != FsmState::Ocs2)
+        {
+            stopHeadTracking();
+            if (is_update_mode_.exchange(false))
             {
-                return 1;
-            }
-            if (name == "HOLD")
-            {
-                return 2;
-            }
-            if (name == "OCS2")
-            {
-                return 3;
-            }
-            if (name == "MOVEJ")
-            {
-                return 4;
+                left_thumbstick_offset_ = Eigen::Vector3d::Zero();
+                right_thumbstick_offset_ = Eigen::Vector3d::Zero();
+                left_thumbstick_yaw_offset_ = 0.0;
+                right_thumbstick_yaw_offset_ = 0.0;
+                RCLCPP_INFO(node_->get_logger(),
+                            "🕹️🕶️🕹️ FSM 已离开 OCS2（%s）：自动切回 STORAGE 并清空摇杆累积",
+                            fsm_->stateName());
             }
         }
-        return current_fsm_state_.load();
+
+        // ③ 全身遥操作只在 OCS2 内有效
+        onWholeBodyFsmStateChanged();
+    }
+
+    bool VRInputHandler::isOcs2State() const noexcept
+    {
+        // 未接入 FsmClient 时按 HOLD 处理（与控制器初始状态一致），
+        // 因此所有 OCS2 门控默认关闭。
+        return fsm_ != nullptr && fsm_->isOcs2();
+    }
+
+    int32_t VRInputHandler::fsmState() const noexcept
+    {
+        return fsm_ ? static_cast<int32_t>(fsm_->state())
+                    : static_cast<int32_t>(FsmState::Hold);
+    }
+
+    void VRInputHandler::requestFsmIntent(FsmIntent intent)
+    {
+        if (!fsm_)
+        {
+            RCLCPP_WARN(node_->get_logger(),
+                        "🕹️ FSM 请求被忽略：未接入 FsmClient");
+            return;
+        }
+        fsm_->request(intent);
+    }
+
+    void VRInputHandler::sendFsmCommand(int32_t command)
+    {
+        if (!fsm_)
+        {
+            RCLCPP_WARN(node_->get_logger(),
+                        "🕹️ FSM 命令 %d 被忽略：未接入 FsmClient", command);
+            return;
+        }
+        fsm_->requestCommand(command);
     }
 
     bool VRInputHandler::isWholeBodyActive() const
@@ -6538,113 +6787,6 @@ namespace arms_ros2_control::command
                 "Failed to send controller topology request: %s", error.what());
         }
     }
-
-    void VRInputHandler::fsmCommandCallback(std_msgs::msg::Int32::SharedPtr msg)
-    {
-        int32_t command = msg->data;
-        
-        // 忽略重置命令（command=0）
-        if (command == 0)
-        {
-            return;
-        }
-
-        // REST姿态切换命令（不改变状态，只切换姿态）
-        if (command == 100)
-        {
-            return;
-        }
-
-        const int32_t old_state = current_fsm_state_.load();
-        std::string current_name;
-        switch (old_state)
-        {
-        case 1:
-            current_name = "HOME";
-            break;
-        case 3:
-            current_name = "OCS2";
-            break;
-        case 4:
-            current_name = "MOVEJ";
-            break;
-        case 2:
-        default:
-            current_name = "HOLD";
-            break;
-        }
-
-        // 与 ArmsTargetManager 使用同一套合法转换表（含 MOVEJ=4）
-        std::string new_name;
-        if (!arms_controller_common::FSMStateTransitionValidator::validateTransition(
-                current_name, command, new_name))
-        {
-            RCLCPP_DEBUG(node_->get_logger(),
-                         "🕹️🕶️🕹️ Ignore invalid FSM transition: %s + command=%d",
-                         current_name.c_str(), command);
-            // 本地缓存与权威状态分歧时这条命令会被丢弃，但全身遥操作的退出判定必须
-            // 依据权威状态走（否则模式会一直残留），这里兜底一次。
-                onWholeBodyFsmStateChanged();
-            return;
-        }
-
-        if (new_name != "OCS2")
-        {
-            stopHeadTracking();
-        }
-        int32_t new_state = old_state;
-        if (new_name == "HOME")
-        {
-            new_state = 1;
-        }
-        else if (new_name == "HOLD")
-        {
-            new_state = 2;
-        }
-        else if (new_name == "OCS2")
-        {
-            new_state = 3;
-        }
-        else if (new_name == "MOVEJ")
-        {
-            new_state = 4;
-        }
-
-        if (new_state != old_state)
-        {
-            if (old_state == 2 && new_state == 3)
-            {
-                clearLastPublishedTargets();
-                RCLCPP_INFO(node_->get_logger(),
-                            "🕹️🕶️🕹️ HOLD → OCS2: cleared cached command targets; next UPDATE will anchor from current pose");
-            }
-
-            current_fsm_state_.store(new_state);
-            
-            // 如果当前状态不是OCS2，自动切换到存储模式
-            if (new_state != 3)  // 3 = OCS2
-            {
-                if (is_update_mode_.load())
-                {
-                    is_update_mode_.store(false);
-                    stopHeadTracking();
-                    // 重置摇杆累积偏移
-                    left_thumbstick_offset_ = Eigen::Vector3d::Zero();
-                    right_thumbstick_offset_ = Eigen::Vector3d::Zero();
-                    left_thumbstick_yaw_offset_ = 0.0;
-                    right_thumbstick_yaw_offset_ = 0.0;
-                    RCLCPP_INFO(node_->get_logger(), 
-                                "🕹️🕶️🕹️ FSM状态不是OCS2，自动切换到STORAGE模式 (状态=%d)", new_state);
-                    RCLCPP_INFO(node_->get_logger(), "🕹️🕶️🕹️ Thumbstick offsets reset!");
-                }
-            }
-        }
-
-        // 全身遥操作只在 OCS2 内有效：权威 FSM 一离开 OCS2（HOLD / HOME / MOVEJ，含控制器
-        // 异常自动回退）就退出整个模式，与上面普通遥操作自动回 STORAGE 保持一致。
-            onWholeBodyFsmStateChanged();
-    }
-
 
     // ===== 共享工具：最后下发目标查询 =====
 

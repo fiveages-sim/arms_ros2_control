@@ -37,6 +37,8 @@
 #include <std_msgs/msg/string.hpp>
 #include <nav_msgs/msg/path.hpp>
 #include "arms_target_manager/MarkerFactory.h"
+#include "arms_target_manager/core/FsmClient.h"
+#include "arms_target_manager/core/HumanoidModeClient.h"
 #include "arms_target_manager/core/TargetRouter.h"
 #include "arms_target_manager/marker/HeadMarker.h"
 #include "arms_target_manager/marker/ArmMarker.h"
@@ -146,7 +148,25 @@ namespace arms_ros2_control::command
 
         void markerUpdateTimerCallback();
 
-        void fsmCommandCallback(std_msgs::msg::Int32::ConstSharedPtr msg);
+        /**
+         * 接入 FSM 统一入口。
+         *
+         * 接入后本类不再自己订阅 fsm_command 也不再推断状态：
+         * `current_fsm_state_` / `current_controller_state_` 变成为兼容旧代码保留的
+         * 缓存，由 FsmClient 的状态变化回调刷新。
+         */
+        void attachFsmClient(FsmClient* client);
+
+        /** 当前 FSM 统一入口（未接入时返回 nullptr）。 */
+        [[nodiscard]] FsmClient* fsmClient() const { return fsm_; }
+
+        /**
+         * 接入 WBC 模式统一入口。
+         *
+         * 接入后本类不再自己订阅 `<controller>/current_state`，
+         * 而是由 HumanoidModeClient 推送；`wbcStateCallback` 的逻辑保持不变。
+         */
+        void attachHumanoidModeClient(HumanoidModeClient* client);
 
         void wbcStateCallback(const arms_ros2_control_msgs::msg::WbcCurrentState::SharedPtr msg);
 
@@ -192,6 +212,9 @@ namespace arms_ros2_control::command
         void refreshArmMarkersFromLatestCurrentTargets();
         void refreshArmMarkersFromLatestCurrentPoses();
 
+        /** 把 FSM 状态应用到 marker 形态、菜单和可见性（旧 fsmCommandCallback 的动作）。 */
+        void applyFsmState(FsmState state);
+
         [[nodiscard]] bool isBimanualCoupled() const;
 
         [[nodiscard]] bool shouldStreamPoseCommands() const;
@@ -224,7 +247,6 @@ namespace arms_ros2_control::command
         std::shared_ptr<MarkerFactory> marker_factory_;
 
         rclcpp::Subscription<arms_ros2_control_msgs::msg::Inputs>::SharedPtr control_input_subscription_;
-        rclcpp::Subscription<arms_ros2_control_msgs::msg::WbcCurrentState>::SharedPtr wbc_state_subscriber_;
         std::function<void(
             const arms_ros2_control_msgs::msg::WbcCurrentState::ConstSharedPtr&)>
             wbc_state_callback_;
@@ -268,6 +290,12 @@ namespace arms_ros2_control::command
         int32_t current_controller_state_ = 2;
         std::string current_fsm_state_ = "HOLD";
         std::vector<int32_t> disable_auto_update_states_;
+        // FSM 统一入口。状态变化由它推送，本类不再自行订阅与推断。
+        FsmClient* fsm_{nullptr};
+        uint64_t fsm_observer_token_{0};
+        // WBC 模式统一入口。状态变化由它推送，本类不再自行订阅。
+        HumanoidModeClient* mode_client_{nullptr};
+        uint64_t mode_state_observer_token_{0};
 
         int left_arm_state_{1};
         int right_arm_state_{1};

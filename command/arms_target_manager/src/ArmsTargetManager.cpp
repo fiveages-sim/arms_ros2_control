@@ -1,10 +1,13 @@
 //
 // ArmsTargetManager 实现。
 //
+// 作用：维护 RViz 交互 marker，把拖动/菜单翻译成目标提交，并按状态决定显示。
+//
 // 记忆点：
 //   * marker 只显示，目标一律走 router_；
 //   * 拖动 → Intent（SourceId::Rviz, 高优先级），松手后由租约自动交还；
-//   * 单次发送模式下拖动只更新预览，菜单“发送目标”才真正下发。
+//   * 单次发送模式下拖动只更新预览，菜单“发送目标”才真正下发；
+//   * FSM 与 WBC 状态都由统一入口推送，本文件不再自己订阅 fsm_command。
 //
 #include "arms_target_manager/ArmsTargetManager.h"
 #include "arms_target_manager/marker/BodyMarker.h"
@@ -18,7 +21,6 @@
 #include <algorithm>
 #include <utility>
 #include <chrono>
-#include <arms_controller_common/utils/FSMStateTransitionValidator.h>
 
 namespace arms_ros2_control::command
 {
@@ -304,6 +306,12 @@ namespace arms_ros2_control::command
         markPendingChanges();
     }
 
+    /**
+     * @brief 收到 WBC 模式状态
+     *
+     * 更新本地缓存、转给上层注册的回调（VR 靠它做门控），
+     * 并在双臂耦合状态变化时清理 marker 命令冷却。
+     */
     void ArmsTargetManager::wbcStateCallback(
         const arms_ros2_control_msgs::msg::WbcCurrentState::SharedPtr msg)
     {
@@ -358,6 +366,13 @@ namespace arms_ros2_control::command
         }
     }
 
+    /**
+     * @brief 构造并初始化所有 marker、菜单、TF 订阅与目标路由
+     * @param pub_left_target 左臂连续目标发布器
+     * @param pub_left_target_stamped 左臂单次目标发布器
+     * @param pub_right_target 右臂连续目标发布器（单臂模式可为空）
+     * @param pub_right_target_stamped 右臂单次目标发布器（单臂模式可为空）
+     */
     void ArmsTargetManager::initialize(
         rclcpp::Publisher<geometry_msgs::msg::Pose>::SharedPtr pub_left_target,
         rclcpp::Publisher<geometry_msgs::msg::PoseStamped>::SharedPtr pub_left_target_stamped,
@@ -645,6 +660,11 @@ namespace arms_ros2_control::command
                     control_base_frame_.c_str());
     }
 
+    /**
+     * @brief 建一个交互 marker 描述（由 MarkerFactory 负责外形）
+     * @param name marker 名
+     * @param markerType "left"/"right"/"head"/"body"
+     */
     visualization_msgs::msg::InteractiveMarker ArmsTargetManager::buildMarker(
         const std::string& name,
         const std::string& markerType) const
@@ -716,6 +736,12 @@ namespace arms_ros2_control::command
         return empty_marker;
     }
 
+    /**
+     * @brief 把 RViz 的交互事件翻成一次目标提交
+     *
+     * 拖动全部走 SourceId::Rviz（高优先级，租约 500 ms）：连续模式下直接下发，
+     * 单次模式只写预览，等菜单“发送目标”。
+     */
     void ArmsTargetManager::handleMarkerFeedback(
         const visualization_msgs::msg::InteractiveMarkerFeedback::ConstSharedPtr& feedback)
     {
@@ -1260,11 +1286,8 @@ namespace arms_ros2_control::command
 
     void ArmsTargetManager::createPublishersAndSubscribers()
     {
-        wbc_state_subscriber_ =
-            node_->create_subscription<arms_ros2_control_msgs::msg::WbcCurrentState>(
-                "ocs2_wbc_controller/current_state",
-                10,
-                std::bind(&ArmsTargetManager::wbcStateCallback, this, std::placeholders::_1));
+        // WBC 模式状态改由 HumanoidModeClient 统一订阅并推送（见 attachHumanoidModeClient），
+        // 这里不再自己建 current_state 订阅，避免同一进程重复订阅与两份缓存。
 
         if (!node_->has_parameter("body_controller_name"))
         {
@@ -1332,6 +1355,9 @@ namespace arms_ros2_control::command
         refreshArmMarkersFromLatestCurrentPoses();
     }
 
+    /**
+     * @brief 用实测位姿刷新左右臂 marker
+     */
     void ArmsTargetManager::refreshArmMarkersFromLatestCurrentPoses()
     {
         if (!server_)
@@ -1365,6 +1391,9 @@ namespace arms_ros2_control::command
         }
     }
 
+    /**
+     * @brief 用控制器回传的目标刷新左右臂 marker
+     */
     void ArmsTargetManager::refreshArmMarkersFromLatestCurrentTargets()
     {
         if (!server_ || !router_)
@@ -1388,6 +1417,11 @@ namespace arms_ros2_control::command
         }
     }
 
+    /**
+     * @brief 摇杆/键盘能不能给这条手臂发速度
+     * @param is_left true=左臂
+     * @return false 表示被 VR 或手动拖动占着
+     */
     bool ArmsTargetManager::canAcceptSpeedCommand(bool is_left) const
     {
         if (!router_)
@@ -1399,34 +1433,80 @@ namespace arms_ros2_control::command
             SourceId::ControlInput);
     }
 
-    void ArmsTargetManager::fsmCommandCallback(std_msgs::msg::Int32::ConstSharedPtr msg)
+    void ArmsTargetManager::attachFsmClient(FsmClient* client)
     {
-        int32_t command = msg->data;
-
-        if (command == 0)
+        fsm_ = client;
+        if (!fsm_)
         {
             return;
         }
 
-        std::string new_state;
-        bool valid_transition = arms_controller_common::FSMStateTransitionValidator::validateTransition(
-            current_fsm_state_, command, new_state);
+        // 先同步一次当前状态：晚启动时 FsmClient 可能已经收到过 fsm_state。
+        applyFsmState(fsm_->state());
 
-        if (valid_transition)
-        {
-            current_fsm_state_ = new_state;
-            current_controller_state_ = command;
-
-            if (command == 4 && current_mode_ == MarkerState::CONTINUOUS)
+        fsm_observer_token_ = fsm_->observe(
+            [this](FsmState /*from*/, FsmState to)
             {
-                current_mode_ = MarkerState::SINGLE_SHOT;
-            }
+                applyFsmState(to);
+            });
 
-            updateMarkerShape();
-            updateMenuVisibility();
-            updateBodyMarkerVisibility();
-            markPendingChanges();
+        RCLCPP_INFO(node_->get_logger(),
+                    "🕹️ ArmsTargetManager 已接入 FsmClient（当前 %s，%s）",
+                    fsmStateName(fsm_->state()),
+                    fsm_->hasReceivedState() ? "已收到控制器状态" : "等待控制器状态");
+    }
+
+    void ArmsTargetManager::attachHumanoidModeClient(HumanoidModeClient* client)
+    {
+        mode_client_ = client;
+        if (!mode_client_)
+        {
+            return;
         }
+
+        // 先同步一次：晚启动时 client 可能已经收到过 current_state。
+        if (mode_client_->hasState())
+        {
+            wbcStateCallback(
+                std::make_shared<arms_ros2_control_msgs::msg::WbcCurrentState>(
+                    mode_client_->state()));
+        }
+
+        mode_state_observer_token_ = mode_client_->observeState(
+            [this](const arms_ros2_control_msgs::msg::WbcCurrentState& msg)
+            {
+                wbcStateCallback(
+                    std::make_shared<arms_ros2_control_msgs::msg::WbcCurrentState>(msg));
+            });
+
+        RCLCPP_INFO(node_->get_logger(),
+                    "🕹️ ArmsTargetManager 已接入 HumanoidModeClient（%s）",
+                    mode_client_->hasState() ? "已收到控制器模式" : "等待控制器模式");
+    }
+
+    /**
+     * @brief 把 FSM 状态应用到 marker 形态、菜单与可见性
+     *
+     * 取代了以前“自己订阅 fsm_command 再推断”的做法：状态现在由 FsmClient 推送。
+     */
+    void ArmsTargetManager::applyFsmState(FsmState state)
+    {
+        {
+            std::lock_guard<std::mutex> lock(state_update_mutex_);
+            current_fsm_state_ = fsmStateName(state);
+            current_controller_state_ = static_cast<int32_t>(state);
+        }
+
+        // MOVEJ 下强制回到单次发布：连续发布会让关节目标被末端目标覆盖。
+        if (state == FsmState::MoveJ && current_mode_ == MarkerState::CONTINUOUS)
+        {
+            current_mode_ = MarkerState::SINGLE_SHOT;
+        }
+
+        updateMarkerShape();
+        updateMenuVisibility();
+        updateBodyMarkerVisibility();
+        markPendingChanges();
     }
 
     void ArmsTargetManager::setCurrentPoseCallback(
@@ -1470,6 +1550,11 @@ namespace arms_ros2_control::command
         return false;
     }
 
+    /**
+     * @brief 标记并限频刷新 marker 显示
+     *
+     * 高频回调（拖动、回显）不应每次都直接改 server，统一在这里做合并。
+     */
     void ArmsTargetManager::markPendingChanges()
     {
         bool was_pending = pending_changes_.exchange(true, std::memory_order_acq_rel);
@@ -1555,6 +1640,9 @@ namespace arms_ros2_control::command
         server_->setPose(name, pose, header);
     }
 
+    /**
+     * @brief 直接设置 marker 的绝对位姿（不做增量累加）
+     */
     void ArmsTargetManager::setMarkerPose(
         const std::string& armType,
         const geometry_msgs::msg::Point& position,
@@ -1586,6 +1674,13 @@ namespace arms_ros2_control::command
         router_->submit(intent);
     }
 
+    /**
+     * @brief 按增量移动一条手臂的 marker
+     * @param armType "left" 或 "right"
+     * @param positionDelta 位置增量（marker 显示系）
+     * @param rpyDelta 姿态增量（固定轴 RPY，弧度）
+     * @param publish true 时立即下发目标，false 只更新预览
+     */
     void ArmsTargetManager::updateMarkerPoseIncremental(
         const std::string& armType,
         const std::array<double, 3>& positionDelta,
@@ -1678,6 +1773,10 @@ namespace arms_ros2_control::command
         }
     }
 
+    /**
+     * @brief 按增量移动胸部 marker
+     * @return false 表示肢体 marker 不可用或当前状态不允许
+     */
     bool ArmsTargetManager::updateBodyMarkerPoseIncremental(
         const std::array<double, 3>& positionDelta,
         const std::array<double, 3>& rpyDelta)
