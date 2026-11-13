@@ -1,7 +1,14 @@
 //
 // PoseFilters 实现：冻结追赶、一阶低通、姿态分解、RPY 转旋转矩阵。
 //
-// 纯计算，不访问 ROS；可以直接写单元测试。
+// 关键点：
+//   * StaleCatchUpFilter 把“冻结恢复后的那一次跳变”分成 N-1 帧摊平，
+//     输入每帧都有变化时完全不干预；
+//   * PoseLowPass 第一帧直接取输入作初值，不会从零缓慢收敛；
+//   * dropRoll 只保留偏航与俯仰。
+//
+// 注意：
+//   纯计算，不访问 ROS；可以直接写单元测试。
 //
 #include "arms_target_manager/detail/PoseFilters.h"
 
@@ -10,6 +17,17 @@
 
 namespace arms_ros2_control::command::detail
 {
+    /**
+     * @brief 冻结追赶滤波
+     *
+     * 上游链路冻结时会逐位重发上一帧，恢复后一帧补齐整段位移（实测可达上百毫米）。
+     * 这里识别“连续 N 帧输入逐位相同”，把恢复时那一次跳变量分成 N-1 帧摊平。
+     * 正常运动（输入有变化）不受影响。
+     *
+     * @param position 输入/输出位置，原地改写
+     * @param orientation 输入/输出姿态，原地改写
+     * @return true 表示当前仍处于摊平阶段（输出与输入不相等）
+     */
     bool StaleCatchUpFilter::apply(Eigen::Vector3d& position, Eigen::Quaterniond& orientation)
     {
         State& s = state_;
@@ -93,6 +111,15 @@ namespace arms_ros2_control::command::detail
         return s.remaining_frames > 0;
     }
 
+    /**
+     * @brief 一阶低通滤波
+     *
+     * 第一帧直接作为初值（不产生向零点的收敛过程），之后按 alpha 系数跟随。
+     * alpha 越大越跟随，越小越平滑。
+     *
+     * @param position 输入/输出位置，原地改写
+     * @param orientation 输入/输出姿态，原地改写（走球面插值）
+     */
     void PoseLowPass::apply(Eigen::Vector3d& position, Eigen::Quaterniond& orientation)
     {
         if (!primed_)
@@ -108,6 +135,11 @@ namespace arms_ros2_control::command::detail
         orientation = orientation_;
     }
 
+    /**
+     * @brief 去掉姿态里的横滚分量，只保留偏航与俯仰
+     * @param q 原始姿态
+     * @return 横滚被置零后的姿态
+     */
     Eigen::Quaterniond dropRoll(const Eigen::Quaterniond& q)
     {
         const Eigen::Matrix3d m = q.normalized().toRotationMatrix();
@@ -119,6 +151,11 @@ namespace arms_ros2_control::command::detail
             .normalized();
     }
 
+    /**
+     * @brief 固定轴 RPY（度）转旋转矩阵，与 URDF 的 rpy 约定一致：R = Rz·Ry·Rx
+     * @param rpy_deg 依次为 roll / pitch / yaw，单位度
+     * @return 对应的旋转矩阵
+     */
     Eigen::Matrix3d rpyDegToMatrix(const double rpy_deg[3])
     {
         return (Eigen::AngleAxisd(rpy_deg[2] * M_PI / 180.0, Eigen::Vector3d::UnitZ()) *

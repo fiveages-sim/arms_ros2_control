@@ -1,8 +1,13 @@
 //
 // ArmMarker 实现。
 //
-// current_pose 订阅用于“显示跟随实测位姿”，带 30 Hz 节流；
-// current_target 的订阅与冷却机制已移除（回显统一在 core/PoseTargetSink）。
+// 关键点：
+//   * current_pose 订阅用于“显示跟随实测位姿”，带 30 Hz 节流；
+//   * current_target 的订阅与冷却机制已移除，回显统一在 core/PoseTargetSink；
+//   * 拖动位姿换算失败时保留原值并打限频 WARN，不抛异常。
+//
+// 注意：
+//   本文件不发布目标；目标下发统一走 TargetRouter。
 //
 #include "arms_target_manager/marker/ArmMarker.h"
 #include "arms_target_manager/MarkerFactory.h"
@@ -70,11 +75,19 @@ namespace arms_ros2_control::command
         // 目标回显与发布统一由 TargetRouter 负责，marker 只保留显示与 current_pose 跟随。
     }
 
+    /**
+     * @brief 用控制器回传的目标刷新 marker 显示
+     * @return true 表示已刷新
+     */
     bool ArmMarker::refreshFromLatestCurrentTarget()
     {
         return false;
     }
 
+    /**
+     * @brief 用实测位姿刷新 marker 显示
+     * @return true 表示已刷新
+     */
     bool ArmMarker::refreshFromLatestCurrentPose()
     {
         if (!has_latest_current_pose_)
@@ -104,6 +117,9 @@ namespace arms_ros2_control::command
         last_marker_command_time_ = rclcpp::Time(0, 0, node_->get_clock()->get_clock_type());
     }
 
+    /**
+     * @brief 生成手臂交互 marker
+     */
     visualization_msgs::msg::InteractiveMarker ArmMarker::createMarker(
         const std::string& name,
         MarkerState mode,
@@ -113,6 +129,9 @@ namespace arms_ros2_control::command
             name, getDescription(), pose_, getColor(), mode, enable_interaction);
     }
 
+    /**
+     * @brief 把 RViz 拖动事件换算到 marker 显示坐标系
+     */
     geometry_msgs::msg::Pose ArmMarker::handleFeedback(
         const visualization_msgs::msg::InteractiveMarkerFeedback::ConstSharedPtr& feedback,
         const std::string& source_frame_id) const
@@ -169,6 +188,11 @@ namespace arms_ros2_control::command
         current_pose_callback_ = std::move(callback);
     }
 
+    /**
+     * @brief 把当前 marker 位姿下发到目标话题
+     *
+     * force=true 忽略节流立即发送；use_stamped=true 发带时间戳的版本（控制器会插值）。
+     */
     bool ArmMarker::publishTargetPose(bool force, bool use_stamped)
     {
         // 如果是单次发布且使用 stamped，发布到 left_target/stamped

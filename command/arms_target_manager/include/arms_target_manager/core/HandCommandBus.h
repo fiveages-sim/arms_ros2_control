@@ -1,8 +1,17 @@
 //
 // HandCommandBus - 手部（夹爪/灵巧手）命令的唯一出口。
 //
-// VR 和摇杆/键盘以前各自维护一套“控制器名 → 发布器”的映射，
-// 现在统一放这里，避免同一条手被两套逻辑并发写入。
+// 作用：
+//   把“控制器名 → 发布器”的映射收拢到一处，对外只给四个入口：
+//     controllerFor / controllerForSide  名字解析；
+//     publishSwitch / publishPercent     真正发命令。
+//
+// 输入：控制器名列表（来自 hand_controllers 参数，第 0 个为左）。
+// 输出：<controller>/target_command（开关）与 <controller>/target_percent（百分比）。
+//
+// 注意：
+//   以前 VR 和摇杆/键盘各维护一套映射，同一条手可能被两套逻辑并发写入；
+//   新增手部输入请调用这里的方法，不要再自己 create_publisher。
 //
 #pragma once
 
@@ -22,6 +31,11 @@ namespace arms_ros2_control::command
     class HandCommandBus
     {
     public:
+        /**
+         * @brief 构造手部命令出口
+         * @param node ROS 节点，用于按需创建发布器
+         * @param controllers 手部/夹爪控制器名列表；第 0 个为左，第 1 个为右
+         */
         HandCommandBus(rclcpp::Node::SharedPtr node,
                        std::vector<std::string> controllers);
 

@@ -1,7 +1,13 @@
 //
 // PoseTargetSink 实现：发送、显示、回显抑制、交接过渡、冻结追赶。
 //
-// 坐标系换算是外部注入的，因此本文件不直接依赖 TF，便于测试。
+// 关键点：
+//   * 发布前依次做：冻结追赶快照 → 交接过渡插值 → 发消息 → 刷新显示；
+//   * 回显抑制期内只记录不显示，避免手动拖动时 marker 被拉回；
+//   * invalidate() 会清掉全部缓存（含冻结追赶状态）。
+//
+// 注意：
+//   坐标系换算是外部注入的，因此本文件不直接依赖 TF，便于测试。
 //
 #include "arms_target_manager/core/PoseTargetSink.h"
 
@@ -70,6 +76,13 @@ namespace arms_ros2_control::command
     {
     }
 
+    /**
+     * @brief 绑定发布器与坐标变换器
+     * @param pose_pub 连续目标发布器
+     * @param stamped_pub 单次（带时间戳）目标发布器
+     * @param transform 坐标系换算函数，用于把目标换算回 marker 显示系
+     * @param node 节点指针，只用于取时间
+     */
     void PoseTargetSink::bind(
         rclcpp::Publisher<geometry_msgs::msg::Pose>::SharedPtr pose_pub,
         rclcpp::Publisher<geometry_msgs::msg::PoseStamped>::SharedPtr stamped_pub,
@@ -81,6 +94,16 @@ namespace arms_ros2_control::command
         node_ = node;
     }
 
+    /**
+     * @brief 发布一个目标位姿
+     *
+     * 处理顺序：冻结追赶（可选）→ 交接平滑 → 发布 → 刷新显示。
+     * 目标始终以控制坐标系传入，发布时也不再换算（下游按同一基准系解释）。
+     *
+     * @param control_pose 控制坐标系下的目标位姿
+     * @param options 本次发布选项（是否带时间戳、是否过滤冻结、是否手动来源等）
+     * @return false 表示未绑定发布器，或本次未发出
+     */
     bool PoseTargetSink::publish(
         const geometry_msgs::msg::Pose& control_pose, const Options& options)
     {
@@ -138,6 +161,11 @@ namespace arms_ros2_control::command
         return true;
     }
 
+    /**
+     * @brief 把上一次缓存的命令目标重新发一次
+     * @param options 发布选项
+     * @return false 表示还没有任何命令目标
+     */
     bool PoseTargetSink::republish(const Options& options)
     {
         if (!last_command_)
@@ -147,12 +175,23 @@ namespace arms_ros2_control::command
         return publish(*last_command_, options);
     }
 
+    /**
+     * @brief 记录本次命令目标（不一定发布）
+     *
+     * 单次模式下拖动只更新这里，菜单“发送目标”时才真正发出去。
+     */
     void PoseTargetSink::recordCommand(const geometry_msgs::msg::Pose& control_pose)
     {
         last_command_ = control_pose;
         notifyView(control_pose);
     }
 
+    /**
+     * @brief 启动一次交接过渡
+     *
+     * 以“上一次实际发出的位置”为起点，在 duration 内渐变到新目标，
+     * 避免手动拖动交还给自动控制时出现位置跳变。
+     */
     void PoseTargetSink::startHandover(std::chrono::milliseconds duration)
     {
         if (duration.count() <= 0 || !last_published_)
@@ -166,6 +205,11 @@ namespace arms_ros2_control::command
         has_handover_ = true;
     }
 
+    /**
+     * @brief 在接下来一段时间内不接受控制器回传值刷新显示
+     *
+     * 手动拖动期间控制器回传的是旧目标，不抑制会把 marker 拉回去。
+     */
     void PoseTargetSink::holdEcho(std::chrono::milliseconds duration)
     {
         if (duration.count() > 0)
@@ -174,6 +218,11 @@ namespace arms_ros2_control::command
         }
     }
 
+    /**
+     * @brief 收到控制器回传的实际目标
+     *
+     * 始终记录，但在回显抑制期内不刷新显示。
+     */
     void PoseTargetSink::onReported(const geometry_msgs::msg::PoseStamped& msg)
     {
         last_reported_ = msg;
@@ -219,6 +268,11 @@ namespace arms_ros2_control::command
         return true;
     }
 
+    /**
+     * @brief 清空全部缓存（命令/发布/回显/交接/冻结追赶）
+     *
+     * 坐标系或控制拓扑变化时调用，避免拿旧值当锚点。
+     */
     void PoseTargetSink::invalidate()
     {
         last_command_.reset();
@@ -229,6 +283,9 @@ namespace arms_ros2_control::command
         stale_.reset();
     }
 
+    /**
+     * @brief 把控制系位姿换算到显示系后交给界面回调
+     */
     void PoseTargetSink::notifyView(const geometry_msgs::msg::Pose& control_pose)
     {
         if (!view_ || !transform_)

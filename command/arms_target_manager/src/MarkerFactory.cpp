@@ -1,6 +1,15 @@
 //
 // MarkerFactory 实现：只生成 marker 消息，不含状态与发布逻辑。
 //
+// 关键点：
+//   * header.stamp 故意留 0：让 RViz 每帧重新换算到 Fixed Frame，
+//     否则拖动一个 marker 会让另一个跟着跳；
+//   * 连续模式用球、单次模式用方块，让用户一眼看出当前会不会持续下发；
+//   * enable_interaction=false 时缩小并透明化，只作为位置提示。
+//
+// 注意：
+//   本文件不订阅、不发布；新增外形请加一个 createXxxMarker。
+//
 #include "arms_target_manager/MarkerFactory.h"
 #include <builtin_interfaces/msg/time.hpp>
 #include <rclcpp/rclcpp.hpp>
@@ -10,6 +19,12 @@
 
 namespace arms_ros2_control::command
 {
+    /**
+     * @brief 构造 marker 工厂
+     * @param node ROS 节点（保留备用）
+     * @param frame_id marker 显示坐标系
+     * @param disable_states 处于这些 FSM 状态时不允许自动刷新显示
+     */
     MarkerFactory::MarkerFactory(
         rclcpp::Node::SharedPtr node,
         std::string  frame_id,
@@ -20,6 +35,19 @@ namespace arms_ros2_control::command
     {
     }
 
+    /**
+     * @brief 生成手臂/胸部类 marker（方块或球 + 六自由度拖拽手柄）
+     *
+     * 连续模式用球（表示会持续下发），单次模式用方块（表示需手动发送）。
+     * enable_interaction=false 时缩小并透明化，只作为位置提示存在。
+     *
+     * @param name marker 名（反馈回调靠它区分是哪个 marker）
+     * @param description RViz 面板上显示的描述
+     * @param pose 初始位姿（显示系）
+     * @param color 颜色名
+     * @param mode 发布模式，决定外形
+     * @param enable_interaction 是否允许拖动
+     */
     visualization_msgs::msg::InteractiveMarker MarkerFactory::createArmMarker(
         const std::string& name,
         const std::string& description,
@@ -84,6 +112,11 @@ namespace arms_ros2_control::command
         return interactiveMarker;
     }
 
+    /**
+     * @brief 生成头部 marker（箭头 + 中心球/方块，保留六自由度拖拽）
+     *
+     * 头部是 6 自由度绝对目标，位置和姿态都可以下发，因此与手臂一样带完整拖拽手柄。
+     */
     visualization_msgs::msg::InteractiveMarker MarkerFactory::createHeadMarker(
         const std::string& name,
         const geometry_msgs::msg::Pose& pose,
@@ -156,6 +189,10 @@ namespace arms_ros2_control::command
         return marker;
     }
 
+    /**
+     * @brief 为 marker 加 3 个平移轴 + 3 个旋转轴共六个拖拽手柄
+     * @param int_marker 目标 marker，原地追加 controls
+     */
     void MarkerFactory::addMovementControls(
         visualization_msgs::msg::InteractiveMarker& interactiveMarker) const
     {
@@ -198,6 +235,11 @@ namespace arms_ros2_control::command
         interactiveMarker.controls.push_back(control);
     }
 
+    /**
+     * @brief 按颜色名给 marker 上色
+     * @param marker 目标 marker，原地修改 color 字段
+     * @param color 颜色名（red/green/blue/...），未知名字保持默认
+     */
     void MarkerFactory::setMarkerColor(
         visualization_msgs::msg::Marker& marker,
         const std::string& color) const
