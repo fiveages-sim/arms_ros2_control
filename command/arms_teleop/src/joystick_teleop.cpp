@@ -42,10 +42,11 @@ JoystickTeleop::JoystickTeleop() : Node("joystick_teleop_node") {
         teleop_mode_publisher_ =
             create_publisher<arms_ros2_control_msgs::msg::TeleopMode>("teleop_mode", qos);
     }
-    fsm_command_publisher_ = create_publisher<std_msgs::msg::Int32>("/fsm_command", 10);
+    // FSM 话题使用相对名：多机器人部署时靠命名空间隔离（/<ns>/fsm_command）。
+    fsm_command_publisher_ = create_publisher<std_msgs::msg::Int32>("fsm_command", 10);
     chassis_publisher_ = create_publisher<geometry_msgs::msg::Twist>("/cmd_vel", 10);
     fsm_state_subscription_ = create_subscription<std_msgs::msg::Int32>(
-        "/fsm_state", rclcpp::QoS(1).transient_local(),
+        "fsm_state", rclcpp::QoS(1).reliable().transient_local(),
         [this](const std_msgs::msg::Int32::SharedPtr msg)
         {
             if (msg)
@@ -55,7 +56,8 @@ JoystickTeleop::JoystickTeleop() : Node("joystick_teleop_node") {
         });
     wbc_state_subscription_ =
         create_subscription<arms_ros2_control_msgs::msg::WbcCurrentState>(
-            "/ocs2_wbc_controller/current_state", 10,
+            "ocs2_wbc_controller/current_state",
+            rclcpp::QoS(1).reliable().transient_local(),
             [this](const arms_ros2_control_msgs::msg::WbcCurrentState::SharedPtr msg)
             {
                 if (msg)

@@ -19,7 +19,6 @@
 #include <arms_controller_common/utils/Interpolation.h>
 #include <map>
 #include <set>
-#include <arms_controller_common/utils/FSMStateTransitionValidator.h>
 
 namespace
 {
@@ -418,10 +417,10 @@ namespace arms_rviz_control_plugin
         updateCategoryOptions();
 
         // Create subscribers
-        // Subscribe to FSM command (dedicated topic for state transitions)
-        fsm_command_subscriber_ = node_->create_subscription<std_msgs::msg::Int32>(
-            "/fsm_command", 10,
-            std::bind(&JointControlPanel::onFsmCommandReceived, this, std::placeholders::_1));
+        // 订阅真实 FSM 状态（transient_local：控制器只在变化时发一次）
+        fsm_state_sub_ = node_->create_subscription<std_msgs::msg::Int32>(
+            "fsm_state", rclcpp::QoS(1).reliable().transient_local(),
+            std::bind(&JointControlPanel::onFsmStateReceived, this, std::placeholders::_1));
 
         joint_state_subscriber_ = node_->create_subscription<sensor_msgs::msg::JointState>(
             "/joint_states", rclcpp::SensorDataQoS(),
@@ -438,7 +437,8 @@ namespace arms_rviz_control_plugin
 
         wbc_current_state_subscriber_ =
             node_->create_subscription<arms_ros2_control_msgs::msg::WbcCurrentState>(
-                "/ocs2_wbc_controller/current_state", 10,
+                "ocs2_wbc_controller/current_state",
+                rclcpp::QoS(1).reliable().transient_local(),
                 std::bind(&JointControlPanel::onWbcCurrentStateReceived, this, std::placeholders::_1));
 
         head_coupling_timer_ = std::make_unique<QTimer>(this);
@@ -501,49 +501,38 @@ namespace arms_rviz_control_plugin
         }
     }
 
-    void JointControlPanel::onFsmCommandReceived(const std_msgs::msg::Int32::SharedPtr msg)
+    void JointControlPanel::onFsmStateReceived(const std_msgs::msg::Int32::SharedPtr msg)
     {
-        // 使用公共的状态转换验证工具类
-        std::string new_state;
-        bool valid_transition = arms_controller_common::FSMStateTransitionValidator::validateTransition(
-            current_state_, msg->data, new_state);
-
-        int32_t old_command = current_command_;
-
-        // 只有在有效转换时才更新状态和命令
-        if (valid_transition)
+        if (!msg)
         {
-            current_state_ = new_state;
-            current_command_ = msg->data;
+            return;
+        }
 
-            // Enable joint control when command is 3 (OCS2) or 4 (MOVEJ)
-            bool should_enable = (msg->data == 3 || msg->data == 4);
+        // 直接采用控制器报的真实状态；不再用本地规则表推断。
+        static constexpr const char* kNames[] = {"RESET", "HOME", "HOLD", "OCS2", "MOVEJ"};
+        const int32_t code = msg->data;
 
-            if (should_enable != is_joint_control_enabled_)
+        const int32_t old_command = current_command_;
+        current_command_ = code;
+        current_state_ = (code >= 0 && code <= 4) ? kNames[code] : "UNKNOWN";
+
+        // 关节控制只在 OCS2(3) / MOVEJ(4) 下可用
+        const bool should_enable = (code == 3 || code == 4);
+        if (should_enable != is_joint_control_enabled_)
+        {
+            is_joint_control_enabled_ = should_enable;
+            if (is_joint_control_enabled_)
             {
-                is_joint_control_enabled_ = should_enable;
-                // Update publisher when enabling/disabling (left/right category uses different publishers in different modes)
-                if (is_joint_control_enabled_)
-                {
-                    updatePublisher();
-                }
-                updatePanelVisibility();
-            }
-            else if (old_command != current_command_ && is_joint_control_enabled_)
-            {
-                // Command changed but control is still enabled, update publisher and button text
-                // Left/right category uses different publishers in OCS2 vs MOVEJ mode
                 updatePublisher();
-                updatePanelVisibility();
             }
+            updatePanelVisibility();
         }
-        else if (msg->data == 0 || msg->data == 100)
+        else if (old_command != current_command_ && is_joint_control_enabled_)
         {
-            // 对于 command 0 和 100（切换姿态等特殊命令），不更新状态但允许处理
-            // 这些命令不影响状态转换
-            current_command_ = msg->data;
+            // 状态在 OCS2 与 MOVEJ 之间切换：发布器不同，需要重建
+            updatePublisher();
+            updatePanelVisibility();
         }
-        // 如果转换无效，不更新任何状态
     }
 
     std::string JointControlPanel::classifyJoint(const std::string& joint_name)
