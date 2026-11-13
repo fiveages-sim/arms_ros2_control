@@ -39,6 +39,8 @@ add_library(${PROJECT_NAME} SHARED
         src/core/InputHub.cpp
         src/core/PoseTargetSink.cpp
         src/core/HandCommandBus.cpp
+        src/core/FsmClient.cpp
+        src/core/HumanoidModeClient.cpp
         src/detail/PoseFilters.cpp
         src/VRInputHandler.cpp
         src/marker/HeadMarker.cpp

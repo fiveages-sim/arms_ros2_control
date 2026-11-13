@@ -13,6 +13,17 @@
 
 using namespace arms_ros2_control::command;
 
+/**
+ * @brief 节点入口：组装各模块并进入 spin
+ *
+ * 只做装配，不做业务判断：
+ *   1. 读参数 → 建 ArmsTargetManager；
+ *   2. 建 ControlInputHandler / VRInputHandler（可选）；
+ *   3. 建 FSM 与 WBC 模式统一入口，注入给上面两个模块；
+ *   4. 把 current_pose / WBC 回调接到 VR，交给 spin。
+ *
+ * @return 0 正常退出；1 启动过程抛异常
+ */
 int main(int argc, char** argv)
 {
     // 初始化ROS2
@@ -241,7 +252,7 @@ int main(int argc, char** argv)
         {
             // VR 手柄位姿缩放因子固定为 1.0（左右手独立），不再通过参数配置
             vr_handler = std::make_unique<VRInputHandler>(
-                node, target_manager.get(), pub_left_target, pub_right_target, hand_controllers,
+                node, target_manager.get(), hand_controllers,
                 vr_thumbstick_linear_scale, vr_thumbstick_angular_scale,
                 vr_pose_scale, reference_link, vr_follow_frame, absolute_options);
         }
@@ -259,27 +270,34 @@ int main(int argc, char** argv)
                 }
             });
 
-        // 创建 FSM 命令订阅器（用于状态切换和 marker 形态更新）
-        // 统一处理 ArmsTargetManager 和 VRInputHandler 的 FSM 状态更新，避免重复订阅冲突
-        auto fsm_command_subscription = node->create_subscription<std_msgs::msg::Int32>(
-            "fsm_command", 10,
-            [target_manager_ptr = target_manager.get(), vr_handler_ptr = vr_handler.get()](
-            const std_msgs::msg::Int32::ConstSharedPtr msg)
-            {
-                // 处理 FSM 状态切换 - ArmsTargetManager
-                if (target_manager_ptr)
-                {
-                    target_manager_ptr->fsmCommandCallback(msg);
-                }
-                
-                // 处理 FSM 状态切换 - VRInputHandler（如果启用）
-                if (vr_handler_ptr)
-                {
-                    // 转换为 SharedPtr 以匹配 VRInputHandler 的回调签名
-                    auto shared_msg = std::const_pointer_cast<std_msgs::msg::Int32>(msg);
-                    vr_handler_ptr->fsmCommandCallback(shared_msg);
-                }
-            });
+        // ===== FSM 统一入口 =====
+        // 只有一个订阅（fsm_state）和一个发布器（fsm_command），
+        // ATM 与 VR 共享同一个实例，不再各自推断状态。
+        // 话题用相对名：多机器人部署时由节点命名空间隔离。
+        auto fsm_client = std::make_shared<FsmClient>(
+            node,
+            node->declare_parameter<std::string>("fsm_state_topic", "fsm_state"),
+            node->declare_parameter<std::string>("fsm_command_topic", "fsm_command"));
+
+        target_manager->attachFsmClient(fsm_client.get());
+        if (vr_handler)
+        {
+            vr_handler->attachFsmClient(fsm_client.get());
+        }
+
+        // ===== WBC 模式统一入口 =====
+        // 只有一个 current_state 订阅、一个 wbc_capabilities 订阅和一个 mode_command
+        // 发布器；同样由 ATM 与 VR 共享。
+        auto mode_client = std::make_shared<HumanoidModeClient>(
+            node,
+            node->declare_parameter<std::string>("wbc_controller_name", "ocs2_wbc_controller"),
+            node->declare_parameter<std::string>("mode_command_topic", "mode_command"));
+
+        target_manager->attachHumanoidModeClient(mode_client.get());
+        if (vr_handler)
+        {
+            vr_handler->attachHumanoidModeClient(mode_client.get());
+        }
 
         // 设置 current_pose 回调（用于 VRInputHandler，通过 ArmMarker 的回调机制避免重复订阅）
         // ArmMarker 内部订阅了 current_pose，通过回调机制将原始消息转发给 VRInputHandler
