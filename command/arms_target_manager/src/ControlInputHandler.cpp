@@ -1,8 +1,28 @@
 //
-// ControlInputHandler 实现。
+// ControlInputHandler 实现 —— 把“手柄/键盘的归一化输入”换成机器人能用的命令。
 //
-// 速度命令先问 ArmsTargetManager::canAcceptSpeedCommand()，
-// 被占用时整条丢弃并打调试日志；手部命令不参与这个判断。
+// 它在链路里的位置：
+//
+//   arms_teleop/joystick_teleop ─┐
+//   arms_teleop/keyboard_teleop ─┴─► control_input (Inputs) ─► 本文件
+//                                                                ├─► left/right_target/twist
+//                                                                └─► HandCommandBus
+//
+// 为什么要单独一层：
+//   设备侧（手柄/键盘）只负责把按键变成 -1~1 的归一化量和“控制哪条手臂”，
+//   不关心 m/s、rad/s、也不关心机器人此刻能不能接受速度。
+//   本文件负责这两件与机器人相关的事，因此换一种手柄不用改这里，
+//   调速度也不用去改设备驱动。
+//
+// 两条输出链路：
+//   1. 速度：x/y/z + roll/pitch/yaw 乘上 linear_scale (m/s) / angular_scale (rad/s)，
+//      发到 <side>_target/twist，由控制器自己积分；
+//   2. 手部：hand_command 交给 HandCommandBus，直接转发，不受速度占用影响。
+//
+// 注意：
+//   * 只发速度，不积分位置、不缓存绝对目标——否则会和 VR/拖动争夺同一条通道；
+//   * 速度不参与 TargetRouter 的控制权仲裁，但会先问 canAcceptSpeedCommand()：
+//     该臂正被 VR 或手动拖动占用时，整条速度丢弃（手部命令照旧转发）。
 //
 #include "arms_target_manager/ControlInputHandler.h"
 
@@ -14,6 +34,9 @@
 
 namespace arms_ros2_control::command
 {
+    /**
+     * @brief 构造：建两条速度发布器，并把手部命令交给 HandCommandBus。
+     */
     ControlInputHandler::ControlInputHandler(
         rclcpp::Node::SharedPtr node,
         ArmsTargetManager* targetManager,
@@ -48,6 +71,12 @@ namespace arms_ros2_control::command
         }
     }
 
+    /**
+     * @brief 处理一帧摇杆/键盘输入
+     *
+     * 速度流不参与目标所有权，但会先问 canAcceptSpeedCommand()：
+     * 该臂正被 VR 或手动拖动占用时，整条速度命令丢弃（手部命令仍转发）。
+     */
     void ControlInputHandler::processControlInput(const arms_ros2_control_msgs::msg::Inputs::ConstSharedPtr msg)
     {
         double x_input = msg->x;
@@ -101,11 +130,19 @@ namespace arms_ros2_control::command
         processHandCommand(msg->target, msg->hand_command);
     }
 
+    /**
+     * @brief target 编号 → 手部控制器名（委托给 HandCommandBus）
+     */
     std::string ControlInputHandler::resolveHandControllerName(int32_t target) const
     {
         return hand_bus_.controllerFor(target);
     }
 
+    /**
+     * @brief 转交手部命令
+     *
+     * 只有精确的 0/1 才当开关用，中间值走百分比，避免把“半握”当成“完全闭合”。
+     */
     void ControlInputHandler::processHandCommand(int32_t target, float hand_command)
     {
         if (!std::isfinite(hand_command)) {

@@ -1,8 +1,17 @@
 //
 // 语义面：把设备上报的原始按键编号翻译成“用户想做什么”。
 //
-// 设备只负责上报编号；至于这个编号在什么条件下代表什么动作，
-// 由绑定表（BindingProfile）回答。换设备、加组合键都只改这一张表。
+// 作用：
+//   定义全部动作（Action）、修饰键（Modifier）与默认的“编号 → 动作”绑定表。
+//   设备（手柄 / 手套 / 键盘）只负责上报编号，编号代表什么由这张表统一回答。
+//
+// 用法：
+//   decodeAction(code) 得到一个 Action，再交给会话层（ModeRegistry）判断
+//   当前模式是否允许它，最后才进入具体处理函数。
+//
+// 注意：
+//   这里不描述“哪个模式允许哪个动作”（那是 ModeRegistry 的事），
+//   也不做任何动作处理。新增组合键只改本文件的 kDefaultBindings。
 //
 #pragma once
 
@@ -130,6 +139,7 @@ namespace arms_ros2_control::command
         return Action::None;
     }
 
+    /** 动作的中文名（日志与界面用），与枚举一一对应。 */
     inline const char* actionName(Action action)
     {
         switch (action)

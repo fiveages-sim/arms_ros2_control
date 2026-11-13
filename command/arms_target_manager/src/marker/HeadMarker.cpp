@@ -1,5 +1,14 @@
 //
-// HeadMarker 实现：显示、TF 初始位姿同步；目标发布由 core/PoseTargetSink 负责。
+// HeadMarker 实现：显示、TF 初始位姿同步。
+//
+// 关键点：
+//   * 只有 enable_wbc_head_tracking_marker 打开时才建话题，
+//     关闭时 RViz 里不会出现多余 marker；
+//   * syncPoseFromTf() 用 TF 把 marker 定位到头部，避免出现时先跳一下；
+//   * 刚下发过命令的 1 秒内不采用回显位姿。
+//
+// 注意：
+//   目标发布由 core/TargetRouter 负责，本文件只维护显示。
 //
 #include "arms_target_manager/marker/HeadMarker.h"
 #include "arms_target_manager/MarkerFactory.h"
@@ -36,6 +45,11 @@ namespace arms_ros2_control::command
         head_pose_.orientation.z = 0.0;
     }
 
+    /**
+     * @brief 读参数并按需建立发布器与回显订阅
+     *
+     * 未启用时不会广告任何话题，RViz 里也不会出现多余 marker。
+     */
     void HeadMarker::initialize()
     {
         node_->declare_parameter<bool>("enable_wbc_head_tracking_marker", false);
@@ -111,6 +125,11 @@ namespace arms_ros2_control::command
         }
     }
 
+    /**
+     * @brief 用 TF 初始化 marker 位姿（显示系 → 头部 link）
+     *
+     * 让 marker 一出现就在头部位置，而不是先跳到默认位姿再被拉过去。
+     */
     bool HeadMarker::syncPoseFromTf()
     {
         if (!enable_wbc_head_tracking_marker_ || head_link_name_.empty())
@@ -137,6 +156,11 @@ namespace arms_ros2_control::command
         }
     }
 
+    /**
+     * @brief 把当前 marker 位姿下发到头部目标
+     *
+     * use_stamped=true 时发带时间戳的版本，控制器会走插值而不是直接跟踪。
+     */
     bool HeadMarker::publishTargetPose(bool force, bool use_stamped)
     {
         if (!enable_wbc_head_tracking_marker_)
@@ -176,6 +200,11 @@ namespace arms_ros2_control::command
         return true;
     }
 
+    /**
+     * @brief 收到控制器回传的头部目标
+     *
+     * 刚下发过命令的 1 秒内不覆盖，防止拖动过程中被回显拉回去。
+     */
     void HeadMarker::updateWbcTargetFromTopic(
         const geometry_msgs::msg::PoseStamped::ConstSharedPtr& msg)
     {

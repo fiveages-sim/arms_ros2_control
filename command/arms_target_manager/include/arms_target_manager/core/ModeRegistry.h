@@ -1,9 +1,19 @@
 //
 // 会话面：模式声明“我允许哪些动作、我独占哪些目标”。
 //
-// 之前这些信息散落在 processButtonEvent / handleNormalButtonEvent /
-// VRInputHandler::handleButtonEvent 的 if 里，加模式就要改三处。
-// 现在每个模式是一条声明，动作处理只有一份。
+// 作用：
+//   把“哪个模式允许哪些动作”从散落的 if 里抽出来，变成一张声明表：
+//     ModeId      —— 有哪几种工作模式；
+//     OverlayId   —— 与模式正交的叠加层（目前是底盘遥控）；
+//     ActionMask / ChannelMask —— 编译期可组合的集合；
+//     VrSession   —— 运行时回答“这个动作现在能不能用”。
+//
+// 用法：
+//   动作入口只需 `if (!session_.allows(action)) return;`，
+//   新增模式时只在 kModes 里加一条，不必改任何动作处理代码。
+//
+// 注意：
+//   这里只回答“允不允许”，不关心动作具体怎么做。
 //
 #pragma once
 

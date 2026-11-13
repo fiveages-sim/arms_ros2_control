@@ -1,7 +1,15 @@
 //
-// TargetRouter 实现：换算 → 仲裁 → 发送 → 显示 → 状态日志。
+// TargetRouter 实现：换算 → 仲裁 → 发送 → 显示。
 //
-// 这里只应出现“通用规则”，任何与 VR / 全身模式相关的判断都不该写进来。
+// 关键点：
+//   * submit() 的顺序不可颠倒：先换算到控制系数值，再查合法性，
+//     再申请控制权，最后才发布或只写预览；
+//   * 100 ms 定时器只负责回收过期控制权，不打印状态日志；
+//     需要状态时调用 status() 取快照；
+//   * dual 聚合只在这里做，别处不要再拼 Path。
+//
+// 注意：
+//   这里只应出现“通用规则”，任何与 VR / 全身模式相关的判断都不该写进来。
 //
 #include "arms_target_manager/core/TargetRouter.h"
 
@@ -20,6 +28,9 @@ namespace arms_ros2_control::command
             "head_current_target", "body_current_target"};
     } // namespace
 
+    /**
+     * @brief 构造路由：只存配置，不建任何 ROS 资源（由 start() 负责）。
+     */
     TargetRouter::TargetRouter(
         rclcpp::Node::SharedPtr node,
         std::shared_ptr<tf2_ros::Buffer> tf_buffer,
@@ -86,18 +97,13 @@ namespace arms_ros2_control::command
                 });
         }
 
+        // 只负责清理过期控制权，不再打印状态日志。
         expiry_timer_ = node_->create_wall_timer(
             std::chrono::milliseconds(100),
             [this]()
             {
-                if (ownership_.expire(std::chrono::steady_clock::now()))
-                {
-                    logStatusIfChanged();
-                }
+                ownership_.expire(std::chrono::steady_clock::now());
             });
-
-        status_timer_ = node_->create_wall_timer(
-            std::chrono::seconds(1), [this]() { logStatusIfChanged(); });
 
         RCLCPP_INFO(
             node_->get_logger(),
@@ -106,6 +112,12 @@ namespace arms_ros2_control::command
             config_.dual_arm ? "true" : "false");
     }
 
+    /**
+     * @brief 提交一个目标意图
+     *
+     * 顺序不可颠倒：先换算到控制系数值，再查合法性，再申请控制权，
+     * 最后才发布/预览。控制权申请失败时只累加拒绝计数并返回原因。
+     */
     Verdict TargetRouter::submit(const Intent& intent)
     {
         auto& st = state(intent.channel);
@@ -150,7 +162,6 @@ namespace arms_ros2_control::command
         {
             st.rejected++;
             st.last_reason = claimed.reason;
-            logStatusIfChanged();
             return claimed;
         }
 
@@ -190,7 +201,6 @@ namespace arms_ros2_control::command
 
         st.accepted++;
         st.last_reason = "ok";
-        logStatusIfChanged();
         return {true, st.last_reason};
     }
 
@@ -202,7 +212,6 @@ namespace arms_ros2_control::command
         {
             // 显式交还后不再保留这条来源的旧目标，避免菜单发到过期值。
             state(channel).sink.invalidate();
-            logStatusIfChanged();
         }
     }
 
@@ -229,6 +238,9 @@ namespace arms_ros2_control::command
         return ownership_.canWrite(channel, source, std::chrono::steady_clock::now());
     }
 
+    /**
+     * @brief 把最近缓存的目标立即发一次（菜单“发送目标”走这里）
+     */
     bool TargetRouter::publishNow(Channel channel, bool stamped)
     {
         auto& st = state(channel);
@@ -246,6 +258,11 @@ namespace arms_ros2_control::command
         return true;
     }
 
+    /**
+     * @brief 双臂合成一条 Path 下发
+     *
+     * 左右臂任一目标缺失时直接失败；include_body 为真时把胸部目标一并写进去。
+     */
     bool TargetRouter::publishDual(bool include_body)
     {
         if (!dual_publisher_)
@@ -340,6 +357,9 @@ namespace arms_ros2_control::command
         return state(channel).sink.hasPublisher();
     }
 
+    /**
+     * @brief 当前控制权快照
+     */
     TeleopStatus TargetRouter::status() const
     {
         TeleopStatus out;
@@ -364,6 +384,9 @@ namespace arms_ros2_control::command
         return out;
     }
 
+    /**
+     * @brief 通道名（left_arm / right_arm / head / body）
+     */
     const char* TargetRouter::channelName(Channel channel)
     {
         switch (channel)
@@ -382,6 +405,9 @@ namespace arms_ros2_control::command
         return "unknown";
     }
 
+    /**
+     * @brief 来源名（vr / rviz / control_input / ...）
+     */
     const char* TargetRouter::sourceName(SourceId source)
     {
         switch (source)
@@ -400,6 +426,10 @@ namespace arms_ros2_control::command
         return "unknown";
     }
 
+    /**
+     * @brief 两个坐标系之间的位姿换算
+     * @return TF 不可用时返回 false 并打一条限频 WARN，输出保持原值
+     */
     bool TargetRouter::transformBetween(
         const geometry_msgs::msg::Pose& pose,
         const std::string& from,
@@ -433,33 +463,13 @@ namespace arms_ros2_control::command
         }
     }
 
+    /**
+     * @brief 收到控制器回传的实际目标（控制坐标系）
+     */
     void TargetRouter::onReportedTarget(
         Channel channel, const geometry_msgs::msg::PoseStamped& msg)
     {
         state(channel).sink.onReported(msg);
-    }
-
-    void TargetRouter::logStatusIfChanged()
-    {
-        const TeleopStatus current = status();
-        for (size_t i = 0; i < static_cast<size_t>(Channel::Count); ++i)
-        {
-            const auto& now = current.channels[i];
-            const auto& was = last_logged_.channels[i];
-            if (now.owner == was.owner && now.active == was.active &&
-                now.last_reason == was.last_reason)
-            {
-                continue;
-            }
-            RCLCPP_INFO(
-                node_->get_logger(),
-                "🎯 %s：控制来源=%s，有效=%s，原因=%s（接受 %llu / 拒绝 %llu）",
-                channelName(now.channel), sourceName(now.owner),
-                now.active ? "是" : "否", now.last_reason,
-                static_cast<unsigned long long>(now.accepted),
-                static_cast<unsigned long long>(now.rejected));
-        }
-        last_logged_ = current;
     }
 
 } // namespace arms_ros2_control::command
