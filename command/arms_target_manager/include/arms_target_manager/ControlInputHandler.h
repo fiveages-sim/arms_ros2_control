@@ -1,5 +1,11 @@
 //
-// Created for Arms ROS2 Control - ControlInputHandler
+// ControlInputHandler - 摇杆 / 键盘输入适配。
+//
+// 输入：control_input（arms_ros2_control_msgs/Inputs，速度与手部命令）
+// 输出：left_target/twist、right_target/twist；手部命令交给 HandCommandBus
+//
+// 速度流不参与目标所有权，但会被 TargetRouter 的屏蔽表拦住：
+// VR 或手动拖动正在控制某条手臂时，这条速度命令直接丢弃（手部命令照常转发）。
 //
 #pragma once
 
@@ -13,6 +19,7 @@
 #include <geometry_msgs/msg/twist.hpp>
 #include <std_msgs/msg/int32.hpp>
 #include <std_msgs/msg/float64.hpp>
+#include "arms_target_manager/core/HandCommandBus.h"
 
 namespace arms_ros2_control::command
 {
@@ -57,7 +64,6 @@ namespace arms_ros2_control::command
         rclcpp::Publisher<geometry_msgs::msg::Twist>::SharedPtr right_twist_publisher_;
 
         std::vector<std::string> hand_controllers_;
-        std::map<std::string, rclcpp::Publisher<std_msgs::msg::Int32>::SharedPtr> hand_switch_publishers_;
-        std::map<std::string, rclcpp::Publisher<std_msgs::msg::Float64>::SharedPtr> hand_percent_publishers_;
+        HandCommandBus hand_bus_;
     };
 } // namespace arms_ros2_control::command

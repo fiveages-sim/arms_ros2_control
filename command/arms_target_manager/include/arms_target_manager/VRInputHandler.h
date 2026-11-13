@@ -1,5 +1,15 @@
 //
-// Created for Arms ROS2 Control - VRInputHandler
+// VRInputHandler - VR 遥操作的唯一类（普通模式 + 全身模式）。
+//
+// 一个类、一份状态：
+//   * 输入：/teleop 下的手柄、头显、骨架、按键、摇杆、扳机；
+//   * 输出：一律通过 ArmsTargetManager 的 TargetRouter 提交 Intent，
+//           手部命令通过 HandCommandBus；
+//   * 会话：VrSession 决定当前模式允许哪些动作（见 core/ModeRegistry.h）。
+//
+// 实现集中在一个 .cpp 里，按“构造 → 按键 → 输入 → 普通映射 → 夹爪 →
+// 光学握手 → WBC → 底盘 → 全身 → 工具”分区，新增组合键或功能时
+// 先看 .cpp 顶部的分区说明与组合键一览。
 //
 #pragma once
 
@@ -26,13 +36,17 @@
 #include <controller_manager_msgs/srv/list_controllers.hpp>
 #include <optional>
 #include "arms_target_manager/ArmsTargetManager.h"
+#include "arms_target_manager/core/Action.h"
+#include "arms_target_manager/core/HandCommandBus.h"
+#include "arms_target_manager/core/InputHub.h"
+#include "arms_target_manager/core/ModeRegistry.h"
+#include "arms_target_manager/detail/PoseFilters.h"
+#include <arms_controller_common/utils/PoseRamp.h>
 #include "arms_controller_common/utils/FSMCommandPublisher.h"
 #include <arms_ros2_control_msgs/msg/wbc_capability.hpp>
 
 namespace arms_ros2_control::command
 {
-    class WholeBodyVrTeleop;
-
     /**
      * 全身骨架绝对位姿映射的可调参数。
      *
@@ -98,16 +112,16 @@ namespace arms_ros2_control::command
     };
 
     /**
-     * VRInputHandler - VR输入处理器Wrapper
-     * 
-     * 基于VRMarkerWrapper功能，适配arms_target_manager
-     * 实现VR pose订阅、状态切换机制和marker更新功能
-     * 
-     * 功能特性:
-     * - 支持存储模式和更新模式切换
-     * - 基于left_thumbstick的状态切换
-     * - VR pose变化检测和频闪优化
-     * - 与ArmsTargetManager的集成
+     * VRInputHandler - VR 遥操作的唯一实现。
+     *
+     * 普通模式（相对映射）与全身模式（骨架绝对映射）共用同一份状态：
+     * 骨架订阅、锚定、渐入都在本类内，两个模式之间只是“用哪个映射”。
+     *
+     * 与外部的关系：
+     *   - 输入：/teleop 下的话题（手柄、骨架、按键、摇杆、扳机）
+     *   - 输出：全部经由 ArmsTargetManager 的 TargetRouter 提交 Intent
+     *   - 手部：经由 HandCommandBus
+     *   - 会话：VrSession 决定“当前模式允许哪些动作”
      */
     class VRInputHandler
     {
@@ -390,12 +404,12 @@ namespace arms_ros2_control::command
 
         // ---- 模式路由 ----
         void toggleWholeBodyMode();
-        void handleNormalButtonEvent(int32_t code);
+        void handleNormalAction(Action action);
         void handleFsmButtonEvent(int32_t code);
         void handleGripperButtonEvent(int32_t code);
         bool isWholeBodyActive() const;
 
-        // ---- 全身模式与普通模式的清场/恢复（供 WholeBodyVrTeleop 通过 hooks 调用） ----
+        // ---- 全身模式与普通模式的清场/恢复（同一个类的两半） ----
         void suspendNormalModeState();
         void resumeNormalModeState();
 
@@ -403,6 +417,9 @@ namespace arms_ros2_control::command
         bool publishArmTargetForWholeBody(bool is_left,
                                           const Eigen::Vector3d& position,
                                           const Eigen::Quaterniond& orientation);
+        bool submitWholeBodyHeadTarget(const geometry_msgs::msg::Pose& pose,
+                                       const std::string& frame_id);
+        void rebaseAfterManualOverride(bool is_left);
         bool prepareWholeBodyArmInput(bool is_left);
         bool robotCurrentPose(bool is_left,
                               Eigen::Vector3d& position,
@@ -651,10 +668,6 @@ namespace arms_ros2_control::command
          * @param prevOri 之前方向
          * @return true如果pose发生显著变化
          */
-        bool hasPoseChanged(const Eigen::Vector3d& currentPos,
-                            const Eigen::Quaterniond& currentOri,
-                            const Eigen::Vector3d& prevPos,
-                            const Eigen::Quaterniond& prevOri);
 
         /**
          * 基于差值计算pose并应用到机器人base pose
@@ -690,12 +703,10 @@ namespace arms_ros2_control::command
         // ROS组件
         rclcpp::Node::SharedPtr node_;
         ArmsTargetManager* target_manager_;
-        std::unique_ptr<WholeBodyVrTeleop> whole_body_;
 
         // 发布器（用于直接发布到left_target/right_target）
         rclcpp::Publisher<geometry_msgs::msg::Pose>::SharedPtr pub_left_target_;
         rclcpp::Publisher<geometry_msgs::msg::Pose>::SharedPtr pub_right_target_;
-        rclcpp::Publisher<nav_msgs::msg::Path>::SharedPtr pub_dual_target_stamped_;
         // FSM命令发布器（使用通用工具类，自动处理command=100的特殊情况）
         std::unique_ptr<arms_controller_common::FSMCommandPublisher> fsm_command_publisher_;
 
@@ -807,24 +818,9 @@ namespace arms_ros2_control::command
         std::chrono::steady_clock::time_point last_published_left_stamp_{};
         std::chrono::steady_clock::time_point last_published_right_stamp_{};
 
-        // 冻结追赶斜坡状态（每臂一份），语义见 applyStaleCatchUpRamp()。
-        struct StaleCatchUpRamp
-        {
-            bool has_previous_input = false;
-            // 上一帧进入斜坡的原始目标，用于逐位比较判定"上游冻结"
-            Eigen::Vector3d previous_input_position = Eigen::Vector3d::Zero();
-            Eigen::Quaterniond previous_input_orientation = Eigen::Quaterniond::Identity();
-            int frozen_frames = 0;
-            // 上一帧实际发出的目标，解冻帧据此测量缺口
-            Eigen::Vector3d output_position = Eigen::Vector3d::Zero();
-            Eigen::Quaterniond output_orientation = Eigen::Quaterniond::Identity();
-            // 尚未交付的追赶量；remaining_frames 归零时必然为零
-            Eigen::Vector3d residual_position = Eigen::Vector3d::Zero();
-            Eigen::Quaterniond residual_orientation = Eigen::Quaterniond::Identity();
-            int remaining_frames = 0;
-        };
-        StaleCatchUpRamp left_stale_ramp_;
-        StaleCatchUpRamp right_stale_ramp_;
+        // 冻结追赶（每臂一份），实现见 detail::StaleCatchUpFilter。
+        detail::StaleCatchUpFilter left_stale_ramp_{STALE_MIN_FROZEN_FRAMES};
+        detail::StaleCatchUpFilter right_stale_ramp_{STALE_MIN_FROZEN_FRAMES};
 
         // 状态管理
         std::atomic<bool> enabled_;
@@ -896,6 +892,10 @@ namespace arms_ros2_control::command
         // 解耦后的下一次右臂发布前需重建控制基准，避免冲向耦合期 VR 映射位姿。
         bool right_vr_target_suppressed_by_bimanual_{false};
 
+        // RViz 手动拖动抢占手臂时的“让位”标记：下次恢复控制前先重建基准。
+        std::atomic<bool> left_manual_override_{false};
+        std::atomic<bool> right_manual_override_{false};
+
         std::atomic<int32_t> current_fsm_state_; // 当前FSM状态：1=HOME, 2=HOLD, 3=OCS2, 4=MOVEJ
 
         // 腰部摇杆控制平面：false=XY平移, true=Z轴+Yaw（与左右臂的 *_grip_mode_ 相互独立）
@@ -957,9 +957,8 @@ namespace arms_ros2_control::command
 
         // Hand controllers mapping（类似ControlInputHandler）
         std::vector<std::string> hand_controllers_;
-        // Publishers for gripper commands (created on demand)
-        std::map<std::string, rclcpp::Publisher<std_msgs::msg::Int32>::SharedPtr> gripper_command_publishers_;
-        std::map<std::string, rclcpp::Publisher<std_msgs::msg::Float64>::SharedPtr> gripper_percent_publishers_;
+        // 手部命令统一出口（与摇杆/键盘共用）
+        std::unique_ptr<HandCommandBus> hand_bus_;
         std::map<std::string, double> last_gripper_percent_;
         // 检测到的左右控制器名称
         std::string left_gripper_controller_name_;
@@ -1017,10 +1016,211 @@ namespace arms_ros2_control::command
         rclcpp::Subscription<tf2_msgs::msg::TFMessage>::SharedPtr tf_static_sub_;
 
         // 常量
-        static const double POSITION_THRESHOLD;
-        static const double ORIENTATION_THRESHOLD;
         // 连续多少帧原始目标逐位相同才判定为上游冻结。实测冻结长度呈双峰分布
         // （1 帧 / ≥5 帧），2..5 取任意值结果相同，取下界即可。
         static const int STALE_MIN_FROZEN_FRAMES;
+
+    public:
+        // ================= 全身模式（与普通模式同属本类） =================
+
+        /** 某侧手臂最后一次实际下发的目标（供接管渐入取锚点）。 */
+        struct LastArmTarget
+        {
+            bool valid{false};
+            Eigen::Vector3d position{Eigen::Vector3d::Zero()};
+            Eigen::Quaterniond orientation{Eigen::Quaterniond::Identity()};
+            std::chrono::steady_clock::time_point stamp{};
+        };
+
+        [[nodiscard]] bool wholeBodyActive() const { return whole_body_teleop_active_.load(); }
+        [[nodiscard]] bool absoluteTrackingActive() const
+        {
+            return absolute_tracking_active_.load();
+        }
+
+        /** 事件 30：进入/退出全身遥操作。 */
+        void toggleWholeBodyTeleop();
+        /** 全身模式内的事件入口。 */
+        void handleWholeBodyButtonEvent(int32_t code);
+        /** 权威 FSM 变化：离开 OCS2 时自动退出全身模式。 */
+        void onWholeBodyFsmStateChanged();
+        /** 拓扑变化：不再是全身控制器时自动退出。 */
+        void onWholeBodyTopologyChanged(bool is_full_body);
+        /** 头部状态变化：非跟踪时停止全身头部目标。 */
+        void onWholeBodyHeadStateChanged(int head_state);
+        /** VR 失能时的全身侧清理。 */
+        void deactivateWholeBodyTeleop();
+        /** 普通模式的目标缓存被清空时，同步清掉全身渐入锚点。 */
+        void onWholeBodyTargetCacheCleared();
+        /** 手动拖动结束后重新布置该臂的接管渐入。 */
+        void rearmWholeBodyArmRamp(bool is_left);
+
+    private:
+        struct SkeletonPoint
+        {
+            Eigen::Vector2d xy = Eigen::Vector2d::Zero();
+            double z{0.0};
+            bool valid{false};
+            std::chrono::steady_clock::time_point stamp{};
+        };
+
+        struct DeformedSkeleton
+        {
+            Eigen::Vector3d pelvis = Eigen::Vector3d::Zero();
+            Eigen::Vector3d spine3 = Eigen::Vector3d::Zero();
+            Eigen::Vector3d head = Eigen::Vector3d::Zero();
+            Eigen::Vector3d shoulder_left = Eigen::Vector3d::Zero();
+            Eigen::Vector3d shoulder_right = Eigen::Vector3d::Zero();
+            Eigen::Vector3d hand_left = Eigen::Vector3d::Zero();
+            Eigen::Vector3d hand_right = Eigen::Vector3d::Zero();
+        };
+
+        // ---- 全身：初始化与模式开关 ----
+        void initializeWholeBodyTeleop();
+        void startWholeBodyTeleop();
+        void stopWholeBodyTeleop();
+
+        // ---- 全身：骨架输入 ----
+        void bodyPelvisCallback(const geometry_msgs::msg::Pose::SharedPtr msg);
+        void bodySpine3Callback(const geometry_msgs::msg::Pose::SharedPtr msg);
+        void bodyHeadCallback(const geometry_msgs::msg::Pose::SharedPtr msg);
+        void bodyHandCallback(bool is_left, const geometry_msgs::msg::Pose::SharedPtr msg);
+        void bodyShoulderCallback(bool is_left, const geometry_msgs::msg::Pose::SharedPtr msg);
+        void humanFootprintCallback(const geometry_msgs::msg::Pose::SharedPtr msg);
+
+        // ---- 全身：绝对位姿映射 ----
+        void toggleAbsoluteTracking();
+        void startAbsoluteTracking();
+        void stopAbsoluteTracking();
+        void resetAbsoluteTracking();
+        bool wholeBodyTeleopReady() const;
+        bool wholeBodyHeadTrackingReady() const;
+        void publishWholeBodyHeadTarget();
+        void stopWholeBodyHeadTracking();
+        void publishBodyTarget();
+        void publishAbsoluteArmTarget(bool is_left);
+        bool captureAbsoluteTrackingMaps();
+        bool humanFootprintTransform(Eigen::Isometry3d& T_H_world);
+        void buildDeformedSkeleton(const Eigen::Isometry3d& T_H_world, DeformedSkeleton& out);
+        bool skeletonJointFresh(const std::chrono::steady_clock::time_point& stamp) const;
+        bool geometryToleranceOk(bool is_left, const Eigen::Vector3d& hand_position) const;
+        static Eigen::Quaterniond dropRoll(const Eigen::Quaterniond& q);
+        void armAbsoluteRamps();
+        void resetAbsoluteRamps();
+
+        // ---- 全身：坐标系与锚定 ----
+        bool resolveAnchorTransforms(const Eigen::Isometry3d& T_H_world,
+                                     Eigen::Isometry3d& T_target_H,
+                                     Eigen::Isometry3d& T_marker_H);
+        bool basePoseInFrame(const std::string& frame, Eigen::Isometry3d& T_frame_base);
+        std::string controlFrame() const;
+        std::string markerFrame() const;
+        void applyAnchorTransition();
+        std::vector<std::string> missingSkeletonSources() const;
+
+        // ---- 全身：与普通模式共享的状态 ----
+        [[nodiscard]] bool vrEnabled() const { return enabled_.load(); }
+        [[nodiscard]] int32_t fsmState() const { return resolvedFsmState(); }
+        [[nodiscard]] bool fullBodyTopology() const { return isFullBodyMode(); }
+        [[nodiscard]] bool eeFrameReady() const { return ee_frame_id_initialized_; }
+        [[nodiscard]] bool baseUnlocked() const;
+        [[nodiscard]] LastArmTarget lastArmTarget(bool is_left) const;
+        bool transformPose(const std::string& label,
+                           const std::string& source_frame,
+                           const std::string& target_frame,
+                           const Eigen::Vector3d& input_position,
+                           const Eigen::Quaterniond& input_orientation,
+                           Eigen::Vector3d& output_position,
+                           Eigen::Quaterniond& output_orientation);
+
+        // ---- 全身：配置与状态 ----
+        AbsoluteTeleopOptions absolute_options_;
+        VrSession session_;
+        InputHub input_hub_;
+
+        std::atomic<bool> whole_body_teleop_active_{false};
+        std::atomic<bool> absolute_tracking_active_{false};
+
+        bool anchor_valid_{false};
+        bool anchor_base_unlocked_{false};
+        Eigen::Isometry3d anchor_M_{Eigen::Isometry3d::Identity()};
+
+        Eigen::Vector3d body_pelvis_position_ = Eigen::Vector3d::Zero();
+        Eigen::Quaterniond body_pelvis_orientation_ = Eigen::Quaterniond::Identity();
+        Eigen::Vector3d body_spine3_position_ = Eigen::Vector3d::Zero();
+        Eigen::Quaterniond body_spine3_orientation_ = Eigen::Quaterniond::Identity();
+        Eigen::Vector3d body_head_position_ = Eigen::Vector3d::Zero();
+        Eigen::Quaterniond body_head_orientation_ = Eigen::Quaterniond::Identity();
+        bool has_body_pelvis_pose_{false};
+        bool has_body_spine3_pose_{false};
+        bool has_body_head_pose_{false};
+
+        Eigen::Vector3d body_left_hand_position_ = Eigen::Vector3d::Zero();
+        Eigen::Quaterniond body_left_hand_orientation_ = Eigen::Quaterniond::Identity();
+        Eigen::Vector3d body_right_hand_position_ = Eigen::Vector3d::Zero();
+        Eigen::Quaterniond body_right_hand_orientation_ = Eigen::Quaterniond::Identity();
+        bool has_body_left_hand_pose_{false};
+        bool has_body_right_hand_pose_{false};
+
+        SkeletonPoint body_left_shoulder_;
+        SkeletonPoint body_right_shoulder_;
+
+        Eigen::Vector3d human_footprint_position_ = Eigen::Vector3d::Zero();
+        Eigen::Quaterniond human_footprint_orientation_ = Eigen::Quaterniond::Identity();
+        std::chrono::steady_clock::time_point human_footprint_stamp_{};
+        bool has_human_footprint_pose_{false};
+
+        std::chrono::steady_clock::time_point body_pelvis_stamp_{};
+        std::chrono::steady_clock::time_point body_spine3_stamp_{};
+        std::chrono::steady_clock::time_point body_head_stamp_{};
+        std::chrono::steady_clock::time_point body_left_hand_stamp_{};
+        std::chrono::steady_clock::time_point body_right_hand_stamp_{};
+
+        bool absolute_maps_captured_{false};
+        bool settle_pending_{false};
+        std::chrono::steady_clock::time_point settle_started_at_{};
+
+        Eigen::Matrix3d abs_hand_to_ee_left_ = Eigen::Matrix3d::Identity();
+        Eigen::Matrix3d abs_hand_to_ee_right_ = Eigen::Matrix3d::Identity();
+        Eigen::Matrix3d abs_body_src_to_ee_ = Eigen::Matrix3d::Identity();
+        Eigen::Matrix3d abs_head_src_to_ee_ = Eigen::Matrix3d::Identity();
+        double abs_left_arm_ref_len_{0.0};
+        double abs_right_arm_ref_len_{0.0};
+
+        bool abs_left_filter_primed_{false};
+        bool abs_right_filter_primed_{false};
+        bool abs_body_filter_primed_{false};
+        bool abs_head_filter_primed_{false};
+        Eigen::Vector3d abs_left_pos_lp_ = Eigen::Vector3d::Zero();
+        Eigen::Quaterniond abs_left_ori_lp_ = Eigen::Quaterniond::Identity();
+        Eigen::Vector3d abs_right_pos_lp_ = Eigen::Vector3d::Zero();
+        Eigen::Quaterniond abs_right_ori_lp_ = Eigen::Quaterniond::Identity();
+        Eigen::Vector3d abs_body_pos_lp_ = Eigen::Vector3d::Zero();
+        Eigen::Quaterniond abs_body_ori_lp_ = Eigen::Quaterniond::Identity();
+        Eigen::Vector3d abs_head_pos_lp_ = Eigen::Vector3d::Zero();
+        Eigen::Quaterniond abs_head_ori_lp_ = Eigen::Quaterniond::Identity();
+
+        arms_controller_common::PoseRamp left_arm_ramp_;
+        arms_controller_common::PoseRamp right_arm_ramp_;
+        arms_controller_common::PoseRamp body_ramp_;
+        arms_controller_common::PoseRamp head_ramp_;
+
+        bool wb_head_tracking_active_{false};
+        std::optional<geometry_msgs::msg::PoseStamped> wb_last_head_target_;
+        std::chrono::steady_clock::time_point wb_last_head_target_stamp_{};
+
+        bool has_last_body_target_{false};
+        Eigen::Vector3d last_body_target_position_ = Eigen::Vector3d::Zero();
+        Eigen::Quaterniond last_body_target_orientation_ = Eigen::Quaterniond::Identity();
+        std::chrono::steady_clock::time_point last_body_target_stamp_{};
+
+        rclcpp::Subscription<geometry_msgs::msg::Pose>::SharedPtr sub_body_pelvis_;
+        rclcpp::Subscription<geometry_msgs::msg::Pose>::SharedPtr sub_body_spine3_;
+        rclcpp::Subscription<geometry_msgs::msg::Pose>::SharedPtr sub_body_head_;
+        rclcpp::Subscription<geometry_msgs::msg::Pose>::SharedPtr sub_body_left_hand_;
+        rclcpp::Subscription<geometry_msgs::msg::Pose>::SharedPtr sub_body_right_hand_;
+        rclcpp::Subscription<geometry_msgs::msg::Pose>::SharedPtr sub_human_footprint_;
+        rclcpp::Subscription<geometry_msgs::msg::Pose>::SharedPtr sub_body_left_shoulder_;
+        rclcpp::Subscription<geometry_msgs::msg::Pose>::SharedPtr sub_body_right_shoulder_;
     };
 } // namespace arms_ros2_control::command

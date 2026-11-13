@@ -1,7 +1,6 @@
 //
-// HeadMarker - 头部 Marker 管理类实现
+// HeadMarker 实现：显示、TF 初始位姿同步；目标发布由 core/PoseTargetSink 负责。
 //
-
 #include "arms_target_manager/marker/HeadMarker.h"
 #include "arms_target_manager/MarkerFactory.h"
 #include <rclcpp/rclcpp.hpp>
@@ -53,16 +52,7 @@ namespace arms_ros2_control::command
         RCLCPP_INFO(node_->get_logger(),
                     "头部marker所在的link名称: %s", head_link_name_.c_str());
 
-        pose_publisher_ = node_->create_publisher<geometry_msgs::msg::Pose>("head_target", 10);
-        pose_stamped_publisher_ =
-            node_->create_publisher<geometry_msgs::msg::PoseStamped>("head_target/stamped", 10);
-        current_target_subscription_ =
-            node_->create_subscription<geometry_msgs::msg::PoseStamped>(
-                "head_current_target", 10,
-                [this](const geometry_msgs::msg::PoseStamped::ConstSharedPtr msg)
-                {
-                    updateWbcTargetFromTopic(msg);
-                });
+        // 目标发布与回显统一由 TargetRouter 负责，这里只保留显示所需的 TF 同步。
     }
 
     visualization_msgs::msg::InteractiveMarker HeadMarker::createMarker(

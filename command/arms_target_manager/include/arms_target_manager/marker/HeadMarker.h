@@ -1,5 +1,8 @@
 //
-// HeadMarker - 头部 Marker 管理类
+// HeadMarker - 头部 marker 的显示。
+//
+// 额外提供从 TF 同步初始位姿（syncPoseFromTf），便于 marker 出现时就在头部位置；
+// 目标发布同样由 core/PoseTargetSink 负责。
 //
 #pragma once
 

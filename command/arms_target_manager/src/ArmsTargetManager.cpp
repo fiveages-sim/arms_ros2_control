@@ -1,7 +1,11 @@
 //
-// Created for Arms ROS2 Control - ArmsTargetManager
+// ArmsTargetManager 实现。
 //
-
+// 记忆点：
+//   * marker 只显示，目标一律走 router_；
+//   * 拖动 → Intent（SourceId::Rviz, 高优先级），松手后由租约自动交还；
+//   * 单次发送模式下拖动只更新预览，菜单“发送目标”才真正下发。
+//
 #include "arms_target_manager/ArmsTargetManager.h"
 #include "arms_target_manager/marker/BodyMarker.h"
 #include <rclcpp/rclcpp.hpp>
@@ -174,10 +178,10 @@ namespace arms_ros2_control::command
             return;
         }
         head_vr_active_ = active;
-        if (head_marker_)
+        if (router_)
         {
-            // Let final-target feedback update the display immediately after VR takeover.
-            head_marker_->clearCommandCooldown();
+            // VR 接管后不再受上一次手动拖动留下的回显抑制影响。
+            router_->clearEchoHold(Channel::Head);
         }
         updateHeadMarkerVisibility();
     }
@@ -190,6 +194,13 @@ namespace arms_ros2_control::command
             return;
         }
         flag = active;
+        if (router_)
+        {
+            // 只挡摇杆/键盘的速度流；RViz 拖动仍然可用（它是人工覆盖）。
+            router_->setBlocked(
+                is_left ? Channel::ArmLeft : Channel::ArmRight,
+                SourceId::ControlInput, active);
+        }
     }
 
     void ArmsTargetManager::updateHeadMarkerVisibility()
@@ -390,6 +401,16 @@ namespace arms_ros2_control::command
                     tf_topic.c_str(), tf_static_topic.c_str(),
                     node_->get_namespace());
 
+        // 目标汇聚器：只有它会发布 left_target / right_target / head_target / body_target。
+        TargetRouter::Config router_config;
+        router_config.control_frame = control_base_frame_;
+        router_config.marker_frame = marker_fixed_frame_;
+        router_config.dual_arm = dual_arm_mode_;
+        router_config.publish_rate = publish_rate_;
+        router_ = std::make_unique<TargetRouter>(node_, tf_buffer_, router_config);
+        router_->start(pub_left_target, pub_left_target_stamped,
+                       pub_right_target, pub_right_target_stamped);
+
         left_arm_marker_ = std::make_shared<ArmMarker>(
             node_, marker_factory_, tf_buffer_, marker_fixed_frame_, control_base_frame_,
             ArmType::LEFT, std::array<double, 3>{0.0, 0.5, 1.0},
@@ -474,22 +495,14 @@ namespace arms_ros2_control::command
         head_marker_->setWbcTargetStateCheckCallback(
             [this]() { return shouldShowWbcHeadMarker(); });
 
-        body_target_publisher_ =
-            node_->create_publisher<geometry_msgs::msg::Pose>(
-                "body_target", 10);
-
-        body_target_stamped_publisher_ =
-            node_->create_publisher<geometry_msgs::msg::PoseStamped>(
-                "body_target/stamped", 10);
-
         body_marker_ = std::make_shared<BodyMarker>(
             node_,
             marker_factory_,
             tf_buffer_,
             marker_fixed_frame_,
             control_base_frame_,
-            body_target_publisher_,
-            body_target_stamped_publisher_,
+            nullptr,
+            nullptr,
             "body_current_pose",
             "body_current_target",
             publish_rate_,
@@ -510,6 +523,68 @@ namespace arms_ros2_control::command
 
         body_marker_->setTargetStateCheckCallback(
             [this]() { return shouldShowBodyMarker(); });
+
+        // 显示层只负责“把目标画出来”，发布与回显规则都在 router_ 里。
+        router_->setView(
+            Channel::ArmLeft,
+            [this](const geometry_msgs::msg::Pose& pose)
+            {
+                if (!left_arm_marker_)
+                {
+                    return;
+                }
+                left_arm_marker_->setPose(pose);
+                if (server_ && shouldShowLeftArmMarker())
+                {
+                    setServerPose(left_arm_marker_->getMarkerName(), pose);
+                    markPendingChanges();
+                }
+            });
+        router_->setView(
+            Channel::ArmRight,
+            [this](const geometry_msgs::msg::Pose& pose)
+            {
+                if (!right_arm_marker_)
+                {
+                    return;
+                }
+                right_arm_marker_->setPose(pose);
+                if (server_ && shouldShowRightArmMarker())
+                {
+                    setServerPose(right_arm_marker_->getMarkerName(), pose);
+                    markPendingChanges();
+                }
+            });
+        router_->setView(
+            Channel::Head,
+            [this](const geometry_msgs::msg::Pose& pose)
+            {
+                if (!head_marker_)
+                {
+                    return;
+                }
+                head_marker_->setPose(pose);
+                if (server_ && shouldShowWbcHeadMarker())
+                {
+                    setServerPose("head_target", pose);
+                    markPendingChanges();
+                }
+            });
+        router_->setView(
+            Channel::Body,
+            [this](const geometry_msgs::msg::Pose& pose)
+            {
+                if (!body_marker_)
+                {
+                    return;
+                }
+                body_marker_->setPose(pose);
+                if (server_ && shouldShowBodyMarker())
+                {
+                    setServerPose(body_marker_->getMarkerName(), pose);
+                    markPendingChanges();
+                }
+            });
 
         server_ = std::make_shared<interactive_markers::InteractiveMarkerServer>(
             "arms_target_manager", node_);
@@ -651,11 +726,27 @@ namespace arms_ros2_control::command
             return;
         }
 
-        std::string source_frame_id = feedback->header.frame_id;
-        std::string marker_name = feedback->marker_name;
+        const std::string source_frame_id = feedback->header.frame_id;
+        const std::string marker_name = feedback->marker_name;
 
-        geometry_msgs::msg::Pose transformed_pose = transformPose(
-            feedback->pose, source_frame_id, marker_fixed_frame_);
+        // 拖动一次提交一次目标；控制权在 500ms 内保持，松手后自动交还给原来的控制来源。
+        auto submit_drag = [this](Channel channel, const geometry_msgs::msg::Pose& pose,
+                                  bool publish)
+        {
+            Intent intent;
+            intent.channel = channel;
+            intent.source = SourceId::Rviz;
+            intent.priority = Priority::High;
+            intent.position = Eigen::Vector3d(
+                pose.position.x, pose.position.y, pose.position.z);
+            intent.orientation = Eigen::Quaterniond(
+                pose.orientation.w, pose.orientation.x,
+                pose.orientation.y, pose.orientation.z);
+            intent.frame = marker_fixed_frame_;
+            intent.lease = std::chrono::milliseconds(500);
+            intent.publish = publish;
+            return router_->submit(intent);
+        };
 
         if (marker_name == "left_arm_target" && left_arm_marker_)
         {
@@ -664,29 +755,36 @@ namespace arms_ros2_control::command
                 return;
             }
 
+            const geometry_msgs::msg::Pose new_pose =
+                left_arm_marker_->handleFeedback(feedback, source_frame_id);
+
+            if (!shouldStreamPoseCommands())
+            {
+                // 非连续模式：只更新预览目标，菜单“发送目标”时再真正下发。
+                submit_drag(Channel::ArmLeft, new_pose, false);
+                return;
+            }
+
             const geometry_msgs::msg::Pose old_left_pose = left_arm_marker_->getPose();
             geometry_msgs::msg::Pose old_right_pose;
             const bool can_follow_right = isBimanualCoupled();
-            if (can_follow_right)
+            if (can_follow_right && right_arm_marker_)
             {
                 old_right_pose = right_arm_marker_->getPose();
             }
 
-            geometry_msgs::msg::Pose new_pose = left_arm_marker_->handleFeedback(feedback, source_frame_id);
-            left_arm_marker_->setPose(new_pose);
+            const Verdict verdict = submit_drag(Channel::ArmLeft, new_pose, true);
+            if (!verdict.accepted)
+            {
+                RCLCPP_WARN_THROTTLE(
+                    node_->get_logger(), *node_->get_clock(), 2000,
+                    "左臂拖动未生效：%s", verdict.reason);
+                return;
+            }
 
             if (can_follow_right)
             {
                 followCoupledRightMarker(old_left_pose, old_right_pose, new_pose);
-            }
-
-            if (shouldStreamPoseCommands())
-            {
-                left_arm_marker_->publishTargetPose();
-                if (body_marker_ && shouldShowBodyMarker())
-                {
-                    body_marker_->publishTargetPose(true);
-                }
             }
         }
         else if (marker_name == "right_arm_target" && right_arm_marker_)
@@ -696,46 +794,59 @@ namespace arms_ros2_control::command
                 return;
             }
 
+            const geometry_msgs::msg::Pose new_pose =
+                right_arm_marker_->handleFeedback(feedback, source_frame_id);
+
+            if (!shouldStreamPoseCommands())
+            {
+                submit_drag(Channel::ArmRight, new_pose, false);
+                return;
+            }
+
             const geometry_msgs::msg::Pose old_right_pose = right_arm_marker_->getPose();
             geometry_msgs::msg::Pose old_left_pose;
             const bool can_follow_left = isBimanualCoupled();
-            if (can_follow_left)
+            if (can_follow_left && left_arm_marker_)
             {
                 old_left_pose = left_arm_marker_->getPose();
             }
 
-            geometry_msgs::msg::Pose new_pose = right_arm_marker_->handleFeedback(feedback, source_frame_id);
-            right_arm_marker_->setPose(new_pose);
+            const Verdict verdict = submit_drag(Channel::ArmRight, new_pose, true);
+            if (!verdict.accepted)
+            {
+                RCLCPP_WARN_THROTTLE(
+                    node_->get_logger(), *node_->get_clock(), 2000,
+                    "右臂拖动未生效：%s", verdict.reason);
+                return;
+            }
 
             if (can_follow_left)
             {
                 followCoupledLeftMarker(old_right_pose, old_left_pose, new_pose);
             }
-
-            if (shouldStreamPoseCommands())
-            {
-                right_arm_marker_->publishTargetPose();
-                if (body_marker_ && shouldShowBodyMarker())
-                {
-                    body_marker_->publishTargetPose(true);
-                }
-            }
         }
         else if (marker_name == "head_target")
         {
-            if (head_vr_active_)
+            if (!shouldShowWbcHeadMarker())
             {
                 return;
             }
-            if (shouldShowWbcHeadMarker())
+
+            // 头部与手臂一致：六自由度，位置与姿态都可以拖动。
+            const geometry_msgs::msg::Pose new_pose =
+                transformPose(feedback->pose, source_frame_id, marker_fixed_frame_);
+            if (!shouldStreamPoseCommands())
             {
-                head_marker_->setPose(transformed_pose);
-                setServerPose(marker_name, transformed_pose);
-                markPendingChanges();
-                if (shouldStreamPoseCommands())
-                {
-                    head_marker_->publishTargetPose();
-                }
+                submit_drag(Channel::Head, new_pose, false);
+                return;
+            }
+
+            const Verdict verdict = submit_drag(Channel::Head, new_pose, true);
+            if (!verdict.accepted)
+            {
+                RCLCPP_WARN_THROTTLE(
+                    node_->get_logger(), *node_->get_clock(), 2000,
+                    "头部拖动未生效：%s", verdict.reason);
             }
         }
         else if (marker_name == "body_target" && body_marker_)
@@ -745,12 +856,21 @@ namespace arms_ros2_control::command
                 return;
             }
 
-            geometry_msgs::msg::Pose new_pose = body_marker_->handleFeedback(feedback, source_frame_id);
-            body_marker_->setPose(new_pose);
+            const geometry_msgs::msg::Pose new_pose =
+                body_marker_->handleFeedback(feedback, source_frame_id);
 
-            if (shouldStreamPoseCommands())
+            if (!shouldStreamPoseCommands())
             {
-                body_marker_->publishTargetPose();
+                submit_drag(Channel::Body, new_pose, false);
+                return;
+            }
+
+            const Verdict verdict = submit_drag(Channel::Body, new_pose, true);
+            if (!verdict.accepted)
+            {
+                RCLCPP_WARN_THROTTLE(
+                    node_->get_logger(), *node_->get_clock(), 2000,
+                    "胸部拖动未生效：%s", verdict.reason);
             }
         }
         else
@@ -809,13 +929,9 @@ namespace arms_ros2_control::command
 
         if (marker_type == "head")
         {
-            if (head_vr_active_)
-            {
-                return;
-            }
             if (shouldShowWbcHeadMarker())
             {
-                head_marker_->publishTargetPose(true, true);
+                router_->publishNow(Channel::Head, true);
             }
             return;
         }
@@ -837,22 +953,23 @@ namespace arms_ros2_control::command
 
         if (marker_type == "left_arm" && left_arm_marker_ && shouldShowLeftArmMarker())
         {
-            left_arm_marker_->publishTargetPose(true, true);
+            router_->publishNow(Channel::ArmLeft, true);
             return;
         }
 
         if (marker_type == "right_arm" && right_arm_marker_ && shouldShowRightArmMarker())
         {
-            right_arm_marker_->publishTargetPose(true, true);
+            router_->publishNow(Channel::ArmRight, true);
             return;
         }
     }
 
     void ArmsTargetManager::sendDualArmTargetPose()
     {
-        if (!dual_arm_mode_ || !dual_target_stamped_publisher_ || !left_arm_marker_ || !right_arm_marker_)
+        if (!dual_arm_mode_)
         {
-            RCLCPP_WARN(node_->get_logger(), "Cannot send dual arm target pose: dual arm mode not enabled or publishers not initialized");
+            RCLCPP_WARN(node_->get_logger(),
+                        "Cannot send dual arm target pose: dual arm mode not enabled");
             return;
         }
 
@@ -862,41 +979,13 @@ namespace arms_ros2_control::command
             return;
         }
 
-        geometry_msgs::msg::Pose left_pose = left_arm_marker_->getPose();
-        geometry_msgs::msg::Pose right_pose = right_arm_marker_->getPose();
-
-        geometry_msgs::msg::Pose left_transformed = transformPose(
-            left_pose, marker_fixed_frame_, control_base_frame_);
-        geometry_msgs::msg::Pose right_transformed = transformPose(
-            right_pose, marker_fixed_frame_, control_base_frame_);
-
-        nav_msgs::msg::Path dual_path;
-        dual_path.header.stamp = node_->get_clock()->now();
-        dual_path.header.frame_id = control_base_frame_;
+        // 左/右臂目标已由 router_ 缓存并换算到控制坐标系，这里只负责合成一条 Path。
         const bool include_body = (body_marker_ && shouldShowBodyMarker());
-        dual_path.poses.resize(include_body ? 3 : 2);
-
-        dual_path.poses[0].header.stamp = dual_path.header.stamp;
-        dual_path.poses[0].header.frame_id = control_base_frame_;
-        dual_path.poses[0].pose = left_transformed;
-
-        dual_path.poses[1].header.stamp = dual_path.header.stamp;
-        dual_path.poses[1].header.frame_id = control_base_frame_;
-        dual_path.poses[1].pose = right_transformed;
-
-        // 若 body marker 可用，三条轨迹（左/右/腰）合并成一次 dual_target/stamped 下发，
-        // 由接收端统一插值规划，避免多topic覆盖。
-        if (include_body)
+        if (!router_->publishDual(include_body))
         {
-            geometry_msgs::msg::Pose body_pose = body_marker_->getPose();
-            geometry_msgs::msg::Pose body_transformed = transformPose(
-                body_pose, marker_fixed_frame_, control_base_frame_);
-            dual_path.poses[2].header.stamp = dual_path.header.stamp;
-            dual_path.poses[2].header.frame_id = control_base_frame_;
-            dual_path.poses[2].pose = body_transformed;
+            RCLCPP_WARN(node_->get_logger(),
+                        "Cannot send dual arm target pose: target not ready");
         }
-
-        dual_target_stamped_publisher_->publish(dual_path);
     }
 
     void ArmsTargetManager::sendBodyTargetPose()
@@ -907,7 +996,7 @@ namespace arms_ros2_control::command
             return;
         }
 
-        body_marker_->publishTargetPose(true);
+        router_->publishNow(Channel::Body, true);
     }
 
     void ArmsTargetManager::setupMarkerMenu(
@@ -1171,12 +1260,6 @@ namespace arms_ros2_control::command
 
     void ArmsTargetManager::createPublishersAndSubscribers()
     {
-        if (dual_arm_mode_)
-        {
-            dual_target_stamped_publisher_ = node_->create_publisher<nav_msgs::msg::Path>(
-                "dual_target/stamped", 1);
-        }
-
         wbc_state_subscriber_ =
             node_->create_subscription<arms_ros2_control_msgs::msg::WbcCurrentState>(
                 "ocs2_wbc_controller/current_state",
@@ -1284,35 +1367,36 @@ namespace arms_ros2_control::command
 
     void ArmsTargetManager::refreshArmMarkersFromLatestCurrentTargets()
     {
-        if (!server_)
+        if (!server_ || !router_)
         {
             return;
         }
 
         bool refreshed_any = false;
-
-        if (left_arm_marker_ && shouldShowLeftArmMarker())
+        if (shouldShowLeftArmMarker())
         {
-            if (left_arm_marker_->refreshFromLatestCurrentTarget())
-            {
-                setServerPose(left_arm_marker_->getMarkerName(), left_arm_marker_->getPose());
-                refreshed_any = true;
-            }
+            refreshed_any |= router_->refreshViewFromLastCommand(Channel::ArmLeft);
         }
-
-        if (dual_arm_mode_ && right_arm_marker_ && shouldShowRightArmMarker())
+        if (dual_arm_mode_ && shouldShowRightArmMarker())
         {
-            if (right_arm_marker_->refreshFromLatestCurrentTarget())
-            {
-                setServerPose(right_arm_marker_->getMarkerName(), right_arm_marker_->getPose());
-                refreshed_any = true;
-            }
+            refreshed_any |= router_->refreshViewFromLastCommand(Channel::ArmRight);
         }
 
         if (refreshed_any)
         {
             markPendingChanges();
         }
+    }
+
+    bool ArmsTargetManager::canAcceptSpeedCommand(bool is_left) const
+    {
+        if (!router_)
+        {
+            return true;
+        }
+        return router_->canWrite(
+            is_left ? Channel::ArmLeft : Channel::ArmRight,
+            SourceId::ControlInput);
     }
 
     void ArmsTargetManager::fsmCommandCallback(std_msgs::msg::Int32::ConstSharedPtr msg)
@@ -1420,6 +1504,7 @@ namespace arms_ros2_control::command
         }
     }
 
+
     geometry_msgs::msg::Pose ArmsTargetManager::transformPose(
         const geometry_msgs::msg::Pose& pose,
         const std::string& sourceFrameId,
@@ -1475,63 +1560,30 @@ namespace arms_ros2_control::command
         const geometry_msgs::msg::Point& position,
         const geometry_msgs::msg::Quaternion& orientation)
     {
-        std::shared_ptr<ArmMarker> arm_marker = nullptr;
-        bool should_show = false;
-
-        if (armType == "left" && left_arm_marker_)
-        {
-            arm_marker = left_arm_marker_;
-            should_show = shouldShowLeftArmMarker();
-        }
-        else if (armType == "right" && dual_arm_mode_ && right_arm_marker_)
-        {
-            arm_marker = right_arm_marker_;
-            should_show = shouldShowRightArmMarker();
-        }
-        else
+        const bool is_left = armType == "left";
+        if (!is_left && armType != "right")
         {
             return;
         }
 
-        if (!should_show)
+        std::shared_ptr<ArmMarker> arm_marker = is_left ? left_arm_marker_ : right_arm_marker_;
+        const bool should_show = is_left ? shouldShowLeftArmMarker() : shouldShowRightArmMarker();
+        if (!arm_marker || !should_show)
         {
             return;
         }
 
-        const geometry_msgs::msg::Pose old_pose = arm_marker->getPose();
-        geometry_msgs::msg::Pose old_opposite_pose;
-        const bool coupled = isBimanualCoupled();
-        if (coupled)
-        {
-            old_opposite_pose = (armType == "left")
-                ? right_arm_marker_->getPose()
-                : left_arm_marker_->getPose();
-        }
-
-        geometry_msgs::msg::Pose new_pose;
-        new_pose.position = position;
-        new_pose.orientation = orientation;
-        arm_marker->setPose(new_pose);
-
-        if (server_ && isStateDisabled(current_controller_state_))
-        {
-            setServerPose(arm_marker->getMarkerName(), new_pose);
-            markPendingChanges();
-        }
-
-        if (coupled && armType == "left")
-        {
-            followCoupledRightMarker(old_pose, old_opposite_pose, new_pose);
-        }
-        else if (coupled && armType == "right")
-        {
-            followCoupledLeftMarker(old_pose, old_opposite_pose, new_pose);
-        }
-
-        if (shouldStreamPoseCommands())
-        {
-            arm_marker->publishTargetPose();
-        }
+        Intent intent;
+        intent.channel = is_left ? Channel::ArmLeft : Channel::ArmRight;
+        intent.source = SourceId::External;
+        intent.priority = Priority::Normal;
+        intent.position = Eigen::Vector3d(position.x, position.y, position.z);
+        intent.orientation = Eigen::Quaterniond(
+            orientation.w, orientation.x, orientation.y, orientation.z);
+        intent.frame = marker_fixed_frame_;
+        intent.lease = std::chrono::milliseconds(500);
+        intent.publish = shouldStreamPoseCommands();
+        router_->submit(intent);
     }
 
     void ArmsTargetManager::updateMarkerPoseIncremental(
@@ -1547,25 +1599,15 @@ namespace arms_ros2_control::command
             return;
         }
 
-        std::shared_ptr<ArmMarker> arm_marker = nullptr;
-        bool should_show = false;
-
-        if (armType == "left" && left_arm_marker_)
-        {
-            arm_marker = left_arm_marker_;
-            should_show = shouldShowLeftArmMarker();
-        }
-        else if (armType == "right" && dual_arm_mode_ && right_arm_marker_)
-        {
-            arm_marker = right_arm_marker_;
-            should_show = shouldShowRightArmMarker();
-        }
-        else
+        const bool is_left = armType == "left";
+        if (!is_left && armType != "right")
         {
             return;
         }
 
-        if (!should_show)
+        std::shared_ptr<ArmMarker> arm_marker = is_left ? left_arm_marker_ : right_arm_marker_;
+        const bool should_show = is_left ? shouldShowLeftArmMarker() : shouldShowRightArmMarker();
+        if (!arm_marker || !should_show)
         {
             return;
         }
@@ -1575,17 +1617,17 @@ namespace arms_ros2_control::command
         const bool coupled = isBimanualCoupled();
         if (coupled)
         {
-            old_opposite_pose = (armType == "left")
-                ? right_arm_marker_->getPose()
-                : left_arm_marker_->getPose();
+            old_opposite_pose = is_left ? right_arm_marker_->getPose()
+                                        : left_arm_marker_->getPose();
         }
-        geometry_msgs::msg::Pose current_pose = old_pose;
 
+        geometry_msgs::msg::Pose current_pose = old_pose;
         current_pose.position.x += positionDelta[0];
         current_pose.position.y += positionDelta[1];
         current_pose.position.z += positionDelta[2];
 
-        if (std::abs(rpyDelta[0]) > 0.001 || std::abs(rpyDelta[1]) > 0.001 || std::abs(rpyDelta[2]) > 0.001)
+        if (std::abs(rpyDelta[0]) > 0.001 || std::abs(rpyDelta[1]) > 0.001 ||
+            std::abs(rpyDelta[2]) > 0.001)
         {
             Eigen::Quaterniond current_quat(
                 current_pose.orientation.w,
@@ -1609,26 +1651,30 @@ namespace arms_ros2_control::command
             current_pose.orientation.z = current_quat.z();
         }
 
-        arm_marker->setPose(current_pose);
-
-        if (server_)
+        Intent intent;
+        intent.channel = is_left ? Channel::ArmLeft : Channel::ArmRight;
+        intent.source = SourceId::External;
+        intent.priority = Priority::Normal;
+        intent.position = Eigen::Vector3d(
+            current_pose.position.x, current_pose.position.y, current_pose.position.z);
+        intent.orientation = Eigen::Quaterniond(
+            current_pose.orientation.w, current_pose.orientation.x,
+            current_pose.orientation.y, current_pose.orientation.z);
+        intent.frame = marker_fixed_frame_;
+        intent.lease = std::chrono::milliseconds(500);
+        intent.publish = publish && shouldStreamPoseCommands();
+        if (!router_->submit(intent).accepted)
         {
-            setServerPose(arm_marker->getMarkerName(), current_pose);
-            markPendingChanges();
+            return;
         }
 
-        if (coupled && armType == "left")
+        if (coupled && is_left)
         {
             followCoupledRightMarker(old_pose, old_opposite_pose, current_pose);
         }
-        else if (coupled && armType == "right")
+        else if (coupled && !is_left)
         {
             followCoupledLeftMarker(old_pose, old_opposite_pose, current_pose);
-        }
-
-        if (publish && shouldStreamPoseCommands())
-        {
-            arm_marker->publishTargetPose();
         }
     }
 
@@ -1671,20 +1717,19 @@ namespace arms_ros2_control::command
             current_pose.orientation.z = current_quat.z();
         }
 
-        body_marker_->setPose(current_pose);
-
-        if (server_)
-        {
-            setServerPose(body_marker_->getMarkerName(), current_pose);
-            markPendingChanges();
-        }
-
-        if (shouldStreamPoseCommands())
-        {
-            body_marker_->publishTargetPose();
-        }
-
-        return true;
+        Intent intent;
+        intent.channel = Channel::Body;
+        intent.source = SourceId::Vr;
+        intent.priority = Priority::Normal;
+        intent.position = Eigen::Vector3d(
+            current_pose.position.x, current_pose.position.y, current_pose.position.z);
+        intent.orientation = Eigen::Quaterniond(
+            current_pose.orientation.w, current_pose.orientation.x,
+            current_pose.orientation.y, current_pose.orientation.z);
+        intent.frame = marker_fixed_frame_;
+        intent.lease = std::chrono::milliseconds(500);
+        intent.publish = shouldStreamPoseCommands();
+        return router_->submit(intent).accepted;
     }
 
     bool ArmsTargetManager::setBodyMarkerPose(const geometry_msgs::msg::Pose& pose)
@@ -1694,23 +1739,22 @@ namespace arms_ros2_control::command
             return false;
         }
 
-        body_marker_->setPose(pose);
-
-        if (server_)
-        {
-            setServerPose(body_marker_->getMarkerName(), pose);
-            markPendingChanges();
-        }
-
         // pose 由调用方给出，表达在 marker 固定系（marker_fixed_frame_，通常是 world）。
-        // 发布 /body_target 时由 BodyMarker::publishTargetPose() 换算到
-        // control_base_frame_（下游 OCS2 模型的 base_frame_），两者不能混用。
-        if (shouldStreamPoseCommands())
-        {
-            body_marker_->publishTargetPose();
-        }
-
-        return true;
+        // 发布 /body_target 时由 router_ 统一换算到 control_base_frame_
+        // （下游 OCS2 模型的 base_frame_），两者不能混用。
+        Intent intent;
+        intent.channel = Channel::Body;
+        intent.source = SourceId::Vr;
+        intent.priority = Priority::Normal;
+        intent.position = Eigen::Vector3d(
+            pose.position.x, pose.position.y, pose.position.z);
+        intent.orientation = Eigen::Quaterniond(
+            pose.orientation.w, pose.orientation.x,
+            pose.orientation.y, pose.orientation.z);
+        intent.frame = marker_fixed_frame_;
+        intent.lease = std::chrono::milliseconds(500);
+        intent.publish = shouldStreamPoseCommands();
+        return router_->submit(intent).accepted;
     }
 
     geometry_msgs::msg::Pose ArmsTargetManager::getMarkerPose(const std::string& armType) const

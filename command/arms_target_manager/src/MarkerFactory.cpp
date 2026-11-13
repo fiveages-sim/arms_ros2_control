@@ -1,8 +1,6 @@
 //
-// Created for Arms ROS2 Control - MarkerFactory
-// Marker 创建工厂类实现
+// MarkerFactory 实现：只生成 marker 消息，不含状态与发布逻辑。
 //
-
 #include "arms_target_manager/MarkerFactory.h"
 #include <builtin_interfaces/msg/time.hpp>
 #include <rclcpp/rclcpp.hpp>
@@ -118,6 +116,7 @@ namespace arms_ros2_control::command
 
         if (enable_interaction)
         {
+            // 头部与手臂一致，保留完整 6 自由度拖拽。
             addMovementControls(interactiveMarker);
         }
 
