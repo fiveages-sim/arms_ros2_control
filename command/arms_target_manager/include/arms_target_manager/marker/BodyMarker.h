@@ -1,3 +1,8 @@
+//
+// BodyMarker - 胸部（腰部）marker 的显示。
+//
+// 与 ArmMarker 一致：只负责显示与鼠标拖动换算，目标发布在 core/PoseTargetSink。
+//
 #pragma once
 
 #include <memory>

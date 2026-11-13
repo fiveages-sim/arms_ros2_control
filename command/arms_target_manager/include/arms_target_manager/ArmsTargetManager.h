@@ -1,5 +1,13 @@
 //
-// Created for Arms ROS2 Control - ArmsTargetManager
+// ArmsTargetManager - 节点门面。
+//
+// 负责三件事，别的都不做：
+//   ① 创建并维护 RViz 里的交互 marker（左臂 / 右臂 / 头 / 胸）；
+//   ② 把 marker 的拖动、菜单操作翻译成“目标提交”交给 TargetRouter；
+//   ③ 汇总 WBC / FSM 状态，回答“这个 marker 现在该不该显示、该不该跟随”。
+//
+// 目标发布不在这里发生：所有话题都由 core/TargetRouter 统一发，
+// marker 只负责显示。改这里时请保持这个边界，否则控制权会再次分裂。
 //
 #pragma once
 
@@ -29,6 +37,7 @@
 #include <std_msgs/msg/string.hpp>
 #include <nav_msgs/msg/path.hpp>
 #include "arms_target_manager/MarkerFactory.h"
+#include "arms_target_manager/core/TargetRouter.h"
 #include "arms_target_manager/marker/HeadMarker.h"
 #include "arms_target_manager/marker/ArmMarker.h"
 #include "arms_target_manager/marker/BodyMarker.h"
@@ -92,6 +101,13 @@ namespace arms_ros2_control::command
         const std::string& getMarkerFixedFrame() const { return marker_fixed_frame_; }
         /** 目标发布的坐标系：下游 WBC 的 base_frame_（移动底盘=world，固定底盘=baseFrame）。 */
         const std::string& getControlBaseFrame() const { return control_base_frame_; }
+
+        /** 目标汇聚器；VR / control_input / 兼容接口都通过它下发目标。 */
+        [[nodiscard]] TargetRouter* router() const { return router_.get(); }
+
+        /** 摇杆/键盘的速度流现在能不能写这条手臂（被 VR 或手动拖动占用时返回 false）。 */
+        [[nodiscard]] bool canAcceptSpeedCommand(bool is_left) const;
+
         void sendTargetPose(const std::string& marker_type = "arm");
 
         void sendDualArmTargetPose();
@@ -214,9 +230,8 @@ namespace arms_ros2_control::command
             wbc_state_callback_;
         rclcpp::Subscription<std_msgs::msg::Float64MultiArray>::SharedPtr body_joint_target_subscriber_;
 
-        rclcpp::Publisher<nav_msgs::msg::Path>::SharedPtr dual_target_stamped_publisher_;
-        rclcpp::Publisher<geometry_msgs::msg::Pose>::SharedPtr body_target_publisher_;
-        rclcpp::Publisher<geometry_msgs::msg::PoseStamped>::SharedPtr body_target_stamped_publisher_;
+        // 目标汇聚：所有输入源都提交到 router_，由它决定谁在写、写什么、何时显示。
+        std::unique_ptr<TargetRouter> router_;
 
         std::shared_ptr<interactive_markers::MenuHandler> left_menu_handler_;
         std::shared_ptr<interactive_markers::MenuHandler> right_menu_handler_;

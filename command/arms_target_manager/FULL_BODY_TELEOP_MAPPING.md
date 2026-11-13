@@ -314,7 +314,7 @@ $$
   - 固定底盘模型（`manipulatorModelType = 0`）→ 模型根（如 `base_footprint`）。
 - RViz marker 表达在 `marker_fixed_frame`（通常是 `world`）。
 
-**锚定规则**（`WholeBodyVrTeleop::resolveAnchorTransforms`）。记人体 footprint 位姿 $T^w_H(t)$、
+**锚定规则**（`VRInputHandler::resolveAnchorTransforms`）。记人体 footprint 位姿 $T^w_H(t)$、
 机器人底座在 marker 固定系下的位姿 $T^M_B(t)$，锚定变换
 
 $$

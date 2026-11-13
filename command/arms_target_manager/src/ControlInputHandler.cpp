@@ -1,7 +1,9 @@
 //
-// Created for Arms ROS2 Control - ControlInputHandler
+// ControlInputHandler 实现。
 //
-
+// 速度命令先问 ArmsTargetManager::canAcceptSpeedCommand()，
+// 被占用时整条丢弃并打调试日志；手部命令不参与这个判断。
+//
 #include "arms_target_manager/ControlInputHandler.h"
 
 #include <algorithm>
@@ -25,6 +27,7 @@ namespace arms_ros2_control::command
           , angular_scale_(angularScale)
           , control_input_rate_(std::max(1.0, controlInputRate))
           , hand_controllers_(handControllers)
+          , hand_bus_(node_, handControllers)
     {
         left_twist_publisher_ = node_->create_publisher<geometry_msgs::msg::Twist>(
             "left_target/twist", 10);
@@ -67,12 +70,12 @@ namespace arms_ros2_control::command
 
         const bool is_left = msg->target != 2;
 
-        // 全身遥操作正在控制该臂（绝对映射）时，让路：
-        // 否则手动/手柄的 twist 速度流会被参考管理器持续积分，与 VR 抢同一目标。
-        if (target_manager_ && target_manager_->isArmVrActive(is_left))
+        // 目标通道同时只允许一个绝对控制来源。VR 或 RViz 拖动正占用该臂时，
+        // 速度流会被拒绝，避免“位姿目标 + 速度积分”互相覆盖。
+        if (target_manager_ && !target_manager_->canAcceptSpeedCommand(is_left))
         {
             RCLCPP_DEBUG_THROTTLE(node_->get_logger(), *node_->get_clock(), 3000,
-                                  "🎮 全身遥操作正在控制%s臂，忽略 control_input 的目标改写",
+                                  "🎮 %s臂当前由其它方式控制，忽略 control_input 速度流",
                                   is_left ? "左" : "右");
             processHandCommand(msg->target, msg->hand_command);
             return;
@@ -87,55 +90,20 @@ namespace arms_ros2_control::command
             right_twist_publisher_->publish(twist);
         }
 
-        if (hasValidInput && target_manager_)
+        if (hasValidInput && target_manager_ &&
+            target_manager_->getCurrentMode() != MarkerState::CONTINUOUS)
         {
-            if (target_manager_->getCurrentMode() != MarkerState::CONTINUOUS)
-            {
-                target_manager_->togglePublishMode();
-                RCLCPP_INFO(node_->get_logger(), "🎮 ArmsTargetManager switched to CONTINUOUS mode for control input");
-            }
-
-            // Marker 仅可视化：用 v/f 近似一帧位移，不向 left_target 发绝对 Pose
-            const double inv_rate = 1.0 / control_input_rate_;
-            std::array<double, 3> positionDelta = {
-                twist.linear.x * inv_rate,
-                twist.linear.y * inv_rate,
-                twist.linear.z * inv_rate
-            };
-            std::array<double, 3> rpyDelta = {
-                twist.angular.x * inv_rate,
-                twist.angular.y * inv_rate,
-                twist.angular.z * inv_rate
-            };
-
-            std::string armType = is_left ? "left" : "right";
-            target_manager_->updateMarkerPoseIncremental(armType, positionDelta, rpyDelta, false);
-
-            RCLCPP_DEBUG(node_->get_logger(),
-                         "🎮 Published %s twist vel pos[%.3f, %.3f, %.3f] ang[%.3f, %.3f, %.3f]",
-                         armType.c_str(),
-                         twist.linear.x, twist.linear.y, twist.linear.z,
-                         twist.angular.x, twist.angular.y, twist.angular.z);
+            target_manager_->togglePublishMode();
+            RCLCPP_INFO(node_->get_logger(), "🎮 ArmsTargetManager switched to CONTINUOUS mode for control input");
         }
 
+        // marker 的显示由控制器回传的 current_target 驱动，这里不再自行积分一份。
         processHandCommand(msg->target, msg->hand_command);
     }
 
     std::string ControlInputHandler::resolveHandControllerName(int32_t target) const
     {
-        if (hand_controllers_.empty()) {
-            return "";
-        }
-
-        size_t controller_index = 0;
-        if (hand_controllers_.size() > 1) {
-            controller_index = static_cast<size_t>(target - 1);
-            if (controller_index >= hand_controllers_.size()) {
-                return "";
-            }
-        }
-
-        return hand_controllers_[controller_index];
+        return hand_bus_.controllerFor(target);
     }
 
     void ControlInputHandler::processHandCommand(int32_t target, float hand_command)
@@ -161,29 +129,16 @@ namespace arms_ros2_control::command
 
         if (use_switch)
         {
-            auto& pub = hand_switch_publishers_[controller_name];
-            if (!pub)
-            {
-                pub = node_->create_publisher<std_msgs::msg::Int32>(
-                    controller_name + "/target_command", 10);
-            }
-            std_msgs::msg::Int32 cmd;
-            cmd.data = (hand_command >= 0.5f) ? 1 : 0;
-            pub->publish(cmd);
-            RCLCPP_DEBUG(node_->get_logger(), "🎮 Hand switch %s -> %d", arm_label.c_str(), cmd.data);
+            hand_bus_.publishSwitch(controller_name, hand_command >= 0.5f);
+            RCLCPP_DEBUG(node_->get_logger(), "🎮 Hand switch %s -> %d",
+                         arm_label.c_str(), hand_command >= 0.5f ? 1 : 0);
         }
         else
         {
-            auto& pub = hand_percent_publishers_[controller_name];
-            if (!pub)
-            {
-                pub = node_->create_publisher<std_msgs::msg::Float64>(
-                    controller_name + "/target_percent", 10);
-            }
-            std_msgs::msg::Float64 pct;
-            pct.data = std::clamp(value, 0.0, 1.0);
-            pub->publish(pct);
-            RCLCPP_DEBUG(node_->get_logger(), "🎮 Hand percent %s -> %.3f", arm_label.c_str(), pct.data);
+            const double percent = std::clamp(value, 0.0, 1.0);
+            hand_bus_.publishPercent(controller_name, percent);
+            RCLCPP_DEBUG(node_->get_logger(), "🎮 Hand percent %s -> %.3f",
+                         arm_label.c_str(), percent);
         }
     }
 } // namespace arms_ros2_control::command

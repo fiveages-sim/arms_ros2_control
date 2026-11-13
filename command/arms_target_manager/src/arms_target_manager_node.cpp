@@ -1,7 +1,10 @@
 //
-// Created for Arms ROS2 Control - ArmsTargetManager Node
+// arms_target_manager 节点入口。
 //
-
+// 只做装配：读参数 → 建 ArmsTargetManager → 建 ControlInputHandler 与 VRInputHandler
+// → 把 FSM、WBC、current_pose 的回调接到对应模块 → spin。
+// 任何业务判断都不应写在这里。
+//
 #include <rclcpp/rclcpp.hpp>
 #include <std_msgs/msg/int32.hpp>
 #include "arms_target_manager/ArmsTargetManager.h"

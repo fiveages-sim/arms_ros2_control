@@ -9,7 +9,7 @@ VRInputHandler是基于VRMarkerWrapper功能开发的VR输入处理器，专门�
 从本版起，VR 遥操作拆成两个**物理独立**的组件：
 
 - `VRInputHandler`：普通 VR 遥操作 + 共享的 FSM（11/12）与夹爪（9/10/13/14 + 扳机模拟量），并负责按键/摇杆事件的路由；
-- `WholeBodyVrTeleop`（`WholeBodyVrTeleop.h/.cpp`）：全身骨架遥操作（case 30），独占 `/teleop/body_*` 与 `/teleop/human_footprint_pose` 订阅，只提供事件 4（全部跟踪）与事件 7（底盘跟踪）。
+- `VRInputHandler`（`VRInputHandler.h/.cpp`）：全身骨架遥操作（case 30），独占 `/teleop/body_*` 与 `/teleop/human_footprint_pose` 订阅，只提供事件 4（全部跟踪）与事件 7（底盘跟踪）。
 
 进入全身模式后，普通模式的组合键（`3`/`6`/`16`/`20`/`21–28`）全部不可用，必须先退出全身模式。两者只共享 FSM、夹爪与发布基础设施。
 
@@ -48,7 +48,7 @@ VRInputHandler是基于VRMarkerWrapper功能开发的VR输入处理器，专门�
 - `/teleop/thumbstick_axes` (`geometry_msgs/msg/Twist`): 左右摇杆轴值；`linear.z` / `angular.z` 携带左右握把按下状态
 - `/teleop/trigger_values` (`geometry_msgs/msg/Twist`): 左右扳机模拟量
 
-### 全身模式（`WholeBodyVrTeleop`）
+### 全身模式（`VRInputHandler`）
 - `/teleop/body_pelvis_pose` (`geometry_msgs/msg/Pose`): 骨架骨盆（胸部锚点 / 绝对映射）
 - `/teleop/body_spine3_pose` (`geometry_msgs/msg/Pose`): 骨架胸椎上段（胸部绝对目标）
 - `/teleop/body_head_pose` (`geometry_msgs/msg/Pose`): 骨架头部（头部绝对目标）
@@ -57,7 +57,7 @@ VRInputHandler是基于VRMarkerWrapper功能开发的VR输入处理器，专门�
 - `/teleop/body_left_shoulder_pose` / `body_right_shoulder_pose`: 肩宽/臂长尺度链起点
 - `/teleop/human_footprint_pose`: 人体基坐标系 H
 
-> 所有 `/teleop/body_*` 与 `/teleop/human_footprint_pose` 都是**动态话题**（头显开启全身追踪后才出现），`WholeBodyVrTeleop` 常驻订阅。
+> 所有 `/teleop/body_*` 与 `/teleop/human_footprint_pose` 都是**动态话题**（头显开启全身追踪后才出现），`VRInputHandler` 常驻订阅。
 
 ### 机器人状态
 - `left_current_pose` (`geometry_msgs/msg/PoseStamped`): 机器人左臂当前pose

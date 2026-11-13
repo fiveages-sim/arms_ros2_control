@@ -1,3 +1,6 @@
+//
+// BodyMarker 实现：显示与鼠标拖动换算，目标发布由 core/PoseTargetSink 负责。
+//
 #include "arms_target_manager/marker/BodyMarker.h"
 
 namespace arms_ros2_control::command
@@ -42,17 +45,11 @@ BodyMarker::BodyMarker(
         this->updateFromTopic(msg);
     };
 
+    // 目标回显与发布统一由 TargetRouter 负责，这里只需要实测位姿用于显示。
+    (void)current_target_topic;
     current_pose_subscription_ =
         node_->create_subscription<geometry_msgs::msg::PoseStamped>(
             current_pose_topic, 10, callback);
-
-    current_target_subscription_ =
-        node_->create_subscription<geometry_msgs::msg::PoseStamped>(
-            current_target_topic, 10,
-            [this](const geometry_msgs::msg::PoseStamped::ConstSharedPtr msg)
-            {
-                updateTargetFromTopic(msg);
-            });
 }
 
 visualization_msgs::msg::InteractiveMarker BodyMarker::createMarker(

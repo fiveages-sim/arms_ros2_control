@@ -1,6 +1,9 @@
 //
-// ArmMarker - 机械臂 Marker 管理类
-// 封装所有机械臂 marker 相关的逻辑，包括创建、更新、发布等
+// ArmMarker - 单条手臂的 marker 显示。
+//
+// 职责很窄：保存当前显示位姿、把鼠标拖动换算到 marker 坐标系、
+// 跟随 current_pose 做可视化刷新。它不再订阅 current_target，也不再发布目标
+// ——目标回显与发布都由 core/PoseTargetSink 统一处理。
 //
 #pragma once
 
