@@ -82,6 +82,15 @@ namespace arms_ros2_control::command
         double body_length_scale{1.0};
         double shoulder_width_scale{1.0};
         double arm_length_scale{1.0};
+        // ===== 「人体关键点 → 机器人关键点」的固定平移偏置 [x, y, z]（米）=====
+        // 表达在人体基坐标系 H 里（x 前 / y 左 / z 上，与 base_footprint 同向），
+        // 在分段尺度缩放完成之后整体加到每个关键点上，只平移不改姿态。
+        // 用途：两者 footprint 的原点定义本来就不同——人体 H 取骨盆地面投影，
+        // 机器人 footprint 由底盘几何决定。若机器人 footprint 落在身体后下方
+        // （底盘后悬）、而人体 footprint 在头部正下方，则机器人每个同名关键点
+        // 都比人体整体偏前，此时把该前移量填进 x 即可。
+        // 默认 [0,0,0] = 不做补偿。
+        std::vector<double> human_to_robot_offset_xyz{0.0, 0.0, 0.0};
         // VR 世界系 → 机器人世界系的对齐偏航（度）。
         // 标准摆放（人站在机器人正后方、面朝机器人前方启动头显）下为 0。
         // 注：早期有一个 absolute_map_yaw_deg（人体根轴向 → 底座轴向的固定偏航），
@@ -1113,6 +1122,12 @@ namespace arms_ros2_control::command
         bool captureAbsoluteTrackingMaps();
         bool humanFootprintTransform(Eigen::Isometry3d& T_H_world);
         void buildDeformedSkeleton(const Eigen::Isometry3d& T_H_world, DeformedSkeleton& out);
+        /**
+         * 读取「人体系 → 机体系」固定平移偏置，表达在 H 的三轴上。
+         * 参数个数不是 3 或含非有限值时返回零向量（并在启动日志里已告警）。
+         * @return [x, y, z] 米
+         */
+        Eigen::Vector3d humanToRobotOffsetInH() const;
         bool skeletonJointFresh(const std::chrono::steady_clock::time_point& stamp) const;
         bool geometryToleranceOk(bool is_left, const Eigen::Vector3d& hand_position) const;
         static Eigen::Quaterniond dropRoll(const Eigen::Quaterniond& q);
