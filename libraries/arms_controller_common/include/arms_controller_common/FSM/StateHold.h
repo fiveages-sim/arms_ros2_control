@@ -18,7 +18,7 @@ namespace arms_controller_common
      * Supports:
      * - Position holding (sends position commands)
      * - Optional gravity compensation (if hardware supports)
-     * - Automatic position threshold checking
+     * - One-time startup position selection and runtime deviation reporting
      */
     class StateHold : public FSMState
     {
@@ -43,9 +43,8 @@ namespace arms_controller_common
 
         std::shared_ptr<rclcpp_lifecycle::LifecycleNode> node_;
         std::shared_ptr<GravityCompensation> gravity_compensation_;
-        std::vector<double> hold_positions_;                  // Positions recorded when entering
+        std::vector<double> hold_positions_;                  // Positions captured once when entering
         double first_check_position_threshold_{0.1};          // Threshold for the initial hold position check (radians). If <= 0, checking is disabled.
-        double joint_position_diff_threshold_{0.1};           // Threshold for runtime position difference adjustment (radians). If <= 0, adjustment is disabled.
-        bool first_threshold_check_passed_;                   // Flag to track if first threshold check has passed
+        double joint_position_diff_threshold_{0.1};           // Runtime warning threshold (radians); never reanchors. If <= 0, warnings are disabled.
     };
 } // namespace arms_controller_common

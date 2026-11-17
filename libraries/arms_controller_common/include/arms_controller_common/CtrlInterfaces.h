@@ -141,6 +141,23 @@ namespace arms_controller_common
             last_sent_joint_positions_[index] = value;
         }
 
+        // A hold must overwrite velocity feed-forward left by the previous state.
+        // Missing optional velocity interfaces are valid for position-only hardware.
+        void setJointHoldCommands(const std::vector<double>& positions)
+        {
+            for (auto& velocity : joint_velocity_command_interface_)
+            {
+                std::ignore = velocity.get().set_value(0.0);
+            }
+            for (size_t i = 0; i < positions.size() &&
+                 i < joint_position_command_interface_.size() &&
+                 i < last_sent_joint_positions_.size(); ++i)
+            {
+                setJointPositionCommand(i, positions[i]);
+                setCommandDerivatives(i, 0.0, 0.0);
+            }
+        }
+
         void initializeLastSentPositions()
         {
             last_sent_joint_positions_.clear();
