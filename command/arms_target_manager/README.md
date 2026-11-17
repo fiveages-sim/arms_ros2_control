@@ -145,6 +145,7 @@ RViz Joint Panel：绝对 / 相对基座 / 相对末端（手臂）或相对身�
 | `body_length_scale` | 身长尺度：`pelvis→spine3`（并同尺度推 `spine3→head`） | `1.0` | 仅启动 |
 | `shoulder_width_scale` | 肩宽尺度：`spine3→shoulder(L/R)` | `1.0` | 仅启动 |
 | `arm_length_scale` | 臂长尺度：`shoulder→末端(hand/wrist)` | `1.0` | 仅启动 |
+| `human_to_robot_offset_xyz` | 人体系 → 机体系的固定平移偏置（米，H 系：x 前 / y 左 / z 上），补偿两边 footprint 原点定义不同造成的整体位移；只平移不改姿态 | `[0,0,0]` | 仅启动 |
 | ~~`absolute_map_yaw_deg`~~ | **已删除**：映射按「人体系」锚定——人体各量先表达在人体根自身坐标系里，人体朝向 ≡ 机器人机头朝向，无需人工偏航常数 | — | — |
 | `hand_to_ee_rpy_deg_left` / `_right` | 手部坐标系 → 末端坐标系的固定偏置（固定轴 RPY，度） | `[-90,0,0]` / `[90,0,0]` | 仅启动 |
 | `body_src_to_ee_rpy_deg` / `head_src_to_ee_rpy_deg` | 胸部/头部数据源 → 目标坐标系的固定偏置（度） | `[0,0,0]` | 仅启动 |

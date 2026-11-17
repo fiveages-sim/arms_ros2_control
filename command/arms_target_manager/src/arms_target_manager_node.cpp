@@ -5,6 +5,8 @@
 // → 把 FSM、WBC、current_pose 的回调接到对应模块 → spin。
 // 任何业务判断都不应写在这里。
 //
+#include <cmath>
+
 #include <rclcpp/rclcpp.hpp>
 #include <std_msgs/msg/int32.hpp>
 #include "arms_target_manager/ArmsTargetManager.h"
@@ -91,6 +93,31 @@ int main(int argc, char** argv)
     warn_bad_rpy("hand_to_ee_rpy_deg_right", absolute_options.hand_to_ee_rpy_deg_right);
     warn_bad_rpy("body_src_to_ee_rpy_deg", absolute_options.body_src_to_ee_rpy_deg);
     warn_bad_rpy("head_src_to_ee_rpy_deg", absolute_options.head_src_to_ee_rpy_deg);
+    // 人体系 → 机体系的固定平移偏置（米，H 系：x 前 / y 左 / z 上），
+    // 用于补偿人体 footprint 与机器人 footprint 原点定义不同带来的整体位移。
+    absolute_options.human_to_robot_offset_xyz = node->declare_parameter(
+        "human_to_robot_offset_xyz", std::vector<double>{0.0, 0.0, 0.0});
+    if (absolute_options.human_to_robot_offset_xyz.size() != 3)
+    {
+        RCLCPP_WARN(node->get_logger(),
+                    "human_to_robot_offset_xyz 需要 3 个元素 [x,y,z]（米），当前 %zu 个"
+                    " → 按零偏置处理",
+                    absolute_options.human_to_robot_offset_xyz.size());
+        absolute_options.human_to_robot_offset_xyz.assign(3, 0.0);
+    }
+    else
+    {
+        for (const double value : absolute_options.human_to_robot_offset_xyz)
+        {
+            if (!std::isfinite(value) || std::abs(value) > 1.0)
+            {
+                RCLCPP_WARN(node->get_logger(),
+                            "human_to_robot_offset_xyz 含可疑值 %.3f"
+                            "（非有限数，或绝对值超过 1 m）；请确认单位是米",
+                            value);
+            }
+        }
+    }
     absolute_options.filter_alpha = node->declare_parameter("absolute_filter_alpha", 0.3);
     absolute_options.capture_settle_sec = node->declare_parameter("capture_settle_ms", 200.0) / 1000.0;
     absolute_options.skeleton_timeout_sec = node->declare_parameter("skeleton_timeout", 0.2);

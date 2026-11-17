@@ -112,8 +112,11 @@ flowchart LR
 > **已实现（绝对映射）**：全身遥操作模式内按右摇杆（事件 4）开启「全部跟踪」后，双臂末端不再用
 > 冻结基准 + 增量，而是逐帧按：
 >
-> $$p^{r}_{E|base}(t) = R_{\mathrm{align}}\,p^{h}_{hand|H}(t),
+> $$p^{r}_{E|base}(t) = R_{\mathrm{align}}\big(p^{h}_{hand|H}(t) + t\big),
 >   \qquad R^{r}_{E|base}(t) = R_{\mathrm{align}}\,R^{h}_{hand|H}(t)\,C_{hand\to E}$$
+>
+> $t$ = `human_to_robot_offset_xyz`：两套 footprint 原点定义不同造成的整体平移
+> （只平移、不改姿态，也不参与下文的段向量缩放），默认 $t=0$。
 >
 > 其中 **人体根 H 由 `vr_pose_publisher` 的 `HumanFootprintEstimator` 统一计算**
 > （话题 `/teleop/human_footprint_pose`）：位置 xy = **骨盆**在地面的投影、z = 两**足**较低者；
@@ -436,6 +439,7 @@ H 无效（看门狗超时）时上肢目标一并冻结。
 |---|---|---|
 | `body_ee_source` | `hand` | 双臂末端数据源：`hand` / `wrist` |
 | `body_length_scale` / `shoulder_width_scale` / `arm_length_scale` | 1.0 / 1.0 / 1.0 | 骨架分段尺度（只缩放段向量，姿态不变） |
+| `human_to_robot_offset_xyz` | [0,0,0] | 人体系 → 机体系固定平移偏置（米），补偿两边 footprint 原点差异 |
 | ~~`absolute_map_yaw_deg`~~ | — | 已删除（「人体系」锚定，人体朝向 ≡ 机头朝向） |
 | `hand_to_ee_rpy_deg_left` / `_right` | [-90,0,0] / [90,0,0] | 手部坐标系 → 末端坐标系固定旋转偏置（度） |
 | `body_src_to_ee_rpy_deg` / `head_src_to_ee_rpy_deg` | [0,0,0] | 胸部/头部源→目标固定旋转偏置（度） |

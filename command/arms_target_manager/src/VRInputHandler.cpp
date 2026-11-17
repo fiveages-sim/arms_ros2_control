@@ -5798,6 +5798,19 @@ namespace arms_ros2_control::command
         return true;
     }
 
+    Eigen::Vector3d VRInputHandler::humanToRobotOffsetInH() const
+    {
+        const std::vector<double>& offset =
+            absolute_options_.human_to_robot_offset_xyz;
+        if (offset.size() != 3)
+        {
+            // 长度非法已在节点启动时告警，这里按零偏置处理避免越界
+            return Eigen::Vector3d::Zero();
+        }
+        const Eigen::Vector3d value(offset[0], offset[1], offset[2]);
+        return value.allFinite() ? value : Eigen::Vector3d::Zero();
+    }
+
     void VRInputHandler::buildDeformedSkeleton(
         const Eigen::Isometry3d& T_H_world, DeformedSkeleton& out)
     {
@@ -5868,6 +5881,24 @@ namespace arms_ros2_control::command
         };
         out.hand_left = scale_arm(out.shoulder_left, shoulder_l_raw, hand_l_raw, "左");
         out.hand_right = scale_arm(out.shoulder_right, shoulder_r_raw, hand_r_raw, "右");
+
+        // ④ 人体系 → 机体系的固定平移偏置：放在三段尺度之后整体相加，因此既不参与
+        //    段向量缩放、也不改变任何姿态。
+        //    人体 footprint 取骨盆地面投影与双足较低者，机器人 footprint 由底盘几何决定，
+        //    两者原点相对身体的位置本来就不同。例如机器人 footprint 落在身体后下方
+        //    （底盘后悬）、人体 footprint 在头部正下方，则机器人每个同名关键点都比人体
+        //    整体偏前，把该前移量填进参数的 x 即可让「手放在胸前」落到机器人胸前。
+        const Eigen::Vector3d offset = humanToRobotOffsetInH();
+        if (!offset.isZero())
+        {
+            out.pelvis += offset;
+            out.spine3 += offset;
+            out.head += offset;
+            out.shoulder_left += offset;
+            out.shoulder_right += offset;
+            out.hand_left += offset;
+            out.hand_right += offset;
+        }
     }
 
     bool VRInputHandler::skeletonJointFresh(
@@ -5970,12 +6001,14 @@ namespace arms_ros2_control::command
 
         settle_pending_ = false;
         absolute_maps_captured_ = true;
+        const Eigen::Vector3d human_to_robot_offset = humanToRobotOffsetInH();
         RCLCPP_INFO(
             node_->get_logger(),
             "🕹️🦴 全身绝对跟踪已生效：人体基坐标系 H 来自 /teleop/human_footprint_pose"
             "（xy 取骨盆地面投影 / 朝向取两踝 x 轴地平面投影均值 / z 取两足较低者，"
             "俯仰滚转恒为 0；低通与原点偏置在 vr_pose_publisher 侧配置），"
             "目标系=%s，marker 固定系=%s，尺度[身长/肩宽/臂长]=%.2f/%.2f/%.2f，"
+            "人体系→机体系平移偏置=[%.3f, %.3f, %.3f] m，"
             "末端源=body_%s，胸部锚点 λ=%.2f；人体参考臂长 L/R=%.3f/%.3f m。"
             "映射按「人体系」锚定：人体各量先表达在人体根自身坐标系里，故人体朝向 ≡ 机器人机头朝向"
             "（无需人工偏航常数）；"
@@ -5986,6 +6019,9 @@ namespace arms_ros2_control::command
             absolute_options_.body_length_scale,
             absolute_options_.shoulder_width_scale,
             absolute_options_.arm_length_scale,
+            human_to_robot_offset.x(),
+            human_to_robot_offset.y(),
+            human_to_robot_offset.z(),
             absolute_options_.ee_source.c_str(),
             absolute_options_.body_anchor_lambda,
             abs_left_arm_ref_len_, abs_right_arm_ref_len_);

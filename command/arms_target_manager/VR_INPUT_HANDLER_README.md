@@ -299,7 +299,7 @@ FULL_BODY 下右握把+右摇杆方向组合仍会锁存并清零右轴（含预
 - **完全不受门控**：RViz marker/面板、`ros2 topic pub`、`ros2_robot_interface` 的 Python API、
   `record/record_playback.py` 回放等直接向 `left/right/body/head_target[*]` 发布的外部脚本。
 
-- **开启时不做任何“按下瞬间的快照”**，而是逐帧按下面三步求值：
+- **开启时不做任何“按下瞬间的快照”**，而是逐帧按下面五步求值：
 
   ```
   ① 人体基坐标系 H（由 vr_pose_publisher 统一计算并发布到
@@ -316,8 +316,13 @@ FULL_BODY 下右握把+右摇杆方向组合仍会锁存并清零右轴（含预
        p'head     = p'spine3   + s_body    ·(p_head    − p_spine3)
        p'shoulder = p'spine3   + s_shoulder·(p_shoulder− p_spine3)
        p'hand     = p'shoulder + s_arm     ·(p_hand    − p_shoulder)
-  ④ 直接作为机器人对应部位「相对底座」的目标：
-       位置_base = R_align · p'
+  ④ 「人体系 → 机体系」固定平移偏置（human_to_robot_offset_xyz，米，H 三轴）：
+       p'' = p' + t
+     t 补偿两边 footprint 原点定义不同带来的整体位移（如机器人 footprint 落在
+     身体后下方，则每个关键点都要相对人体前移）；只平移，不改变姿态，
+     也不参与 ③ 的段向量缩放
+  ⑤ 直接作为机器人对应部位「相对底座」的目标：
+       位置_base = R_align · p''
        姿态_base = R_align · R_H · C_src→ee
      再乘底座位姿 → world：T_world = T_base_world · T_base
   ```
