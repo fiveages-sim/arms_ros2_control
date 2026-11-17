@@ -78,6 +78,24 @@ def build_ocs2_control_context(context) -> Ocs2ControlContext:
     profile = load_robot_profile(profile_path) if profile_path else {}
     control_left, control_right = resolve_control_sides(configs, profile)
     control_patch = resolve_control_patch(profile)
+    external_chassis = configs.get("external_chassis", "false").lower() == "true"
+    if external_chassis:
+        task_path = os.path.join(get_robot_package_path(robot_name), "config", "ocs2",
+                                 "mobile_base_omni_tcp.info")
+        if not os.path.isfile(task_path):
+            raise ValueError(f"External omni chassis configuration is unavailable: {task_path}")
+        control_patch = copy.deepcopy(control_patch)
+        control_patch.setdefault("ocs2_wbc_controller", {}).setdefault("ros__parameters", {}).update({
+            "info_file_name": "mobile_base_omni_tcp",
+            "tf_topic": "/tf",
+            "tf_static_topic": "/tf_static",
+            "world_frame": "world",
+            "enable_identity_world_tf": False,
+            "mobile_base_pose_max_age_sec": 0.2,
+            "mobile_base_tf_timeout_sec": 10.0,
+            "fsm_default_humanoid_mode": "HM_DUAL_RELATIVE_MOBILE_BASE",
+            "fsm_default_head_mode": "HEAD_DISABLE",
+        })
     robot_arms = resolve_robot_arms(configs, profile, robot_name=robot_name)
     if robot_arms and not str(configs.get("arms") or "").strip():
         configs["arms"] = robot_arms

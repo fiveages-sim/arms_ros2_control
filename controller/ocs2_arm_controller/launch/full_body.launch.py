@@ -158,6 +158,16 @@ def launch_setup(context, *args, **kwargs):
         except Exception as exc:
             print(f"[WARN] Failed to patch RViz Fixed Frame for ARM type: {exc}")
 
+    world_to_map = None
+    if wbc_available and info_file_name == "mobile_base_omni_tcp":
+        world_to_map = Node(
+            package="tf2_ros", executable="static_transform_publisher", name="world_to_map",
+            arguments=["--frame-id", "world", "--child-frame-id", "map",
+                       "--x", "0", "--y", "0", "--z", "0",
+                       "--roll", "0", "--pitch", "0", "--yaw", "0"],
+            parameters=[{"use_sim_time": ctx.use_sim_time}],
+        )
+
     rviz_node = ocs2_common.build_rviz_node(
         ctx,
         rviz_config_path,
@@ -172,7 +182,7 @@ def launch_setup(context, *args, **kwargs):
         controller_stack_nodes=controller_stack_nodes,
         main_spawner=main_spawner,
         extra_spawners=hand_spawners + body_spawners + ft_spawners,
-        optional_nodes=[arms_target_manager] if arms_target_manager else [],
+        optional_nodes=[node for node in (world_to_map, arms_target_manager) if node is not None],
     )
 
 
@@ -185,6 +195,8 @@ def generate_launch_description():
             DeclareLaunchArgument("world", default_value="dart"),
             DeclareLaunchArgument("enable_arms_target_manager", default_value="true"),
             DeclareLaunchArgument("enable_gripper", default_value="true"),
+            DeclareLaunchArgument("external_chassis", default_value="false", choices=["true", "false"],
+                                  description="Use external world->base_link TF and omni cmd_vel; start chassis separately"),
             DeclareLaunchArgument(
                 "use_controller_manager_include",
                 default_value="false",
