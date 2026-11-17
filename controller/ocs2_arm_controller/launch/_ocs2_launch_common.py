@@ -89,7 +89,7 @@ def build_ocs2_control_context(context) -> Ocs2ControlContext:
             "info_file_name": "mobile_base_omni_tcp",
             "tf_topic": "/tf",
             "tf_static_topic": "/tf_static",
-            "world_frame": "world",
+            "world_frame": "odom",
             "enable_identity_world_tf": False,
             "mobile_base_pose_max_age_sec": 0.2,
             "mobile_base_tf_timeout_sec": 10.0,

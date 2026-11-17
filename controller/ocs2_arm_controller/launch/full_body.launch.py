@@ -1,6 +1,5 @@
 import os
 import sys
-import tempfile
 
 from launch import LaunchDescription
 from launch.actions import DeclareLaunchArgument, OpaqueFunction
@@ -104,14 +103,18 @@ def launch_setup(context, *args, **kwargs):
 
     _dual_arm, _control_base_frame, _auto_marker_frame = parse_task_info(task_file_path)
     if wbc_available:
-        marker_fixed_frame = "world"
+        wbc_params = ctx.config.get("ocs2_wbc_controller", {}).get("ros__parameters", {})
+        # parse_task_info marks mobile models with an inertial marker frame.
+        # Resolve that reference from the same parameter as the WBC itself.
+        marker_fixed_frame = (wbc_params.get("world_frame", "odom") if _auto_marker_frame
+                              else wbc_params.get("base_frame", _control_base_frame))
     elif _auto_marker_frame:
         marker_fixed_frame = _auto_marker_frame
     else:
         marker_fixed_frame = _control_base_frame
     print(
         f"[INFO] marker_fixed_frame={marker_fixed_frame} "
-        f"(wbc={wbc_available}, control_base_frame={_control_base_frame})"
+        f"(wbc={wbc_available}, control_base_frame={marker_fixed_frame if wbc_available else _control_base_frame})"
     )
 
     arms_target_manager = None
@@ -132,6 +135,7 @@ def launch_setup(context, *args, **kwargs):
             output="screen",
             parameters=arms_params + [
                 {"use_sim_time": ctx.use_sim_time},
+                *([{"control_base_frame": marker_fixed_frame}] if wbc_available else []),
                 # WBC MOVEJ has no IK MoveL; keep arm markers hidden (follow actual pose).
                 {"enable_movej_cartesian_markers": not wbc_available},
                 # Full-body WBC capability gate; shared YAML stays false for split_body.
@@ -140,32 +144,9 @@ def launch_setup(context, *args, **kwargs):
         )
 
     rviz_config_path = ocs2_common.resolve_rviz_config(ctx.robot_name, "fullbody.rviz")
-    if is_arm_controller_type and marker_fixed_frame:
-        try:
-            with open(rviz_config_path, "r", encoding="utf-8") as handle:
-                rviz_content = handle.read()
-            patched_content = rviz_content.replace(
-                "Fixed Frame: world", f"Fixed Frame: {marker_fixed_frame}"
-            )
-            tmp_name = f"full_body_{ctx.robot_name}_{ctx.robot_type or 'default'}_arm_fixedframe.rviz"
-            tmp_rviz_config_path = os.path.join(tempfile.gettempdir(), tmp_name)
-            with open(tmp_rviz_config_path, "w", encoding="utf-8") as handle:
-                handle.write(patched_content)
-            rviz_config_path = tmp_rviz_config_path
-            print(
-                f"[INFO] ARM type: RViz Fixed Frame={marker_fixed_frame}: {rviz_config_path}"
-            )
-        except Exception as exc:
-            print(f"[WARN] Failed to patch RViz Fixed Frame for ARM type: {exc}")
-
-    world_to_map = None
-    if wbc_available and info_file_name == "mobile_base_omni_tcp":
-        world_to_map = Node(
-            package="tf2_ros", executable="static_transform_publisher", name="world_to_map",
-            arguments=["--frame-id", "world", "--child-frame-id", "map",
-                       "--x", "0", "--y", "0", "--z", "0",
-                       "--roll", "0", "--pitch", "0", "--yaw", "0"],
-            parameters=[{"use_sim_time": ctx.use_sim_time}],
+    if marker_fixed_frame:
+        rviz_config_path = ocs2_common.patch_rviz_fixed_frame(
+            rviz_config_path, marker_fixed_frame, tag=f"full_body_{ctx.robot_name}"
         )
 
     rviz_node = ocs2_common.build_rviz_node(
@@ -182,7 +163,7 @@ def launch_setup(context, *args, **kwargs):
         controller_stack_nodes=controller_stack_nodes,
         main_spawner=main_spawner,
         extra_spawners=hand_spawners + body_spawners + ft_spawners,
-        optional_nodes=[node for node in (world_to_map, arms_target_manager) if node is not None],
+        optional_nodes=[node for node in (arms_target_manager,) if node is not None],
     )
 
 
@@ -196,7 +177,7 @@ def generate_launch_description():
             DeclareLaunchArgument("enable_arms_target_manager", default_value="true"),
             DeclareLaunchArgument("enable_gripper", default_value="true"),
             DeclareLaunchArgument("external_chassis", default_value="false", choices=["true", "false"],
-                                  description="Use external world->base_link TF and omni cmd_vel; start chassis separately"),
+                                  description="Use external odom->base_link TF and omni cmd_vel; start chassis separately"),
             DeclareLaunchArgument(
                 "use_controller_manager_include",
                 default_value="false",
