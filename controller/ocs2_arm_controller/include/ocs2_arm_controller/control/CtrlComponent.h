@@ -97,6 +97,7 @@ namespace ocs2::mobile_manipulator
             future_time_offset_ = auto_declare("future_time_offset", 1.0);
             const std::string info_file_name = auto_declare("info_file_name", std::string("task"));
             joint_names_ = node_->get_parameter("joints").as_string_array();
+            home_joint_ref_manager_.setExpectedJointNames(joint_names_);
             const std::string robot_pkg = robot_name_ + "_description";
             const std::string config_path = ament_index_cpp::get_package_share_directory(robot_pkg);
 
@@ -259,6 +260,9 @@ namespace ocs2::mobile_manipulator
         /** Exit OCS2: q_home ← home_1, enable ← activateDefault (params themselves unchanged). */
         void resetHomeJointReferenceToHome();
 
+        /** Sync URDF joint limits used to gate HOME joint soft-reference enable. */
+        void updateHomeJointReferenceLimitsFromURDF(const std::string& robot_description);
+
         // Get node reference
         std::shared_ptr<rclcpp_lifecycle::LifecycleNode> getNode() const { return node_; }
 
@@ -292,6 +296,7 @@ namespace ocs2::mobile_manipulator
         void prepareThreadIsolation();
 
         void setHomeJointReferenceJoints(const std::vector<double>& home_joints);
+        void disableHomeJointReference(const char* reason);
 
         std::shared_ptr<rclcpp_lifecycle::LifecycleNode> node_;
         CtrlInterfaces& ctrl_interfaces_;

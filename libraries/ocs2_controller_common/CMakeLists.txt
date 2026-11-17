@@ -28,6 +28,9 @@ find_package(ocs2_pinocchio_interface REQUIRED)
 find_package(ocs2_self_collision REQUIRED)
 find_package(ocs2_self_collision_visualization REQUIRED)
 find_package(ocs2_ros_interfaces REQUIRED)
+# After ocs2_*: pinocchio/urdf Boost flags from arms_controller_common must not
+# precede ocs2_core's boost_log find (debug-runtime mismatch).
+find_package(arms_controller_common REQUIRED)
 find_package(ocs2_wheel_humanoid QUIET)
 find_package(lina_planning QUIET)
 
@@ -59,6 +62,7 @@ target_link_libraries(${PROJECT_NAME} PUBLIC
     ${tf2_msgs_TARGETS}
     ${tf2_geometry_msgs_TARGETS}
     ${arms_ros2_control_msgs_TARGETS}
+    ${arms_controller_common_TARGETS}
     ${ocs2_core_TARGETS}
     ${ocs2_oc_TARGETS}
     ${ocs2_mpc_TARGETS}
@@ -107,6 +111,7 @@ ament_export_dependencies(
     tf2_ros
     tf2_geometry_msgs
     arms_ros2_control_msgs
+    arms_controller_common
     ocs2_core
     ocs2_oc
     ocs2_mpc

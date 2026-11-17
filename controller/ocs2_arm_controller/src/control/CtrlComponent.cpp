@@ -159,25 +159,41 @@ namespace ocs2::mobile_manipulator
                             param.as_bool() ? "true" : "false");
             }
         }
-        if (home_joint_ref_manager_.handleParameterUpdates(node_, parameters))
+        const auto home_ref_update =
+            home_joint_ref_manager_.handleParameterUpdates(node_, parameters);
+        if (home_ref_update.rejected)
+        {
+            result.successful = false;
+            result.reason = home_ref_update.reason;
+        }
+        else if (home_ref_update.touched)
         {
             // Already in OCS2: push q_home immediately. Outside OCS2 MPC is stopped (harmless).
-            // Do not touch enable here — WBC may have toggled HOME_JOINT_OFF mid-session.
+            // Keep enable only when the new vector is valid; invalid home forces disable.
             const auto& session = home_joint_ref_manager_.sessionJoints();
             if (interface_ && interface_->hasHomeJointReference() && !session.empty())
             {
-                try
+                if (!home_joint_ref_manager_.validateAgainstJointLimits(
+                        session, joint_names_, node_->get_logger()))
                 {
-                    interface_->setHomeJointReferenceFromArmJoints(session);
-                    RCLCPP_INFO(node_->get_logger(),
-                                "HOME joint reference applied live from %s (%zu joints)",
-                                home_joint_ref_manager_.sourceDescription().c_str(),
-                                session.size());
+                    disableHomeJointReference(
+                        "live home_joint_reference update exceeds joint limits");
                 }
-                catch (const std::exception& e)
+                else
                 {
-                    RCLCPP_WARN(node_->get_logger(),
-                                "Failed to apply HOME joint reference live: %s", e.what());
+                    try
+                    {
+                        interface_->setHomeJointReferenceFromArmJoints(session);
+                        RCLCPP_INFO(node_->get_logger(),
+                                    "HOME joint reference applied live from %s (%zu joints)",
+                                    home_joint_ref_manager_.sourceDescription().c_str(),
+                                    session.size());
+                    }
+                    catch (const std::exception& e)
+                    {
+                        RCLCPP_WARN(node_->get_logger(),
+                                    "Failed to apply HOME joint reference live: %s", e.what());
+                    }
                 }
             }
         }
@@ -773,10 +789,40 @@ namespace ocs2::mobile_manipulator
         }
     }
 
+    void CtrlComponent::updateHomeJointReferenceLimitsFromURDF(
+        const std::string& robot_description)
+    {
+        home_joint_ref_manager_.updateJointLimitsFromURDF(
+            robot_description, joint_names_, node_->get_logger());
+        // Init may run before robot_description; re-apply once limits are ready.
+        if (interface_ && interface_->hasHomeJointReference())
+        {
+            applyConfiguredHomeJointReference();
+        }
+    }
+
+    void CtrlComponent::disableHomeJointReference(const char* reason)
+    {
+        if (!interface_ || !interface_->hasHomeJointReference())
+        {
+            return;
+        }
+        interface_->setHomeJointReferenceEnabled(false);
+        RCLCPP_ERROR(node_->get_logger(),
+                     "HOME joint reference disabled: %s",
+                     reason != nullptr ? reason : "invalid home");
+    }
+
     void CtrlComponent::setHomeJointReferenceJoints(const std::vector<double>& home_joints)
     {
         if (!interface_ || home_joints.empty())
         {
+            return;
+        }
+        if (!home_joint_ref_manager_.validateAgainstJointLimits(
+                home_joints, joint_names_, node_->get_logger()))
+        {
+            disableHomeJointReference("configured home exceeds joint limits");
             return;
         }
         try
@@ -824,10 +870,14 @@ namespace ocs2::mobile_manipulator
             return;
         }
         const auto& home_1 = home_joint_ref_manager_.home1Joints();
-        if (!home_1.empty())
+        if (home_1.empty() ||
+            !home_joint_ref_manager_.validateAgainstJointLimits(
+                home_1, joint_names_, node_->get_logger()))
         {
-            interface_->setHomeJointReferenceFromArmJoints(home_1);
+            disableHomeJointReference("home_1 exceeds joint limits on reset");
+            return;
         }
+        interface_->setHomeJointReferenceFromArmJoints(home_1);
         interface_->setHomeJointReferenceEnabled(interface_->homeJointReferenceDefaultEnabled());
         RCLCPP_INFO(node_->get_logger(),
                     "HOME joint reference reset to home_1 (%zu joints), enabled=%s",

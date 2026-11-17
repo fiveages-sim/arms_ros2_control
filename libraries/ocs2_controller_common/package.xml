@@ -19,6 +19,7 @@
   <depend>tf2_msgs</depend>
   <depend>tf2_geometry_msgs</depend>
   <depend>arms_ros2_control_msgs</depend>
+  <depend>arms_controller_common</depend>
   <depend>ocs2_mobile_manipulator_ros</depend>
   <depend>ocs2_ros_interfaces</depend>
   <depend>lina_planning</depend>

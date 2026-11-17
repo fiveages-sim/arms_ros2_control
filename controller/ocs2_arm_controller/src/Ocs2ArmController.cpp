@@ -354,6 +354,10 @@ namespace ocs2::mobile_manipulator
             {
                 state_list_.home->updateJointLimitsFromURDF(msg->data, joint_names_);
                 state_list_.movej->updateJointLimitsFromURDF(msg->data);
+                if (ctrl_comp_)
+                {
+                    ctrl_comp_->updateHomeJointReferenceLimitsFromURDF(msg->data);
+                }
             });
         state_list_.movej->setupJointTrajectoryAction("joint_trajectory_with_para");
         state_list_.movej->setupLinearTrajectoryAction("execute_linear");

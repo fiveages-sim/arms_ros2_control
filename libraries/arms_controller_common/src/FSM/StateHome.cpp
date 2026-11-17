@@ -68,33 +68,7 @@ namespace arms_controller_common
             RCLCPP_ERROR(node_->get_logger(), "HOME target rejected: joint limits are not ready");
             return false;
         }
-        for (size_t i = 0; i < count; ++i)
-        {
-            const auto& name = joint_names_[i];
-            const auto limits = joint_limits_->getJointLimits(name);
-            if (!std::isfinite(target[i]))
-            {
-                RCLCPP_ERROR(node_->get_logger(), "HOME target rejected: %s is not finite", name.c_str());
-                return false;
-            }
-            if (limits.motion_type == JointMotionType::CONTINUOUS)
-                continue;
-            if (!limits.initialized || !std::isfinite(limits.lower) ||
-                !std::isfinite(limits.upper) || limits.lower > limits.upper)
-            {
-                RCLCPP_ERROR(node_->get_logger(),
-                             "HOME target rejected: %s has no valid position limits", name.c_str());
-                return false;
-            }
-            if (target[i] < limits.lower || target[i] > limits.upper)
-            {
-                RCLCPP_ERROR(node_->get_logger(),
-                             "HOME target rejected: %s target %.9f outside [%.9f, %.9f]",
-                             name.c_str(), target[i], limits.lower, limits.upper);
-                return false;
-            }
-        }
-        return true;
+        return joint_limits_->validatePositions(joint_names_, target, "HOME target");
     }
 
     void StateHome::setHomeConfigurations(const std::vector<std::vector<double>>& home_configs)
