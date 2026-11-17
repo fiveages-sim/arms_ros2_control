@@ -90,8 +90,8 @@ Package-specific parameters:
 | Parameter | Default | When | Notes |
 |---|---|---|---|
 | `home_1` … `home_N` | — | Startup only | FSM HOME targets (require at least `home_1`). Loaded by `StateHome::init()`. |
-| `home_joint_reference` | (empty) | Runtime | Explicit soft HOME joint vector (same order as `joints`). Highest priority when non-empty. Param change applies live if already in OCS2; otherwise on next enter. On exit `q_home` resets to `home_1` (param unchanged). Requires `.info` `homeJointReference.activate=true`. No ON/OFF toggle (unlike WBC). |
-| `home_joint_reference_id` | `0` | Runtime | 1-based home index (`2` → `home_2`). Used when vector is empty; `0` → `home_1`. Param change applies live in OCS2 / on next enter from HOLD. |
+| `home_joint_reference` | (empty) | Runtime | Explicit soft HOME joint vector (same order as `joints`). Highest priority when non-empty. Param change applies live if already in OCS2; otherwise on next enter. On exit `q_home` resets to `home_1` (param unchanged). Requires `.info` `homeJointReference.activate=true`. Values outside URDF joint limits are rejected and the constraint stays disabled. No ON/OFF toggle (unlike WBC). |
+| `home_joint_reference_id` | `0` | Runtime | 1-based home index (`2` → `home_2`). Used when vector is empty; `0` → `home_1`. Param change applies live in OCS2 / on next enter from HOLD. Selected `home_N` must also pass joint-limit checks or the reference is not enabled. |
 | `robot_name` | `"cr5"` | Startup only | OCS2 files come from `{robot_name}_description` (there is no `robot_pkg` parameter) |
 | `default_gains` | (empty) | Startup only | HOME / HOLD impedance `[kp, kd]` when MIX interfaces are present |
 | `pd_gains` | (empty) | Startup only | OCS2-state impedance `[kp, kd]` |

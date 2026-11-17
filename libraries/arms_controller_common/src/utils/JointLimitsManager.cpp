@@ -131,6 +131,58 @@ namespace arms_controller_common
         return getJointMotionType(joint_name) == JointMotionType::PRISMATIC;
     }
 
+    bool JointLimitsManager::validatePositions(
+        const std::vector<std::string>& joint_names,
+        const std::vector<double>& positions,
+        const std::string& context) const
+    {
+        const std::string label = context.empty() ? "joint target" : context;
+        if (joint_names.empty())
+        {
+            RCLCPP_ERROR(logger_, "%s rejected: joint name list is empty", label.c_str());
+            return false;
+        }
+        if (positions.size() != joint_names.size())
+        {
+            RCLCPP_ERROR(logger_,
+                         "%s rejected: got %zu positions, expected %zu",
+                         label.c_str(), positions.size(), joint_names.size());
+            return false;
+        }
+
+        for (size_t i = 0; i < joint_names.size(); ++i)
+        {
+            const auto& name = joint_names[i];
+            const auto limits = getJointLimits(name);
+            if (!std::isfinite(positions[i]))
+            {
+                RCLCPP_ERROR(logger_, "%s rejected: %s is not finite", label.c_str(), name.c_str());
+                return false;
+            }
+            if (limits.motion_type == JointMotionType::CONTINUOUS)
+            {
+                continue;
+            }
+            if (!limits.initialized || !std::isfinite(limits.lower) ||
+                !std::isfinite(limits.upper) || limits.lower > limits.upper)
+            {
+                RCLCPP_ERROR(logger_,
+                             "%s rejected: %s has no valid position limits",
+                             label.c_str(), name.c_str());
+                return false;
+            }
+            if (positions[i] < limits.lower || positions[i] > limits.upper)
+            {
+                RCLCPP_ERROR(logger_,
+                             "%s rejected: %s target %.9f outside [%.9f, %.9f]",
+                             label.c_str(), name.c_str(), positions[i],
+                             limits.lower, limits.upper);
+                return false;
+            }
+        }
+        return true;
+    }
+
     std::vector<double> JointLimitsManager::applyLimits(
         const std::vector<std::string>& joint_names,
         const std::vector<double>& target_positions) const

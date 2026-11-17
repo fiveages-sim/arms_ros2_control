@@ -117,6 +117,20 @@ namespace arms_controller_common
         bool isPrismaticJoint(const std::string& joint_name) const;
 
         /**
+         * @brief Reject positions outside URDF limits (no clamping)
+         *
+         * Continuous joints are skipped. Non-finite values and missing/invalid
+         * limits for non-continuous joints cause rejection. @p joint_names and
+         * @p positions must be the same size.
+         *
+         * @param context Short label embedded in ERROR logs (e.g. "HOME joint reference")
+         * @return true if every joint passes
+         */
+        bool validatePositions(const std::vector<std::string>& joint_names,
+                               const std::vector<double>& positions,
+                               const std::string& context) const;
+
+        /**
          * @brief Apply joint limits to target positions (clamp values)
          * 
          * Clamps each position value to its joint limits if limits are initialized.
