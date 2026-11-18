@@ -170,6 +170,12 @@ namespace arms_ros2_control::command
 
         void wbcStateCallback(const arms_ros2_control_msgs::msg::WbcCurrentState::SharedPtr msg);
 
+        /**
+         * 转发某条通道的实测位姿消息（复用 marker 已有的订阅，不重复建订阅）。
+         *
+         * @param armType "left" / "right" / "body"
+         * @param callback 收到 `*_current_pose` 时被调用
+         */
         void setCurrentPoseCallback(
             const std::string& armType,
             std::function<void(const geometry_msgs::msg::PoseStamped::ConstSharedPtr&)> callback);
