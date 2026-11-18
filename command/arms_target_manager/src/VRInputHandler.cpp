@@ -1210,6 +1210,30 @@ namespace arms_ros2_control::command
         has_robot_current_right_pose_.store(true);
     }
 
+    void VRInputHandler::robotBodyPoseCallback(
+        geometry_msgs::msg::PoseStamped::ConstSharedPtr msg)
+    {
+        // 只作为全身接管渐入的锚点，不参与映射计算：
+        // 无效时把有效标志清掉，让渐入退回「1 s 内最后下发的目标」。
+        if (!msg)
+        {
+            has_robot_body_pose_ = false;
+            return;
+        }
+        const auto& p = msg->pose.position;
+        const auto& q = msg->pose.orientation;
+        const Eigen::Quaterniond orientation(q.w, q.x, q.y, q.z);
+        if (msg->header.frame_id.empty() ||
+            !Eigen::Vector3d(p.x, p.y, p.z).allFinite() ||
+            !orientation.coeffs().allFinite() || orientation.norm() < 1e-9)
+        {
+            has_robot_body_pose_ = false;
+            return;
+        }
+        robot_body_pose_ = *msg;
+        has_robot_body_pose_ = true;
+    }
+
     void VRInputHandler::vrHeadCallback(const geometry_msgs::msg::Pose::SharedPtr msg)
     {
         // 全身模式的头部由骨架 /teleop/body_head_pose 驱动，头显不参与
@@ -5285,7 +5309,16 @@ namespace arms_ros2_control::command
         // 目标来源切换，清掉冻结追赶斜坡，避免切换瞬间跳变
         resetStaleCatchUpRamp();
 
-        // 接管渐入：以机器人当前保持的位姿为锚点，按速度约束过渡到实时骨架期望位姿。
+        // 目标汇聚层仍缓存着上一轮（普通模式 / 上次跟踪）实际发出的位姿，且会在
+        // 「控制权换手」时从它按 handover_ramp 平滑过渡。那个位姿已经不代表机器人
+        // 当前状态（带底盘时可能已被 OCS2 / 导航带走），直接沿用会让第一帧目标
+        // 从别处出发。这里清掉缓存，起点统一交给下面的渐入锚点（实测位姿）。
+        if (target_manager_ && target_manager_->router())
+        {
+            target_manager_->router()->invalidate();
+        }
+
+        // 接管渐入：以机器人当前实测位姿为锚点，按速度约束过渡到实时骨架期望位姿。
         armAbsoluteRamps();
 
         RCLCPP_INFO(
@@ -6001,6 +6034,11 @@ namespace arms_ros2_control::command
 
         settle_pending_ = false;
         absolute_maps_captured_ = true;
+
+        // 标定结束、真正开始下发的那一刻再取一次锚点：等待骨架稳定的窗口内机器人
+        // 可能已经移动（带底盘时尤其明显），用按下瞬间的位姿起手会留下一段旧误差。
+        armAbsoluteRamps();
+
         const Eigen::Vector3d human_to_robot_offset = humanToRobotOffsetInH();
         RCLCPP_INFO(
             node_->get_logger(),
@@ -6028,7 +6066,7 @@ namespace arms_ros2_control::command
         return true;
     }
 
-    void VRInputHandler::armAbsoluteRamps()
+    void VRInputHandler::armAbsoluteRamps(bool anchor_at_measured_pose)
     {
         if (!absolute_options_.pose_ramp_enable)
         {
@@ -6037,22 +6075,63 @@ namespace arms_ros2_control::command
         }
 
         const auto now = std::chrono::steady_clock::now();
-        // 锚点新鲜度：超过该时长的「最后下发值」可能已被 RViz marker / control_input
-        // 改写过，不再代表控制器当前保持的目标，此时退回实测位姿更安全。
+        // 锚点语义：必须是「机器人当前状态」。最后下发的目标只是「本节点曾经的意图」，
+        // 带底盘时它可能已被 OCS2 / 导航挪走、被 RViz marker 拖过、或位于世界系的另一个
+        // 位置；拿它当渐入起点，按下开始跟踪时就会看到目标点从别处飞向手柄位姿。
+        // 因此开始跟踪时一律先用实测位姿（*_current_pose），实测不可用时才退回 1 s 内的
+        // 最后下发值；底盘锁定/解锁切换（anchor_at_measured_pose=false）仍以最后下发值
+        // 优先，保证切换瞬间目标严格连续、不因跟踪误差回抽。
         constexpr double kAnchorMaxAgeSec = 1.0;
         const auto isFresh = [&now](const std::chrono::steady_clock::time_point& stamp)
         {
             return stamp != std::chrono::steady_clock::time_point{} &&
                    std::chrono::duration<double>(now - stamp).count() <= kAnchorMaxAgeSec;
         };
-
-        // ---- 双臂：优先最后下发的 command target，其次实测末端位姿 ----
-        const auto arm_anchor = [&](bool is_left) -> std::optional<LastArmTarget>
+        // 取最后下发值；不可用/过期时返回 false。
+        const auto fresh_last_arm = [&](bool is_left) -> std::optional<LastArmTarget>
         {
             const LastArmTarget last = lastArmTarget(is_left);
             if (last.valid && isFresh(last.stamp))
             {
                 return last;
+            }
+            return std::nullopt;
+        };
+
+        const std::string target_frame = controlFrame();
+        // 锚点可能来自实测话题（自带 frame_id）或本节点缓存（目标表达系），
+        // 布置渐入前统一换算到目标表达系，避免带底盘时两套坐标系混用。
+        const auto ramp_from = [&](arms_controller_common::PoseRamp& ramp,
+                                   const Eigen::Vector3d& position,
+                                   const Eigen::Quaterniond& orientation,
+                                   const std::string& frame_id,
+                                   const char* task) -> bool
+        {
+            if (frame_id.empty() || frame_id == target_frame)
+            {
+                ramp.armFrom(position, orientation);
+                return true;
+            }
+            Eigen::Vector3d transformed_position;
+            Eigen::Quaterniond transformed_orientation;
+            if (!transformPose(task, frame_id, target_frame, position, orientation,
+                               transformed_position, transformed_orientation))
+            {
+                return false;
+            }
+            ramp.armFrom(transformed_position, transformed_orientation);
+            return true;
+        };
+
+        // ---- 双臂：开始跟踪时优先实测末端位姿，其次最后下发的 command target ----
+        const auto arm_anchor = [&](bool is_left) -> std::optional<LastArmTarget>
+        {
+            if (!anchor_at_measured_pose)
+            {
+                if (const auto last = fresh_last_arm(is_left))
+                {
+                    return last;
+                }
             }
             Eigen::Vector3d position;
             Eigen::Quaterniond orientation;
@@ -6065,83 +6144,98 @@ namespace arms_ros2_control::command
                 measured.stamp = now;
                 return measured;
             }
-            return std::nullopt;
+            return fresh_last_arm(is_left);
         };
 
-        const auto left_anchor = arm_anchor(true);
-        if (left_anchor)
+        bool left_armed = false;
+        if (const auto anchor = arm_anchor(true))
         {
-            left_arm_ramp_.armFrom(left_anchor->position, left_anchor->orientation);
+            left_armed = ramp_from(
+                left_arm_ramp_, anchor->position, anchor->orientation,
+                ee_frame_id_, "left");
         }
-        else
+        if (!left_armed)
         {
             left_arm_ramp_.reset();
         }
 
-        const auto right_anchor = arm_anchor(false);
-        if (right_anchor)
+        bool right_armed = false;
+        if (const auto anchor = arm_anchor(false))
         {
-            right_arm_ramp_.armFrom(right_anchor->position, right_anchor->orientation);
+            right_armed = ramp_from(
+                right_arm_ramp_, anchor->position, anchor->orientation,
+                ee_frame_id_, "right");
         }
-        else
+        if (!right_armed)
         {
             right_arm_ramp_.reset();
         }
 
-        // ---- 胸部：本节点最后一次实际下发的值（与目标表达系 controlFrame() 一致）----
-        if (has_last_body_target_ && isFresh(last_body_target_stamp_))
+        // ---- 胸部：开始跟踪时优先实测胸部位姿（body_current_pose），其次最后下发的目标 ----
+        const bool has_fresh_body_target =
+            has_last_body_target_ && isFresh(last_body_target_stamp_);
+        const auto last_body_ramp = [&]() -> bool
         {
-            body_ramp_.armFrom(
-                last_body_target_position_, last_body_target_orientation_);
+            if (!has_fresh_body_target)
+            {
+                return false;
+            }
+            // 最后下发值本来就与目标表达系一致
+            return ramp_from(
+                body_ramp_, last_body_target_position_, last_body_target_orientation_,
+                target_frame, "body");
+        };
+        bool body_armed = !anchor_at_measured_pose && last_body_ramp();
+        Eigen::Vector3d body_position;
+        Eigen::Quaterniond body_orientation;
+        std::string body_frame_id;
+        if (!body_armed && robotBodyPose(body_position, body_orientation, body_frame_id))
+        {
+            body_armed = ramp_from(
+                body_ramp_, body_position, body_orientation, body_frame_id, "body");
         }
-        else
+        if (!body_armed)
+        {
+            body_armed = last_body_ramp();
+        }
+        if (!body_armed)
         {
             body_ramp_.reset();
         }
 
-        // ---- 头部：最后一次下发的目标（可能来自普通模式的另一个 frame），
-        //      先转到目标表达系；不可用则退回实测头部位姿 ----
-        const std::string target_frame = controlFrame();
-        bool head_armed = false;
-        const auto arm_head_from = [&](const Eigen::Vector3d& position,
-                                       const Eigen::Quaterniond& orientation,
-                                       const std::string& frame_id)
+        // ---- 头部：开始跟踪时优先实测头部位姿，其次最后一次下发的目标
+        //      （两者都可能来自普通模式的另一个 frame，先转到目标表达系） ----
+        const bool has_fresh_head_target =
+            wb_last_head_target_ && isFresh(wb_last_head_target_stamp_);
+        const auto last_head_ramp = [&]() -> bool
         {
-            if (frame_id == target_frame)
+            if (!has_fresh_head_target)
             {
-                head_ramp_.armFrom(position, orientation);
-                head_armed = true;
-                return;
+                return false;
             }
-            Eigen::Vector3d transformed_position;
-            Eigen::Quaterniond transformed_orientation;
-            if (transformPose(
-                    "head", frame_id, target_frame, position, orientation,
-                    transformed_position, transformed_orientation))
-            {
-                head_ramp_.armFrom(transformed_position, transformed_orientation);
-                head_armed = true;
-            }
-        };
-
-        if (wb_last_head_target_ && isFresh(wb_last_head_target_stamp_))
-        {
             const auto& p = wb_last_head_target_->pose.position;
             const auto& q = wb_last_head_target_->pose.orientation;
-            arm_head_from(
+            return ramp_from(
+                head_ramp_,
                 Eigen::Vector3d(p.x, p.y, p.z),
                 Eigen::Quaterniond(q.w, q.x, q.y, q.z),
-                wb_last_head_target_->header.frame_id);
-        }
+                wb_last_head_target_->header.frame_id, "head");
+        };
+        bool head_armed = !anchor_at_measured_pose && last_head_ramp();
         geometry_msgs::msg::PoseStamped robot_head;
         if (!head_armed && robotHeadPose(robot_head))
         {
             const auto& p = robot_head.pose.position;
             const auto& q = robot_head.pose.orientation;
-            arm_head_from(
+            head_armed = ramp_from(
+                head_ramp_,
                 Eigen::Vector3d(p.x, p.y, p.z),
                 Eigen::Quaterniond(q.w, q.x, q.y, q.z),
-                robot_head.header.frame_id);
+                robot_head.header.frame_id, "head");
+        }
+        if (!head_armed)
+        {
+            head_armed = last_head_ramp();
         }
         if (!head_armed)
         {
@@ -6150,8 +6244,11 @@ namespace arms_ros2_control::command
 
         RCLCPP_INFO(
             node_->get_logger(),
-            "🕹️🦴 [case 4] 接管渐入已布置：lin=%.2f m/s, ang=%.2f rad/s, "
+            "🕹️🦴 [case 4] 接管渐入已布置（锚点=%s）：lin=%.2f m/s, ang=%.2f rad/s, "
             "臂(L/R)=%s/%s, 胸=%s, 头=%s（未布置的任务直接跟踪）",
+            anchor_at_measured_pose
+                ? "机器人当前实测位姿（实测不可用时退回 1 s 内最后下发目标）"
+                : "最后下发目标（底盘锁定/解锁切换，保持连续）",
             absolute_options_.pose_ramp_max_linear_velocity,
             absolute_options_.pose_ramp_max_angular_velocity,
             left_arm_ramp_.ramping() ? "on" : "off",
@@ -6300,7 +6397,8 @@ namespace arms_ros2_control::command
         }
         // 底盘锁定状态变化后，目标语义从「相对底盘」切到「世界系锚定」（或反过来），
         // 重新从最后一次实际下发的目标开始按速度约束过渡，避免直接跳变。
-        armAbsoluteRamps();
+        // 这里刻意不用实测位姿：切换瞬间目标本身是连续的，用实测会把跟踪误差回抽成一段倒退。
+        armAbsoluteRamps(/*anchor_at_measured_pose=*/false);
     }
 
 
@@ -6692,6 +6790,23 @@ namespace arms_ros2_control::command
         }
         pose = robot_head_pose_;
         return true;
+    }
+
+    bool VRInputHandler::robotBodyPose(
+        Eigen::Vector3d& position,
+        Eigen::Quaterniond& orientation,
+        std::string& frame_id) const
+    {
+        if (!has_robot_body_pose_)
+        {
+            return false;
+        }
+        const auto& p = robot_body_pose_.pose.position;
+        const auto& q = robot_body_pose_.pose.orientation;
+        position = Eigen::Vector3d(p.x, p.y, p.z);
+        orientation = Eigen::Quaterniond(q.w, q.x, q.y, q.z).normalized();
+        frame_id = robot_body_pose_.header.frame_id;
+        return position.allFinite() && orientation.coeffs().allFinite();
     }
 
     void VRInputHandler::detectControlTopology()

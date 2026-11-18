@@ -1521,6 +1521,12 @@ namespace arms_ros2_control::command
         {
             right_arm_marker_->setCurrentPoseCallback(callback);
         }
+        else if (armType == "body" && body_marker_)
+        {
+            // 胸部实测位姿（body_current_pose）由 BodyMarker 统一订阅，
+            // 这里只转发给需要它的人（全身接管渐入取锚点）。
+            body_marker_->setCurrentPoseCallback(callback);
+        }
     }
 
     void ArmsTargetManager::setWbcStateCallback(

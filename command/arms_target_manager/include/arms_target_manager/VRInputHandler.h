@@ -111,8 +111,9 @@ namespace arms_ros2_control::command
         double geometry_tolerance{0.2};
 
         // ---- 接管渐入（仅「开启跟踪」与「数据恢复」的过渡段） ----
-        // 全新开启「全部跟踪」时，目标位姿从机器人当前保持的位姿按速度约束缓慢过渡到
+        // 全新开启「全部跟踪」时，目标位姿从机器人【当前实测位姿】按速度约束缓慢过渡到
         // 实时 VR 期望位姿；过渡结束后恢复直通，不影响稳态跟随手感。
+        // 不能用上一次下发的目标做起点：带底盘时它可能已离开机器人。
         bool pose_ramp_enable{true};
         double pose_ramp_max_linear_velocity{0.15};   // [m/s]
         double pose_ramp_max_angular_velocity{0.4};   // [rad/s]
@@ -266,6 +267,15 @@ namespace arms_ros2_control::command
          * @param msg 机器人pose消息
          */
         void robotRightPoseCallback(geometry_msgs::msg::PoseStamped::SharedPtr msg);
+
+        /**
+         * 机器人胸部当前pose回调函数
+         *
+         * 由外部统一订阅（BodyMarker 已订阅 `body_current_pose`）后转发，避免重复订阅。
+         * 全身模式的接管渐入需要「机器人现在在哪」，而不能用本节点上一次下发过的目标。
+         * @param msg 机器人胸部位姿消息（frame_id 为控制器基准系）
+         */
+        void robotBodyPoseCallback(geometry_msgs::msg::PoseStamped::ConstSharedPtr msg);
 
         void wbcStateCallback(
             arms_ros2_control_msgs::msg::WbcCurrentState::ConstSharedPtr msg);
@@ -444,6 +454,16 @@ namespace arms_ros2_control::command
                               Eigen::Vector3d& position,
                               Eigen::Quaterniond& orientation) const;
         bool robotHeadPose(geometry_msgs::msg::PoseStamped& pose) const;
+        /**
+         * 机器人胸部的实测位姿（`body_current_pose`），用于接管渐入取锚点。
+         * @param[out] position 位置
+         * @param[out] orientation 姿态
+         * @param[out] frame_id 表达该位姿的坐标系
+         * @return false 表示还没有收到过有效数据
+         */
+        bool robotBodyPose(Eigen::Vector3d& position,
+                           Eigen::Quaterniond& orientation,
+                           std::string& frame_id) const;
 
         void handleGripActiveEdge(bool isLeft, bool pressed);
         void applyGripShortPress(bool isLeft);
@@ -809,6 +829,9 @@ namespace arms_ros2_control::command
         // 注：head_target 由 TargetRouter 统一发布，本类不再持有发布器。
         geometry_msgs::msg::PoseStamped robot_head_pose_;
         bool has_robot_head_pose_{false};
+        // 胸腔实测位姿（body_current_pose）：全身接管渐入的锚点来源之一
+        geometry_msgs::msg::PoseStamped robot_body_pose_;
+        bool has_robot_body_pose_{false};
         bool has_vr_head_pose_{false};
         bool head_tracking_active_{false};
         Eigen::Vector3d vr_head_base_position_ = Eigen::Vector3d::Zero();
@@ -1131,7 +1154,17 @@ namespace arms_ros2_control::command
         bool skeletonJointFresh(const std::chrono::steady_clock::time_point& stamp) const;
         bool geometryToleranceOk(bool is_left, const Eigen::Vector3d& hand_position) const;
         static Eigen::Quaterniond dropRoll(const Eigen::Quaterniond& q);
-        void armAbsoluteRamps();
+
+        /**
+         * 布置四条接管渐入（左/右臂、胸、头）的起点。
+         *
+         * @param anchor_at_measured_pose
+         *        true（默认，用于「开始跟踪」）：起点取机器人**当前实测位姿**，
+         *              实测不可用时退回 1 s 内最后下发的目标；
+         *        false（用于底盘锁定/解锁切换）：优先沿用最后下发的目标，
+         *              保证切换瞬间目标严格连续。
+         */
+        void armAbsoluteRamps(bool anchor_at_measured_pose = true);
         void resetAbsoluteRamps();
 
         // ---- 全身：坐标系与锚定 ----

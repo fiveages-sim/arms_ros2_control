@@ -366,6 +366,17 @@ int main(int argc, char** argv)
                         }
                     });
             }
+
+            // 胸部 current_pose 回调：全身「全部跟踪」的接管渐入以实测位姿为锚点，
+            // 避免带底盘时从上一轮残留在世界系的目标点飞过来。
+            target_manager->setCurrentPoseCallback("body",
+                [vr_handler_ptr = vr_handler.get()](const geometry_msgs::msg::PoseStamped::ConstSharedPtr& msg)
+                {
+                    if (vr_handler_ptr)
+                    {
+                        vr_handler_ptr->robotBodyPoseCallback(msg);
+                    }
+                });
         }
 
         RCLCPP_INFO(node->get_logger(), "ArmsTargetManager is ready!");
