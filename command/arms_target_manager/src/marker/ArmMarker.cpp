@@ -1,7 +1,14 @@
 //
-// ArmMarker - 机械臂 Marker 管理类实现
+// ArmMarker 实现。
 //
-
+// 关键点：
+//   * current_pose 订阅用于“显示跟随实测位姿”，带 30 Hz 节流；
+//   * current_target 的订阅与冷却机制已移除，回显统一在 core/PoseTargetSink；
+//   * 拖动位姿换算失败时保留原值并打限频 WARN，不抛异常。
+//
+// 注意：
+//   本文件不发布目标；目标下发统一走 TargetRouter。
+//
 #include "arms_target_manager/marker/ArmMarker.h"
 #include "arms_target_manager/MarkerFactory.h"
 #include <rclcpp/rclcpp.hpp>
@@ -65,76 +72,22 @@ namespace arms_ros2_control::command
                 updateFromTopic(msg);
             });
 
-        // 创建当前目标订阅器（用于获取 frame_id 和更新 marker 位置）
-        std::string current_target_topic = arm_type == ArmType::LEFT ? "left_current_target" : "right_current_target";
-        current_target_subscription_ = node_->create_subscription<geometry_msgs::msg::PoseStamped>(
-            current_target_topic, 10,
-            [this](const geometry_msgs::msg::PoseStamped::ConstSharedPtr msg)
-            {
-                // 更新 frame_id
-                current_target_frame_id_ = msg->header.frame_id;
-                latest_current_target_pose_ = *msg;
-                has_latest_current_target_pose_ = true;
-
-                // 获取消息的 frame_id
-                std::string source_frame_id = msg->header.frame_id;
-                
-                // 如果 frame_id 为空，跳过更新
-                if (source_frame_id.empty())
-                {
-                    return;
-                }
-
-                // 冷却机制检查：只有当超过1秒不是由marker这边发送的指令，才允许topic的数据来更新marker位置
-                auto now = node_->now();
-                if (last_marker_command_time_.seconds() > 0)  // 如果曾经发送过指令
-                {
-                    auto time_since_last_command = (now - last_marker_command_time_).seconds();
-                    if (time_since_last_command < 1.0)  // 如果距离上次marker发送指令不足1秒，跳过更新
-                    {
-                        return;
-                    }
-                }
-
-                // 转换 pose 到 marker 的坐标系（frame_id_）
-                geometry_msgs::msg::Pose transformed_pose = transformPose(
-                    msg->pose, source_frame_id, frame_id_);
-
-                // 更新内部 pose 存储
-                pose_ = transformed_pose;
-
-                // 调用更新回调，通知外部更新可视化
-                if (update_callback_)
-                {
-                    update_callback_(getMarkerName(), pose_);
-                }
-            });
+        // 目标回显与发布统一由 TargetRouter 负责，marker 只保留显示与 current_pose 跟随。
     }
 
+    /**
+     * @brief 用控制器回传的目标刷新 marker 显示
+     * @return true 表示已刷新
+     */
     bool ArmMarker::refreshFromLatestCurrentTarget()
     {
-        if (!has_latest_current_target_pose_)
-        {
-            return false;
-        }
-
-        const std::string& source_frame_id = latest_current_target_pose_.header.frame_id;
-        if (source_frame_id.empty())
-        {
-            return false;
-        }
-
-        geometry_msgs::msg::Pose transformed_pose = transformPose(
-            latest_current_target_pose_.pose, source_frame_id, frame_id_);
-        pose_ = transformed_pose;
-
-        if (update_callback_)
-        {
-            update_callback_(getMarkerName(), pose_);
-        }
-        return true;
+        return false;
     }
 
+    /**
+     * @brief 用实测位姿刷新 marker 显示
+     * @return true 表示已刷新
+     */
     bool ArmMarker::refreshFromLatestCurrentPose()
     {
         if (!has_latest_current_pose_)
@@ -164,6 +117,9 @@ namespace arms_ros2_control::command
         last_marker_command_time_ = rclcpp::Time(0, 0, node_->get_clock()->get_clock_type());
     }
 
+    /**
+     * @brief 生成手臂交互 marker
+     */
     visualization_msgs::msg::InteractiveMarker ArmMarker::createMarker(
         const std::string& name,
         MarkerState mode,
@@ -173,6 +129,9 @@ namespace arms_ros2_control::command
             name, getDescription(), pose_, getColor(), mode, enable_interaction);
     }
 
+    /**
+     * @brief 把 RViz 拖动事件换算到 marker 显示坐标系
+     */
     geometry_msgs::msg::Pose ArmMarker::handleFeedback(
         const visualization_msgs::msg::InteractiveMarkerFeedback::ConstSharedPtr& feedback,
         const std::string& source_frame_id) const
@@ -229,6 +188,11 @@ namespace arms_ros2_control::command
         current_pose_callback_ = std::move(callback);
     }
 
+    /**
+     * @brief 把当前 marker 位姿下发到目标话题
+     *
+     * force=true 忽略节流立即发送；use_stamped=true 发带时间戳的版本（控制器会插值）。
+     */
     bool ArmMarker::publishTargetPose(bool force, bool use_stamped)
     {
         // 如果是单次发布且使用 stamped，发布到 left_target/stamped

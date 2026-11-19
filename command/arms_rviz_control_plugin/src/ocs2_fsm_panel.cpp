@@ -17,7 +17,6 @@
 #include <functional>
 #include <memory>
 #include <utility>
-#include <arms_controller_common/utils/FSMStateTransitionValidator.h>
 
 namespace arms_rviz_control_plugin
 {
@@ -406,14 +405,15 @@ namespace arms_rviz_control_plugin
             }
         }
 
-        // Create FSM command publisher
+        // 话题全部使用相对名：多机器人部署时靠节点命名空间隔离
+        // （/robot_a/fsm_command 与 /robot_b/fsm_command）。
         fsm_command_publisher_ = node_->create_publisher<std_msgs::msg::Int32>(
-            "/fsm_command", 10);
+            "fsm_command", 10);
 
-        // Create subscriber to listen for FSM command changes
-        fsm_command_subscriber_ = node_->create_subscription<std_msgs::msg::Int32>(
-            "/fsm_command", 10,
-            std::bind(&OCS2FSMPanel::onFsmCommandReceived, this, std::placeholders::_1));
+        // 订阅真实状态（transient_local：控制器只在变化时发，后加入也能拿到）
+        fsm_state_sub_ = node_->create_subscription<std_msgs::msg::Int32>(
+            "fsm_state", rclcpp::QoS(1).reliable().transient_local(),
+            std::bind(&OCS2FSMPanel::onFsmStateReceived, this, std::placeholders::_1));
 
         // Only create WBC related ROS2 interfaces if controller is available
         if (wbc_available_)
@@ -424,53 +424,47 @@ namespace arms_rviz_control_plugin
 
             // Create WBC subscribers
             capability_sub_ = node_->create_subscription<arms_ros2_control_msgs::msg::WbcCapability>(
-                "/ocs2_wbc_controller/wbc_capabilities",
-                rclcpp::QoS(1).transient_local(),
+                "ocs2_wbc_controller/wbc_capabilities",
+                rclcpp::QoS(1).reliable().transient_local(),
                 std::bind(&OCS2FSMPanel::onReceiveCapability, this, std::placeholders::_1));
 
             state_sub_ = node_->create_subscription<arms_ros2_control_msgs::msg::WbcCurrentState>(
-                "/ocs2_wbc_controller/current_state",
-                10,
+                "ocs2_wbc_controller/current_state",
+                rclcpp::QoS(1).reliable().transient_local(),
                 std::bind(&OCS2FSMPanel::onReceiveCurrentState, this, std::placeholders::_1));
     }
 
-    RCLCPP_INFO(node_->get_logger(), "OCS2 FSM Panel initialized with /fsm_command topic");
+    RCLCPP_INFO(node_->get_logger(), "OCS2 FSM Panel initialized with fsm_command / fsm_state topics");
     }
 
     void OCS2FSMPanel::onHomeToHold()
     {
         publishCommand(2);
-        setCurrentState("HOLD");
     }
 
     void OCS2FSMPanel::onHoldToOCS2()
     {
         publishCommand(3);
-        setCurrentState("OCS2");
     }
 
     void OCS2FSMPanel::onOCS2ToHold()
     {
         publishCommand(2);
-        setCurrentState("HOLD");
     }
 
     void OCS2FSMPanel::onHoldToHome()
     {
         publishCommand(1);
-        setCurrentState("HOME");
     }
 
     void OCS2FSMPanel::onHoldToMoveJ()
     {
         publishCommand(4);
-        setCurrentState("MOVEJ");
     }
 
     void OCS2FSMPanel::onMoveJToHold()
     {
         publishCommand(2);
-        setCurrentState("HOLD");
     }
 
     void OCS2FSMPanel::onSwitchPose()
@@ -646,17 +640,21 @@ namespace arms_rviz_control_plugin
         Panel::save(config);
     }
 
-    void OCS2FSMPanel::onFsmCommandReceived(const std_msgs::msg::Int32::SharedPtr msg)
+    void OCS2FSMPanel::onFsmStateReceived(const std_msgs::msg::Int32::SharedPtr msg)
     {
-        std::string new_state;
-        bool valid_transition = arms_controller_common::FSMStateTransitionValidator::validateTransition(
-            current_state_, msg->data, new_state);
-
-        if (valid_transition)
+        if (!msg)
         {
-            setCurrentState(new_state);
-            current_command_ = msg->data;
+            return;
         }
+
+        // 直接采用控制器报的真实状态。这里不再用本地规则表推断：
+        // 规则表与控制器实际行为并不一致（例如 HOME + 命令 3 控制器会回 HOLD）。
+        static constexpr const char* kNames[] = {"RESET", "HOME", "HOLD", "OCS2", "MOVEJ"};
+        const int32_t code = msg->data;
+        const char* name = (code >= 0 && code <= 4) ? kNames[code] : "UNKNOWN";
+
+        current_command_ = code;
+        setCurrentState(name);
     }
 
     // ==================== WBC Control Methods ====================

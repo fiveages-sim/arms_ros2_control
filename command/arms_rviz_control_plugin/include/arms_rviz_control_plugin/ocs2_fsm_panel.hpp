@@ -67,7 +67,8 @@ private:
   void updateStatusDisplay();
   void updateButtonVisibility();
   void setCurrentState(const std::string& state);
-  void onFsmCommandReceived(const std_msgs::msg::Int32::SharedPtr msg);
+  /** 真实 FSM 状态回调（fsm_state，transient_local）：只认它，不再自己推断。 */
+  void onFsmStateReceived(const std_msgs::msg::Int32::SharedPtr msg);
 
   // WBC related methods
   bool wbc_available_ = false;
@@ -132,7 +133,7 @@ private:
   // ROS2
   rclcpp::Node::SharedPtr node_;
   rclcpp::Publisher<std_msgs::msg::Int32>::SharedPtr fsm_command_publisher_;
-  rclcpp::Subscription<std_msgs::msg::Int32>::SharedPtr fsm_command_subscriber_;
+  rclcpp::Subscription<std_msgs::msg::Int32>::SharedPtr fsm_state_sub_;
 
   // WBC ROS2
   rclcpp::Publisher<std_msgs::msg::String>::SharedPtr mode_command_pub_;

@@ -1,6 +1,14 @@
 //
-// Created for Arms ROS2 Control - MarkerFactory
-// Marker 创建工厂类，统一管理所有 marker 的创建逻辑
+// MarkerFactory - marker 外形工厂。
+//
+// 作用：
+//   按名称、颜色、发布模式生成 InteractiveMarker 消息，并负责三种外形
+//   （方块 / 球 / 箭头）与颜色设置。连续模式用球表示会持续下发，
+//   单次模式用方块表示需要手动发送。
+//
+// 注意：
+//   本文件不持有状态、不订阅话题、不发布目标；
+//   新增被控目标需要新外形时，在这里加一个创建函数即可。
 //
 #pragma once
 
