@@ -2,6 +2,7 @@
 // Common StateHold Implementation
 //
 #include "arms_controller_common/FSM/StateHold.h"
+#include <algorithm>
 #include <cmath>
 #include <utility>
 
@@ -44,16 +45,17 @@ namespace arms_controller_common
         updateParam();
         if (first_check_position_threshold_ > 0.0 || joint_position_diff_threshold_ > 0.0)
         {
+            const size_t num_joints = std::min(
+                ctrl_interfaces_.joint_position_state_interface_.size(), hold_positions_.size());
             double max_diff = 0.0;
             bool exceeds_first_check_threshold = false;
-            bool exceeds_diff_threshold = false;
+            size_t updated_joint_count = 0;
 
-            for (size_t i = 0; i < ctrl_interfaces_.joint_position_state_interface_.size() && 
-                 i < hold_positions_.size(); ++i)
+            for (size_t i = 0; i < num_joints; ++i)
             {
                 auto value = ctrl_interfaces_.joint_position_state_interface_[i].get().get_optional();
-                double current_pos = value.value_or(0.0);
-                double diff = std::abs(current_pos - hold_positions_[i]);
+                const double current_pos = value.value_or(0.0);
+                const double diff = std::abs(current_pos - hold_positions_[i]);
 
                 if (diff > max_diff)
                 {
@@ -65,9 +67,15 @@ namespace arms_controller_common
                     exceeds_first_check_threshold = true;
                 }
 
-                if (joint_position_diff_threshold_ > 0.0 && diff > joint_position_diff_threshold_)
+                // Runtime: re-anchor only joints that individually exceed the threshold.
+                // Other joints keep their previous hold command so impedance teach on one
+                // limb does not drag the rest of the robot via command←state sync.
+                if (first_threshold_check_passed_ &&
+                    joint_position_diff_threshold_ > 0.0 &&
+                    diff > joint_position_diff_threshold_)
                 {
-                    exceeds_diff_threshold = true;
+                    hold_positions_[i] = current_pos;
+                    ++updated_joint_count;
                 }
             }
 
@@ -78,7 +86,7 @@ namespace arms_controller_common
                     first_threshold_check_passed_ = true;
                     RCLCPP_INFO(node_->get_logger(),
                                "HOLD state: first threshold check disabled. Automatic adjustment %s.",
-                               joint_position_diff_threshold_ > 0.0 ? "enabled" : "disabled");
+                               joint_position_diff_threshold_ > 0.0 ? "enabled (per-joint)" : "disabled");
                 }
                 else if (!exceeds_first_check_threshold)
                 {
@@ -87,13 +95,13 @@ namespace arms_controller_common
                                "HOLD state: first threshold check passed (max diff: %.4f rad <= first check threshold: %.4f rad). "
                                "Automatic adjustment %s.",
                                max_diff, first_check_position_threshold_,
-                               joint_position_diff_threshold_ > 0.0 ? "enabled" : "disabled");
+                               joint_position_diff_threshold_ > 0.0 ? "enabled (per-joint)" : "disabled");
                 }
                 else
                 {
-                    size_t num_joints = ctrl_interfaces_.joint_position_state_interface_.size();
-                    hold_positions_.resize(num_joints);
-                    for (size_t i = 0; i < num_joints; ++i)
+                    // Startup only: full sync avoids a jump when entering HOLD far from last_sent.
+                    hold_positions_.resize(ctrl_interfaces_.joint_position_state_interface_.size());
+                    for (size_t i = 0; i < hold_positions_.size(); ++i)
                     {
                         auto value = ctrl_interfaces_.joint_position_state_interface_[i].get().get_optional();
                         hold_positions_[i] = value.value_or(0.0);
@@ -105,32 +113,21 @@ namespace arms_controller_common
                                        max_diff, first_check_position_threshold_);
                 }
             }
-            else
+            else if (updated_joint_count > 0)
             {
-                if (exceeds_diff_threshold)
-                {
-                    size_t num_joints = ctrl_interfaces_.joint_position_state_interface_.size();
-                    hold_positions_.resize(num_joints);
-                    for (size_t i = 0; i < num_joints; ++i)
-                    {
-                        auto value = ctrl_interfaces_.joint_position_state_interface_[i].get().get_optional();
-                        hold_positions_[i] = value.value_or(0.0);
-                    }
+                static rclcpp::Time last_warn_time(0, 0, RCL_ROS_TIME);
+                static bool first_warn = true;
 
-                    static rclcpp::Time last_warn_time(0, 0, RCL_ROS_TIME);
-                    static bool first_warn = true;
-                    
-                    rclcpp::Duration time_since_last_warn = time - last_warn_time;
-                    
-                    if (first_warn || time_since_last_warn.seconds() >= 1.0)
-                    {
-                        RCLCPP_WARN(node_->get_logger(),
-                                   "HOLD state: position difference (max: %.4f rad) exceeds threshold (%.4f rad). "
-                                   "Updating hold positions to current positions for safety.",
-                                   max_diff, joint_position_diff_threshold_);
-                        last_warn_time = time;
-                        first_warn = false;
-                    }
+                const rclcpp::Duration time_since_last_warn = time - last_warn_time;
+
+                if (first_warn || time_since_last_warn.seconds() >= 1.0)
+                {
+                    RCLCPP_WARN(node_->get_logger(),
+                               "HOLD state: %zu joint(s) exceed threshold (max: %.4f rad > %.4f rad). "
+                               "Updating hold positions for those joints only.",
+                               updated_joint_count, max_diff, joint_position_diff_threshold_);
+                    last_warn_time = time;
+                    first_warn = false;
                 }
             }
         }
