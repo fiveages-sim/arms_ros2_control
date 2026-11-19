@@ -480,9 +480,16 @@ def assemble_nodes(
     main_spawner: Optional[Node],
     extra_spawners: List[Node],
     optional_nodes: Optional[List[Any]] = None,
+    pre_control_nodes: Optional[List[Any]] = None,
 ) -> List[Any]:
+    """按启动顺序拼装节点列表。
+
+    pre_control_nodes 排在 controller_stack_nodes 之前：需要比 ros2_control_node
+    更早就绪的节点（例如给控制器启动探测用的位姿源）必须放这里。
+    """
     nodes: List[Any] = []
     optional_nodes = optional_nodes or []
+    pre_control_nodes = pre_control_nodes or []
 
     if ctx.rviz_only:
         if rviz_node:
@@ -491,6 +498,7 @@ def assemble_nodes(
 
     if rviz_node:
         nodes.append(rviz_node)
+    nodes.extend(pre_control_nodes)
     nodes.extend(controller_stack_nodes)
     if main_spawner:
         nodes.append(main_spawner)
