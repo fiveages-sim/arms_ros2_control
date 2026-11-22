@@ -43,6 +43,9 @@ VRInputHandler是基于VRMarkerWrapper功能开发的VR输入处理器，专门�
 - `left_current_pose` (`geometry_msgs/msg/PoseStamped`): 机器人左臂当前pose
 - `right_current_pose` (`geometry_msgs/msg/PoseStamped`): 机器人右臂当前pose
 
+### 发布（模式反馈）
+- `teleop/vr_mode` (`arms_ros2_control_msgs/VrTeleopMode`, `Reliable` + `TransientLocal`): VR 输入语义锁存。启动发一次，字段变化再发。含 `enabled`、`update_mode`、`chassis_mode`、`yb_pause_semantics`、左右 `arm_paused`、摇杆/腰部平面、夹爪比例模式、`mirror_movement` / `mirror_profile`、`topology`。WBC 约束仍看 `ocs2_wbc_controller/current_state`。原 `/teleop/mirror_mode` 已移除。
+
 ## 参数配置
 
 ### 构造函数参数

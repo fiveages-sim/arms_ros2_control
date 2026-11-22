@@ -16,7 +16,6 @@
 #include <geometry_msgs/msg/twist.hpp>
 #include <Eigen/Core>
 #include <Eigen/Geometry>
-#include <std_msgs/msg/bool.hpp>
 #include <std_msgs/msg/float64.hpp>
 #include <std_msgs/msg/int32.hpp>
 #include <std_msgs/msg/string.hpp>
@@ -28,6 +27,7 @@
 #include "arms_target_manager/ArmsTargetManager.h"
 #include "arms_controller_common/utils/FSMCommandPublisher.h"
 #include <arms_ros2_control_msgs/msg/wbc_capability.hpp>
+#include <arms_ros2_control_msgs/msg/vr_teleop_mode.hpp>
 
 namespace arms_ros2_control::command
 {
@@ -361,8 +361,11 @@ namespace arms_ros2_control::command
          */
         void runScaleCalibration(bool use_left_z);
 
-        /** Publish latch of mirror_mode_ on /teleop/mirror_mode (TRANSIENT_LOCAL). */
-        void publishMirrorMode();
+        /**
+         * Publish VR input semantic latch on teleop/vr_mode (Reliable + TransientLocal).
+         * Skips publish when the latch snapshot is unchanged unless force=true.
+         */
+        void publishVrTeleopMode(bool force = false);
 
         /**
          * Optional optical R0 handshake (not in main teleop topics):
@@ -654,8 +657,11 @@ namespace arms_ros2_control::command
 
         // WBC 模式切换命令发布器（case 21–24 请求身体模式）
         rclcpp::Publisher<std_msgs::msg::String>::SharedPtr pub_mode_command_;
-        // Level latch for hand sinks / DualHand (same bit as EE/trigger mirror).
-        rclcpp::Publisher<std_msgs::msg::Bool>::SharedPtr pub_mirror_mode_;
+        // VR input semantic latch (replaces former /teleop/mirror_mode Bool).
+        rclcpp::Publisher<arms_ros2_control_msgs::msg::VrTeleopMode>::SharedPtr
+            pub_vr_teleop_mode_;
+        bool has_published_vr_teleop_mode_{false};
+        arms_ros2_control_msgs::msg::VrTeleopMode last_vr_teleop_mode_{};
         rclcpp::Subscription<arms_ros2_control_msgs::msg::WbcCapability>::SharedPtr
             sub_wbc_capability_;
 

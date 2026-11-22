@@ -34,6 +34,27 @@ ROS 2 接口包：[`arms_ros2_control`](../..) 系统所使用的 **msg / srv / 
 
 **分工**：界面用 `TeleopMode` 看模式状态，用 `Inputs.target` 看当前目标臂。joystick 在底盘模式下可能暂停周期发 `Inputs`，界面应缓存最近一次 `target`。
 
+### `VrTeleopMode`（msg）
+
+VR 输入语义锁存（如 topic `teleop/vr_mode`，由 `VRInputHandler` 发布）。建议 QoS：`Reliable` + `TransientLocal`；启动发一次，字段变化再发。**不**复用 `TeleopMode`，也**不**重复 WBC 约束（身体锁 / 臂使能等请读 `WbcCurrentState`）。
+
+| 字段 | 类型 | 说明 |
+|------|------|------|
+| `stamp` | `builtin_interfaces/Time` | 发布时间戳 |
+| `enabled` | `bool` | VR 处理器是否启用 |
+| `update_mode` | `bool` | `true`=UPDATE（跟随），`false`=STORAGE |
+| `chassis_mode` | `bool` | `true`=底盘遥控（事件 20），`false`=末端摇杆 |
+| `yb_pause_semantics` | `bool` | FULL_BODY 下 Y/B：`false`=WBC 单臂禁用，`true`=VR 暂停 |
+| `left_arm_paused` / `right_arm_paused` | `bool` | 单臂 VR 暂停（与 WBC `arm_state` 独立） |
+| `left_stick_plane` / `right_stick_plane` | `uint8` | `PLANE_XY=0` / `PLANE_Z_YAW=1` |
+| `body_stick_plane` | `uint8` | 腰部跟随摇杆平面（同上常量） |
+| `left_gripper_percent_mode` / `right_gripper_percent_mode` | `bool` | `true`=比例，`false`=开合 |
+| `mirror_movement` | `bool` | 镜像开关 |
+| `mirror_profile` | `uint8` | `MIRROR_PROFILE_A=0` / `MIRROR_PROFILE_B=1` |
+| `topology` | `uint8` | `TOPOLOGY_UNKNOWN=0` / `SPLIT_BODY=1` / `FULL_BODY=2` |
+
+原 `/teleop/mirror_mode`（`Bool`）已由此消息的 `mirror_movement` 取代，不再单独发布。
+
 ---
 
 ## 2. 全身控制状态（WBC）
@@ -185,7 +206,7 @@ ROS 2 接口包：[`arms_ros2_control`](../..) 系统所使用的 **msg / srv / 
 
 ## 依赖
 
-- `builtin_interfaces`（`TeleopMode.stamp`）
+- `builtin_interfaces`（`TeleopMode.stamp` / `VrTeleopMode.stamp`）
 - `std_msgs`
 - `geometry_msgs`
 - `nav_msgs`
