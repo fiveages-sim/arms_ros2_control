@@ -43,6 +43,7 @@
 #include "arms_target_manager/marker/HeadMarker.h"
 #include "arms_target_manager/marker/ArmMarker.h"
 #include "arms_target_manager/marker/BodyMarker.h"
+#include "arms_target_manager/marker/BaseMarker.h"
 
 namespace arms_ros2_control::command
 {
@@ -123,6 +124,7 @@ namespace arms_ros2_control::command
         bool shouldShowLeftArmMarker() const;
         bool shouldShowRightArmMarker() const;
         bool shouldShowBodyMarker() const;
+        bool shouldShowBaseMarker() const;
         bool shouldShowWbcHeadMarker() const;
         bool shouldShowHeadMarker() const;
         void setHeadVrActive(bool active);
@@ -214,6 +216,7 @@ namespace arms_ros2_control::command
         void createPublishersAndSubscribers();
 
         void updateBodyMarkerVisibility();
+        void updateBaseMarkerVisibility();
         void updateHeadMarkerVisibility();
         void refreshArmMarkersFromLatestCurrentTargets();
         void refreshArmMarkersFromLatestCurrentPoses();
@@ -265,6 +268,7 @@ namespace arms_ros2_control::command
         std::shared_ptr<interactive_markers::MenuHandler> right_menu_handler_;
         std::shared_ptr<interactive_markers::MenuHandler> head_menu_handler_;
         std::shared_ptr<interactive_markers::MenuHandler> body_menu_handler_;
+        std::shared_ptr<interactive_markers::MenuHandler> base_menu_handler_;
 
         interactive_markers::MenuHandler::EntryHandle left_send_handle_{};
         interactive_markers::MenuHandler::EntryHandle left_toggle_handle_{};
@@ -276,6 +280,8 @@ namespace arms_ros2_control::command
         interactive_markers::MenuHandler::EntryHandle head_toggle_handle_{};
         interactive_markers::MenuHandler::EntryHandle body_send_handle_{};
         interactive_markers::MenuHandler::EntryHandle body_toggle_handle_{};
+        interactive_markers::MenuHandler::EntryHandle base_send_handle_{};
+        interactive_markers::MenuHandler::EntryHandle base_toggle_handle_{};
 
         bool dual_arm_mode_;
         std::string control_base_frame_;
@@ -311,6 +317,9 @@ namespace arms_ros2_control::command
         int base_state_{
             arms_ros2_control_msgs::msg::WbcCurrentState::BASE_LOCKED};
         bool wbc_head_marker_visible_{false};
+        bool base_marker_visible_{false};
+        bool left_arm_marker_visible_{false};
+        bool right_arm_marker_visible_{false};
         bool head_vr_active_{false};
         bool left_arm_vr_active_{false};
         bool right_arm_vr_active_{false};
@@ -326,5 +335,6 @@ namespace arms_ros2_control::command
         std::shared_ptr<ArmMarker> right_arm_marker_;
         std::shared_ptr<HeadMarker> head_marker_;
         std::shared_ptr<BodyMarker> body_marker_;
+        std::shared_ptr<BaseMarker> base_marker_;
     };
 } // namespace arms_ros2_control::command

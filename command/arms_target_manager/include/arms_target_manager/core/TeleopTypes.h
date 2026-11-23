@@ -44,7 +44,8 @@ namespace arms_ros2_control::command
         ArmRight = 1,
         Head = 2,
         Body = 3,
-        Count = 4,
+        Base = 4,
+        Count = 5,
     };
 
     /** 输入源。新增控制方式时在这里加一项。 */

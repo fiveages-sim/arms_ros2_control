@@ -29,7 +29,7 @@
 //   20     左右摇杆按下（底盘遥控）              两种模式
 //   26     右握把+右摇杆向下（底盘解锁/锁定）     两种模式
 //    4     右摇杆按下：普通=更新/存储，全身=全部跟踪  各自模式
-//    3/6   左 Y / 右 B：普通=暂停/恢复，FULL_BODY=WBC 单臂开关
+//    3/6   左 Y / 右 B：普通=暂停/恢复或 WBC 单臂开关，全身=WBC 单臂开关
 //    7     左摇杆按下（镜像开关）                普通
 //   29     左握把+左摇杆按下（镜像方案切换）       普通
 //   16     左右握把+左 Y+右 B（Y/B 语义切换）      普通
@@ -985,8 +985,8 @@ namespace arms_ros2_control::command
     /**
      * @brief 全身模式内的事件分发
      *
-     * 全身模式下只保留 FSM、夹爪、事件 4（全部跟踪）等少数功能，
-     * 其余编号会打一条限频提示，告诉用户要先退出全身模式。
+     * 全身模式下保留 FSM、夹爪、事件 4（全部跟踪）、事件 3/6（WBC 单臂开关）、
+     * 事件 20/26（底盘），其余编号会打一条限频提示，告诉用户要先退出全身模式。
      *
      * @param code 原始事件编号
      */
@@ -997,6 +997,20 @@ namespace arms_ros2_control::command
             case 4:  // 右摇杆短按：开/关「全部跟踪」
                 toggleAbsoluteTracking();
                 break;
+            case 3:  // 左 Y：WBC 单臂开关（与普通模式 FULL_BODY 下的 3/6 语义一致）
+            case 6:  // 右 B
+            {
+                // 全身模式进入时镜像被强制关闭（suspendNormalModeState），
+                // 因此 Y 固定对应左臂、B 固定对应右臂，不需要再按镜像翻转；
+                // 「开启/锁定」由 WBC 的 ARM_ENABLED / ARM_DISABLED 决定。
+                const bool is_left_button = (code == 3);
+                requestWbcToggle(
+                    code,
+                    is_left_button ? "左Y按钮" : "右B按钮",
+                    is_left_button ? WbcToggleTarget::LEFT_ARM
+                                   : WbcToggleTarget::RIGHT_ARM);
+                break;
+            }
             default:
                 RCLCPP_INFO_THROTTLE(
                     node_->get_logger(), *node_->get_clock(), 2000,
@@ -4750,14 +4764,14 @@ namespace arms_ros2_control::command
 
     bool VRInputHandler::wbcOwnsChassisVelocity() const
     {
-        // 仅全身 OCS2 且底盘规划解锁时让路；HOLD / 锁底盘由 VR 直发 /cmd_vel。
+        // 仅全身 OCS2 且底盘可动（随动/跟随）时让路；HOLD / 锁底盘由 VR 直发 /cmd_vel。
         // 用 FsmClient 订阅到的权威状态（fsm_state），而不是本地缓存，
         // 避免缓存落后时退出全身模式该发的零速被吞掉。
         return isFullBodyMode() &&
                isOcs2State() &&
                target_manager_ &&
-               target_manager_->getCurrentBaseState() ==
-                   arms_ros2_control_msgs::msg::WbcCurrentState::BASE_UNLOCKED;
+               target_manager_->getCurrentBaseState() !=
+                   arms_ros2_control_msgs::msg::WbcCurrentState::BASE_LOCKED;
     }
 
     void VRInputHandler::publishChassisVelocity(const geometry_msgs::msg::Twist& velocity)
@@ -4893,7 +4907,8 @@ namespace arms_ros2_control::command
         RCLCPP_INFO(
             node_->get_logger(),
             "🕹️🦴 全身模式仅支持：FSM(11/12)、夹爪(9/10/13/14)、右摇杆短按(4)=全部跟踪、"
-            "组合键(20)=底盘遥控、组合键(26)=底盘解锁/锁定、组合键(30)=退出；"
+            "左Y/右B(3/6)=WBC 单臂开关、组合键(20)=底盘遥控、"
+            "组合键(26)=底盘解锁/锁定、组合键(30)=退出；"
             "其余普通模式组合键在全身模式下不可用");
     }
 
@@ -5778,9 +5793,10 @@ namespace arms_ros2_control::command
 
     bool VRInputHandler::baseUnlocked() const
     {
+        // 随动与跟随都属于“底盘可动”，锚定语义相同；只有锁定才随底座实时刷新。
         return target_manager_ &&
-            target_manager_->getCurrentBaseState() ==
-            arms_ros2_control_msgs::msg::WbcCurrentState::BASE_UNLOCKED;
+            target_manager_->getCurrentBaseState() !=
+            arms_ros2_control_msgs::msg::WbcCurrentState::BASE_LOCKED;
     }
 
     bool VRInputHandler::transformPose(
@@ -6360,7 +6376,7 @@ namespace arms_ros2_control::command
             anchor_valid_ = true;
         }
         // 解锁期间 anchor_M_ 冻结：marker 锚定在世界系，人体走动时远离机器人，
-        // 由 OCS2 的底盘自由度（BASE_UNLOCKED）自动把底座挪到可达的位置。
+        // 由 OCS2 的底盘自由度（随动/跟随）自动把底座挪到可达的位置。
 
         const bool state_changed = !fresh_anchor && (anchor_base_unlocked_ != base_unlocked);
         anchor_base_unlocked_ = base_unlocked;

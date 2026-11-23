@@ -46,6 +46,7 @@ add_library(${PROJECT_NAME} SHARED
         src/marker/HeadMarker.cpp
         src/marker/ArmMarker.cpp
         src/marker/BodyMarker.cpp
+        src/marker/BaseMarker.cpp
 )
 
 target_include_directories(${PROJECT_NAME}

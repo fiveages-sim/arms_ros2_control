@@ -161,6 +161,15 @@ namespace arms_ros2_control::command
             head_state_ != arms_ros2_control_msgs::msg::WbcCurrentState::HEAD_FORWARD;
     }
 
+    bool ArmsTargetManager::shouldShowBaseMarker() const
+    {
+        // 底盘目标必须画在与控制坐标系一致的世界系里；若 marker 被配置到
+        // 机器人本体坐标系，marker 会随底盘一起漂移，无法表达世界目标。
+        return (current_controller_state_ == 3) &&
+            (base_state_ == arms_ros2_control_msgs::msg::WbcCurrentState::BASE_TRACKING) &&
+            (marker_fixed_frame_ == control_base_frame_);
+    }
+
     bool ArmsTargetManager::shouldShowWbcHeadMarker() const
     {
         return head_marker_ && head_marker_->isWbcEnabled() &&
@@ -306,6 +315,57 @@ namespace arms_ros2_control::command
         markPendingChanges();
     }
 
+    void ArmsTargetManager::updateBaseMarkerVisibility()
+    {
+        if (!server_ || !base_marker_)
+        {
+            return;
+        }
+
+        const bool show = shouldShowBaseMarker();
+
+        if (show)
+        {
+            // 首次进入跟随：把 marker 放到当前底盘位置，避免从原点跳过来。
+            if (!base_marker_visible_ && !base_marker_->syncPoseFromTf())
+            {
+                base_marker_visible_ = false;
+                server_->erase("base_target");
+                markPendingChanges();
+                return;
+            }
+
+            auto marker = buildMarker("base_target", "base");
+            if (marker.name.empty())
+            {
+                base_marker_visible_ = false;
+                server_->erase("base_target");
+                markPendingChanges();
+                return;
+            }
+            server_->insert(marker);
+            server_->setCallback(
+                marker.name,
+                [this](const visualization_msgs::msg::InteractiveMarkerFeedback::ConstSharedPtr& feedback)
+                {
+                    handleMarkerFeedback(feedback);
+                });
+
+            if (base_menu_handler_)
+            {
+                base_menu_handler_->apply(*server_, marker.name);
+            }
+            base_marker_visible_ = true;
+        }
+        else if (base_marker_visible_)
+        {
+            server_->erase("base_target");
+            base_marker_visible_ = false;
+        }
+
+        markPendingChanges();
+    }
+
     /**
      * @brief 收到 WBC 模式状态
      *
@@ -325,6 +385,7 @@ namespace arms_ros2_control::command
         const int prev_bimanual_state = bimanual_state_;
         const int prev_body_state = body_state_;
         const int prev_head_state = head_state_;
+        const int prev_base_state = base_state_;
 
         left_arm_state_ = msg->left_arm_state;
         right_arm_state_ = msg->right_arm_state;
@@ -357,11 +418,13 @@ namespace arms_ros2_control::command
 
         if (prev_left_arm_state != left_arm_state_ ||
             prev_right_arm_state != right_arm_state_ ||
-            prev_body_state != body_state_ || prev_head_state != head_state_)
+            prev_body_state != body_state_ || prev_head_state != head_state_ ||
+            prev_base_state != base_state_)
         {
             updateMarkerShape();
             updateMenuVisibility();
             updateBodyMarkerVisibility();
+            updateBaseMarkerVisibility();
             markPendingChanges();
         }
     }
@@ -539,6 +602,13 @@ namespace arms_ros2_control::command
         body_marker_->setTargetStateCheckCallback(
             [this]() { return shouldShowBodyMarker(); });
 
+        base_marker_ = std::make_shared<BaseMarker>(
+            node_,
+            marker_factory_,
+            tf_buffer_,
+            marker_fixed_frame_);
+        base_marker_->initialize();
+
         // 显示层只负责“把目标画出来”，发布与回显规则都在 router_ 里。
         router_->setView(
             Channel::ArmLeft,
@@ -600,6 +670,21 @@ namespace arms_ros2_control::command
                     markPendingChanges();
                 }
             });
+        router_->setView(
+            Channel::Base,
+            [this](const geometry_msgs::msg::Pose& pose)
+            {
+                if (!base_marker_)
+                {
+                    return;
+                }
+                base_marker_->setPose(pose);
+                if (server_ && shouldShowBaseMarker())
+                {
+                    setServerPose(base_marker_->getMarkerName(), pose);
+                    markPendingChanges();
+                }
+            });
 
         server_ = std::make_shared<interactive_markers::InteractiveMarkerServer>(
             "arms_target_manager", node_);
@@ -626,12 +711,26 @@ namespace arms_ros2_control::command
 
         if (left_arm_marker_ && shouldShowLeftArmMarker())
         {
+            left_arm_marker_->refreshFromLatestCurrentPose(false);
             initMarker("left_arm_target", "left_arm", left_menu_handler_);
+            left_arm_marker_visible_ = true;
         }
 
         if (dual_arm_mode_ && right_arm_marker_ && shouldShowRightArmMarker())
         {
+            right_arm_marker_->refreshFromLatestCurrentPose(false);
             initMarker("right_arm_target", "right_arm", right_menu_handler_);
+            right_arm_marker_visible_ = true;
+        }
+
+        if (head_marker_ && shouldShowWbcHeadMarker())
+        {
+            initMarker("head_target", "head", head_menu_handler_);
+        }
+
+        if (base_marker_ && shouldShowBaseMarker())
+        {
+            initMarker("base_target", "base", base_menu_handler_);
         }
 
         createPublishersAndSubscribers();
@@ -643,6 +742,8 @@ namespace arms_ros2_control::command
 
         updateMenuVisibility();
         updateBodyMarkerVisibility();
+        updateHeadMarkerVisibility();
+        updateBaseMarkerVisibility();
         markPendingChanges();
 
         RCLCPP_INFO(node_->get_logger(),
@@ -724,6 +825,17 @@ namespace arms_ros2_control::command
                 return empty_marker;
             }
             return body_marker_->createMarker(name, current_mode_, true);
+        }
+
+        if (markerType == "base" && base_marker_)
+        {
+            if (!shouldShowBaseMarker())
+            {
+                visualization_msgs::msg::InteractiveMarker empty_marker;
+                empty_marker.name = name;
+                return empty_marker;
+            }
+            return base_marker_->createMarker(name, current_mode_, true);
         }
 
         if (left_arm_marker_)
@@ -899,6 +1011,30 @@ namespace arms_ros2_control::command
                     "胸部拖动未生效：%s", verdict.reason);
             }
         }
+        else if (marker_name == "base_target" && base_marker_)
+        {
+            if (!shouldShowBaseMarker())
+            {
+                return;
+            }
+
+            const geometry_msgs::msg::Pose new_pose =
+                base_marker_->handleFeedback(feedback, source_frame_id);
+
+            if (!shouldStreamPoseCommands())
+            {
+                submit_drag(Channel::Base, new_pose, false);
+                return;
+            }
+
+            const Verdict verdict = submit_drag(Channel::Base, new_pose, true);
+            if (!verdict.accepted)
+            {
+                RCLCPP_WARN_THROTTLE(
+                    node_->get_logger(), *node_->get_clock(), 2000,
+                    "底盘拖动未生效：%s", verdict.reason);
+            }
+        }
         else
         {
             RCLCPP_WARN(node_->get_logger(),
@@ -965,6 +1101,18 @@ namespace arms_ros2_control::command
         if (marker_type == "body")
         {
             sendBodyTargetPose();
+            return;
+        }
+
+        if (marker_type == "base")
+        {
+            if (!base_marker_ || !shouldShowBaseMarker())
+            {
+                RCLCPP_WARN(node_->get_logger(),
+                            "Cannot send base target pose: base marker not available");
+                return;
+            }
+            router_->publishNow(Channel::Base, true);
             return;
         }
 
@@ -1095,20 +1243,23 @@ namespace arms_ros2_control::command
             setupDualArmMenu(right_menu_handler_, right_both_handle_);
         }
 
-        if (head_marker_ && head_marker_->isEnabled())
-        {
-            setupMarkerMenu(
-                head_menu_handler_,
-                head_send_handle_,
-                head_toggle_handle_,
-                [this]() { sendTargetPose("head"); });
-        }
+        setupMarkerMenu(
+            head_menu_handler_,
+            head_send_handle_,
+            head_toggle_handle_,
+            [this]() { sendTargetPose("head"); });
 
         setupMarkerMenu(
             body_menu_handler_,
             body_send_handle_,
             body_toggle_handle_,
             [this]() { sendTargetPose("body"); });
+
+        setupMarkerMenu(
+            base_menu_handler_,
+            base_send_handle_,
+            base_toggle_handle_,
+            [this]() { sendTargetPose("base"); });
     }
 
     void ArmsTargetManager::updateMarkerShape()
@@ -1120,26 +1271,42 @@ namespace arms_ros2_control::command
 
         if (left_arm_marker_ && shouldShowLeftArmMarker())
         {
+            if (!left_arm_marker_visible_)
+            {
+                // 首次显示/重新使能：跳到当前手腕实测位姿，避免沿用关闭前的旧目标。
+                left_arm_marker_->refreshFromLatestCurrentPose(false);
+                left_arm_marker_->clearCommandCooldown();
+            }
             auto leftMarker = buildMarker("left_arm_target", "left_arm");
             server_->insert(leftMarker);
             server_->setCallback(leftMarker.name, markerCallback);
             left_menu_handler_->apply(*server_, leftMarker.name);
+            left_arm_marker_visible_ = true;
         }
         else if (left_arm_marker_)
         {
             server_->erase("left_arm_target");
+            left_arm_marker_visible_ = false;
         }
 
         if (dual_arm_mode_ && right_arm_marker_ && shouldShowRightArmMarker())
         {
+            if (!right_arm_marker_visible_)
+            {
+                // 首次显示/重新使能：跳到当前手腕实测位姿，避免沿用关闭前的旧目标。
+                right_arm_marker_->refreshFromLatestCurrentPose(false);
+                right_arm_marker_->clearCommandCooldown();
+            }
             auto rightMarker = buildMarker("right_arm_target", "right_arm");
             server_->insert(rightMarker);
             server_->setCallback(rightMarker.name, markerCallback);
             right_menu_handler_->apply(*server_, rightMarker.name);
+            right_arm_marker_visible_ = true;
         }
         else if (dual_arm_mode_ && right_arm_marker_)
         {
             server_->erase("right_arm_target");
+            right_arm_marker_visible_ = false;
         }
 
         updateHeadMarkerVisibility();
@@ -1155,6 +1322,8 @@ namespace arms_ros2_control::command
         {
             server_->erase("body_target");
         }
+
+        updateBaseMarkerVisibility();
     }
 
     void ArmsTargetManager::updateMenuVisibility()
@@ -1170,7 +1339,7 @@ namespace arms_ros2_control::command
             right_menu_handler_->apply(*server_, "right_arm_target");
         }
 
-        if (shouldShowHeadMarker())
+        if (head_marker_ && wbc_head_marker_visible_)
         {
             head_menu_handler_->apply(*server_, "head_target");
         }
@@ -1178,6 +1347,11 @@ namespace arms_ros2_control::command
         if (body_marker_ && shouldShowBodyMarker())
         {
             body_menu_handler_->apply(*server_, "body_target");
+        }
+
+        if (base_marker_ && base_marker_visible_)
+        {
+            base_menu_handler_->apply(*server_, "base_target");
         }
 
         if (current_mode_ == MarkerState::CONTINUOUS)
@@ -1206,7 +1380,7 @@ namespace arms_ros2_control::command
                 }
             }
 
-            if (shouldShowHeadMarker())
+            if (head_marker_ && wbc_head_marker_visible_)
             {
                 head_menu_handler_->setVisible(head_send_handle_, false);
             }
@@ -1214,6 +1388,11 @@ namespace arms_ros2_control::command
             if (body_marker_ && shouldShowBodyMarker())
             {
                 body_menu_handler_->setVisible(body_send_handle_, false);
+            }
+
+            if (base_marker_ && base_marker_visible_)
+            {
+                base_menu_handler_->setVisible(base_send_handle_, false);
             }
         }
         else
@@ -1235,7 +1414,7 @@ namespace arms_ros2_control::command
                 right_menu_handler_->setVisible(right_both_handle_, show_both);
             }
 
-            if (shouldShowHeadMarker())
+            if (head_marker_ && wbc_head_marker_visible_)
             {
                 head_menu_handler_->setVisible(head_send_handle_, true);
             }
@@ -1243,6 +1422,11 @@ namespace arms_ros2_control::command
             if (body_marker_ && shouldShowBodyMarker())
             {
                 body_menu_handler_->setVisible(body_send_handle_, true);
+            }
+
+            if (base_marker_ && base_marker_visible_)
+            {
+                base_menu_handler_->setVisible(base_send_handle_, true);
             }
         }
 
@@ -1255,13 +1439,17 @@ namespace arms_ros2_control::command
         {
             right_menu_handler_->setVisible(right_toggle_handle_, show_continuous_toggle);
         }
-        if (shouldShowHeadMarker())
+        if (head_marker_ && wbc_head_marker_visible_)
         {
             head_menu_handler_->setVisible(head_toggle_handle_, show_continuous_toggle);
         }
         if (body_marker_ && shouldShowBodyMarker())
         {
             body_menu_handler_->setVisible(body_toggle_handle_, show_continuous_toggle);
+        }
+        if (base_marker_ && base_marker_visible_)
+        {
+            base_menu_handler_->setVisible(base_toggle_handle_, show_continuous_toggle);
         }
 
         if (left_arm_marker_ && shouldShowLeftArmMarker())
@@ -1273,7 +1461,7 @@ namespace arms_ros2_control::command
             right_menu_handler_->reApply(*server_);
         }
 
-        if (shouldShowHeadMarker())
+        if (head_marker_ && wbc_head_marker_visible_)
         {
             head_menu_handler_->reApply(*server_);
         }
@@ -1281,6 +1469,11 @@ namespace arms_ros2_control::command
         if (body_marker_ && shouldShowBodyMarker())
         {
             body_menu_handler_->reApply(*server_);
+        }
+
+        if (base_marker_ && base_marker_visible_)
+        {
+            base_menu_handler_->reApply(*server_);
         }
     }
 

@@ -174,8 +174,9 @@ void KeyboardTeleop::publishWaistZero()
 
 bool KeyboardTeleop::wbcOwnsChassisVelocity() const
 {
+    // 随动与跟随都由 WBC 输出 cmd_vel；只有锁定状态由本节点直发。
     return fsm_state_ == 3 &&
-           base_state_ == arms_ros2_control_msgs::msg::WbcCurrentState::BASE_UNLOCKED;
+           base_state_ != arms_ros2_control_msgs::msg::WbcCurrentState::BASE_LOCKED;
 }
 
 void KeyboardTeleop::publishChassisCommand()

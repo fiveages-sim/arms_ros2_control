@@ -17,36 +17,53 @@ namespace arms_ros2_control::command
 {
     namespace
     {
-        const char* bodyModeCommand(BodyMode mode)
+        const char *bodyModeCommand(uint8_t mode)
         {
+            using State = arms_ros2_control_msgs::msg::WbcCurrentState;
             switch (mode)
             {
-                case BodyMode::Free:
-                    return "BODY_FREE";
-                case BodyMode::Relative:
-                    return "BODY_RELATIVE";
-                case BodyMode::Tracking:
-                    return "BODY_TRACKING";
-                case BodyMode::Locked:
-                    return "BODY_LOCK";
-                case BodyMode::CustomLocked:
-                    return "BODY_CUSTOM_LOCK";
+            case State::BODY_FREE:
+                return "BODY_FREE";
+            case State::BODY_VERTICAL:
+                return "BODY_RELATIVE";
+            case State::BODY_TRACKING:
+                return "BODY_TRACKING";
+            case State::BODY_LOCKED:
+                return "BODY_LOCK";
+            case State::BODY_CUSTOM_LOCKED:
+                return "BODY_CUSTOM_LOCK";
             }
             return nullptr;
         }
 
-        const char* headModeCommand(HeadMode mode)
+        const char *headModeCommand(uint8_t mode)
         {
+            using State = arms_ros2_control_msgs::msg::WbcCurrentState;
             switch (mode)
             {
-                case HeadMode::Disabled:
-                    return "HEAD_DISABLE";
-                case HeadMode::Tracking:
-                    return "HEAD_TRACKING";
-                case HeadMode::Gaze:
-                    return "HEAD_GAZE";
-                case HeadMode::Forward:
-                    return "HEAD_FORWARD";
+            case State::HEAD_DISABLED:
+                return "HEAD_DISABLE";
+            case State::HEAD_TRACKING:
+                return "HEAD_TRACKING";
+            case State::HEAD_GAZE:
+                return "HEAD_GAZE";
+            case State::HEAD_FORWARD:
+                return "HEAD_FORWARD";
+            }
+            return nullptr;
+        }
+
+        const char *baseModeCommand(uint8_t mode)
+        {
+            using State = arms_ros2_control_msgs::msg::WbcCurrentState;
+            switch (mode)
+            {
+            case State::BASE_LOCKED:
+                return "BASE_LOCK";
+            case State::BASE_UNLOCKED:
+                return "BASE_UNLOCK";
+            case State::BASE_TRACKING:
+                return "BASE_TRACK";
             }
             return nullptr;
         }
@@ -57,10 +74,9 @@ namespace arms_ros2_control::command
      */
     HumanoidModeClient::HumanoidModeClient(
         rclcpp::Node::SharedPtr node,
-        const std::string& controller_name,
-        const std::string& command_topic)
-        : node_(std::move(node))
-        , controller_name_(controller_name)
+        const std::string &controller_name,
+        const std::string &command_topic)
+        : node_(std::move(node)), controller_name_(controller_name)
     {
         if (!node_)
         {
@@ -133,8 +149,15 @@ namespace arms_ros2_control::command
 
     bool HumanoidModeClient::baseUnlocked() const
     {
+        // 随动与跟随都属于“底盘可动”；只有锁定不算。
         std::lock_guard<std::mutex> lock(state_mutex_);
-        return state_.base_state == arms_ros2_control_msgs::msg::WbcCurrentState::BASE_UNLOCKED;
+        return state_.base_state != arms_ros2_control_msgs::msg::WbcCurrentState::BASE_LOCKED;
+    }
+
+    bool HumanoidModeClient::baseTracking() const
+    {
+        std::lock_guard<std::mutex> lock(state_mutex_);
+        return state_.base_state == arms_ros2_control_msgs::msg::WbcCurrentState::BASE_TRACKING;
     }
 
     bool HumanoidModeClient::bodyTracking() const
@@ -181,7 +204,7 @@ namespace arms_ros2_control::command
      *
      * 服务端是“局部修改”语义，所以拼字符串前必须清楚哪些字段会被改。
      */
-    bool HumanoidModeClient::publishCommand(const std::string& command)
+    bool HumanoidModeClient::publishCommand(const std::string &command)
     {
         if (command.empty())
         {
@@ -198,22 +221,22 @@ namespace arms_ros2_control::command
         return true;
     }
 
-    bool HumanoidModeClient::setBodyMode(BodyMode mode)
+    bool HumanoidModeClient::setBodyMode(uint8_t mode)
     {
-        const char* command = bodyModeCommand(mode);
+        const char *command = bodyModeCommand(mode);
         return command != nullptr && publishCommand(command);
     }
 
-    bool HumanoidModeClient::setHeadMode(HeadMode mode)
+    bool HumanoidModeClient::setHeadMode(uint8_t mode)
     {
-        const char* command = headModeCommand(mode);
+        const char *command = headModeCommand(mode);
         return command != nullptr && publishCommand(command);
     }
 
-    bool HumanoidModeClient::setBaseLocked(bool locked)
+    bool HumanoidModeClient::setBaseMode(uint8_t mode)
     {
-        // 无外部世界坐标时会控制器侧强制锁定，这里的请求可能被静默忽略。
-        return publishCommand(locked ? "BASE_LOCK" : "BASE_UNLOCK");
+        const char *command = baseModeCommand(mode);
+        return command != nullptr && publishCommand(command);
     }
 
     bool HumanoidModeClient::setBimanualCoupled(bool coupled)
@@ -339,7 +362,7 @@ namespace arms_ros2_control::command
             std::lock_guard<std::mutex> lock(state_observer_mutex_);
             snapshot = state_observers_;
         }
-        for (auto& [token, observer] : snapshot)
+        for (auto &[token, observer] : snapshot)
         {
             (void)token;
             if (observer)
@@ -368,7 +391,7 @@ namespace arms_ros2_control::command
             std::lock_guard<std::mutex> lock(capability_observer_mutex_);
             snapshot = capability_observers_;
         }
-        for (auto& [token, observer] : snapshot)
+        for (auto &[token, observer] : snapshot)
         {
             (void)token;
             if (observer)
@@ -401,7 +424,7 @@ namespace arms_ros2_control::command
             }
         }
 
-        for (const auto& pending : expired)
+        for (const auto &pending : expired)
         {
             RCLCPP_WARN(node_->get_logger(),
                         "🕹️ WBC 模式未生效：%s（控制器可能拒绝该命令，"

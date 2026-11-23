@@ -8,7 +8,7 @@
 | | 第一层：FSM 状态 | 第二层：WBC 模式 |
 |---|---|---|
 | 回答的问题 | 整机现在归谁控制 | OCS2 内部怎么控 |
-| 取值 | HOME / HOLD / MOVEJ / OCS2（4 个） | 一个 9 位整数：身体 / 双臂 / 耦合 / 底盘锁定 / 头部 |
+| 取值 | HOME / HOLD / MOVEJ / OCS2（4 个） | 一个 10 位整数：身体 / 双臂 / 耦合 / 底盘三态 / 头部 |
 | 存放位置 | 控制器里的当前状态对象 | OCS2 的 `ModeSchedule` |
 | HOLD 下能改吗 | 不能（改就是切状态） | **能**（注释明确写了 any FSM state including HOLD） |
 | 命令话题 | `fsm_command` | `mode_command` |
@@ -111,7 +111,7 @@ fsm.request(FsmIntent::Back);        // OCS2/MOVEJ → HOLD → HOME
 |---|---|
 | 身体 | `BODY_FREE` / `BODY_RELATIVE` / `BODY_TRACKING` / `BODY_LOCK` / `BODY_CUSTOM_LOCK` / `BODY_UNLOCK` |
 | 头部 | `HEAD_DISABLE` / `HEAD_TRACKING` / `HEAD_GAZE` / `HEAD_FORWARD` |
-| 底盘 | `BASE_LOCK` / `BASE_UNLOCK` |
+| 底盘 | `BASE_LOCK` / `BASE_UNLOCK` / `BASE_TRACK` |
 | 双臂 | `ARMS_COUPLED` / `ARMS_INDEPENDENT` |
 | 单臂 | `LEFT_ARM_ENABLE` / `LEFT_ARM_DISABLE` / `RIGHT_ARM_ENABLE` / `RIGHT_ARM_DISABLE` |
 | 参考关节 | `HOME_JOINT_ON` / `HOME_JOINT_OFF` |
@@ -120,10 +120,11 @@ fsm.request(FsmIntent::Back);        // OCS2/MOVEJ → HOLD → HOME
 包内统一走 `HumanoidModeClient` 的意图方法，不再四处拼字符串：
 
 ```cpp
+using State = arms_ros2_control_msgs::msg::WbcCurrentState;
 HumanoidModeClient mode(node);
-mode.setBodyMode(BodyMode::Tracking);
-mode.setHeadMode(HeadMode::Gaze);
-mode.setBaseLocked(false);
+mode.setBodyMode(State::BODY_TRACKING);
+mode.setHeadMode(State::HEAD_GAZE);
+mode.setBaseMode(State::BASE_TRACKING);
 mode.setArmEnabled(/*left=*/true, true);
 mode.setBodyAndHeadTracking();       // 全身遥操进入
 ```
@@ -136,8 +137,8 @@ mode.setBodyAndHeadTracking();       // 全身遥操进入
 
 1. **不要用模式位自己推手臂状态。** 控制器要等内部使能等待相位结束才报
    `ARM_ENABLED`，自己推会得到“已使能”的假象。用 `armEnabled(left)`。
-2. **`base_state` 可能被控制器强制锁定。** 没有外部世界坐标时，控制器会把
-   `baseLocked` 强制置真，用户请求解锁会静默失败。用 `expect()` 登记期望，
+2. **`base_state` 可能被控制器强制锁定。** 没有外部世界坐标时，控制器会把底盘模式
+   强制为锁定，用户请求解锁或跟随会静默失败。用 `expect()` 登记期望，
    超时会打 WARN。
 3. `<controller>/wbc_capabilities` 是**静态能力声明**（有没有移动底盘、腰锁、
    双臂耦合、头部跟踪），不是运行状态，不要混用。
@@ -149,6 +150,27 @@ if (mode.capability().has_mobile_base) { ... }
 ```
 
 未收到时为默认值（全 false），所以依赖能力的功能在启动早期会保守关闭。
+
+### 底盘三态
+
+底盘不再是一个布尔开关，而是三种互斥状态：
+
+| 状态 | 状态值 | 命令 | 含义 |
+|---|---|---|---|
+| 锁定 | `BASE_LOCKED=0` | `BASE_LOCK` | 底盘速度输入强制为 0 |
+| 随动 | `BASE_UNLOCKED=1` | `BASE_UNLOCK` | 底盘是 OCS2 的自由变量，没有显式位姿目标 |
+| 跟随 | `BASE_TRACKING=2` | `BASE_TRACK` | 底盘跟踪世界系 `base_target` 的平面位姿 |
+
+随动与跟随都由 OCS2 求解底盘速度并发布到 `cmd_vel`；两者的区别只在于是否给底盘一个显式的位姿目标。
+跟随是软约束，底盘速度仍受 `task.info` 的限幅约束。
+
+模式编码保留原有 0–8 位不变，新增第 9 位表示跟随；因此旧预设和旧 9 位数值仍然有效。
+跟随与锁定互斥，同时置位时以跟随为准。
+
+没有外部 `world → base_footprint` TF 时，跟随与随动都不可用，控制器会把模式降级为锁定。
+
+`BASE_TRACK` 只建议从 RViz 面板或程序下发；VR 的事件 26 仍保持“锁定 ↔ 随动”二态，
+在跟随状态下按一次事件 26 会回到随动。
 
 ## 五、包内的接线
 

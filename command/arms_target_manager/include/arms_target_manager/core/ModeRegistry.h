@@ -140,7 +140,8 @@ namespace arms_ros2_control::command
         Action::HandModeToggleLeft | Action::HandModeToggleRight |
         Action::WholeBodyToggle | Action::ChassisToggle;
 
-    // 只有普通模式才有：手臂暂停、更新/存储、镜像、身体模式、WBC 组合键
+    // 只有普通模式才有：更新/存储、镜像、身体模式、WBC 组合键
+    // （ArmToggleLeft/Right 归两种模式共用，见 kWholeBodyActions）
     inline constexpr ActionMask kNormalActions =
         kCommonActions |
         Action::UpdateToggle | Action::ArmToggleLeft | Action::ArmToggleRight |
@@ -149,9 +150,12 @@ namespace arms_ros2_control::command
         Action::BimanualToggle | Action::BaseToggle | Action::HomeJointToggle |
         Action::ScaleCalibrate;
 
-    // 全身模式：只保留右摇杆短按（全部跟踪）与底盘相关
+    // 全身模式：右摇杆短按（全部跟踪）、底盘相关，以及左 Y / 右 B 的 WBC 单臂开关。
+    // 单臂开关在两种模式下语义相同（ARM_ENABLED ↔ ARM_DISABLED），
+    // 全身模式下镜像恒为关闭，Y 固定对应左臂、B 固定对应右臂。
     inline constexpr ActionMask kWholeBodyActions =
-        kCommonActions | Action::AbsoluteTrackingToggle | Action::BaseToggle;
+        kCommonActions | Action::AbsoluteTrackingToggle | Action::BaseToggle |
+        Action::ArmToggleLeft | Action::ArmToggleRight;
 
     inline constexpr ModeSpec kModes[] = {
         {ModeId::Idle, "未使能", ActionMask{}, ChannelMask{}},

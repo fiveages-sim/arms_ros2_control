@@ -53,13 +53,13 @@ private Q_SLOTS:
   void onSwitchPoseReleased();
 
   // WBC control slots
-  void onBaseToggled();
+  void onBaseModeChanged(int index);
   void onBimanualToggled();
   void onLeftArmToggled();
   void onRightArmToggled();
   void onBodyModeChanged(int index);
   void onHeadModeChanged(int index);
-  void onHomePoseTrackingToggled();
+  void onHomeJointReferenceToggled();
 
 private:
   // FSM related methods
@@ -77,33 +77,19 @@ private:
   void onReceiveCurrentState(const arms_ros2_control_msgs::msg::WbcCurrentState::SharedPtr msg);
 
   void refreshWbcUi();
+  void updateBaseComboBox();
   void updateBodyComboBox();
   void updateHeadComboBox();
   void updateSwitchVisualState(SwitchButton* sw, bool capability_available, bool logical_on);
 
-  bool isBaseLocked() const;
-  bool isBimanualCoupled() const;
-  bool isLeftArmEnabled() const;
-  bool isRightArmEnabled() const;
-
-  bool isBodyFree() const;
-  bool isBodyVertical() const;
-  bool isBodyTracking() const;
-  bool isBodyLocked() const;
-  bool isBodyCustomLocked() const;
-
   int getCurrentBodyModeIndex() const;
   QString getBodyModeCommand(int modeIndex) const;
 
-  // WBC mode indices
-  enum BodyModeIndex
-  {
-    BODY_MODE_FREE = 0,
-    BODY_MODE_VERTICAL = 1,
-    BODY_MODE_TRACKING = 2,
-    BODY_MODE_LOCKED = 3,
-    BODY_MODE_CUSTOM_LOCKED = 5
-  };
+  int getCurrentHeadModeIndex() const;
+  QString getHeadModeCommand(int modeIndex) const;
+
+  int getCurrentBaseModeIndex() const;
+  QString getBaseModeCommand(int modeIndex) const;
 
   struct CapabilityState
   {
@@ -117,6 +103,7 @@ private:
     bool head_tracking_ee_enabled = false;
     bool head_midpoint_gaze_enabled = false;
     bool has_home_joint_reference = false;
+    bool base_tracking_enabled = false;
   };
 
   struct CurrentWbcState
@@ -163,7 +150,6 @@ private:
   std::unique_ptr<QLabel> right_arm_label_;
   std::unique_ptr<QLabel> home_pose_label_;
 
-  std::unique_ptr<SwitchButton> base_switch_;
   std::unique_ptr<SwitchButton> bimanual_switch_;
   std::unique_ptr<SwitchButton> left_arm_switch_;
   std::unique_ptr<SwitchButton> right_arm_switch_;
@@ -173,6 +159,7 @@ private:
   std::unique_ptr<QComboBox> body_combo_box_;
   std::unique_ptr<QLabel> head_label_;
   std::unique_ptr<QComboBox> head_combo_box_;
+  std::unique_ptr<QComboBox> base_combo_box_;
 
   // Current state tracking
   int32_t current_command_ = 0;

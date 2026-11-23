@@ -88,7 +88,7 @@ namespace arms_ros2_control::command
      * @brief 用实测位姿刷新 marker 显示
      * @return true 表示已刷新
      */
-    bool ArmMarker::refreshFromLatestCurrentPose()
+    bool ArmMarker::refreshFromLatestCurrentPose(bool notify)
     {
         if (!has_latest_current_pose_)
         {
@@ -105,7 +105,7 @@ namespace arms_ros2_control::command
             latest_current_pose_.pose, source_frame_id, frame_id_);
         pose_ = transformed_pose;
 
-        if (update_callback_)
+        if (notify && update_callback_)
         {
             update_callback_(getMarkerName(), pose_);
         }

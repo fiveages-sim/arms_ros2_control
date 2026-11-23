@@ -87,6 +87,24 @@ namespace arms_ros2_control::command
             bool enable_interaction,
             MarkerState mode) const;
 
+        /**
+         * 创建底盘 marker（平面三自由度：x/y 平移 + 偏航旋转）
+         * @param name marker 名称
+         * @param description 描述文本
+         * @param pose marker 的位姿
+         * @param color 颜色
+         * @param mode 发布模式
+         * @param enable_interaction 是否启用交互功能
+         * @return 创建好的 InteractiveMarker
+         */
+        visualization_msgs::msg::InteractiveMarker createBaseMarker(
+            const std::string& name,
+            const std::string& description,
+            const geometry_msgs::msg::Pose& pose,
+            const std::string& color,
+            MarkerState mode,
+            bool enable_interaction) const;
+
     private:
 
         /**
@@ -115,6 +133,13 @@ namespace arms_ros2_control::command
          * @param interactiveMarker 要添加控制的 InteractiveMarker
          */
         void addMovementControls(
+            visualization_msgs::msg::InteractiveMarker& interactiveMarker) const;
+
+        /**
+         * 添加平面控制（x/y 平移 + 偏航旋转），用于底盘目标
+         * @param interactiveMarker 要添加控制的 InteractiveMarker
+         */
+        void addPlanarControls(
             visualization_msgs::msg::InteractiveMarker& interactiveMarker) const;
 
         /**

@@ -77,7 +77,7 @@ VRInputHandler是基于VRMarkerWrapper功能开发的VR输入处理器，专门�
 - `vr_follow_frame`: VR 增量参考轴系，恢复时冻结 F → C 旋转，FULL_BODY / SPLIT_BODY 均生效，默认 `base_footprint`
 - 全身绝对映射参数（`body_ee_source`、`absolute_*`、`capture_settle_ms`、`skeleton_*`）
   见 `README.md` 的参数表，均只影响全身遥操作模式内部行为。
-- 底盘跟随不再由本节点做速度外环（`base_follow_*` 已删除）：由 OCS2 在 `BASE_UNLOCKED` 时
+- 底盘跟随不再由本节点做速度外环（`base_follow_*` 已删除）：由 OCS2 在随动/跟随模式下
   用底盘自由度去追世界系 marker。
 
 ### VR 目标坐标系
@@ -125,7 +125,7 @@ VR 操作分为两套**互斥**模式：
 4. **（全身绝对映射路径）**按 **左右握把 + 右摇杆按下**（30）进入全身遥操作模式，再按 **右摇杆短按**（4）开启「全部跟踪」（骨架绝对位姿驱动胸/头/双臂）；需要底盘跟随时按 **左摇杆按键**（7）开关「底盘跟踪」。
 5. **（普通模式）**用 **左握把 + 左摇杆四方向** 切换身体模式；用 **右握把 + 右摇杆上/下/右** 切换双臂耦合 / 底盘锁 / 参考关节。单臂启用默认用左 Y / 右 B；**左右握把 + 左 Y + 右 B**（事件 16）可把 Y/B 切到 VR 暂停语义。
 6. **（普通模式）**进入 **跟随（BODY_TRACKING）** 后，左摇杆改控腰部，右摇杆仍控右臂。
-7. **（普通模式）**需要底盘遥控时，同时按下左右摇杆进入 CHASSIS 模式；全身模式下同样可用（`BASE_UNLOCKED` 时自动让路给 WBC）。
+7. **（普通模式）**需要底盘遥控时，同时按下左右摇杆进入 CHASSIS 模式；全身模式下同样可用（底盘非锁定时自动让路给 WBC）。
 
 > 以下“身体模式 / 腰部跟随 / WBC 开关 / 单臂启用 / 底盘遥控”各节均为**普通模式**行为，全身模式下不可用。
 
@@ -161,7 +161,7 @@ WBC 确认 `body_state = BODY_TRACKING` 且 FSM = OCS2 后：
 | 操作 | 事件 | 切换命令 | 效果 |
 |------|------|----------|------|
 | 右握把 + 右摇杆**上** | 25 | `ARMS_COUPLED` / `ARMS_INDEPENDENT` | 双臂耦合开/关 |
-| 右握把 + 右摇杆**下** | 26 | `BASE_UNLOCK` / `BASE_LOCK` | 底盘解锁 / 锁定（WBC 层） |
+| 右握把 + 右摇杆**下** | 26 | `BASE_UNLOCK` / `BASE_LOCK` | 底盘锁定 ↔ 随动（跟随中按一次回到随动；跟随从 RViz 面板选择） |
 | 右握把 + 右摇杆**左** | 27 | — | 预留，当前不处理 |
 | 右握把 + 右摇杆**右** | 28 | `HOME_JOINT_ON` / `HOME_JOINT_OFF` | 参考关节追踪开/关 |
 
@@ -213,13 +213,13 @@ CHASSIS 模式下摇杆不再驱动末端：
 
 FULL_BODY 下右握把+右摇杆方向组合仍会锁存并清零右轴（含预留的 27/28），因此 **CHASSIS 里不能再用右握把当腰部修饰符**。全身场景下请用：
 
-- 事件 26：WBC 底盘解锁 / 锁定；
+- 事件 26：WBC 底盘锁定 / 随动切换；
 - 事件 23 + 左摇杆：腰部跟随微调；
 - 事件 20 + 左摇杆 / 右摇杆 X：VR 直发 `/cmd_vel`。
 
 这与事件 26 的 `BASE_UNLOCK` 不是同一层：前者是手柄遥控速度，后者是 MPC 是否允许底盘自由度。
 
-`/cmd_vel` 交接：仅在 **FULL_BODY + FSM=OCS2 + `BASE_UNLOCKED`** 时 VR 不发 `/cmd_vel`（让给 WBC）。HOLD / HOME / MOVEJ，或 OCS2 里手动 `BASE_LOCK`，手柄底盘照常可用。SPLIT_BODY 不让路。退出 OCS2 的零速由 WBC `stopBase()` 负责；退出 CHASSIS / `disable()` 仍由 VR 清零。
+`/cmd_vel` 交接：仅在 **FULL_BODY + FSM=OCS2 + 底盘非锁定**（随动或跟随）时 VR 不发 `/cmd_vel`（让给 WBC）。HOLD / HOME / MOVEJ，或 OCS2 里手动 `BASE_LOCK`，手柄底盘照常可用。SPLIT_BODY 不让路。退出 OCS2 的零速由 WBC `stopBase()` 负责；退出 CHASSIS / `disable()` 仍由 VR 清零。
 
 ### 全身控制速查（普通模式）
 
@@ -426,11 +426,11 @@ FULL_BODY 下右握把+右摇杆方向组合仍会锁存并清零右轴（含预
 
 - **底盘锁定**（`BASE_LOCKED`）：marker / 目标 = 机器人底座 ⊗ 人体相对 footprint 的位姿，
   人体原地走动不会把期望 marker 拉离机器人；
-- **底盘解锁**（事件 26 → `BASE_UNLOCKED`）：marker 锚定世界系（解锁瞬间冻结基准，不跳变），
+- **底盘可动**（随动或跟随）：marker 锚定世界系（进入可动状态时冻结基准，不跳变），
   人体走动时 marker 远离机器人；双腕/胸部 marker 超出机械臂工作空间时，OCS2 会自动移动底盘
   使其到达 marker 位姿；
 - **事件 20（左右摇杆同时按下）** 在全身模式下也可用：`BASE_LOCKED` 时 VR 直发 `/cmd_vel`，
-  `BASE_UNLOCKED` 时 `publishChassisVelocity()` 让路给 WBC（不发指令）。
+  `BASE_UNLOCKED` 或 `BASE_TRACKING` 时 `publishChassisVelocity()` 让路给 WBC（不发指令）。
 
 目标表达系：`/left_target`、`/right_target`、`/body_target`、`/head_target` 都是无 header 的
 `geometry_msgs/Pose`，按下游 WBC 的 `base_frame_` 解释——移动底盘模型（`manipulatorModelType 1/4`）

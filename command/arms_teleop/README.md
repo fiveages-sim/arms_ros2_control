@@ -234,7 +234,7 @@ sudo udevadm control --reload-rules
 
 ### 6.3 `/cmd_vel` 与 WBC
 
-仅当 **FSM=OCS2 且 `BASE_UNLOCKED`** 时，遥操节点向 WBC 让出 `/cmd_vel`。HOLD、底盘锁定的 OCS2、分体（无 WBC 状态）仍由本节点发布。离开 OCS2 时由 WBC `stopBase()` 清零，而不是本节点。键盘在 ARM 模式下发的零速度，在 WBC 占用话题时也会跳过。
+仅当 **FSM=OCS2 且底盘不是锁定状态**（随动或跟随）时，遥操节点向 WBC 让出 `/cmd_vel`。HOLD、底盘锁定的 OCS2、分体（无 WBC 状态）仍由本节点发布。离开 OCS2 时由 WBC `stopBase()` 清零，而不是本节点。键盘在 ARM 模式下发的零速度，在 WBC 占用话题时也会跳过。
 
 ## 7. 依赖
 

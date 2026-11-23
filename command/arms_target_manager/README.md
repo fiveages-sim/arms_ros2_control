@@ -56,6 +56,9 @@ ros2 launch ocs2_arm_controller demo.launch.py robot:=cr5
 | `head_target` | `geometry_msgs/Pose` | WBC Head 6D 最终目标连续更新 | full-body Head marker |
 | `head_target/stamped` | `geometry_msgs/PoseStamped` | WBC Head 6D 插值目标 | full-body Head marker 单次发送 |
 | `head_current_target` | `geometry_msgs/PoseStamped` | WBC Head 最终目标回写；本节点只订阅 | Head marker |
+| `base_target` | `geometry_msgs/Pose` | 底盘平面目标连续更新（仅 x/y/偏航生效） | RViz 底盘 marker |
+| `base_target/stamped` | `geometry_msgs/PoseStamped` | 底盘平面目标插值 | RViz 底盘 marker 单次发送 |
+| `base_current_target` | `geometry_msgs/PoseStamped` | 底盘最终目标回写；本节点只订阅 | 底盘 marker |
 
 **MOVEJ 下同一 stamped 话题**：`PoseBasedReferenceManager` 是 `left/right/dual_target/stamped` 与 TF buffer 的唯一持有者。FSM 为 OCS2 时写入参考缓冲；非 OCS2 时转给 `StateMoveJ` 走 `startLinearTrajectory`（lina MoveL + 逐点 IK），语义同 `execute_linear`。vel/acc/jerk 留空则用控制器 `cartesian_defaults`（默认 `max_linear_velocity=0.25`，`ik_type=AUTO`，`time_mode=false`）。无 `lina_planning` 时 MOVEJ 侧为 no-op。
 
@@ -100,6 +103,20 @@ RViz Joint Panel：绝对 / 相对基座 / 相对末端（手臂）或相对身�
 
 每次进入该模式，Marker 先从 `marker_fixed_frame -> head_link_name` TF 同步当前完整位姿；模式内 Marker 表示最终目标，不持续跟随实际 Head 或 MPC 中间轨迹。自身发布后的短暂回显冷却避免 `head_target -> head_current_target -> Marker` 抖动，其他最终目标随后可通过 `head_current_target` 回写 Marker。
 
+### Full-body WBC 底盘平面 Marker
+
+底盘只有平面位姿，因此 Marker 只提供 **x/y 平移 + 偏航旋转** 三个拖拽手柄。
+它只在 FSM=OCS2 且 `WbcCurrentState.base_state=BASE_TRACKING` 时显示；
+锁定与随动模式没有显式位姿目标，不显示 Marker。
+
+首次进入跟随时，Marker 先从 `marker_fixed_frame -> base_link_name`（默认 `base_footprint`）
+TF 同步到当前底盘位置，避免从原点跳过来。底盘目标必须画在与控制坐标系一致的世界系里；
+若 `marker_fixed_frame` 被配置成机器人本体坐标系，Marker 会随底盘漂移，此时不显示。
+
+| 参数 | 含义 | 默认 | 生效时机 |
+|------|------|------|------|
+| `base_link_name` | 底盘 Marker 首次显示时用于取当前底盘位姿的 link 名 | `"base_footprint"` | 仅启动 |
+
 ## 参数说明
 
 本节点在 `main` 里 `declare_parameter` 后把值传入构造函数，**没有** `add_on_set_parameters_callback`，之后也不再 `get_parameter`。下表全部为 **仅启动**（改参数需重启节点）。无 **运行时** / **未核实** 项。
@@ -112,6 +129,7 @@ RViz Joint Panel：绝对 / 相对基座 / 相对末端（手臂）或相对身�
 | `control_base_frame` | 控制基座坐标系 | `"world"` | 仅启动 |
 | `hand_controllers` | 手部控制器名列表（用于检测/校验） | `[]` | 仅启动 |
 | `marker_fixed_frame` | Marker 固定坐标系 | `"base_link"` | 仅启动 |
+| `base_link_name` | 底盘 marker 首次显示时用于取当前底盘位姿的 link 名 | `"base_footprint"` | 仅启动 |
 | `enable_movej_cartesian_markers` | MOVEJ 下是否显示可拖手臂 marker（发 stamped → IK MoveL）。`full_body.launch.py` 在 `ocs2_wbc_controller` 下设为 `false` | 有 `lina_planning` 时 `true`，否则 `false` | 仅启动 |
 | `enable_wbc_head_tracking_marker` | 是否具备 full-body WBC Head 6D Marker 启动能力；仍需 OCS2 + `HEAD_TRACKING` | `false` | 仅启动 |
 
@@ -167,7 +185,8 @@ RViz Joint Panel：绝对 / 相对基座 / 相对末端（手臂）或相对身�
 
 > 底盘跟随不再由本节点做速度外环（旧的 `base_follow_*` / `base_vmax` 等参数已删除）：
 > 全身遥操作的目标按下游 WBC 的 `base_frame_` 下发（移动底盘模型为 `world`，
-> 固定底盘模型为模型根如 `base_footprint`），底盘运动由 OCS2 在 `BASE_UNLOCKED` 时实现。
+> 固定底盘模型为模型根如 `base_footprint`）。底盘有三种模式：锁定、随动（OCS2 自由决定）、
+> 跟随（跟踪 `base_target` 世界系 marker）。随动与跟随都由 OCS2 驱动底盘。
 
 ### 全身遥操作模式（组合键 30）内的允许操作
 
@@ -176,7 +195,7 @@ RViz Joint Panel：绝对 / 相对基座 / 相对末端（手臂）或相对身�
 | 左右握把 + 右摇杆按下 | `30` | 进入/退出全身遥操作模式（发 `BODY_TRACKING` + `HEAD_TRACKING`） |
 | 右摇杆短按 | `4` | 开/关「全部跟踪」：胸/头/双臂末端改为 `/teleop/body_*` 绝对位姿映射 |
 | 左摇杆 + 右摇杆同时按下 | `20` | 开/关手动底盘遥控（左摇杆→底盘 XY，右摇杆→转向） |
-| 右握把 + 右摇杆向下 | `26` | 底盘解锁/锁定（WBC 层）：解锁后由 OCS2 驱动底盘跟随世界系 marker |
+| 右握把 + 右摇杆向下 | `26` | 底盘锁定/随动切换（WBC 层）：锁定 ↔ 随动；跟随模式从 RViz 面板选择，跟随中按此组合键回到随动 |
 | 右 A / 左 X | `11` / `12` | FSM 前进 / 后退（与普通模式共享） |
 | 扳机 / 握把+扳机 | `9` / `10` / `13` / `14` | 夹爪控制（与普通模式共享） |
 | FSM 离开 OCS2 / 拓扑离开 FULL_BODY | — | **自动退出整个模式**（「全部跟踪」一并关闭），回到 OCS2 后需重新按组合键开启 |

@@ -104,6 +104,22 @@ public:
     /** Optional head pose block, with the same cache/update semantics as body. */
     void setHeadPoseReference(const vector_t& head_pose_xyzw_7);
     void setHeadPoseTargetOnly(const vector_t& head_pose_xyzw_7, bool update_target_trajectory = true);
+    /** Optional planar base pose block (only x, y, yaw are used by the base constraint). */
+    void setBasePoseReference(const vector_t& base_pose_xyzw_7);
+    /**
+     * Update only the base target. interpolate=true creates a moveL from the previous
+     * target; false resets the buffer immediately (use when entering BASE_TRACKING so a
+     * stale target cannot pull the chassis before the measured pose takes over).
+     */
+    void setBasePoseTargetOnly(const vector_t& base_pose_xyzw_7,
+                               bool update_target_trajectory = true,
+                               bool interpolate = true);
+    /**
+     * Keep a held arm's target attached to the current held EE pose while an enable is
+     * pending. Other channels' active reference buffers are preserved, and the current
+     * target is published so the RViz marker follows the robot.
+     */
+    void setHeldEndEffectorTarget(bool left, const vector_t& pose);
     /** Publish cached current targets for visualization/marker refresh, without modifying MPC targets. */
     void publishCurrentTargetsFromCache();
 
@@ -127,11 +143,12 @@ public:
      */
     void markLeftCouplingCommand();
 
-    /** Build the explicit dual-arm + optional body/head layout. */
+    /** Build the explicit dual-arm + optional body/head/base layout. */
     static vector_t assembleWheelHumanoidTargetState(
         const vector_t& left_pose7_xyzw, const vector_t& right_pose7_xyzw,
         const vector_t& body_pose7_xyzw, const vector_t& head_pose7_xyzw,
-        bool body_target_enabled, bool head_target_enabled);
+        const vector_t& base_pose7_xyzw,
+        bool body_target_enabled, bool head_target_enabled, bool base_target_enabled);
 
 private:
     void setupTfBuffer(const rclcpp_lifecycle::LifecycleNode::SharedPtr& node);
@@ -141,6 +158,7 @@ private:
     void rightPoseCallback(geometry_msgs::msg::Pose::SharedPtr msg);
     void bodyPoseCallback(geometry_msgs::msg::Pose::SharedPtr msg);
     void headPoseCallback(geometry_msgs::msg::Pose::SharedPtr msg);
+    void basePoseCallback(geometry_msgs::msg::Pose::SharedPtr msg);
     void leftPoseStampedCallback(geometry_msgs::msg::PoseStamped::SharedPtr msg);
     void rightPoseStampedCallback(geometry_msgs::msg::PoseStamped::SharedPtr msg);
     void leftTwistCallback(geometry_msgs::msg::Twist::SharedPtr msg);
@@ -151,6 +169,7 @@ private:
     void dualTargetStampedCallback(nav_msgs::msg::Path::SharedPtr msg);
     void bodyPoseStampedCallback(geometry_msgs::msg::PoseStamped::SharedPtr msg);
     void headPoseStampedCallback(geometry_msgs::msg::PoseStamped::SharedPtr msg);
+    void basePoseStampedCallback(geometry_msgs::msg::PoseStamped::SharedPtr msg);
     void pathCallback(nav_msgs::msg::Path::SharedPtr msg);
     void runInterpolatedPathTrajectory(
         const std::vector<vector_t>& left_arm_waypoints,
@@ -165,6 +184,7 @@ private:
                                   const vector_t& previous_body_target_state);
     void updateBodyTrajectory(const vector_t& previous_body_target_state);
     void updateHeadTrajectory(const vector_t& previous_head_target_state);
+    void updateBaseTrajectory(const vector_t& previous_base_target_state);
 
     [[nodiscard]] int effectiveTargetStateDim() const;
     [[nodiscard]] vector_t identityBodyPose7() const;
@@ -176,12 +196,14 @@ private:
     void rightPoseStampedPoseCallback(geometry_msgs::msg::Pose::SharedPtr msg);
     void bodyPoseStampedPoseCallback(geometry_msgs::msg::Pose::SharedPtr msg);
     void headPoseStampedPoseCallback(geometry_msgs::msg::Pose::SharedPtr msg);
+    void basePoseStampedPoseCallback(geometry_msgs::msg::Pose::SharedPtr msg);
 
     /** Apply absolute 7D target [x,y,z,qx,qy,qz,qw]. interpolate=true uses moveL buffer path. */
     void applyLeftAbsoluteTarget(const vector_t& goal7, bool interpolate);
     void applyRightAbsoluteTarget(const vector_t& goal7, bool interpolate);
     void applyBodyAbsoluteTarget(const vector_t& goal7, bool interpolate);
     void applyHeadAbsoluteTarget(const vector_t& goal7, bool interpolate);
+    void applyBaseAbsoluteTarget(const vector_t& goal7, bool interpolate);
 
     /** Compose one-shot relative Twist (linear=m, angular=rad RPY) onto base7. */
     [[nodiscard]] static vector_t composeTwistDelta(const vector_t& base7,
@@ -232,6 +254,7 @@ private:
     rclcpp::Subscription<geometry_msgs::msg::Pose>::SharedPtr right_pose_subscriber_;
     rclcpp::Subscription<geometry_msgs::msg::Pose>::SharedPtr body_pose_subscriber_;
     rclcpp::Subscription<geometry_msgs::msg::Pose>::SharedPtr head_pose_subscriber_;
+    rclcpp::Subscription<geometry_msgs::msg::Pose>::SharedPtr base_pose_subscriber_;
     rclcpp::Subscription<geometry_msgs::msg::PoseStamped>::SharedPtr left_pose_stamped_subscriber_;
     rclcpp::Subscription<geometry_msgs::msg::PoseStamped>::SharedPtr right_pose_stamped_subscriber_;
     rclcpp::Subscription<geometry_msgs::msg::Twist>::SharedPtr left_twist_subscriber_;
@@ -242,6 +265,7 @@ private:
     rclcpp::Subscription<nav_msgs::msg::Path>::SharedPtr dual_target_stamped_subscriber_;
     rclcpp::Subscription<geometry_msgs::msg::PoseStamped>::SharedPtr body_pose_stamped_subscriber_;
     rclcpp::Subscription<geometry_msgs::msg::PoseStamped>::SharedPtr head_pose_stamped_subscriber_;
+    rclcpp::Subscription<geometry_msgs::msg::PoseStamped>::SharedPtr base_pose_stamped_subscriber_;
     rclcpp::Subscription<nav_msgs::msg::Path>::SharedPtr path_subscriber_;
 
     rclcpp::Service<arms_ros2_control_msgs::srv::ExecutePath>::SharedPtr execute_path_service_;
@@ -250,6 +274,7 @@ private:
     rclcpp::Publisher<geometry_msgs::msg::PoseStamped>::SharedPtr right_target_publisher_;
     rclcpp::Publisher<geometry_msgs::msg::PoseStamped>::SharedPtr body_target_publisher_;
     rclcpp::Publisher<geometry_msgs::msg::PoseStamped>::SharedPtr head_target_publisher_;
+    rclcpp::Publisher<geometry_msgs::msg::PoseStamped>::SharedPtr base_target_publisher_;
 
     std::shared_ptr<tf2_ros::Buffer> tf_buffer_;
     // Relative tf/tf_static (not TransformListener): it hard-binds absolute /tf
@@ -275,6 +300,8 @@ private:
     /** Optional body/head moveL buffers; same representation as arm buffers. */
     ArmReferenceBuffer body_reference_buffer_;
     ArmReferenceBuffer head_reference_buffer_;
+    /** Optional planar base moveL buffer; only x, y, yaw are used by the constraint. */
+    ArmReferenceBuffer base_reference_buffer_;
 
     /** True if any left/right/body reference buffer is still active at time. */
     [[nodiscard]] bool anyReferenceBufferActive(double time) const;
@@ -309,6 +336,7 @@ private:
     vector_t right_target_state_;
     vector_t body_pose_7_xyzw_;
     vector_t head_pose_7_xyzw_;
+    vector_t base_pose_7_xyzw_;
 
     geometry_msgs::msg::Twist left_latched_twist_{};
     geometry_msgs::msg::Twist right_latched_twist_{};

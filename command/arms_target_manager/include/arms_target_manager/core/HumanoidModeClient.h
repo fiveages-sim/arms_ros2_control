@@ -3,8 +3,8 @@
 //
 // 和 FsmClient 是两层不同的东西，不要合并：
 //   * FsmClient          管"整机现在归谁控制"（HOME / HOLD / MOVEJ / OCS2），4 个状态；
-//   * HumanoidModeClient 管"OCS2 内部怎么控制"（身体约束 / 双臂 / 耦合 / 底盘锁定 / 头部），
-//                        是控制器里一个 9 位整数，在 HOLD 状态下同样可以修改。
+//   * HumanoidModeClient 管"OCS2 内部怎么控制"（身体约束 / 双臂 / 耦合 / 底盘三态 / 头部），
+//                        是控制器里一个 10 位整数，在 HOLD 状态下同样可以修改。
 //
 // 输入：ocs2_wbc_controller/current_state   控制器算好的模式视图
 //       ocs2_wbc_controller/wbc_capabilities 这台机器支持哪些模式（静态）
@@ -37,24 +37,14 @@
 
 namespace arms_ros2_control::command
 {
-    /** 身体约束方式。对应控制器 BodyConstraintMode。 */
-    enum class BodyMode : uint8_t
-    {
-        Free,
-        Relative,
-        Tracking,
-        Locked,
-        CustomLocked,
-    };
-
-    /** 头部模式。对应控制器 HeadMode。 */
-    enum class HeadMode : uint8_t
-    {
-        Disabled,
-        Tracking,
-        Gaze,
-        Forward,
-    };
+    /**
+     * 模式取值直接使用 WbcCurrentState 的常量：
+     *   BODY_FREE / BODY_VERTICAL / BODY_TRACKING / BODY_LOCKED / BODY_CUSTOM_LOCKED
+     *   HEAD_DISABLED / HEAD_TRACKING / HEAD_GAZE / HEAD_FORWARD
+     *   BASE_LOCKED / BASE_UNLOCKED / BASE_TRACKING
+     * 这些值与 ocs2_wheel_humanoid 的 BodyConstraintMode / HeadMode / BaseMode
+     * 一一对应；命令侧不直接依赖 OCS2 库。
+     */
 
     /**
      * WBC 内部模式的唯一访问点：一个状态缓存 + 一个命令出口。
@@ -87,6 +77,7 @@ namespace arms_ros2_control::command
         [[nodiscard]] bool hasState() const;
 
         [[nodiscard]] bool baseUnlocked() const;
+        [[nodiscard]] bool baseTracking() const;
         [[nodiscard]] bool bodyTracking() const;
         /** 手臂是否真的可用（已过控制器的使能等待相位）。 */
         [[nodiscard]] bool armEnabled(bool left) const;
@@ -105,9 +96,12 @@ namespace arms_ros2_control::command
          */
         bool publishCommand(const std::string& command);
 
-        bool setBodyMode(BodyMode mode);
-        bool setHeadMode(HeadMode mode);
-        bool setBaseLocked(bool locked);
+        /** 传 WbcCurrentState::BODY_* 常量。 */
+        bool setBodyMode(uint8_t mode);
+        /** 传 WbcCurrentState::HEAD_* 常量。 */
+        bool setHeadMode(uint8_t mode);
+        /** 传 WbcCurrentState::BASE_* 常量。 */
+        bool setBaseMode(uint8_t mode);
         bool setBimanualCoupled(bool coupled);
         bool setArmEnabled(bool left, bool enabled);
         bool setHomeJointReference(bool enabled);

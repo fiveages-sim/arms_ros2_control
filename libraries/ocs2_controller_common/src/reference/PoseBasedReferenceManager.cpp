@@ -158,6 +158,8 @@ namespace ocs2::controller_common
         body_pose_7_xyzw_(6) = 1.0; // identity quaternion (geometry_msgs order)
         head_pose_7_xyzw_ = vector_t::Zero(7);
         head_pose_7_xyzw_(6) = 1.0;
+        base_pose_7_xyzw_ = vector_t::Zero(7);
+        base_pose_7_xyzw_(6) = 1.0;
 
         // 初始化圆弧指针
 #ifdef HAS_LINA_PLANNING
@@ -347,6 +349,15 @@ namespace ocs2::controller_common
                 "head_target/stamped", 1,
                 [this](const geometry_msgs::msg::PoseStamped::SharedPtr msg) { headPoseStampedCallback(msg); });
         }
+        if (target_context_.base_target_enabled)
+        {
+            base_pose_subscriber_ = node->create_subscription<geometry_msgs::msg::Pose>(
+                "base_target", 1,
+                [this](const geometry_msgs::msg::Pose::SharedPtr msg) { basePoseCallback(msg); });
+            base_pose_stamped_subscriber_ = node->create_subscription<geometry_msgs::msg::PoseStamped>(
+                "base_target/stamped", 1,
+                [this](const geometry_msgs::msg::PoseStamped::SharedPtr msg) { basePoseStampedCallback(msg); });
+        }
         // 删除圆弧订阅者，添加Service
 #ifdef HAS_LINA_PLANNING
         // 左臂圆弧Service
@@ -449,6 +460,11 @@ namespace ocs2::controller_common
             head_target_publisher_ = node->create_publisher<geometry_msgs::msg::PoseStamped>(
                 "head_current_target", 1);
         }
+        if (target_context_.base_target_enabled)
+        {
+            base_target_publisher_ = node->create_publisher<geometry_msgs::msg::PoseStamped>(
+                "base_current_target", 1);
+        }
     }
 
     int PoseBasedReferenceManager::effectiveTargetStateDim() const
@@ -484,7 +500,8 @@ namespace ocs2::controller_common
     bool PoseBasedReferenceManager::isWheelHumanoidTargetLayout() const
     {
         return dual_arm_mode_ &&
-            (target_context_.body_target_enabled || target_context_.head_target_enabled);
+            (target_context_.body_target_enabled || target_context_.head_target_enabled ||
+             target_context_.base_target_enabled);
     }
 
     vector_t PoseBasedReferenceManager::assembleDualArmReferenceState(const vector_t& left7, const vector_t& right7) const
@@ -492,8 +509,9 @@ namespace ocs2::controller_common
         if (isWheelHumanoidTargetLayout())
         {
             return assembleWheelHumanoidTargetState(
-                left7, right7, bodySegmentForAssembly(), head_pose_7_xyzw_,
-                target_context_.body_target_enabled, target_context_.head_target_enabled);
+                left7, right7, bodySegmentForAssembly(), head_pose_7_xyzw_, base_pose_7_xyzw_,
+                target_context_.body_target_enabled, target_context_.head_target_enabled,
+                target_context_.base_target_enabled);
         }
         vector_t s = vector_t::Zero(14);
         s.segment(0, 7) = left7;
@@ -505,12 +523,15 @@ namespace ocs2::controller_common
                                                                          const vector_t& right_pose7_xyzw,
                                                                          const vector_t& body_pose7_xyzw,
                                                                          const vector_t& head_pose7_xyzw,
+                                                                         const vector_t& base_pose7_xyzw,
                                                                          bool body_target_enabled,
-                                                                         bool head_target_enabled)
+                                                                         bool head_target_enabled,
+                                                                         bool base_target_enabled)
     {
         const int dim = Ocs2ReferenceTargetContext::kDualArmTargetDim +
             (body_target_enabled ? Ocs2ReferenceTargetContext::kPoseTargetDim : 0) +
-            (head_target_enabled ? Ocs2ReferenceTargetContext::kPoseTargetDim : 0);
+            (head_target_enabled ? Ocs2ReferenceTargetContext::kPoseTargetDim : 0) +
+            (base_target_enabled ? Ocs2ReferenceTargetContext::kPoseTargetDim : 0);
         vector_t s = vector_t::Zero(dim);
         s.segment(0, 7) = left_pose7_xyzw.head<7>();
         s.segment(7, 7) = right_pose7_xyzw.head<7>();
@@ -521,6 +542,10 @@ namespace ocs2::controller_common
         }
         if (head_target_enabled) {
             s.segment(offset, 7) = head_pose7_xyzw.head<7>();
+            offset += Ocs2ReferenceTargetContext::kPoseTargetDim;
+        }
+        if (base_target_enabled) {
+            s.segment(offset, 7) = base_pose7_xyzw.head<7>();
         }
         return s;
     }
@@ -755,6 +780,11 @@ namespace ocs2::controller_common
         {
             return true;
         }
+        if (target_context_.base_target_enabled &&
+            isArmReferenceBufferActive(base_reference_buffer_, time))
+        {
+            return true;
+        }
         return false;
     }
 
@@ -782,6 +812,10 @@ namespace ocs2::controller_common
         if (target_context_.head_target_enabled)
         {
             extend_end_time(head_reference_buffer_);
+        }
+        if (target_context_.base_target_enabled)
+        {
+            extend_end_time(base_reference_buffer_);
         }
         rebuildTargetTrajectoriesFromArmReferenceBuffers(start_time, end_time);
     }
@@ -818,9 +852,12 @@ namespace ocs2::controller_common
                     sampleArmReferenceBuffer(body_reference_buffer_, bodySegmentForAssembly(), t);
                 const vector_t head_pose =
                     sampleArmReferenceBuffer(head_reference_buffer_, head_pose_7_xyzw_, t);
+                const vector_t base_pose =
+                    sampleArmReferenceBuffer(base_reference_buffer_, base_pose_7_xyzw_, t);
                 state = assembleWheelHumanoidTargetState(
-                    left_pose, right_pose, body_pose, head_pose,
-                    target_context_.body_target_enabled, target_context_.head_target_enabled);
+                    left_pose, right_pose, body_pose, head_pose, base_pose,
+                    target_context_.body_target_enabled, target_context_.head_target_enabled,
+                    target_context_.base_target_enabled);
             }
             else if (dual_arm_mode_)
             {
@@ -871,6 +908,49 @@ namespace ocs2::controller_common
         {
             head_pose_7_xyzw_ = head_pose_xyzw_7.head<7>();
         }
+    }
+
+    void PoseBasedReferenceManager::setBasePoseReference(const vector_t& base_pose_xyzw_7)
+    {
+        if (base_pose_xyzw_7.size() >= 7)
+        {
+            base_pose_7_xyzw_ = base_pose_xyzw_7.head<7>();
+        }
+    }
+
+    void PoseBasedReferenceManager::setBasePoseTargetOnly(const vector_t& base_pose_xyzw_7,
+                                                           bool update_target_trajectory,
+                                                           bool interpolate)
+    {
+        if (base_pose_xyzw_7.size() < 7 || !target_context_.base_target_enabled)
+        {
+            return;
+        }
+        const vector_t previous_base_target_state = base_pose_7_xyzw_;
+        base_pose_7_xyzw_ = base_pose_xyzw_7.head<7>();
+
+        if (!update_target_trajectory)
+        {
+            return;
+        }
+        if (interpolate)
+        {
+            updateBaseTrajectory(previous_base_target_state);
+            return;
+        }
+
+        // Immediate reset: drop any running base moveL and rebuild from the new pose.
+        const double t = current_observation_.time;
+        resetArmReferenceBuffer(base_reference_buffer_, base_pose_7_xyzw_, t);
+        if (anyReferenceBufferActive(t))
+        {
+            rebuildTargetTrajectoriesFromActiveArmReferenceBuffers(t, 0.0);
+        }
+        else
+        {
+            updateTargetTrajectory();
+        }
+        publishCurrentTargets("base");
     }
 
     void PoseBasedReferenceManager::setHeadPoseTargetOnly(const vector_t& head_pose_xyzw_7,
@@ -1083,6 +1163,20 @@ namespace ocs2::controller_common
         rebuildTargetTrajectoriesFromActiveArmReferenceBuffers(start_time, moveL_duration_);
     }
 
+    void PoseBasedReferenceManager::updateBaseTrajectory(const vector_t& previous_base_target_state)
+    {
+        if (!target_context_.base_target_enabled)
+        {
+            updateTargetTrajectory();
+            return;
+        }
+        const double start_time = current_observation_.time;
+        setArmReferenceBufferFromWaypoints(
+            base_reference_buffer_, previous_base_target_state, {base_pose_7_xyzw_},
+            start_time, moveL_duration_);
+        rebuildTargetTrajectoriesFromActiveArmReferenceBuffers(start_time, moveL_duration_);
+    }
+
     void PoseBasedReferenceManager::updateParam()
     {
         trajectory_duration_ = std::max(0.0,
@@ -1264,6 +1358,19 @@ namespace ocs2::controller_common
         target_state << msg->position.x, msg->position.y, msg->position.z,
             msg->orientation.x, msg->orientation.y, msg->orientation.z, msg->orientation.w;
         applyHeadAbsoluteTarget(target_state, false);
+    }
+
+    void PoseBasedReferenceManager::basePoseCallback(
+        const geometry_msgs::msg::Pose::SharedPtr msg)
+    {
+        if (!shouldAcceptExternalTargets())
+        {
+            return;
+        }
+        vector_t target_state(7);
+        target_state << msg->position.x, msg->position.y, msg->position.z,
+            msg->orientation.x, msg->orientation.y, msg->orientation.z, msg->orientation.w;
+        applyBaseAbsoluteTarget(target_state, false);
     }
 
     void PoseBasedReferenceManager::setArmExternalCommandPredicate(
@@ -1462,6 +1569,36 @@ namespace ocs2::controller_common
         head_pose_7_xyzw_ = goal7.head<7>();
         updateHeadTrajectory(previous);
         publishCurrentTargets("head");
+    }
+
+    void PoseBasedReferenceManager::applyBaseAbsoluteTarget(const vector_t& goal7, bool interpolate)
+    {
+        if (goal7.size() < 7 || !target_context_.base_target_enabled)
+        {
+            return;
+        }
+        if (!interpolate)
+        {
+            base_pose_7_xyzw_ = goal7.head<7>();
+            const double t = current_observation_.time;
+            resetArmReferenceBuffer(base_reference_buffer_, base_pose_7_xyzw_, t);
+            if (anyReferenceBufferActive(t))
+            {
+                rebuildTargetTrajectoriesFromActiveArmReferenceBuffers(t, 0.0);
+            }
+            else
+            {
+                updateTargetTrajectory();
+            }
+            publishCurrentTargets("base");
+            return;
+        }
+
+        updateParam();
+        const vector_t previous = base_pose_7_xyzw_;
+        base_pose_7_xyzw_ = goal7.head<7>();
+        updateBaseTrajectory(previous);
+        publishCurrentTargets("base");
     }
 
     vector_t PoseBasedReferenceManager::composeTwistDelta(
@@ -1765,6 +1902,15 @@ namespace ocs2::controller_common
         applyHeadAbsoluteTarget(target_state, true);
     }
 
+    void PoseBasedReferenceManager::basePoseStampedPoseCallback(
+        const geometry_msgs::msg::Pose::SharedPtr msg)
+    {
+        vector_t target_state(7);
+        target_state << msg->position.x, msg->position.y, msg->position.z,
+            msg->orientation.x, msg->orientation.y, msg->orientation.z, msg->orientation.w;
+        applyBaseAbsoluteTarget(target_state, true);
+    }
+
     void PoseBasedReferenceManager::processPoseStamped(
         const geometry_msgs::msg::PoseStamped::SharedPtr& msg,
         std::function<void(geometry_msgs::msg::Pose::SharedPtr)> callback)
@@ -1935,6 +2081,19 @@ namespace ocs2::controller_common
         processPoseStamped(msg, [this](geometry_msgs::msg::Pose::SharedPtr pose_msg)
         {
             headPoseStampedPoseCallback(pose_msg);
+        });
+    }
+
+    void PoseBasedReferenceManager::basePoseStampedCallback(
+        const geometry_msgs::msg::PoseStamped::SharedPtr msg)
+    {
+        if (!shouldAcceptExternalTargets())
+        {
+            return;
+        }
+        processPoseStamped(msg, [this](geometry_msgs::msg::Pose::SharedPtr pose_msg)
+        {
+            basePoseStampedPoseCallback(pose_msg);
         });
     }
 
@@ -2336,6 +2495,10 @@ namespace ocs2::controller_common
         {
             extendEndTimeFromActiveBuffer(head_reference_buffer_);
         }
+        if (target_context_.base_target_enabled)
+        {
+            extendEndTimeFromActiveBuffer(base_reference_buffer_);
+        }
 
         if (!dual_arm_mode_ && left_arm_waypoints.empty())
         {
@@ -2361,10 +2524,13 @@ namespace ocs2::controller_common
         body_pose_7_xyzw_(6) = 1.0;
         head_pose_7_xyzw_ = vector_t::Zero(7);
         head_pose_7_xyzw_(6) = 1.0;
+        base_pose_7_xyzw_ = vector_t::Zero(7);
+        base_pose_7_xyzw_(6) = 1.0;
         left_arm_reference_buffer_ = ArmReferenceBuffer{};
         right_arm_reference_buffer_ = ArmReferenceBuffer{};
         body_reference_buffer_ = ArmReferenceBuffer{};
         head_reference_buffer_ = ArmReferenceBuffer{};
+        base_reference_buffer_ = ArmReferenceBuffer{};
 
         RCLCPP_INFO(logger_,
                     "Target state cache reset - cleared all cached target states");
@@ -2439,6 +2605,41 @@ namespace ocs2::controller_common
         publishCurrentTargets("right");
     }
 
+    void PoseBasedReferenceManager::setHeldEndEffectorTarget(bool left, const vector_t& pose)
+    {
+        if (pose.size() != 7)
+        {
+            return;
+        }
+        if (left)
+        {
+            left_target_state_ = pose;
+            resetArmReferenceBuffer(left_arm_reference_buffer_, pose, current_observation_.time);
+        }
+        else
+        {
+            right_target_state_ = pose;
+            resetArmReferenceBuffer(right_arm_reference_buffer_, pose, current_observation_.time);
+        }
+
+        if (isWheelHumanoidTargetLayout())
+        {
+            // Preserve an in-flight moveL on the other arm: rebuilding from active buffers
+            // keeps its end time instead of collapsing it to the current held pose.
+            if (anyReferenceBufferActive(current_observation_.time))
+            {
+                rebuildTargetTrajectoriesFromActiveArmReferenceBuffers(
+                    current_observation_.time, 0.0);
+            }
+            else
+            {
+                updateTargetTrajectory();
+            }
+        }
+        // Marker feedback: the held arm target follows the robot while the enable is pending.
+        publishCurrentTargets(left ? "left" : "right");
+    }
+
     void PoseBasedReferenceManager::publishCurrentTargets(
         const std::string& target_type)
     {
@@ -2450,6 +2651,8 @@ namespace ocs2::controller_common
             (target_type.empty() || target_type == "both" || target_type == "body");
         const bool publish_head =
             (target_type.empty() || target_type == "both" || target_type == "head");
+        const bool publish_base =
+            (target_type.empty() || target_type == "both" || target_type == "base");
 
         // 发布左臂当前目标
         if (publish_left)
@@ -2511,6 +2714,21 @@ namespace ocs2::controller_common
             msg.pose.orientation.z = head_pose_7_xyzw_(5);
             msg.pose.orientation.w = head_pose_7_xyzw_(6);
             head_target_publisher_->publish(msg);
+        }
+
+        if (target_context_.base_target_enabled && publish_base && base_target_publisher_)
+        {
+            geometry_msgs::msg::PoseStamped msg;
+            msg.header.stamp = clock_->now();
+            msg.header.frame_id = base_frame_;
+            msg.pose.position.x = base_pose_7_xyzw_(0);
+            msg.pose.position.y = base_pose_7_xyzw_(1);
+            msg.pose.position.z = base_pose_7_xyzw_(2);
+            msg.pose.orientation.x = base_pose_7_xyzw_(3);
+            msg.pose.orientation.y = base_pose_7_xyzw_(4);
+            msg.pose.orientation.z = base_pose_7_xyzw_(5);
+            msg.pose.orientation.w = base_pose_7_xyzw_(6);
+            base_target_publisher_->publish(msg);
         }
     }
 

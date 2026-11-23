@@ -25,7 +25,7 @@ namespace arms_ros2_control::command
     {
         constexpr std::array<const char*, static_cast<size_t>(Channel::Count)> kTopics{
             "left_current_target", "right_current_target",
-            "head_current_target", "body_current_target"};
+            "head_current_target", "body_current_target", "base_current_target"};
     } // namespace
 
     /**
@@ -42,7 +42,8 @@ namespace arms_ros2_control::command
                 ChannelState{config_, Channel::ArmLeft},
                 ChannelState{config_, Channel::ArmRight},
                 ChannelState{config_, Channel::Head},
-                ChannelState{config_, Channel::Body}}
+                ChannelState{config_, Channel::Body},
+                ChannelState{config_, Channel::Base}}
     {
     }
 
@@ -75,6 +76,12 @@ namespace arms_ros2_control::command
         body.sink.bind(
             node_->create_publisher<geometry_msgs::msg::Pose>("body_target", 10),
             node_->create_publisher<geometry_msgs::msg::PoseStamped>("body_target/stamped", 10),
+            transform, node_.get());
+
+        auto& base = state(Channel::Base);
+        base.sink.bind(
+            node_->create_publisher<geometry_msgs::msg::Pose>("base_target", 10),
+            node_->create_publisher<geometry_msgs::msg::PoseStamped>("base_target/stamped", 10),
             transform, node_.get());
 
         if (config_.dual_arm)
@@ -385,7 +392,7 @@ namespace arms_ros2_control::command
     }
 
     /**
-     * @brief 通道名（left_arm / right_arm / head / body）
+     * @brief 通道名（left_arm / right_arm / head / body / base）
      */
     const char* TargetRouter::channelName(Channel channel)
     {
@@ -399,6 +406,8 @@ namespace arms_ros2_control::command
                 return "head";
             case Channel::Body:
                 return "body";
+            case Channel::Base:
+                return "base";
             case Channel::Count:
                 break;
         }

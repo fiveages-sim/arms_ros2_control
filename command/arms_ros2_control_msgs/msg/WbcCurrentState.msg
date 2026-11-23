@@ -1,6 +1,10 @@
 # base
+# LOCKED: base velocity input forced to zero.
+# UNLOCKED: base is a free MPC variable with no explicit pose target.
+# TRACKING: base follows the planar base_target pose (x, y, yaw).
 uint8 BASE_LOCKED=0
 uint8 BASE_UNLOCKED=1
+uint8 BASE_TRACKING=2
 
 # body
 uint8 BODY_FREE=0

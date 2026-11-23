@@ -162,9 +162,10 @@ namespace arms_ros2_control::command
 
         /**
          * @brief 使用最近一次 current_pose 重新刷新 marker pose（仅可视化，不 publish target）
+         * @param notify 是否触发 update_callback_（marker 尚未插入时应传 false）
          * @return true 刷新成功，false 表示没有可用的 current_pose
          */
-        bool refreshFromLatestCurrentPose();
+        bool refreshFromLatestCurrentPose(bool notify = true);
 
         /**
          * @brief 清除 marker 自身发令冷却，允许 current_target 立即回写可视化
