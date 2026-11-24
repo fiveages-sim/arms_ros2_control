@@ -15,6 +15,8 @@ namespace arms_ros2_control::command
     ControlInputHandler::ControlInputHandler(
         rclcpp::Node::SharedPtr node,
         ArmsTargetManager* targetManager,
+        rclcpp::Publisher<geometry_msgs::msg::Twist>::SharedPtr left_twist_publisher,
+        rclcpp::Publisher<geometry_msgs::msg::Twist>::SharedPtr right_twist_publisher,
         const double linearScale,
         const double angularScale,
         const double controlInputRate,
@@ -24,13 +26,10 @@ namespace arms_ros2_control::command
           , linear_scale_(linearScale)
           , angular_scale_(angularScale)
           , control_input_rate_(std::max(1.0, controlInputRate))
+          , left_twist_publisher_(std::move(left_twist_publisher))
+          , right_twist_publisher_(std::move(right_twist_publisher))
           , hand_controllers_(handControllers)
     {
-        left_twist_publisher_ = node_->create_publisher<geometry_msgs::msg::Twist>(
-            "left_target/twist", 10);
-        right_twist_publisher_ = node_->create_publisher<geometry_msgs::msg::Twist>(
-            "right_target/twist", 10);
-
         RCLCPP_INFO(node_->get_logger(),
                     "🎮 ControlInputHandler: twist velocity scales linear=%.3f m/s, angular=%.3f rad/s "
                     "(control_input_rate=%.1f Hz)",
@@ -83,7 +82,6 @@ namespace arms_ros2_control::command
                 RCLCPP_INFO(node_->get_logger(), "🎮 ArmsTargetManager switched to CONTINUOUS mode for control input");
             }
 
-            // Marker 仅可视化：用 v/f 近似一帧位移，不向 left_target 发绝对 Pose
             const double inv_rate = 1.0 / control_input_rate_;
             std::array<double, 3> positionDelta = {
                 twist.linear.x * inv_rate,
@@ -141,7 +139,6 @@ namespace arms_ros2_control::command
         }
 
         const double value = static_cast<double>(hand_command);
-        // 仅精确 0/1 走开关；中间比例走 target_percent（扳机未按时 teleop 不发 hand_command）
         const bool use_switch = (hand_command == 0.0f || hand_command == 1.0f);
         const std::string arm_label = (hand_controllers_.size() == 1)
             ? controller_name

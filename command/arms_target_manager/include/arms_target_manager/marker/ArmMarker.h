@@ -1,6 +1,4 @@
 //
-// ArmMarker - 机械臂 Marker 管理类
-// 封装所有机械臂 marker 相关的逻辑，包括创建、更新、发布等
 //
 #pragma once
 
@@ -17,15 +15,10 @@
 
 namespace arms_ros2_control::command
 {
-    class MarkerFactory; // 前向声明
-
-    /**
-     * @brief 手臂类型枚举
-     */
     enum class ArmType
     {
-        LEFT,   // 左臂
-        RIGHT   // 右臂
+        LEFT,
+        RIGHT
     };
 
     /**
@@ -151,6 +144,11 @@ namespace arms_ros2_control::command
         bool refreshFromLatestCurrentTarget();
 
         /**
+         * @brief 最近一次 left/right_current_target（控制器指令系，未变换到 marker frame）
+         */
+        bool getLatestCurrentTarget(geometry_msgs::msg::PoseStamped& out) const;
+
+        /**
          * @brief 使用最近一次 current_pose 重新刷新 marker pose（仅可视化，不 publish target）
          * @return true 刷新成功，false 表示没有可用的 current_pose
          */
@@ -217,30 +215,24 @@ namespace arms_ros2_control::command
          */
         bool shouldThrottle(double interval);
 
-        // ROS 节点和工具
         rclcpp::Node::SharedPtr node_;
         std::shared_ptr<MarkerFactory> marker_factory_;
         std::shared_ptr<tf2_ros::Buffer> tf_buffer_;
-        std::string frame_id_;              // Marker 所在的坐标系
-        std::string control_base_frame_;    // 控制基坐标系
+        std::string frame_id_;
+        std::string control_base_frame_;
 
-        // 手臂类型和配置
         ArmType arm_type_;
         std::array<double, 3> initial_position_;
 
-        // 状态
         geometry_msgs::msg::Pose pose_;
         
-        // 发布配置
-        double publish_rate_;  // 发布频率（Hz）
-        rclcpp::Publisher<geometry_msgs::msg::Pose>::SharedPtr target_publisher_;  // 目标 pose 发布器（连续发布用）
-        rclcpp::Publisher<geometry_msgs::msg::PoseStamped>::SharedPtr target_stamped_publisher_;  // 目标 pose 发布器（单次发布用）
+        double publish_rate_;
+        rclcpp::Publisher<geometry_msgs::msg::Pose>::SharedPtr target_publisher_;
+        rclcpp::Publisher<geometry_msgs::msg::PoseStamped>::SharedPtr target_stamped_publisher_;
         
-        // 订阅器
-        rclcpp::Subscription<geometry_msgs::msg::PoseStamped>::SharedPtr current_pose_subscription_;  // 当前 pose 订阅器
-        rclcpp::Subscription<geometry_msgs::msg::PoseStamped>::SharedPtr current_target_subscription_;  // 当前目标订阅器（用于获取 frame_id）
+        rclcpp::Subscription<geometry_msgs::msg::PoseStamped>::SharedPtr current_pose_subscription_;
+        rclcpp::Subscription<geometry_msgs::msg::PoseStamped>::SharedPtr current_target_subscription_;
         
-        // 当前目标的 frame_id（从 left_current_target 或 right_current_target 获取）
         std::string current_target_frame_id_;
         geometry_msgs::msg::PoseStamped latest_current_target_pose_;
         bool has_latest_current_target_pose_{false};
@@ -248,19 +240,15 @@ namespace arms_ros2_control::command
         geometry_msgs::msg::PoseStamped latest_current_pose_;
         bool has_latest_current_pose_{false};
         
-        // 更新回调（用于通知外部更新可视化）
         UpdateCallback update_callback_;
         
-        // 状态检查回调（用于检查是否允许自动更新）
         StateCheckCallback state_check_callback_;
         
-        // Current pose 原始消息回调（用于通知外部收到原始消息，如 VRInputHandler）
         CurrentPoseCallback current_pose_callback_;
         
-        // 节流管理（每个 marker 独立管理）
         mutable rclcpp::Time last_publish_time_;
-        mutable rclcpp::Time last_subscription_update_time_;  // 订阅更新的节流时间戳（限制为30Hz）
-        mutable rclcpp::Time last_marker_command_time_;  // 最后一次由marker发送指令的时间（用于冷却机制）
+        mutable rclcpp::Time last_subscription_update_time_;
+        mutable rclcpp::Time last_marker_command_time_;
     };
 } // namespace arms_ros2_control::command
 

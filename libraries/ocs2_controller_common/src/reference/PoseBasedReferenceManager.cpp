@@ -443,6 +443,11 @@ namespace ocs2::controller_common
                 [this](const geometry_msgs::msg::TwistStamped::SharedPtr msg) {
                     bodyRelativeCallback(msg);
                 });
+            body_twist_subscriber_ = node->create_subscription<geometry_msgs::msg::Twist>(
+                "body_target/twist", 1,
+                [this](const geometry_msgs::msg::Twist::SharedPtr msg) {
+                    bodyTwistCallback(msg);
+                });
         }
         if (target_context_.head_target_enabled)
         {
@@ -1528,6 +1533,15 @@ namespace ocs2::controller_common
                 right_latched_twist_ = geometry_msgs::msg::Twist{};
             }
         }
+        if (body_twist_active_)
+        {
+            const double age = std::chrono::duration<double>(now - body_twist_stamp_).count();
+            if (age > kTwistTimeoutSec_)
+            {
+                body_twist_active_ = false;
+                body_latched_twist_ = geometry_msgs::msg::Twist{};
+            }
+        }
     }
 
     void PoseBasedReferenceManager::integrateLatchedTwists(double dt)
@@ -1561,6 +1575,12 @@ namespace ocs2::controller_common
             resetArmReferenceBuffer(right_arm_reference_buffer_, right_target_state_, t);
             right_target_state_ = integrateTwistVelocity(right_target_state_, right_latched_twist_, dt);
             (void)syncWheelHumanoidCoupledOppositeArmIfNeeded(false);
+            updated = true;
+        }
+        if (body_twist_active_ && target_context_.body_target_enabled)
+        {
+            resetArmReferenceBuffer(body_reference_buffer_, body_pose_7_xyzw_, t);
+            body_pose_7_xyzw_ = integrateTwistVelocity(body_pose_7_xyzw_, body_latched_twist_, dt);
             updated = true;
         }
         if (updated)
@@ -1625,6 +1645,22 @@ namespace ocs2::controller_common
             std::abs(msg->linear.z) < 1e-9 && std::abs(msg->angular.x) < 1e-9 &&
             std::abs(msg->angular.y) < 1e-9 && std::abs(msg->angular.z) < 1e-9;
         right_twist_active_ = !is_zero;
+    }
+
+    void PoseBasedReferenceManager::bodyTwistCallback(
+        const geometry_msgs::msg::Twist::SharedPtr msg)
+    {
+        if (!shouldAcceptExternalTargets() || !target_context_.body_target_enabled)
+        {
+            return;
+        }
+        body_latched_twist_ = *msg;
+        body_twist_stamp_ = std::chrono::steady_clock::now();
+        const bool is_zero =
+            std::abs(msg->linear.x) < 1e-9 && std::abs(msg->linear.y) < 1e-9 &&
+            std::abs(msg->linear.z) < 1e-9 && std::abs(msg->angular.x) < 1e-9 &&
+            std::abs(msg->angular.y) < 1e-9 && std::abs(msg->angular.z) < 1e-9;
+        body_twist_active_ = !is_zero;
     }
 
     bool PoseBasedReferenceManager::twistStampedToBaseTwist(

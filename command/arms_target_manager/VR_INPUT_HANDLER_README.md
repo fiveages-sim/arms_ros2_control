@@ -104,7 +104,7 @@ R_target_C = R_C_F * delta_R_F * inverse(R_C_F) * R_anchor_C
 2. 用 **右 A** 把 FSM 推到 OCS2（HOME → HOLD → OCS2）；**左 X** 后退。
 3. 把双手柄放到期望起始姿态，点 **右摇杆** 进入 UPDATE，双臂开始跟随。
 4. 用 **左握把 + 左摇杆四方向** 切换身体模式；用 **右握把 + 右摇杆上/下/右** 切换双臂耦合 / 底盘锁 / 参考关节。单臂启用默认用左 Y / 右 B；**左右握把 + 左 Y + 右 B**（事件 16）可把 Y/B 切到 VR 暂停语义。
-5. 进入 **跟随（BODY_TRACKING）** 后，左右摇杆都改控腰部（右臂末端仍由手柄位姿驱动）。
+5. 进入 **跟随（BODY_TRACKING）** 后，左右摇杆都改控腰部；双臂 VR 绝对 pose 会 hold，离开跟随后再 rebase。
 6. 需要底盘遥控时，再同时按下左右摇杆进入 CHASSIS 模式。
 
 ### 身体模式（左握把 + 左摇杆）
@@ -122,7 +122,7 @@ R_target_C = R_C_F * delta_R_F * inverse(R_C_F) * R_anchor_C
 
 ### 腰部跟随（BODY_TRACKING）
 
-WBC 确认 `body_state = BODY_TRACKING` 且 FSM = OCS2 后，**左右摇杆都增量改 BodyMarker**（不依赖双臂 UPDATE/STORAGE；右臂末端仍由手柄位姿驱动）：
+WBC 确认 `body_state = BODY_TRACKING` 且 FSM = OCS2 后，**左右摇杆经 `body_target/twist` 以速度语义改腰**（与 joystick 共用 `linear_scale`/`angular_scale`）。进入跟随后 **mute 左右臂 VR 绝对 pose**，避免手柄位姿与腰 twist 叠加速度；离开跟随后按 `current_target` rebase 再 unmute：
 
 | 摇杆 | 默认平面 | 握把短切换面 |
 |------|----------|--------------|
@@ -174,14 +174,14 @@ WBC 确认 `body_state = BODY_TRACKING` 且 FSM = OCS2 后，**左右摇杆都�
 
 WBC 确认某臂为 `ARM_DISABLED` 后：
 
-- VR 停止向该臂发布 pose，也不再累积该臂摇杆 offset；另一臂仍可控制。
-- 禁用期间可自由移动对应手柄。重新启用并确认后，机器人基准取当前 `left/right_current_pose`，VR 基准取手柄当前位置，并清零该臂摇杆 offset。
+- VR 停止向该臂发布 pose，也不再对该臂发 `*/twist`；另一臂仍可控制。
+- 禁用期间可自由移动对应手柄。重新启用并确认后，机器人基准取当前 `left/right_current_pose`，VR 基准取手柄当前位置。
 - rebase 成功前该臂保持抑制；current pose 或 TF 暂不可用时不会回退到禁用前的 target。
 - 镜像只交换物理手柄到机械臂的映射；WBC enabled/disabled 与 rebase 始终按实际机械臂保存。
 
 ### 底盘遥控（左右摇杆同时按下）
 
-同时按下左右摇杆帽（事件 20）在 **CHASSIS** 与末端控制之间切换。只要求 VR 已启用，不要求 FULL_BODY。进入时清零末端摇杆累积；退出时向底盘/腰部话题各发一次 0，防止残留运动。
+同时按下左右摇杆帽（事件 20）在 **CHASSIS** 与末端控制之间切换。只要求 VR 已启用，不要求 FULL_BODY。进入时停止臂 `*/twist`；退出时向底盘/腰部话题各发一次 0，防止残留运动。
 
 CHASSIS 模式下摇杆不再驱动末端：
 
@@ -212,6 +212,9 @@ FULL_BODY 下右握把+右摇杆方向组合仍会锁存并清零右轴（含预
 跟随模式下短按左/右握把    →  腰部左 XY↔ROLL / 右 ZYAW↔PYAW
 短按左/右握把（非跟随）    →  对应臂摇杆 XY ↔ Z+Yaw（长按或组合键不切换）
 右摇杆点击                  →  STORAGE ↔ UPDATE（需 OCS2）
+
+臂末端摇杆（UPDATE、非跟随/底盘）：发 `left|right_target/twist`，离中 mute 该臂 VR 绝对 pose，回中 rebase 后 unmute。  
+腰部跟随：整段 BODY_TRACKING 期间 mute 双臂 VR pose；离开跟随再 rebase。
 右 A / 左 X                 →  FSM 前进 / 后退
 RViz HUD 点 L/R              →  同 3/6；FULL_BODY 非暂停语义时先发 16 再发 3/6
 ```

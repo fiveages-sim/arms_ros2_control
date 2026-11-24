@@ -16,7 +16,6 @@
 
 namespace arms_ros2_control::command
 {
-    // 前向声明
     class ArmsTargetManager;
 
     /**
@@ -33,6 +32,8 @@ namespace arms_ros2_control::command
         ControlInputHandler(
             rclcpp::Node::SharedPtr node,
             ArmsTargetManager* targetManager,
+            rclcpp::Publisher<geometry_msgs::msg::Twist>::SharedPtr left_twist_publisher,
+            rclcpp::Publisher<geometry_msgs::msg::Twist>::SharedPtr right_twist_publisher,
             double linearScale = 0.1,
             double angularScale = 0.25,
             double controlInputRate = 50.0,

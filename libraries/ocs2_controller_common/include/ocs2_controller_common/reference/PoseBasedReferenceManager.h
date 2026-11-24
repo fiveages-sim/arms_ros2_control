@@ -145,6 +145,7 @@ private:
     void rightPoseStampedCallback(geometry_msgs::msg::PoseStamped::SharedPtr msg);
     void leftTwistCallback(geometry_msgs::msg::Twist::SharedPtr msg);
     void rightTwistCallback(geometry_msgs::msg::Twist::SharedPtr msg);
+    void bodyTwistCallback(geometry_msgs::msg::Twist::SharedPtr msg);
     void leftRelativeCallback(geometry_msgs::msg::TwistStamped::SharedPtr msg);
     void rightRelativeCallback(geometry_msgs::msg::TwistStamped::SharedPtr msg);
     void bodyRelativeCallback(geometry_msgs::msg::TwistStamped::SharedPtr msg);
@@ -236,6 +237,7 @@ private:
     rclcpp::Subscription<geometry_msgs::msg::PoseStamped>::SharedPtr right_pose_stamped_subscriber_;
     rclcpp::Subscription<geometry_msgs::msg::Twist>::SharedPtr left_twist_subscriber_;
     rclcpp::Subscription<geometry_msgs::msg::Twist>::SharedPtr right_twist_subscriber_;
+    rclcpp::Subscription<geometry_msgs::msg::Twist>::SharedPtr body_twist_subscriber_;
     rclcpp::Subscription<geometry_msgs::msg::TwistStamped>::SharedPtr left_relative_subscriber_;
     rclcpp::Subscription<geometry_msgs::msg::TwistStamped>::SharedPtr right_relative_subscriber_;
     rclcpp::Subscription<geometry_msgs::msg::TwistStamped>::SharedPtr body_relative_subscriber_;
@@ -312,10 +314,13 @@ private:
 
     geometry_msgs::msg::Twist left_latched_twist_{};
     geometry_msgs::msg::Twist right_latched_twist_{};
+    geometry_msgs::msg::Twist body_latched_twist_{};
     bool left_twist_active_{false};
     bool right_twist_active_{false};
+    bool body_twist_active_{false};
     std::chrono::steady_clock::time_point left_twist_stamp_{};
     std::chrono::steady_clock::time_point right_twist_stamp_{};
+    std::chrono::steady_clock::time_point body_twist_stamp_{};
     static constexpr double kTwistTimeoutSec_{0.2};
     /** Coupled: left remains leader while it keeps commanding; after this gap, right may lead. */
     std::chrono::steady_clock::time_point last_left_coupling_command_stamp_{};

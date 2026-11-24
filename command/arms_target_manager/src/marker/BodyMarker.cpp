@@ -1,5 +1,9 @@
 #include "arms_target_manager/marker/BodyMarker.h"
 
+#include <tf2/exceptions.hpp>
+#include <tf2_geometry_msgs/tf2_geometry_msgs.hpp>
+#include <visualization_msgs/msg/interactive_marker_control.hpp>
+
 namespace arms_ros2_control::command
 {
 
@@ -64,7 +68,7 @@ visualization_msgs::msg::InteractiveMarker BodyMarker::createMarker(
         name,
         "Body Target",
         pose_,
-        "green",   // 建议用绿色区分
+        "green",
         mode,
         enable_interaction);
 }
@@ -87,7 +91,6 @@ void BodyMarker::updateFromTopic(
         current_pose_callback_(pose_msg);
     }
 
-    // 节流到 30Hz 左右
     const double interval = 1.0 / 30.0;
     auto now = node_->now();
     if ((now - last_subscription_update_time_).seconds() < interval) {
@@ -95,7 +98,6 @@ void BodyMarker::updateFromTopic(
     }
     last_subscription_update_time_ = now;
 
-    // 如果外部状态检查不允许自动更新，则直接返回
     if (state_check_callback_ && !state_check_callback_()) {
         return;
     }
@@ -149,7 +151,6 @@ void BodyMarker::updateTargetFromTopic(
 
 bool BodyMarker::publishTargetPose(bool force)
 {
-    // 单次发送（force=true）走 stamped（插值）；连续发送走 pose（不插值），与双臂逻辑保持一致。
     if (force)
     {
         if (!target_stamped_publisher_) {
