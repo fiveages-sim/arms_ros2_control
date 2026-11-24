@@ -55,9 +55,9 @@ namespace arms_ros2_control::command
      * 这些开关只在「全身遥操作模式」（case 30 已开启）内部生效：
      *   - 右摇杆短按（事件 4） = 开/关「全部跟踪」→ 胸/头/双臂末端改为 /teleop/body_* 绝对位姿映射
      * 底盘跟随不由本节点做速度外环：由 OCS2 负责
-     * （事件 26 解锁底盘后，MPC 用底盘自由度去追世界系 marker）。
+     * （事件 26 在「锁定 ↔ 追踪」之间切换，追踪时 MPC 用底盘自由度去追世界系 marker）。
      * 非全身模式下的一切既有行为（UPDATE/STORAGE、摇杆微调、镜像等）不受影响；
-     * 事件 20 的手动底盘遥控在两种模式下都可用。
+     * 底盘只允许「锁定/追踪」，事件 20 的手动底盘遥控只在普通模式可用。
      */
     struct AbsoluteTeleopOptions
     {
@@ -399,6 +399,17 @@ namespace arms_ros2_control::command
          * @param command 模式命令字符串，例如 "BODY_TRACKING"
          */
         void publishHumanoidModeCommand(const std::string& command);
+
+        /**
+         * 全身遥操作的底盘约束：只允许「锁定」或「追踪」。
+         *
+         * 进入全身模式时若底盘仍处于普通模式的「随动」，切到追踪；
+         * 退出时若仍是追踪，收回到锁定。普通模式只允许「锁定/随动」。
+         */
+        void syncBaseModeForWholeBody();
+        void releaseBaseTrackingOnExit();
+        /** WBC 底盘状态变化：全身模式下把外部设置的「随动」拉回「追踪」。 */
+        void onWbcBaseStateChanged(int base_state);
 
         /**
          * 处理底盘模式下的摇杆轴值
@@ -904,6 +915,8 @@ namespace arms_ros2_control::command
         // 等待 state-based rebase。不替代 SPLIT_BODY 的 *_arm_paused_，也不改变
         // right_wbc_toggle_request_pending_ 的互斥/超时/回中语义。
         std::atomic<int> observed_left_wbc_arm_state_{-1};
+        // 全身模式底盘纠偏节流：避免与外部（RViz 面板）反复拉锂。
+        std::chrono::steady_clock::time_point last_base_mode_sync_time_{};
         std::atomic<int> observed_right_wbc_arm_state_{-1};
         std::atomic<bool> left_wbc_vr_suppressed_{false};
         std::atomic<bool> right_wbc_vr_suppressed_{false};

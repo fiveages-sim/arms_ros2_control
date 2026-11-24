@@ -750,7 +750,10 @@ namespace arms_rviz_control_plugin
         const char* name = (code >= 0 && code <= 4) ? kNames[code] : "UNKNOWN";
 
         current_command_ = code;
-        setCurrentState(name);
+        // 本回调运行在 rviz 的 executor 线程，标签/按钮只能在 GUI 线程改。
+        const std::string state_name(name);
+        QMetaObject::invokeMethod(
+            this, [this, state_name]() { setCurrentState(state_name); }, Qt::QueuedConnection);
     }
 
     // ==================== WBC Control Methods ====================

@@ -9,6 +9,7 @@
 #include <QVBoxLayout>
 #include <QGridLayout>
 #include <QGroupBox>
+#include <QMetaObject>
 #include <QSizePolicy>
 #include <QDoubleSpinBox>
 #include <QString>
@@ -114,7 +115,9 @@ namespace arms_rviz_control_plugin
         // Update gripper state directly
         *it->second = is_open;
 
-        updateGripperDisplay();
+        // 本回调运行在 rviz 的 executor 线程，控件更新投递回 GUI 线程。
+        QMetaObject::invokeMethod(
+            this, [this]() { updateGripperDisplay(); }, Qt::QueuedConnection);
     }
 
     void GripperControlPanel::publishGripperCommand(bool open, const std::string& controller_name)

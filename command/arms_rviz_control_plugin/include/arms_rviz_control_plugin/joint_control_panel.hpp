@@ -294,6 +294,8 @@ namespace arms_rviz_control_plugin
         bool relative_keep_input_ = false;  // false = clear after send (default)
         // 避免在 /joint_states 高频回调中反复 wait_for_service 卡住 RViz
         std::chrono::steady_clock::time_point last_joint_order_attempt_{};
+        // /joint_states 驱动 spinbox 刷新的节流时间戳（回调线程独占写入）
+        std::chrono::steady_clock::time_point last_state_ui_refresh_{};
         std::string current_category_ = "all";
 
         // Control state

@@ -14,6 +14,8 @@
 #include <QGridLayout>
 #include <QFontDatabase>
 #include <QFrame>
+#include <QMetaObject>
+#include <QThread>
 #include <QToolButton>
 #include <QSignalBlocker>
 #include <arms_controller_common/utils/Interpolation.h>
@@ -516,23 +518,30 @@ namespace arms_rviz_control_plugin
         current_command_ = code;
         current_state_ = (code >= 0 && code <= 4) ? kNames[code] : "UNKNOWN";
 
-        // 关节控制只在 OCS2(3) / MOVEJ(4) 下可用
-        const bool should_enable = (code == 3 || code == 4);
-        if (should_enable != is_joint_control_enabled_)
-        {
-            is_joint_control_enabled_ = should_enable;
-            if (is_joint_control_enabled_)
+        // 控件更新投递回 GUI 线程（本回调在 executor 线程执行）。
+        QMetaObject::invokeMethod(
+            this,
+            [this, old_command, code]()
             {
-                updatePublisher();
-            }
-            updatePanelVisibility();
-        }
-        else if (old_command != current_command_ && is_joint_control_enabled_)
-        {
-            // 状态在 OCS2 与 MOVEJ 之间切换：发布器不同，需要重建
-            updatePublisher();
-            updatePanelVisibility();
-        }
+                // 关节控制只在 OCS2(3) / MOVEJ(4) 下可用
+                const bool should_enable = (code == 3 || code == 4);
+                if (should_enable != is_joint_control_enabled_)
+                {
+                    is_joint_control_enabled_ = should_enable;
+                    if (is_joint_control_enabled_)
+                    {
+                        updatePublisher();
+                    }
+                    updatePanelVisibility();
+                }
+                else if (old_command != code && is_joint_control_enabled_)
+                {
+                    // 状态在 OCS2 与 MOVEJ 之间切换：发布器不同，需要重建
+                    updatePublisher();
+                    updatePanelVisibility();
+                }
+            },
+            Qt::QueuedConnection);
     }
 
     std::string JointControlPanel::classifyJoint(const std::string& joint_name)
@@ -673,38 +682,72 @@ namespace arms_rviz_control_plugin
             }
         }
 
+        // 先把数据落到缓存（回调线程只碰数据，不碰控件）。
+        if (joints_initialized_ && !msg->name.empty() && !msg->position.empty())
+        {
+            for (size_t i = 0; i < joint_names_.size(); ++i)
+            {
+                auto it = std::find(msg->name.begin(), msg->name.end(), joint_names_[i]);
+                if (it == msg->name.end())
+                {
+                    continue;
+                }
+                const size_t msg_index = std::distance(msg->name.begin(), it);
+                if (msg_index < msg->position.size() && i < joint_positions_.size())
+                {
+                    joint_positions_[i] = msg->position[msg_index];
+                }
+            }
+        }
+
         // Initialize joint names and positions on first message
         if (!joints_initialized_ && !msg->name.empty())
         {
-            initializeJoints(msg->name);
+            // 建控件必须回到 GUI 线程；重复投递时由 lambda 内的标志位过滤。
+            const std::vector<std::string> names = msg->name;
+            QMetaObject::invokeMethod(
+                this,
+                [this, names]()
+                {
+                    if (!joints_initialized_ && !names.empty())
+                    {
+                        initializeJoints(names);
+                    }
+                },
+                Qt::QueuedConnection);
+            return;
         }
 
         // Update joint positions from joint state
         // Only update when NOT in joint control mode (command != 3 and != 4)
-        // This allows users to modify values when in control mode
-        if (joints_initialized_ && !msg->name.empty() && !msg->position.empty() && !is_joint_control_enabled_)
+        // This allows users to modify values when in control mode.
+        // 刷新节流到 10 Hz，避免 100 Hz 的 /joint_states 把 GUI 事件队列灌满。
+        if (!is_joint_control_enabled_)
         {
-            // Update spinbox values from joint state (only if not in control mode)
-            for (size_t i = 0; i < joint_names_.size(); ++i)
+            const auto now = std::chrono::steady_clock::now();
+            if (now - last_state_ui_refresh_ >= std::chrono::milliseconds(100))
             {
-                const std::string& joint_name = joint_names_[i];
-
-                // Find this joint in the message
-                auto it = std::find(msg->name.begin(), msg->name.end(), joint_name);
-                if (it != msg->name.end())
-                {
-                    size_t msg_index = std::distance(msg->name.begin(), it);
-                    if (msg_index < msg->position.size())
+                last_state_ui_refresh_ = now;
+                // 投递快照，避免 GUI 线程与回调线程同时读写 joint_positions_。
+                const std::vector<double> snapshot = joint_positions_;
+                QMetaObject::invokeMethod(
+                    this,
+                    [this, snapshot]()
                     {
-                        double position = msg->position[msg_index];
-                        joint_positions_[i] = position;
-
-                        if (joint_types_ready_ && joint_spinboxes_[i])
+                        if (is_joint_control_enabled_ || !joints_initialized_ || !joint_types_ready_)
                         {
-                            setJointSpinboxFromSiValue(i, position);
+                            return;
                         }
-                    }
-                }
+                        const size_t count = std::min(joint_spinboxes_.size(), snapshot.size());
+                        for (size_t i = 0; i < count; ++i)
+                        {
+                            if (joint_spinboxes_[i])
+                            {
+                                setJointSpinboxFromSiValue(i, snapshot[i]);
+                            }
+                        }
+                    },
+                    Qt::QueuedConnection);
             }
         }
     }
@@ -724,13 +767,20 @@ namespace arms_rviz_control_plugin
         left_current_pose_ = msg->pose;
         left_current_pose_valid_ = true;
 
-        // 相对模式保留用户输入的增量，不覆盖 spinbox
-        if (use_relative_pose_ || left_arm_spinboxes_.size() < 6)
-        {
-            return;
-        }
-
-        setArmPoseSpinboxesFromPose(left_arm_spinboxes_, msg->pose);
+        // spinbox 只能在 GUI 线程更新，这里把位姿投递过去（本回调在 executor 线程）。
+        const geometry_msgs::msg::Pose pose = msg->pose;
+        QMetaObject::invokeMethod(
+            this,
+            [this, pose]()
+            {
+                // 相对模式保留用户输入的增量，不覆盖 spinbox
+                if (use_relative_pose_ || left_arm_spinboxes_.size() < 6)
+                {
+                    return;
+                }
+                setArmPoseSpinboxesFromPose(left_arm_spinboxes_, pose);
+            },
+            Qt::QueuedConnection);
     }
 
     void JointControlPanel::onRightCurrentTargetReceived(const geometry_msgs::msg::PoseStamped::SharedPtr msg)
@@ -743,12 +793,18 @@ namespace arms_rviz_control_plugin
         right_current_pose_ = msg->pose;
         right_current_pose_valid_ = true;
 
-        if (use_relative_pose_ || right_arm_spinboxes_.size() < 6)
-        {
-            return;
-        }
-
-        setArmPoseSpinboxesFromPose(right_arm_spinboxes_, msg->pose);
+        const geometry_msgs::msg::Pose pose = msg->pose;
+        QMetaObject::invokeMethod(
+            this,
+            [this, pose]()
+            {
+                if (use_relative_pose_ || right_arm_spinboxes_.size() < 6)
+                {
+                    return;
+                }
+                setArmPoseSpinboxesFromPose(right_arm_spinboxes_, pose);
+            },
+            Qt::QueuedConnection);
     }
 
     void JointControlPanel::onBodyPoseCurrentTargetReceived(
@@ -762,12 +818,18 @@ namespace arms_rviz_control_plugin
         body_current_pose_ = msg->pose;
         body_current_pose_valid_ = true;
 
-        if (use_relative_pose_ || !isBodyTrackingPoseMode() || body_pose_spinboxes_.size() < 6)
-        {
-            return;
-        }
-
-        setArmPoseSpinboxesFromPose(body_pose_spinboxes_, msg->pose);
+        const geometry_msgs::msg::Pose pose = msg->pose;
+        QMetaObject::invokeMethod(
+            this,
+            [this, pose]()
+            {
+                if (use_relative_pose_ || !isBodyTrackingPoseMode() || body_pose_spinboxes_.size() < 6)
+                {
+                    return;
+                }
+                setArmPoseSpinboxesFromPose(body_pose_spinboxes_, pose);
+            },
+            Qt::QueuedConnection);
     }
 
     void JointControlPanel::onWbcCurrentStateReceived(
@@ -780,14 +842,29 @@ namespace arms_rviz_control_plugin
         wbc_head_state_ = msg->head_state;
         const uint8_t prev = wbc_body_state_;
         wbc_body_state_ = msg->body_state;
-        if (prev != wbc_body_state_ && is_joint_control_enabled_)
+        if (prev == wbc_body_state_)
         {
-            if (current_category_ == "body")
-            {
-                updatePublisher();
-            }
-            updatePanelVisibility();
+            return;
         }
+
+        // 本回调运行在 rviz 的 executor 线程，Qt 控件只能在 GUI 线程里改。
+        // 之前直接在这里 setVisible()/重建 publisher，进入全身遥操作把身体模式
+        // 切到 BODY_TRACKING 时会与绘制线程竞争，导致 rviz2 段错误（exit -11）。
+        QMetaObject::invokeMethod(
+            this,
+            [this]()
+            {
+                if (!is_joint_control_enabled_)
+                {
+                    return;
+                }
+                if (current_category_ == "body")
+                {
+                    updatePublisher();
+                }
+                updatePanelVisibility();
+            },
+            Qt::QueuedConnection);
     }
 
     bool JointControlPanel::shouldShowSendButton() const
@@ -821,6 +898,16 @@ namespace arms_rviz_control_plugin
 
     void JointControlPanel::updateWaistControlsVisibility(bool visible)
     {
+        // 该函数也会从 executor 线程进来（/joint_states 首次回调里的能力检查），
+        // Qt 控件只能在 GUI 线程改，统一下投递。
+        if (QThread::currentThread() != this->thread())
+        {
+            QMetaObject::invokeMethod(
+                this, [this, visible]() { updateWaistControlsVisibility(visible); },
+                Qt::QueuedConnection);
+            return;
+        }
+
         if (waist_group_box_)
         {
             waist_group_box_->setVisible(visible);

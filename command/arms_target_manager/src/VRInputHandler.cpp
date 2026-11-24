@@ -986,7 +986,7 @@ namespace arms_ros2_control::command
      * @brief 全身模式内的事件分发
      *
      * 全身模式下保留 FSM、夹爪、事件 4（全部跟踪）、事件 3/6（WBC 单臂开关）、
-     * 事件 20/26（底盘），其余编号会打一条限频提示，告诉用户要先退出全身模式。
+     * 事件 26（底盘锁定 ↔ 追踪），其余编号会打一条限频提示，告诉用户要先退出全身模式。
      *
      * @param code 原始事件编号
      */
@@ -1690,7 +1690,7 @@ namespace arms_ros2_control::command
         right_grip_active_.store(rightGripNow);
 
         // 全身模式：只同步轴值与握把 bit，不跑握把短按/方向抑制/腰部/末端等普通模式逻辑；
-        // 事件 20 的手动底盘遥控与事件 26 的底盘解锁/锁定仍可用。
+        // 事件 26 的底盘锁定/追踪切换仍可用（事件 20 的底盘遥控已被屏蔽）。
         if (isWholeBodyActive())
         {
             // FSM 可能由外部来源切走，摇杆消息是高频入口，这里顺带做一次兜底退出
@@ -3897,10 +3897,15 @@ namespace arms_ros2_control::command
         switch (target)
         {
             case WbcToggleTarget::BASE:
-                enabled =
-                    target_manager_->getCurrentBaseState() ==
-                    WbcState::BASE_UNLOCKED;
+            {
+                // 全身模式只允许「锁定 ↔ 追踪」，普通模式只允许「锁定 ↔ 随动」。
+                const std::uint8_t base_state =
+                    target_manager_->getCurrentBaseState();
+                enabled = isFullBodyMode()
+                    ? base_state == WbcState::BASE_TRACKING
+                    : base_state == WbcState::BASE_UNLOCKED;
                 return true;
+            }
             case WbcToggleTarget::BIMANUAL:
                 enabled =
                     target_manager_->getCurrentBimanualState() ==
@@ -4016,7 +4021,10 @@ namespace arms_ros2_control::command
         switch (target)
         {
             case WbcToggleTarget::BASE:
-                command = expectedEnabled ? "BASE_UNLOCK" : "BASE_LOCK";
+                // 全身模式的「非锁定」是追踪，普通模式是随动。
+                command = expectedEnabled
+                    ? (isFullBodyMode() ? "BASE_TRACK" : "BASE_UNLOCK")
+                    : "BASE_LOCK";
                 break;
             case WbcToggleTarget::BIMANUAL:
                 command = expectedEnabled ? "ARMS_COUPLED" : "ARMS_INDEPENDENT";
@@ -4119,6 +4127,7 @@ namespace arms_ros2_control::command
             }
                 onWholeBodyHeadStateChanged(msg->head_state);
         }
+        onWbcBaseStateChanged(msg->base_state);
         home_joint_reference_enabled_.store(msg->home_joint_reference_enabled);
 
         updateArmWbcVrState(
@@ -4447,6 +4456,87 @@ namespace arms_ros2_control::command
         mode_client_->publishCommand(command);
     }
 
+    /**
+     * @brief 进入全身模式时把底盘的「随动」拉成「追踪」
+     *
+     * 全身模式只允许「锁定」或「追踪」：跟随目标就是人体 footprint，
+     * 「随动」在这个模式下没有意义，而且会破坏 marker 的锚定语义。
+     */
+    void VRInputHandler::syncBaseModeForWholeBody()
+    {
+        using WbcState = arms_ros2_control_msgs::msg::WbcCurrentState;
+        if (!target_manager_)
+        {
+            return;
+        }
+
+        const uint8_t base_state = target_manager_->getCurrentBaseState();
+        if (base_state == WbcState::BASE_LOCKED ||
+            base_state == WbcState::BASE_TRACKING)
+        {
+            return;
+        }
+
+        last_base_mode_sync_time_ = std::chrono::steady_clock::now();
+        publishHumanoidModeCommand("BASE_TRACK");
+        RCLCPP_INFO(
+            node_->get_logger(),
+            "🕹️🦴 全身模式只允许底盘「锁定/追踪」：进入前为%s，已请求 BASE_TRACK",
+            base_state == WbcState::BASE_UNLOCKED
+                ? "随动（BASE_UNLOCKED）"
+                : "非锁定状态");
+    }
+
+    /**
+     * @brief 退出全身模式时把底盘的「追踪」收回到「锁定」
+     *
+     * 普通模式只允许「锁定」或「随动」；若不收回，追踪会一直跟着
+     * 最后一次人体 footprint 目标，普通遥操时底盘不响应。
+     */
+    void VRInputHandler::releaseBaseTrackingOnExit()
+    {
+        using WbcState = arms_ros2_control_msgs::msg::WbcCurrentState;
+        if (!target_manager_ ||
+            target_manager_->getCurrentBaseState() != WbcState::BASE_TRACKING)
+        {
+            return;
+        }
+
+        last_base_mode_sync_time_ = std::chrono::steady_clock::now();
+        publishHumanoidModeCommand("BASE_LOCK");
+        RCLCPP_INFO(
+            node_->get_logger(),
+            "🕹️🦴 退出全身遥操作：底盘追踪已收回锁定（普通模式只允许锁定/随动）");
+    }
+
+    /**
+     * @brief 全身模式下把外部设置的底盘「随动」拉回「追踪」
+     *
+     * RViz 面板或其它节点仍可发 mode_command；全身模式下底盘一旦回到随动，
+     * marker 锚定语义就会和用户预期不一致，因此在状态回调里纠偏。
+     * 带节流，避免与外部反复拉锯。
+     */
+    void VRInputHandler::onWbcBaseStateChanged(int base_state)
+    {
+        using WbcState = arms_ros2_control_msgs::msg::WbcCurrentState;
+        if (!whole_body_teleop_active_.load() ||
+            base_state != WbcState::BASE_UNLOCKED)
+        {
+            return;
+        }
+
+        const auto now = std::chrono::steady_clock::now();
+        if (now - last_base_mode_sync_time_ < std::chrono::seconds(2))
+        {
+            return;
+        }
+        last_base_mode_sync_time_ = now;
+        publishHumanoidModeCommand("BASE_TRACK");
+        RCLCPP_WARN(
+            node_->get_logger(),
+            "🕹️🦴 全身遥操作不允许底盘随动：检测到 BASE_UNLOCKED，已请求 BASE_TRACK");
+    }
+
     bool VRInputHandler::isYbModeConversionPending() const
     {
         return left_pause_after_enable_.load() ||
@@ -4683,12 +4773,14 @@ namespace arms_ros2_control::command
     /**
      * @brief 底盘/腰部摇杆遥控
      *
-     * 普通模式与全身模式共用的事件 20。非全身拓扑下按住右握把可作为腰部修饰键；
+     * 仅普通模式使用：全身模式的底盘只允许「锁定/追踪」，事件 20 在会话层
+     * 就被拒绝，chassis_mode_ 进入全身模式时也已清零。
+     * 非全身拓扑下按住右握把可作为腰部修饰键；
      * 全身拓扑下右轴方向由 WBC 四开关组合消费，进入这里前已被清零。
      */
     void VRInputHandler::processChassisAxes()
     {
-        // 普通模式与全身模式共用的事件 20 手动底盘遥控（全身模式的底盘跟随由 OCS2 负责）。
+        // 普通模式的事件 20 手动底盘遥控（全身模式的底盘跟随由 OCS2 负责）。
         // VR 手柄轴值约定（Pico）：Y 轴往前推是负数，与机器人"正数=向前/向右"相反，
         // 因此 chassis 模式下对四个轴值统一取负，使方向语义与 joystick_teleop.cpp 对齐。
         // 非 FULL_BODY 下按住右握把可作为腰部控制修饰符；
@@ -4987,6 +5079,9 @@ namespace arms_ros2_control::command
         // 全身模式摇杆不参与请求确认，因此直接发命令，不走普通模式的 pending/回中逻辑。
         publishHumanoidModeCommand("BODY_TRACKING");
         publishHumanoidModeCommand("HEAD_TRACKING");
+        // 全身模式的底盘只允许「锁定」或「追踪」：进入前若是普通模式的「随动」，
+        // 统一切到追踪，让 marker 从进入那一刻起就按世界系锚定。
+        syncBaseModeForWholeBody();
         // 控制器可能因为不支持 BODY_TRACKING 而静默忽略，这里登记一次期望，
         // 超时会打 WARN，避免"开了全身模式但机器人不动"却没有线索。
         if (mode_client_)
@@ -5006,8 +5101,9 @@ namespace arms_ros2_control::command
             "🕹️🦴 [case 30] 全身遥操作已开启：身体=跟随（BODY_TRACKING）、"
             "头部=跟踪（HEAD_TRACKING）；右摇杆短按(4)开/关「全部跟踪」，"
             "底盘锁定状态下的 marker 相对机器人底座；"
-            "组合键(26)解锁底盘后 marker 锚定世界系、由 OCS2 驱动底盘跟随；"
-            "组合键(20)可手动遥控底盘；再次按左右握把+右摇杆按下退出");
+            "全身模式底盘只允许「锁定/追踪」，组合键(26)在两者之间切换；"
+            "追踪时 marker 锚定世界系、由 OCS2 驱动底盘跟随；"
+            "再次按左右握把+右摇杆按下退出");
     }
 
     /**
@@ -5024,6 +5120,9 @@ namespace arms_ros2_control::command
 
         if (was_active)
         {
+            // 普通模式的底盘只允许「锁定/随动」：退出时把追踪收回到锁定，
+            // 避免底盘继续跟随最后一次人体 footprint 目标。
+            releaseBaseTrackingOnExit();
             RCLCPP_INFO(
                 node_->get_logger(),
                 "🕹️🦴 [case 30] 全身遥操作已关闭（「全部跟踪」已关闭，"

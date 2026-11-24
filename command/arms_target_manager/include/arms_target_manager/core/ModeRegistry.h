@@ -134,13 +134,15 @@ namespace arms_ros2_control::command
     // ---- 各层允许的动作 ----
 
     // 两种模式共用的“系统级”动作
+    // ChassisToggle（底盘遥控）故意不在这里：普通模式允许「锁定/随动」，
+    // 全身模式只允许「锁定/追踪」，遥控在全身模式下无意义。
     inline constexpr ActionMask kCommonActions =
         Action::FsmNext | Action::FsmBack | Action::FsmToggleRest |
         Action::HandSwitchLeft | Action::HandSwitchRight |
         Action::HandModeToggleLeft | Action::HandModeToggleRight |
-        Action::WholeBodyToggle | Action::ChassisToggle;
+        Action::WholeBodyToggle;
 
-    // 只有普通模式才有：更新/存储、镜像、身体模式、WBC 组合键
+    // 只有普通模式才有：更新/存储、镜像、身体模式、WBC 组合键、底盘遥控
     // （ArmToggleLeft/Right 归两种模式共用，见 kWholeBodyActions）
     inline constexpr ActionMask kNormalActions =
         kCommonActions |
@@ -148,7 +150,7 @@ namespace arms_ros2_control::command
         Action::MirrorToggle | Action::MirrorProfileToggle | Action::YbSemanticsToggle |
         Action::BodyVertical | Action::BodyLocked | Action::BodyTracking | Action::BodyCustom |
         Action::BimanualToggle | Action::BaseToggle | Action::HomeJointToggle |
-        Action::ScaleCalibrate;
+        Action::ChassisToggle | Action::ScaleCalibrate;
 
     // 全身模式：右摇杆短按（全部跟踪）、底盘相关，以及左 Y / 右 B 的 WBC 单臂开关。
     // 单臂开关在两种模式下语义相同（ARM_ENABLED ↔ ARM_DISABLED），
