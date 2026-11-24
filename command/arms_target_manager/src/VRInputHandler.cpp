@@ -12,7 +12,7 @@
 #include <geometry_msgs/msg/twist.hpp>
 #include <arms_ros2_control_msgs/msg/wbc_current_state.hpp>
 #include <arms_ros2_control_msgs/msg/wbc_capability.hpp>
-#include <arms_ros2_control_msgs/msg/vr_teleop_mode.hpp>
+#include <arms_ros2_control_msgs/msg/teleop_mode_state.hpp>
 #include <std_msgs/msg/float64.hpp>
 #include <std_msgs/msg/int32.hpp>
 #include <nav_msgs/msg/path.hpp>
@@ -149,14 +149,14 @@ namespace arms_ros2_control::command
             this->vrLeftCallback(msg);
         };
         sub_left_ = node_->create_subscription<geometry_msgs::msg::Pose>(
-            "/teleop/left_ee_pose", 10, vrLeftCallback);
+            "teleop/left_ee_pose", 10, vrLeftCallback);
 
         auto vrRightCallback = [this](const geometry_msgs::msg::Pose::SharedPtr msg)
         {
             this->vrRightCallback(msg);
         };
         sub_right_ = node_->create_subscription<geometry_msgs::msg::Pose>(
-            "/teleop/right_ee_pose", 10, vrRightCallback);
+            "teleop/right_ee_pose", 10, vrRightCallback);
 
         // 头显位姿订阅器
         auto vrHeadCallback = [this](const geometry_msgs::msg::Pose::SharedPtr msg)
@@ -164,34 +164,33 @@ namespace arms_ros2_control::command
             this->vrHeadCallback(msg);
         };
         sub_head_ = node_->create_subscription<geometry_msgs::msg::Pose>(
-            "/teleop/head_pose", 10, vrHeadCallback);
+            "teleop/head_pose", 10, vrHeadCallback);
 
         sub_robot_head_ = node_->create_subscription<geometry_msgs::msg::PoseStamped>(
             "head_current_pose", 10,
             [this](geometry_msgs::msg::PoseStamped::ConstSharedPtr msg) { robotHeadPoseCallback(msg); });
         pub_head_target_ = node_->create_publisher<geometry_msgs::msg::Pose>("head_target", 10);
 
-        // 创建按钮事件订阅器（Int32类型）
         auto controllerStateCallback = [this](const std_msgs::msg::Int32::SharedPtr msg)
         {
             this->processButtonEvent(msg);
         };
         sub_controller_state_ = node_->create_subscription<std_msgs::msg::Int32>(
-            "/teleop/controller_state", 10, controllerStateCallback);
+            "teleop/controller_state", 10, controllerStateCallback);
 
         pub_optical_r0_request_ = node_->create_publisher<std_msgs::msg::Int32>(
-            "/teleop/optical_r0_request", 10);
+            "teleop/optical_r0_request", 10);
         // Capability beacon is transient_local so ATM started later still learns
         // that this publisher speaks the handshake (see opticalR0CapsCallback).
         sub_optical_r0_caps_ = node_->create_subscription<std_msgs::msg::Int32>(
-            "/teleop/optical_r0_caps",
+            "teleop/optical_r0_caps",
             rclcpp::QoS(1).transient_local(),
             [this](const std_msgs::msg::Int32::SharedPtr msg)
             {
                 this->opticalR0CapsCallback(msg);
             });
         sub_optical_r0_ready_ = node_->create_subscription<std_msgs::msg::Int32>(
-            "/teleop/optical_r0_ready", 10,
+            "teleop/optical_r0_ready", 10,
             [this](const std_msgs::msg::Int32::SharedPtr msg)
             {
                 this->opticalR0ReadyCallback(msg);
@@ -203,7 +202,7 @@ namespace arms_ros2_control::command
         RCLCPP_INFO(
             node_->get_logger(),
             "🕹️ Optional optical R0 handshake "
-            "(/teleop/optical_r0_caps|_request ↔ /teleop/optical_r0_ready; "
+            "(teleop/optical_r0_caps|_request ↔ teleop/optical_r0_ready; "
             "else main topic R0)");
         
         // 创建摇杆轴值订阅器（合并订阅左右摇杆，使用 Twist 消息）
@@ -213,7 +212,7 @@ namespace arms_ros2_control::command
             this->thumbstickAxesCallback(msg);
         };
         sub_thumbstick_axes_ = node_->create_subscription<geometry_msgs::msg::Twist>(
-            "/teleop/thumbstick_axes", 10, thumbstickAxesCallback);
+            "teleop/thumbstick_axes", 10, thumbstickAxesCallback);
 
         // 创建扳机模拟量订阅器（合并订阅左右扳机，使用 Twist 消息）
         // linear.x 表示左扳机拉动比例，angular.x 表示右扳机拉动比例
@@ -222,7 +221,7 @@ namespace arms_ros2_control::command
             this->triggerValuesCallback(msg);
         };
         sub_trigger_values_ = node_->create_subscription<geometry_msgs::msg::Twist>(
-            "/teleop/trigger_values", 10, triggerValuesCallback);
+            "teleop/trigger_values", 10, triggerValuesCallback);
 
         // 双臂目标位姿发布器（仅双臂模式；用于尺度校准后发送校准目标）
         if (pub_right_target_)
@@ -242,15 +241,11 @@ namespace arms_ros2_control::command
         // WBC 模式切换命令发布器（case 21–24 请求身体模式）
         pub_mode_command_ = node_->create_publisher<std_msgs::msg::String>("mode_command", 10);
 
-        // VR input semantic latch (Reliable + TransientLocal, like joystick teleop_mode).
-        pub_vr_teleop_mode_ =
-            node_->create_publisher<arms_ros2_control_msgs::msg::VrTeleopMode>(
-                "teleop/vr_mode",
+        pub_teleop_mode_state_ =
+            node_->create_publisher<arms_ros2_control_msgs::msg::TeleopModeState>(
+                "teleop/mode_state",
                 rclcpp::QoS(1).reliable().transient_local());
-        publishVrTeleopMode(true);
-        RCLCPP_INFO(
-            node_->get_logger(),
-            "🕹️🕶️🕹️ Publishing teleop/vr_mode (VrTeleopMode, transient_local)");
+        publishTeleopModeState(true);
 
         sub_wbc_capability_ =
             node_->create_subscription<arms_ros2_control_msgs::msg::WbcCapability>(
@@ -278,9 +273,9 @@ namespace arms_ros2_control::command
             "🕹️ FULL_BODY directions: "
             "left grip + left stick cases 21-24; "
             "right grip + right stick cases 25-26, 28 (27 unused)");
-        RCLCPP_INFO(node_->get_logger(), "🕹️🕶️🕹️ Subscribed to button event topic: /teleop/controller_state (Int32)");
-        RCLCPP_INFO(node_->get_logger(), "🕹️🕶️🕹️ Subscribed to thumbstick axes topic: /teleop/thumbstick_axes (ThumbstickAxes)");
-        RCLCPP_INFO(node_->get_logger(), "🕹️🕶️🕹️ Subscribed to trigger values topic: /teleop/trigger_values (linear.x=left, angular.x=right)");
+        RCLCPP_INFO(node_->get_logger(), "🕹️🕶️🕹️ Subscribed to button event topic: teleop/controller_state (Int32)");
+        RCLCPP_INFO(node_->get_logger(), "🕹️🕶️🕹️ Subscribed to thumbstick axes topic: teleop/thumbstick_axes");
+        RCLCPP_INFO(node_->get_logger(), "🕹️🕶️🕹️ Subscribed to trigger values topic: teleop/trigger_values (linear.x=left, angular.x=right)");
         RCLCPP_INFO(node_->get_logger(), "🕹️🕶️🕹️ Trigger hand mode: percent control by default; press left Y + right B together to toggle percent/switch mode");
         RCLCPP_INFO(node_->get_logger(), "🕹️🕶️🕹️ Thumbstick scaling: linear=%.3f, angular=%.3f",
                     vr_thumbstick_linear_scale_, vr_thumbstick_angular_scale_);
@@ -506,17 +501,17 @@ namespace arms_ros2_control::command
                     mirror_mode_.load() ? " [镜像模式]" : "",
                     left_gripper_percent_mode_.load() ? "比例" : "开关",
                     right_gripper_percent_mode_.load() ? "比例" : "开关");
-        publishVrTeleopMode();
+        publishTeleopModeState();
     }
 
-    void VRInputHandler::publishVrTeleopMode(bool force)
+    void VRInputHandler::publishTeleopModeState(bool force)
     {
-        if (!pub_vr_teleop_mode_)
+        if (!pub_teleop_mode_state_)
         {
             return;
         }
 
-        using Msg = arms_ros2_control_msgs::msg::VrTeleopMode;
+        using Msg = arms_ros2_control_msgs::msg::TeleopModeState;
         Msg msg;
         msg.stamp = node_->get_clock()->now();
         msg.enabled = enabled_.load();
@@ -531,7 +526,10 @@ namespace arms_ros2_control::command
         msg.right_stick_plane = right_grip_mode_.load()
             ? Msg::PLANE_Z_YAW
             : Msg::PLANE_XY;
-        msg.body_stick_plane = body_thumbstick_z_yaw_mode_.load()
+        msg.body_stick_plane = body_left_stick_alt_mode_.load()
+            ? Msg::PLANE_Z_YAW
+            : Msg::PLANE_XY;
+        msg.body_right_stick_plane = body_right_stick_alt_mode_.load()
             ? Msg::PLANE_Z_YAW
             : Msg::PLANE_XY;
         msg.left_gripper_percent_mode = left_gripper_percent_mode_.load();
@@ -551,9 +549,9 @@ namespace arms_ros2_control::command
                 break;
         }
 
-        if (!force && has_published_vr_teleop_mode_)
+        if (!force && has_published_teleop_mode_state_)
         {
-            const auto& prev = last_vr_teleop_mode_;
+            const auto& prev = last_teleop_mode_state_;
             if (prev.enabled == msg.enabled &&
                 prev.update_mode == msg.update_mode &&
                 prev.chassis_mode == msg.chassis_mode &&
@@ -563,6 +561,7 @@ namespace arms_ros2_control::command
                 prev.left_stick_plane == msg.left_stick_plane &&
                 prev.right_stick_plane == msg.right_stick_plane &&
                 prev.body_stick_plane == msg.body_stick_plane &&
+                prev.body_right_stick_plane == msg.body_right_stick_plane &&
                 prev.left_gripper_percent_mode == msg.left_gripper_percent_mode &&
                 prev.right_gripper_percent_mode == msg.right_gripper_percent_mode &&
                 prev.mirror_movement == msg.mirror_movement &&
@@ -573,9 +572,9 @@ namespace arms_ros2_control::command
             }
         }
 
-        pub_vr_teleop_mode_->publish(msg);
-        last_vr_teleop_mode_ = msg;
-        has_published_vr_teleop_mode_ = true;
+        pub_teleop_mode_state_->publish(msg);
+        last_teleop_mode_state_ = msg;
+        has_published_teleop_mode_state_ = true;
     }
 
     void VRInputHandler::opticalR0ReadyCallback(
@@ -877,7 +876,7 @@ namespace arms_ros2_control::command
         optical_r0_ready_bits_.store(0);
         refreshOpticalR0Request();  // ACK → request=0 → fa-py opens
         resetStaleCatchUpRamp();
-        publishVrTeleopMode();
+        publishTeleopModeState();
         RCLCPP_INFO(
             node_->get_logger(),
             "🕹️ UPDATE ON via optical R0 handshake (R0=I world-Δ); "
@@ -1008,7 +1007,7 @@ namespace arms_ros2_control::command
                 "🕹️ optical R0 resume complete (%s arm, %s)",
                 armType.c_str(),
                 snapped ? "R0=I" : "R0=topic");
-            publishVrTeleopMode();
+            publishTeleopModeState();
             // true ⇒ timed out to topic while peer was alive (broken peer).
             return !snapped && alive;
         };
@@ -1027,6 +1026,63 @@ namespace arms_ros2_control::command
         {
             unlearnOpticalR0Peer("alive but no contract frame on resume");
         }
+    }
+
+    bool VRInputHandler::toggleArmVrPause(
+        WbcToggleTarget arm,
+        const char* tag)
+    {
+        const bool isLeftArm = arm == WbcToggleTarget::LEFT_ARM;
+        const bool isRightArm = arm == WbcToggleTarget::RIGHT_ARM;
+        if (!isLeftArm && !isRightArm)
+        {
+            return false;
+        }
+        if (!is_update_mode_.load())
+        {
+            RCLCPP_DEBUG(
+                node_->get_logger(),
+                "🔘 [%s] 忽略 VR 暂停切换：当前不在 UPDATE 模式",
+                tag);
+            return false;
+        }
+
+        const bool paused = isLeftArm
+            ? left_arm_paused_.load()
+            : right_arm_paused_.load();
+        if (paused)
+        {
+            return resumeArmVrControl(arm, tag);
+        }
+
+        // Freeze the VR side that currently drives this robot arm.
+        const bool useLeftVr = mirror_mode_.load() ? isRightArm : isLeftArm;
+        if (useLeftVr)
+        {
+            paused_left_position_ = left_position_;
+            paused_left_orientation_ = left_orientation_;
+        }
+        else
+        {
+            paused_right_position_ = right_position_;
+            paused_right_orientation_ = right_orientation_;
+        }
+        if (isLeftArm)
+        {
+            left_arm_paused_.store(true);
+        }
+        else
+        {
+            right_arm_paused_.store(true);
+        }
+        publishTeleopModeState();
+        RCLCPP_INFO(
+            node_->get_logger(),
+            "🔘 [%s] VR 暂停%s臂更新（已记录暂停时刻 VR 位姿）%s",
+            tag,
+            isLeftArm ? "左" : "右",
+            mirror_mode_.load() ? " [镜像模式]" : "");
+        return true;
     }
 
     bool VRInputHandler::resumeArmVrControl(
@@ -1164,7 +1220,7 @@ namespace arms_ros2_control::command
                 has_last_published_right_target_ ? "last_command"
                                                  : "current_pose");
         }
-        publishVrTeleopMode();
+        publishTeleopModeState();
         return true;
     }
 
@@ -1175,7 +1231,7 @@ namespace arms_ros2_control::command
         mirror_mode_.store(false);
         is_update_mode_.store(false);
         stopHeadTracking();
-        publishVrTeleopMode();
+        publishTeleopModeState();
         RCLCPP_INFO(node_->get_logger(), "🔘 [%s] 已切换至非镜像模式", tag);
         RCLCPP_INFO(node_->get_logger(),
                     "🔘 [%s] 自动切换到 STORAGE 模式 - 正在更新映射尺度，请重新进入 UPDATE 模式",
@@ -1551,7 +1607,7 @@ namespace arms_ros2_control::command
             target_manager_->togglePublishMode();
             RCLCPP_INFO(node_->get_logger(), "🕹️🕶️🕹️ ArmsTargetManager switched to CONTINUOUS mode for VR control");
         }
-        publishVrTeleopMode();
+        publishTeleopModeState();
         RCLCPP_INFO(node_->get_logger(), "🕹️🕶️🕹️ VR control ENABLED!");
     }
 
@@ -1575,8 +1631,10 @@ namespace arms_ros2_control::command
         {
             chassis_mode_.store(false);
         }
+        body_left_stick_alt_mode_.store(false);
+        body_right_stick_alt_mode_.store(false);
         resetChassisAndWaistCommands();
-        publishVrTeleopMode();
+        publishTeleopModeState();
         RCLCPP_INFO(node_->get_logger(), "🕹️🕶️🕹️ VR control DISABLED!");
     }
 
@@ -2681,18 +2739,19 @@ namespace arms_ros2_control::command
             return;
         }
 
-        // 跟随模式已确认：左摇杆改为控制腰部 marker，右摇杆保持右臂
+        // 跟随模式已确认：左右摇杆都改控腰部 marker（右臂末端改由手柄位姿驱动）
         if (isBodyTrackingActive())
         {
             processBodyThumbstickAxes();
-            processRightThumbstickAxes();
             return;
         }
 
-        // 离开跟随后腰部控制平面回到默认 XY
-        if (body_thumbstick_z_yaw_mode_.exchange(false))
+        // 离开跟随后腰部摇杆平面回到默认
+        const bool left_body_reset = body_left_stick_alt_mode_.exchange(false);
+        const bool right_body_reset = body_right_stick_alt_mode_.exchange(false);
+        if (left_body_reset || right_body_reset)
         {
-            publishVrTeleopMode();
+            publishTeleopModeState();
         }
 
         // 处理左摇杆轴值（末端控制）
@@ -3535,7 +3594,7 @@ namespace arms_ros2_control::command
         right_pause_after_enable_.store(false);
         left_clear_pause_after_disable_.store(false);
         right_clear_pause_after_disable_.store(false);
-        publishVrTeleopMode();
+        publishTeleopModeState();
     }
 
     void VRInputHandler::updateYbModeConversionState()
@@ -3597,7 +3656,7 @@ namespace arms_ros2_control::command
             right_arm_paused_.store(true);
         }
         resetStaleCatchUpRamp(isLeftArm);
-        publishVrTeleopMode();
+        publishTeleopModeState();
     }
 
     void VRInputHandler::clearArmPause(WbcToggleTarget arm)
@@ -3628,7 +3687,7 @@ namespace arms_ros2_control::command
             paused_right_orientation_ = Eigen::Quaterniond::Identity();
         }
         resetStaleCatchUpRamp(isLeftArm);
-        publishVrTeleopMode();
+        publishTeleopModeState();
     }
 
     bool VRInputHandler::handleCase16YbModeToggle()
@@ -3701,7 +3760,7 @@ namespace arms_ros2_control::command
                 publishHumanoidModeCommand("RIGHT_ARM_DISABLE");
             }
         }
-        publishVrTeleopMode();
+        publishTeleopModeState();
         return true;
     }
 
@@ -3756,6 +3815,7 @@ namespace arms_ros2_control::command
     {
         // 腰部增量直接改 BodyMarker 绝对目标，不依赖双臂 UPDATE/STORAGE 的 VR base pose，
         // 因此这里不检查 is_update_mode_。
+        // 左默认 XY；左切面：前进 + 侧摆(roll)。右默认 升降+yaw；右切面：俯仰+yaw。
         if (!enabled_.load() || !target_manager_ || !isBodyTrackingActive())
         {
             return;
@@ -3764,16 +3824,29 @@ namespace arms_ros2_control::command
         std::array<double, 3> positionDelta{0.0, 0.0, 0.0};
         std::array<double, 3> rpyDelta{0.0, 0.0, 0.0};
         constexpr double body_thumbstick_step_scale = 0.1;
+        const double lin = vr_thumbstick_linear_scale_ * body_thumbstick_step_scale;
+        const double ang = vr_thumbstick_angular_scale_ * body_thumbstick_step_scale;
 
-        if (body_thumbstick_z_yaw_mode_.load())
+        if (body_left_stick_alt_mode_.load())
         {
-            positionDelta[2] = -left_thumbstick_axes_.y() * vr_thumbstick_linear_scale_ * body_thumbstick_step_scale;
-            rpyDelta[2] = -left_thumbstick_axes_.x() * vr_thumbstick_angular_scale_ * body_thumbstick_step_scale;
+            positionDelta[0] = -left_thumbstick_axes_.y() * lin;
+            rpyDelta[0] = -left_thumbstick_axes_.x() * ang;
         }
         else
         {
-            positionDelta[0] = -left_thumbstick_axes_.y() * vr_thumbstick_linear_scale_ * body_thumbstick_step_scale;
-            positionDelta[1] = -left_thumbstick_axes_.x() * vr_thumbstick_linear_scale_ * body_thumbstick_step_scale;
+            positionDelta[0] = -left_thumbstick_axes_.y() * lin;
+            positionDelta[1] = -left_thumbstick_axes_.x() * lin;
+        }
+
+        if (body_right_stick_alt_mode_.load())
+        {
+            rpyDelta[1] = -right_thumbstick_axes_.y() * ang;
+            rpyDelta[2] = -right_thumbstick_axes_.x() * ang;
+        }
+        else
+        {
+            positionDelta[2] = -right_thumbstick_axes_.y() * lin;
+            rpyDelta[2] = -right_thumbstick_axes_.x() * ang;
         }
 
         // 回中时跳过，避免 20Hz 空发布刷新 last_marker_command_time_，
@@ -3925,7 +3998,7 @@ namespace arms_ros2_control::command
             RCLCPP_INFO(node_->get_logger(),
                         "🔘 [case 20] 退出 CHASSIS 模式，恢复末端控制");
         }
-        publishVrTeleopMode();
+        publishTeleopModeState();
     }
 
     void VRInputHandler::handleGripActiveEdge(bool isLeft, bool pressed)
@@ -3962,14 +4035,26 @@ namespace arms_ros2_control::command
 
     void VRInputHandler::applyGripShortPress(bool isLeft)
     {
-        if (isLeft && isBodyTrackingActive())
+        if (isBodyTrackingActive())
         {
-            const bool newMode = !body_thumbstick_z_yaw_mode_.load();
-            body_thumbstick_z_yaw_mode_.store(newMode);
-            publishVrTeleopMode();
-            RCLCPP_INFO(node_->get_logger(),
-                        "🔘 [左握把] 短按：腰部摇杆模式切换为 %s",
-                        newMode ? "Z+Yaw" : "XY");
+            if (isLeft)
+            {
+                const bool newMode = !body_left_stick_alt_mode_.load();
+                body_left_stick_alt_mode_.store(newMode);
+                publishTeleopModeState();
+                RCLCPP_INFO(node_->get_logger(),
+                            "🔘 [左握把] 短按：腰部左摇杆切换为 %s",
+                            newMode ? "前进+侧摆(roll)" : "XY平移");
+            }
+            else
+            {
+                const bool newMode = !body_right_stick_alt_mode_.load();
+                body_right_stick_alt_mode_.store(newMode);
+                publishTeleopModeState();
+                RCLCPP_INFO(node_->get_logger(),
+                            "🔘 [右握把] 短按：腰部右摇杆切换为 %s",
+                            newMode ? "俯仰+Yaw" : "升降+Yaw");
+            }
             return;
         }
 
@@ -3978,7 +4063,7 @@ namespace arms_ros2_control::command
         auto& gripMode = toggleRightArm ? right_grip_mode_ : left_grip_mode_;
         const bool newMode = !gripMode.load();
         gripMode.store(newMode);
-        publishVrTeleopMode();
+        publishTeleopModeState();
 
         const char* gripName = isLeft ? "左握把" : "右握把";
         const char* armName = toggleRightArm ? "右臂" : "左臂";
@@ -4036,64 +4121,38 @@ namespace arms_ros2_control::command
                                 "🔘 [case 3] 忽略左Y按钮：控制拓扑尚未确认");
                     break;
                 }
-                if (isYbModeConversionPending())
-                {
-                    RCLCPP_WARN(node_->get_logger(),
-                                "🔘 [case 3] 忽略左Y：case 16 转换仍在 pending");
-                    break;
-                }
                 if (topology == ControlTopology::FULL_BODY &&
                     !isFullBodyYbPauseMode())
                 {
+                    if (isYbModeConversionPending())
+                    {
+                        RCLCPP_WARN(node_->get_logger(),
+                                    "🔘 [case 3] 忽略左Y：case 16 转换仍在 pending");
+                        break;
+                    }
                     const auto target = mirror_mode_.load()
                         ? WbcToggleTarget::RIGHT_ARM
                         : WbcToggleTarget::LEFT_ARM;
                     requestWbcToggle(3, "左Y按钮", target);
                     break;
                 }
-                // SPLIT_BODY，或 FULL_BODY 暂停语义：沿用下方现有暂停/恢复
-
-                // 只在UPDATE模式下启用（右手摇杆按钮按下后进入UPDATE模式）
-                if (!is_update_mode_.load())
+                // SPLIT_BODY，或 FULL_BODY 暂停语义（含 HUD 紧跟 case 16 的 3）
                 {
-                    RCLCPP_DEBUG(node_->get_logger(), "🔘 [左Y按钮] 按下 - 功能: 切换左臂更新状态 - 操作: 忽略（当前不在UPDATE模式）");
-                    break;
-                }
-
-                // 根据镜像模式决定控制哪个臂
-                if (mirror_mode_.load())
-                {
-                    // 镜像模式：左话题数据用于右臂
-                    if (right_arm_paused_.load())
+                    const auto arm = mirror_mode_.load()
+                        ? WbcToggleTarget::RIGHT_ARM
+                        : WbcToggleTarget::LEFT_ARM;
+                    // 本臂仍在 enable→pause 转换中：启用后会自动暂停，勿吞掉对侧/已启用臂的暂停请求
+                    const bool thisArmEnablePending =
+                        (arm == WbcToggleTarget::LEFT_ARM)
+                            ? left_pause_after_enable_.load()
+                            : right_pause_after_enable_.load();
+                    if (thisArmEnablePending)
                     {
-                        resumeArmVrControl(
-                            WbcToggleTarget::RIGHT_ARM, "左Y按钮");
+                        RCLCPP_INFO(node_->get_logger(),
+                                    "🔘 [case 3] 左Y：本臂 case 16 enable→pause 中，跳过重复暂停");
+                        break;
                     }
-                    else
-                    {
-                        paused_left_position_ = left_position_;
-                        paused_left_orientation_ = left_orientation_;
-                        right_arm_paused_.store(true);
-                        publishVrTeleopMode();
-                        RCLCPP_INFO(node_->get_logger(), "🔘 [左Y按钮] 按下 - 功能: 切换右臂更新状态 - 操作: 暂停右臂更新（已记录暂停时刻VR位姿，摇杆可继续控制） [镜像模式]");
-                    }
-                }
-                else
-                {
-                    // 正常模式：左话题数据用于左臂
-                    if (left_arm_paused_.load())
-                    {
-                        resumeArmVrControl(
-                            WbcToggleTarget::LEFT_ARM, "左Y按钮");
-                    }
-                    else
-                    {
-                        paused_left_position_ = left_position_;
-                        paused_left_orientation_ = left_orientation_;
-                        left_arm_paused_.store(true);
-                        publishVrTeleopMode();
-                        RCLCPP_INFO(node_->get_logger(), "🔘 [左Y按钮] 按下 - 功能: 切换左臂更新状态 - 操作: 暂停左臂更新（已记录暂停时刻VR位姿，摇杆可继续控制）");
-                    }
+                    toggleArmVrPause(arm, "左Y按钮");
                 }
                 break;
             }
@@ -4194,7 +4253,7 @@ namespace arms_ros2_control::command
                     is_update_mode_.store(true);
                     // 目标流在此中断/重启，清空斜坡，避免用陈旧输出量缺口
                     resetStaleCatchUpRamp();
-                    publishVrTeleopMode();
+                    publishTeleopModeState();
                     RCLCPP_INFO(node_->get_logger(), "🔘 [右摇杆按钮] 按下 - 功能: 切换UPDATE/STORAGE模式 - 操作: 切换到UPDATE模式（已存储基准位姿，重置摇杆偏移）");
                     RCLCPP_DEBUG(node_->get_logger(),
                                 "   VR Base Positions: Left [%.3f, %.3f, %.3f], Right [%.3f, %.3f, %.3f]",
@@ -4217,7 +4276,7 @@ namespace arms_ros2_control::command
                     refreshOpticalR0Request();
                     is_update_mode_.store(false);
                     stopHeadTracking();
-                    publishVrTeleopMode();
+                    publishTeleopModeState();
                     RCLCPP_INFO(node_->get_logger(), "🔘 [右摇杆按钮] 按下 - 功能: 切换UPDATE/STORAGE模式 - 操作: 切换到STORAGE模式（准备存储新的基准位姿）");
                 }
                 break;
@@ -4233,64 +4292,37 @@ namespace arms_ros2_control::command
                                 "🔘 [case 6] 忽略右B按钮：控制拓扑尚未确认");
                     break;
                 }
-                if (isYbModeConversionPending())
-                {
-                    RCLCPP_WARN(node_->get_logger(),
-                                "🔘 [case 6] 忽略右B：case 16 转换仍在 pending");
-                    break;
-                }
                 if (topology == ControlTopology::FULL_BODY &&
                     !isFullBodyYbPauseMode())
                 {
+                    if (isYbModeConversionPending())
+                    {
+                        RCLCPP_WARN(node_->get_logger(),
+                                    "🔘 [case 6] 忽略右B：case 16 转换仍在 pending");
+                        break;
+                    }
                     const auto target = mirror_mode_.load()
                         ? WbcToggleTarget::LEFT_ARM
                         : WbcToggleTarget::RIGHT_ARM;
                     requestWbcToggle(6, "右B按钮", target);
                     break;
                 }
-                // SPLIT_BODY，或 FULL_BODY 暂停语义：沿用下方现有暂停/恢复
-
-                // 只在UPDATE模式下启用（右手摇杆按钮按下后进入UPDATE模式）
-                if (!is_update_mode_.load())
+                // SPLIT_BODY，或 FULL_BODY 暂停语义（含 HUD 紧跟 case 16 的 6）
                 {
-                    RCLCPP_DEBUG(node_->get_logger(), "🔘 [右B按钮] 按下 - 功能: 切换右臂更新状态 - 操作: 忽略（当前不在UPDATE模式）");
-                    break;
-                }
-
-                // 根据镜像模式决定控制哪个臂
-                if (mirror_mode_.load())
-                {
-                    // 镜像模式：右话题数据用于左臂
-                    if (left_arm_paused_.load())
+                    const auto arm = mirror_mode_.load()
+                        ? WbcToggleTarget::LEFT_ARM
+                        : WbcToggleTarget::RIGHT_ARM;
+                    const bool thisArmEnablePending =
+                        (arm == WbcToggleTarget::LEFT_ARM)
+                            ? left_pause_after_enable_.load()
+                            : right_pause_after_enable_.load();
+                    if (thisArmEnablePending)
                     {
-                        resumeArmVrControl(
-                            WbcToggleTarget::LEFT_ARM, "右B按钮");
+                        RCLCPP_INFO(node_->get_logger(),
+                                    "🔘 [case 6] 右B：本臂 case 16 enable→pause 中，跳过重复暂停");
+                        break;
                     }
-                    else
-                    {
-                        paused_right_position_ = right_position_;
-                        paused_right_orientation_ = right_orientation_;
-                        left_arm_paused_.store(true);
-                        publishVrTeleopMode();
-                        RCLCPP_INFO(node_->get_logger(), "🔘 [右B按钮] 按下 - 功能: 切换左臂更新状态 - 操作: 暂停左臂更新（已记录暂停时刻VR位姿，摇杆可继续控制） [镜像模式]");
-                    }
-                }
-                else
-                {
-                    // 正常模式：右话题数据用于右臂
-                    if (right_arm_paused_.load())
-                    {
-                        resumeArmVrControl(
-                            WbcToggleTarget::RIGHT_ARM, "右B按钮");
-                    }
-                    else
-                    {
-                        paused_right_position_ = right_position_;
-                        paused_right_orientation_ = right_orientation_;
-                        right_arm_paused_.store(true);
-                        publishVrTeleopMode();
-                        RCLCPP_INFO(node_->get_logger(), "🔘 [右B按钮] 按下 - 功能: 切换右臂更新状态 - 操作: 暂停右臂更新（已记录暂停时刻VR位姿，摇杆可继续控制）");
-                    }
+                    toggleArmVrPause(arm, "右B按钮");
                 }
                 break;
             }
@@ -4327,7 +4359,7 @@ namespace arms_ros2_control::command
                     RCLCPP_WARN(node_->get_logger(),
                                 "   自动切换到STORAGE模式 - 请重新进入UPDATE模式以应用镜像处理方案切换");
                 }
-                publishVrTeleopMode();
+                publishTeleopModeState();
                 break;
             }
             case 7:  // 镜像模式切换（toggle）
@@ -4366,7 +4398,7 @@ namespace arms_ros2_control::command
                     RCLCPP_WARN(node_->get_logger(),
                                 "   自动切换到STORAGE模式 - 请重新进入UPDATE模式以应用镜像模式更改");
                 }
-                publishVrTeleopMode();
+                publishTeleopModeState();
                 break;
             }
             case 9:  // 左扳机按钮
@@ -4612,7 +4644,7 @@ namespace arms_ros2_control::command
                         }
                         else
                         {
-                            publishVrTeleopMode();
+                            publishTeleopModeState();
                         }
                         const char* name =
                             next == ControlTopology::FULL_BODY ? "FULL_BODY" :
@@ -4769,7 +4801,7 @@ namespace arms_ros2_control::command
                     right_thumbstick_offset_ = Eigen::Vector3d::Zero();
                     left_thumbstick_yaw_offset_ = 0.0;
                     right_thumbstick_yaw_offset_ = 0.0;
-                    publishVrTeleopMode();
+                    publishTeleopModeState();
                     RCLCPP_INFO(node_->get_logger(), 
                                 "🕹️🕶️🕹️ FSM状态不是OCS2，自动切换到STORAGE模式 (状态=%d)", new_state);
                     RCLCPP_INFO(node_->get_logger(), "🕹️🕶️🕹️ Thumbstick offsets reset!");

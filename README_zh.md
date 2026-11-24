@@ -262,7 +262,7 @@ colcon build --packages-up-to ocs2_arm_controller cr5_description arms_teleop ad
 
 - 基于手柄的控制
 - 基于键盘的控制
-- 基于 USB 脚踏板的控制（`/teleop/controller_state`）
+- 基于 USB 脚踏板的控制（`teleop/controller_state`，跟随机器人命名空间）
 - 不同输入方法的统一接口
 
 ## 配置

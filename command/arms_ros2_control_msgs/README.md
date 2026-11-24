@@ -6,7 +6,14 @@ ROS 2 接口包：[`arms_ros2_control`](../..) 系统所使用的 **msg / srv / 
 
 ## 1. 遥操（Teleop）
 
-手柄 / 键盘遥操节点发布；可视化可订阅模式快照与增量输入。
+两套并行契约（本阶段不合并）：
+
+| 路径 | 修改（command） | 反馈（status） | 谁发反馈 |
+|------|-----------------|----------------|----------|
+| 手柄 / 键盘 | `control_input`（`Inputs`）等 | `teleop_mode`（`TeleopMode`） | `joystick_teleop` / `keyboard_teleop` |
+| 事件总线（VR / 脚踏 / 外骨骼） | `teleop/controller_state`（`Int32` 事件码） | `teleop/mode_state`（`TeleopModeState`） | `VRInputHandler`（ATM） |
+
+**分工**：改模式发修改链路；看当前模式只订反馈链路。灵巧手 / UI **不要**把 `teleop/controller_state` 当模式源。修改与反馈均为**相对话题**，落在机器人 namespace下（如 `/robot_a/teleop/...`），同场景多机互不串扰。
 
 ### `Inputs`（msg）
 
@@ -21,7 +28,7 @@ ROS 2 接口包：[`arms_ros2_control`](../..) 系统所使用的 **msg / srv / 
 
 ### `TeleopMode`（msg）
 
-遥操模式快照（如 topic `teleop_mode`）。建议 QoS：`Reliable` + `TransientLocal`；启动发一次，激活状态 / 模式 / 镜像 / 速度切换时再发。目标臂不在此消息中，请读 `Inputs.target`。
+手柄 / 键盘遥操模式快照（topic `teleop_mode`）。建议 QoS：`Reliable` + `TransientLocal`；启动发一次，激活状态 / 模式 / 镜像 / 速度切换时再发。目标臂不在此消息中，请读 `Inputs.target`。
 
 | 字段 | 类型 | 说明 |
 |------|------|------|
@@ -32,28 +39,29 @@ ROS 2 接口包：[`arms_ros2_control`](../..) 系统所使用的 **msg / srv / 
 | `speed_level` | `int32` | 档位：keyboard `1~10`；joystick `0`=LOW / `1`=HIGH |
 | `speed_scale` | `float32` | 实际速度倍率 |
 
-**分工**：界面用 `TeleopMode` 看模式状态，用 `Inputs.target` 看当前目标臂。joystick 在底盘模式下可能暂停周期发 `Inputs`，界面应缓存最近一次 `target`。
+**分工**：界面用 `TeleopMode` 看手柄/键盘模式，用 `Inputs.target` 看当前目标臂。joystick 在底盘模式下可能暂停周期发 `Inputs`，界面应缓存最近一次 `target`。
 
-### `VrTeleopMode`（msg）
+### `TeleopModeState`（msg）
 
-VR 输入语义锁存（如 topic `teleop/vr_mode`，由 `VRInputHandler` 发布）。建议 QoS：`Reliable` + `TransientLocal`；启动发一次，字段变化再发。**不**复用 `TeleopMode`，也**不**重复 WBC 约束（身体锁 / 臂使能等请读 `WbcCurrentState`）。
+事件总线遥操模式锁存（topic `teleop/mode_state`，由 `VRInputHandler` 发布）。VR 面键、脚踏板、外骨骼等只向同命名空间下的 `teleop/controller_state` 发修改事件；状态变化后由此消息反馈「当前处于怎样的遥操模式」，与谁按下无关。建议 QoS：`Reliable` + `TransientLocal`；启动发一次，字段变化再发。**不**复用 `TeleopMode`，也**不**重复 WBC 约束（身体锁 / 臂使能等请读 `WbcCurrentState`）。
 
 | 字段 | 类型 | 说明 |
 |------|------|------|
 | `stamp` | `builtin_interfaces/Time` | 发布时间戳 |
-| `enabled` | `bool` | VR 处理器是否启用 |
+| `enabled` | `bool` | 事件总线遥操处理器是否启用 |
 | `update_mode` | `bool` | `true`=UPDATE（跟随），`false`=STORAGE |
 | `chassis_mode` | `bool` | `true`=底盘遥控（事件 20），`false`=末端摇杆 |
-| `yb_pause_semantics` | `bool` | FULL_BODY 下 Y/B：`false`=WBC 单臂禁用，`true`=VR 暂停 |
-| `left_arm_paused` / `right_arm_paused` | `bool` | 单臂 VR 暂停（与 WBC `arm_state` 独立） |
-| `left_stick_plane` / `right_stick_plane` | `uint8` | `PLANE_XY=0` / `PLANE_Z_YAW=1` |
-| `body_stick_plane` | `uint8` | 腰部跟随摇杆平面（同上常量） |
+| `yb_pause_semantics` | `bool` | FULL_BODY 下 Y/B：`false`=WBC 单臂禁用，`true`=遥操暂停 |
+| `left_arm_paused` / `right_arm_paused` | `bool` | 单臂遥操暂停（与 WBC `arm_state` 独立） |
+| `left_stick_plane` / `right_stick_plane` | `uint8` | 臂摇杆：`PLANE_XY=0` / `PLANE_Z_YAW=1` |
+| `body_stick_plane` | `uint8` | 腰部左摇杆：`0`=XY，`1`=前进+侧摆(roll) |
+| `body_right_stick_plane` | `uint8` | 腰部右摇杆：`0`=升降+yaw，`1`=俯仰+yaw |
 | `left_gripper_percent_mode` / `right_gripper_percent_mode` | `bool` | `true`=比例，`false`=开合 |
 | `mirror_movement` | `bool` | 镜像开关 |
 | `mirror_profile` | `uint8` | `MIRROR_PROFILE_A=0` / `MIRROR_PROFILE_B=1` |
 | `topology` | `uint8` | `TOPOLOGY_UNKNOWN=0` / `SPLIT_BODY=1` / `FULL_BODY=2` |
 
-原 `/teleop/mirror_mode`（`Bool`）已由此消息的 `mirror_movement` 取代，不再单独发布。
+**消费约定**（灵巧手 / DualHand / UI）：订同机器人命名空间下的 `teleop/mode_state`，建议 QoS `Reliable` + `TransientLocal`。镜像读 `mirror_movement`；按需再读 pause、夹爪模式、`update_mode`、`topology`。夹爪开合/比例命令仍走 `*/target_command` / `*/target_percent`，不由本消息下发。不要把 `teleop/controller_state` 当模式源。
 
 ---
 
@@ -206,7 +214,7 @@ VR 输入语义锁存（如 topic `teleop/vr_mode`，由 `VRInputHandler` 发布
 
 ## 依赖
 
-- `builtin_interfaces`（`TeleopMode.stamp` / `VrTeleopMode.stamp`）
+- `builtin_interfaces`（`TeleopMode.stamp` / `TeleopModeState.stamp`）
 - `std_msgs`
 - `geometry_msgs`
 - `nav_msgs`

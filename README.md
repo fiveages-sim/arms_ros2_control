@@ -275,7 +275,7 @@ The `arms_teleop` package provides unified teleoperation capabilities for roboti
 
 - Joystick-based control
 - Keyboard-based control
-- USB foot-pedal control (`/teleop/controller_state`)
+- USB foot-pedal control (`teleop/controller_state`, namespaced)
 - Unified interface for different input methods
 
 ## Configuration

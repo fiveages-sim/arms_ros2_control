@@ -31,20 +31,29 @@ VRInputHandler是基于VRMarkerWrapper功能开发的VR输入处理器，专门�
 
 ## 订阅的Topic
 
+### 双链路（修改 vs 反馈）
+
+| 链路 | Topic | 说明 |
+|------|-------|------|
+| **修改** | `teleop/controller_state`（`Int32`） | VR 面键、脚踏板、外骨骼等只发事件码；本 handler 统一 `processButtonEvent()` |
+| **反馈** | `teleop/mode_state`（`TeleopModeState`） | 状态变化后锁存「当前遥操模式」；与谁按下无关。UI / 灵巧手只订此话题 |
+
+以上均为**相对话题**，跟随 ATM 节点命名空间（多机时为 `/<robot>/teleop/...`）。与手柄/键盘的 `TeleopMode`（`teleop_mode`）并行，本阶段不合并。
+
 ### VR输入
-- `/teleop/left_ee_pose` (`geometry_msgs/msg/Pose`): VR左臂末端执行器pose
-- `/teleop/right_ee_pose` (`geometry_msgs/msg/Pose`): VR右臂末端执行器pose
-- `/teleop/head_pose` (`geometry_msgs/msg/Pose`): VR头显pose
-- `/teleop/controller_state` (`std_msgs/msg/Int32`): 按钮/组合键事件码（单帧）
-- `/teleop/thumbstick_axes` (`geometry_msgs/msg/Twist`): 左右摇杆轴值；`linear.z` / `angular.z` 携带左右握把按下状态
-- `/teleop/trigger_values` (`geometry_msgs/msg/Twist`): 左右扳机模拟量
+- `teleop/left_ee_pose` (`geometry_msgs/msg/Pose`): VR左臂末端执行器pose
+- `teleop/right_ee_pose` (`geometry_msgs/msg/Pose`): VR右臂末端执行器pose
+- `teleop/head_pose` (`geometry_msgs/msg/Pose`): VR头显pose
+- `teleop/controller_state` (`std_msgs/msg/Int32`): 按钮/组合键/脚踏事件码（修改链路，单帧）
+- `teleop/thumbstick_axes` (`geometry_msgs/msg/Twist`): 左右摇杆轴值；`linear.z` / `angular.z` 携带左右握把按下状态
+- `teleop/trigger_values` (`geometry_msgs/msg/Twist`): 左右扳机模拟量
 
 ### 机器人状态
 - `left_current_pose` (`geometry_msgs/msg/PoseStamped`): 机器人左臂当前pose
 - `right_current_pose` (`geometry_msgs/msg/PoseStamped`): 机器人右臂当前pose
 
 ### 发布（模式反馈）
-- `teleop/vr_mode` (`arms_ros2_control_msgs/VrTeleopMode`, `Reliable` + `TransientLocal`): VR 输入语义锁存。启动发一次，字段变化再发。含 `enabled`、`update_mode`、`chassis_mode`、`yb_pause_semantics`、左右 `arm_paused`、摇杆/腰部平面、夹爪比例模式、`mirror_movement` / `mirror_profile`、`topology`。WBC 约束仍看 `ocs2_wbc_controller/current_state`。原 `/teleop/mirror_mode` 已移除。
+- `teleop/mode_state` (`arms_ros2_control_msgs/TeleopModeState`, `Reliable` + `TransientLocal`): 事件总线遥操语义锁存。启动发一次，字段变化再发。含 `enabled`、`update_mode`、`chassis_mode`、`yb_pause_semantics`、左右 `arm_paused`、臂摇杆平面、腰部左/右摇杆平面（`body_stick_plane` / `body_right_stick_plane`）、夹爪比例模式、`mirror_movement` / `mirror_profile`、`topology`。WBC 约束仍看 `ocs2_wbc_controller/current_state`。灵巧手 / UI 订本话题读当前模式，勿把 `teleop/controller_state` 当模式源。
 
 ## 参数配置
 
@@ -95,7 +104,7 @@ R_target_C = R_C_F * delta_R_F * inverse(R_C_F) * R_anchor_C
 2. 用 **右 A** 把 FSM 推到 OCS2（HOME → HOLD → OCS2）；**左 X** 后退。
 3. 把双手柄放到期望起始姿态，点 **右摇杆** 进入 UPDATE，双臂开始跟随。
 4. 用 **左握把 + 左摇杆四方向** 切换身体模式；用 **右握把 + 右摇杆上/下/右** 切换双臂耦合 / 底盘锁 / 参考关节。单臂启用默认用左 Y / 右 B；**左右握把 + 左 Y + 右 B**（事件 16）可把 Y/B 切到 VR 暂停语义。
-5. 进入 **跟随（BODY_TRACKING）** 后，左摇杆改控腰部，右摇杆仍控右臂。
+5. 进入 **跟随（BODY_TRACKING）** 后，左右摇杆都改控腰部（右臂末端仍由手柄位姿驱动）。
 6. 需要底盘遥控时，再同时按下左右摇杆进入 CHASSIS 模式。
 
 ### 身体模式（左握把 + 左摇杆）
@@ -113,13 +122,15 @@ R_target_C = R_C_F * delta_R_F * inverse(R_C_F) * R_anchor_C
 
 ### 腰部跟随（BODY_TRACKING）
 
-WBC 确认 `body_state = BODY_TRACKING` 且 FSM = OCS2 后：
+WBC 确认 `body_state = BODY_TRACKING` 且 FSM = OCS2 后，**左右摇杆都增量改 BodyMarker**（不依赖双臂 UPDATE/STORAGE；右臂末端仍由手柄位姿驱动）：
 
-- **左摇杆** 增量改 BodyMarker（不依赖双臂 UPDATE/STORAGE）。
-- **右摇杆** 仍控制右臂。
-- 默认 XY：摇杆 Y → 前后（X），摇杆 X → 左右（Y）。
-- 点一下 **左握把**（短按松开，未超过 400 ms，且未被组合键消费）在 **XY** 与 **Z+Yaw** 之间切换：Y → 升降，X → 偏航。长按（包括组合键没发出去）不会切模式。
-- 离开跟随后，腰部摇杆平面自动回到 XY；此时左握把短按恢复为「切换左臂摇杆 XY / Z+Yaw」。右握把短按同样切换对应臂的摇杆平面。
+| 摇杆 | 默认平面 | 握把短切换面 |
+|------|----------|--------------|
+| **左** | Y → 前后（X），X → 左右（Y） | Y → 前后（X），X → 侧摆（roll） |
+| **右** | Y → 升降（Z），X → 偏航（yaw） | Y → 俯仰（pitch），X → 偏航（yaw） |
+
+- 点一下对应侧 **握把**（短按松开，未超过 400 ms，且未被组合键消费）切换该侧腰部平面。长按（包括组合键没发出去）不会切模式。
+- 离开跟随后，左右腰部平面都回到默认；握把短按恢复为「切换对应臂摇杆 XY / Z+Yaw」。
 
 腰部控制不要求当前处于 UPDATE 模式。
 
@@ -198,10 +209,11 @@ FULL_BODY 下右握把+右摇杆方向组合仍会锁存并清零右轴（含预
 左 Y / 右 B                 →  默认对应臂 ENABLE/DISABLE；事件 16 后为 VR 暂停/恢复
 左右握把 + 左 Y + 右 B      →  切换 Y/B 禁用 ↔ 暂停语义（SPLIT_BODY 忽略）
 左右摇杆同时按下            →  底盘遥控 ↔ 末端控制
-跟随模式下短按左握把      →  腰部摇杆 XY ↔ Z+Yaw
-短按左/右握把              →  对应臂摇杆 XY ↔ Z+Yaw（长按或组合键不切换）
+跟随模式下短按左/右握把    →  腰部左 XY↔ROLL / 右 ZYAW↔PYAW
+短按左/右握把（非跟随）    →  对应臂摇杆 XY ↔ Z+Yaw（长按或组合键不切换）
 右摇杆点击                  →  STORAGE ↔ UPDATE（需 OCS2）
 右 A / 左 X                 →  FSM 前进 / 后退
+RViz HUD 点 L/R              →  同 3/6；FULL_BODY 非暂停语义时先发 16 再发 3/6
 ```
 
 ## 使用方法
@@ -295,7 +307,7 @@ VRInputHandler会输出详细的调试信息：
 
 1. **VR控制不响应**
    - 检查VR设备是否连接、`/xr_target_node` 是否存在
-   - 确认topic名称是否为 `/teleop/left_ee_pose` 等
+   - 确认 topic 为相对名 `teleop/left_ee_pose` 等，且与 ATM 同命名空间（多机勿发全局 `/teleop/...`）
    - 检查是否处于更新模式，以及 FSM 是否为 OCS2
 
 2. **Marker不更新**

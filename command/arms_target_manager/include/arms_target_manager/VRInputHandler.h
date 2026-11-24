@@ -27,7 +27,7 @@
 #include "arms_target_manager/ArmsTargetManager.h"
 #include "arms_controller_common/utils/FSMCommandPublisher.h"
 #include <arms_ros2_control_msgs/msg/wbc_capability.hpp>
-#include <arms_ros2_control_msgs/msg/vr_teleop_mode.hpp>
+#include <arms_ros2_control_msgs/msg/teleop_mode_state.hpp>
 
 namespace arms_ros2_control::command
 {
@@ -218,8 +218,8 @@ namespace arms_ros2_control::command
         void processRightThumbstickAxes();
 
         /**
-         * 处理 BODY_TRACKING 下的左摇杆轴值，把增量累加到腰部 marker
-         * XY 模式：Y→X, X→Y；Z+Yaw 模式：Y→Z, X→Yaw
+         * 处理 BODY_TRACKING 下的左右摇杆轴值，把增量累加到腰部 marker。
+         * 左默认 XY；左切面：Y→X、X→roll。右默认：Y→Z、X→yaw；右切面：Y→pitch、X→yaw。
          */
         void processBodyThumbstickAxes();
 
@@ -361,19 +361,16 @@ namespace arms_ros2_control::command
          */
         void runScaleCalibration(bool use_left_z);
 
-        /**
-         * Publish VR input semantic latch on teleop/vr_mode (Reliable + TransientLocal).
-         * Skips publish when the latch snapshot is unchanged unless force=true.
-         */
-        void publishVrTeleopMode(bool force = false);
+        /** Publish teleop/mode_state when the latch changes (or force=true). */
+        void publishTeleopModeState(bool force = false);
 
         /**
-         * Optional optical R0 handshake (not in main teleop topics):
-         *   /teleop/optical_r0_caps     fa-py→ATM  bit0 = publisher implements handshake
-         *   /teleop/optical_r0_request  ATM→fa-py  bit0/1 keep I+p_a; 0 = ACK open
-         *   /teleop/optical_r0_ready    fa-py→ATM  bit0/1 contract frame on EE
+         * Optional optical R0 handshake:
+         *   teleop/optical_r0_caps     fa-py→ATM  bit0 = publisher implements handshake
+         *   teleop/optical_r0_request  ATM→fa-py  bit0/1 keep I+p_a; 0 = ACK open
+         *   teleop/optical_r0_ready    fa-py→ATM  bit0/1 contract frame on EE
          *
-         * Peer support tracks /teleop/optical_r0_caps (assignable, including
+         * Peer support tracks teleop/optical_r0_caps (assignable, including
          * caps=0). Once any caps message is seen, ready traffic no longer
          * latches support — only caps does. Legacy publishers that never send
          * caps may still learn support from ready. Unlearn only on
@@ -403,6 +400,11 @@ namespace arms_ros2_control::command
         void tryCompleteOpticalResumes();
         /** Pause→resume one arm: optical handshake or main topic snap. */
         bool resumeArmVrControl(WbcToggleTarget arm, const char* buttonTag);
+        /**
+         * Toggle VR pause for one robot arm (left_arm_paused_ / right_arm_paused_).
+         * Always pause semantics; never WBC ENABLE/DISABLE. Requires UPDATE mode.
+         */
+        bool toggleArmVrPause(WbcToggleTarget arm, const char* tag);
 
         /**
          * 按镜像模式解析左右扳机对应的手控制器
@@ -657,11 +659,10 @@ namespace arms_ros2_control::command
 
         // WBC 模式切换命令发布器（case 21–24 请求身体模式）
         rclcpp::Publisher<std_msgs::msg::String>::SharedPtr pub_mode_command_;
-        // VR input semantic latch (replaces former /teleop/mirror_mode Bool).
-        rclcpp::Publisher<arms_ros2_control_msgs::msg::VrTeleopMode>::SharedPtr
-            pub_vr_teleop_mode_;
-        bool has_published_vr_teleop_mode_{false};
-        arms_ros2_control_msgs::msg::VrTeleopMode last_vr_teleop_mode_{};
+        rclcpp::Publisher<arms_ros2_control_msgs::msg::TeleopModeState>::SharedPtr
+            pub_teleop_mode_state_;
+        bool has_published_teleop_mode_state_{false};
+        arms_ros2_control_msgs::msg::TeleopModeState last_teleop_mode_state_{};
         rclcpp::Subscription<arms_ros2_control_msgs::msg::WbcCapability>::SharedPtr
             sub_wbc_capability_;
 
@@ -799,8 +800,11 @@ namespace arms_ros2_control::command
 
         std::atomic<int32_t> current_fsm_state_; // 当前FSM状态：1=HOME, 2=HOLD, 3=OCS2, 4=MOVEJ
 
-        // 腰部摇杆控制平面：false=XY平移, true=Z轴+Yaw（与左右臂的 *_grip_mode_ 相互独立）
-        std::atomic<bool> body_thumbstick_z_yaw_mode_{false};
+        // BODY_TRACKING 腰部摇杆平面（与左右臂 *_grip_mode_ 独立；离开跟随后复位）
+        // 左：false=XY，true=前进 + 侧摆(roll)
+        std::atomic<bool> body_left_stick_alt_mode_{false};
+        // 右：false=升降+yaw，true=俯仰+yaw
+        std::atomic<bool> body_right_stick_alt_mode_{false};
         // 身体模式命令发出后到 WBC 确认且左摇杆回中之间的异步窗口。
         std::atomic<bool> body_mode_request_pending_{false};
         std::atomic<int> requested_body_state_{-1};

@@ -165,7 +165,7 @@ twist.angular.{x,y,z} = Inputs.{roll,pitch,yaw} * angular_scale  # 单位：rad/
 - Marker 连续 / VR：`left_target`、`right_target`（绝对 Pose；MOVEJ 下不发）
 - WBC Head Marker：`head_target`（连续）或 `head_target/stamped`（单次）
 - 手柄适配：`left_target/twist`、`right_target/twist`
-- VR 模式锁存：`teleop/vr_mode`（`VrTeleopMode`，`Reliable` + `TransientLocal`；取代原 `/teleop/mirror_mode`）
+- 事件总线模式反馈：`teleop/mode_state`（`TeleopModeState`，`Reliable` + `TransientLocal`；VR / 脚踏 / 外骨骼改模式后的统一锁存）
 
 **订阅**
 

@@ -61,7 +61,7 @@ FootPedalTeleop::FootPedalTeleop()
     grab_device_ = declare_parameter<bool>("grab_device", true);
     publish_rate_hz_ = declare_parameter<double>("teleop.publish_rate_hz", 30.0);
     controller_state_topic_ = declare_parameter<std::string>(
-        "teleop.controller_state_topic", "/teleop/controller_state");
+        "teleop.controller_state_topic", "teleop/controller_state");
     whole_teleop_long_press_ms_ = declare_parameter<std::int64_t>(
         "whole_teleop_long_press_ms", 800);
     mirror_long_press_ms_ = declare_parameter<std::int64_t>(

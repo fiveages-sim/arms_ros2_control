@@ -1,15 +1,17 @@
 # Arms RViz Control Plugin
 
-面向 OCS2 / WBC 机械臂控制的 RViz2 面板集合：FSM 切换、关节与末端目标、夹爪、以及 WBC 能力。
+面向 OCS2 / WBC 机械臂控制的 RViz2 面板与视口 HUD：FSM 切换、关节与末端目标、夹爪、WBC 能力，以及跟踪误差 / 遥操状态叠加层。
 
-在 RViz 中通过 `Panels` → `Add New Panel` 添加，类名前缀均为 `arms_rviz_control_plugin/`。
+在 RViz 中通过 `Panels` → `Add New Panel` 添加面板；HUD 通过 Displays → Add 添加。类名前缀均为 `arms_rviz_control_plugin/`。
 
-| Panel 类名 | 用途 |
-|---|---|
-| `OCS2FSMPanel` | FSM 状态切换；可选 WBC 模式控制 |
-| `JointControlPanel` | MOVEJ 关节目标 / OCS2 末端绝对·相对目标；腰部点动 |
-| `GripperControlPanel` | 夹爪开关与位置百分比 |
-| `WbcCapabilityPanel` | 只读：WBC 能力标志 |
+| 类名 | 类型 | 用途 |
+|---|---|---|
+| `OCS2FSMPanel` | Panel | FSM 状态切换；可选 WBC 模式控制 |
+| `JointControlPanel` | Panel | MOVEJ 关节目标 / OCS2 末端绝对·相对目标；腰部点动 |
+| `GripperControlPanel` | Panel | 夹爪开关与位置百分比 |
+| `WbcCapabilityPanel` | Panel | 只读：WBC 能力标志 |
+| `TargetErrorDisplay` | Display | 右上：跟踪误差 + MPC（仅 OCS2） |
+| `TeleopModeDisplay` | Display | 左上：事件总线遥操状态（仅激活时显示） |
 
 ## 目录
 
@@ -226,3 +228,20 @@ HUD 顶部固定一张 **MPC** 卡片：大字为最近一次求解耗时（ms�
 每个框的位置、姿态数字背后各叠加最近 5 秒的半透明误差曲线，最多 5 Hz 更新。横轴按实际时间滚动；纵轴固定为 0 到对应红色阈值的两倍，红色虚线表示红色阈值，超出上限时在顶部显示短标记。无效数据或采样间隔超过 0.6 秒时断线，RViz Reset 清空历史。不显示时间窗口标注，曲线不另占高度；数字保持不透明并在曲线上层显示，单位沿用下方标签。
 
 HUD 以控制器实际反馈 `fsm_state`（transient-local）为总开关，仅状态 3（OCS2）计算和显示误差与 MPC 耗时。HOME、HOLD、MOVEJ、未知状态或尚未收到状态时隐藏并跳过误差/曲线更新；状态切换清空曲线并等待新的实际位姿。保留目标缓存以兼容仅在目标变化时发布的话题；非 OCS2 模式直接丢弃实际位姿与 `mpc_timing` 回调数据。
+
+### 三维视窗中的遥操状态 HUD
+
+`arms_rviz_control_plugin/TeleopModeDisplay` 显示在视口**左上角**（与右上误差 HUD 分工）。Displays → Add → TeleopModeDisplay；`Scale` 0.5–2.0。
+
+订相对话题：`teleop/mode_state`（`TeleopModeState`，`Reliable` + `TransientLocal`）、`ocs2_wbc_controller/current_state`（腰部跟随）、`teleop/optical_r0_caps`（光学腕/灵巧手会话）。点击可向同 ns 的 `teleop/controller_state` 发修改事件（与 VR/脚踏同链路）。仅当 `enabled==true` 时显示；未激活或尚未收到消息时隐藏。不依赖 FSM=OCS2。
+
+单卡内容：首行左右分栏（`TELEOP ON`=UPDATE 跟随 / `TELEOP OFF`=STORAGE | `MIRROR ON`/`OFF`）；臂列左右分栏（`L/R RUN|PAUSE`，摇杆行，`GRIP %`/`GRIP SW`），中间竖线分隔。摇杆行随路由改写：默认 `STICK XY`/`STICK ZYAW`；`chassis_mode` 时为 `CHASSIS XY` / `CHASSIS YAW`；`BODY_TRACKING` 时双列为腰部 `WAIST XY`/`WAIST ROLL`（`body_stick_plane`）与 `WAIST ZYAW`/`WAIST PYAW`（`body_right_stick_plane`）。`optical_r0_caps≠0`（`vr-xrt wrist`）时隐藏 STICK/GRIP（含 WAIST）；`chassis_mode` 仍保留 `CHASSIS` 行。颜色：TELEOP ON 绿 / OFF 蓝 / MIRROR ON 琥珀 / OFF 灰 / RUN 绿 / PAUSE 红 / TELEOP ON 时 XY 蓝·切面/ZYAW 琥珀，TELEOP OFF 时 STICK/WAIST 灰；CHASSIS 琥珀且不受 TELEOP OFF 影响 / GRIP % 蓝 / GRIP SW 琥珀。不显示拓扑。Latin 文案。多机时 RViz 与 ATM 同 namespace即可。
+
+可点击（左键松开，走事件总线；ATM 侧约束与手柄相同，如 UPDATE 需 FSM=OCS2）：
+
+| 命中 | 事件 | 语义 |
+|------|------|------|
+| `TELEOP ON/OFF` | `4` | UPDATE ↔ STORAGE |
+| `MIRROR ON/OFF` | `7` | 镜像开关 |
+| `L RUN/PAUSE` | `3`（必要时先 `16`） | 与左 Y 相同；FULL_BODY 且尚非暂停语义时先发 `16`，等 `mode_state.yb_pause_semantics` 后再发 `3` |
+| `R RUN/PAUSE` | `6`（必要时先 `16`） | 与右 B 相同；同上 |
