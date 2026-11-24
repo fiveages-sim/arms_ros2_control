@@ -9,8 +9,15 @@
 
 	<buildtool_depend>ament_cmake</buildtool_depend>
 
+	<depend>rclcpp</depend>
+	<depend>rclcpp_lifecycle</depend>
+	<depend>rcl_interfaces</depend>
+	<depend>ament_index_cpp</depend>
 	<depend>controller_interface</depend>
+	<depend>hardware_interface</depend>
 	<depend>pluginlib</depend>
+	<depend>boost</depend>
+	<depend>pinocchio</depend>
 	<depend>arms_teleop</depend>
 	<depend>robot_common_launch</depend>
 	<depend>std_msgs</depend>
@@ -18,13 +25,25 @@
 	<depend>adaptive_gripper_controller</depend>
 	<depend>arms_controller_common</depend>
 	<depend>ocs2_controller_common</depend>
+	<depend>ocs2_core</depend>
+	<depend>ocs2_ddp</depend>
+	<depend>ocs2_mpc</depend>
+	<depend>ocs2_msgs</depend>
+	<depend>ocs2_mobile_manipulator</depend>
+	<depend>ocs2_ros_interfaces</depend>
 	<depend>tf2_ros</depend>
 	<depend>tf2_geometry_msgs</depend>
 	<depend>arms_ros2_control_msgs</depend>
 
+	<exec_depend>ament_index_python</exec_depend>
+	<exec_depend>launch</exec_depend>
+	<exec_depend>launch_ros</exec_depend>
+	<exec_depend>rviz2</exec_depend>
 	<exec_depend>controller_manager</exec_depend>
 	<exec_depend>joint_state_broadcaster</exec_depend>
 	<exec_depend>force_torque_sensor_broadcaster</exec_depend>
+	<!-- full_body / split_body launch 会 spawn 这些 basic_joint_controller 实例 -->
+	<exec_depend>basic_joint_controller</exec_depend>
 
 	<test_depend>ament_lint_auto</test_depend>
 	<test_depend>ament_lint_common</test_depend>

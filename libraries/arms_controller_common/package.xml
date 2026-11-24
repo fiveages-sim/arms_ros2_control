@@ -12,6 +12,7 @@
     <depend>hardware_interface</depend>
     <depend>rclcpp</depend>
     <depend>rclcpp_action</depend>
+    <depend>rclcpp_lifecycle</depend>
     <depend>pinocchio</depend>
     <depend>urdf</depend>
     <depend>ament_index_cpp</depend>
@@ -20,6 +21,9 @@
     <depend>tf2_ros</depend>
     <depend>geometry_msgs</depend>
     <depend>nav_msgs</depend>
+    <depend>std_msgs</depend>
+    <depend>trajectory_msgs</depend>
+    <depend>eigen</depend>
     <depend>arms_ros2_control_msgs</depend>
     <depend>lina_planning</depend>
     <test_depend>ament_lint_auto</test_depend>

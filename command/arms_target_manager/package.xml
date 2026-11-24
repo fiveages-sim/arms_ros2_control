@@ -11,16 +11,19 @@
 
   <depend>rclcpp</depend>
   <depend>geometry_msgs</depend>
+  <depend>builtin_interfaces</depend>
   <depend>visualization_msgs</depend>
   <depend>interactive_markers</depend>
   <depend>arms_ros2_control_msgs</depend>
   <depend>arms_controller_common</depend>
   <depend>arms_rviz_control_plugin</depend>
+  <depend>tf2</depend>
   <depend>tf2_ros</depend>
   <depend>tf2_msgs</depend>
   <depend>tf2_geometry_msgs</depend>
   <depend>std_msgs</depend>
   <depend>nav_msgs</depend>
+  <depend>eigen</depend>
   <depend>controller_manager_msgs</depend>
 
   <test_depend>ament_lint_auto</test_depend>
