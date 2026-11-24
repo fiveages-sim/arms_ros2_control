@@ -166,6 +166,40 @@ def launch_setup(context, *args, **kwargs):
         extra_rviz_parameters=[{"wbc_available": wbc_available}],
     )
 
+    # 无物理仿真下没有任何节点发布 world→base，而 WBC 只在 on_activate 里探测一次
+    # （mobile_base_tf_timeout_sec），探不到就把底盘当固定基座锁死。这里补一个
+    # 纯运动学位姿源；必须排在 ros2_control_node 之前。
+    # 固定基座机型不需要（也不应该）启动它，所以按 task.info 的底盘类型门控。
+    pre_control_nodes = []
+    sim_base_enabled = (
+        context.launch_configurations.get("sim_base", "true").lower() == "true"
+    )
+    model_arg = context.launch_configurations.get("sim_base_model", "auto").strip()
+    resolved_model = _resolve_sim_base_model(task_file_path) if model_arg == "auto" else model_arg
+    if sim_base_enabled and wbc_available and ctx.hardware == "mock_components":
+        if resolved_model is None:
+            print("[INFO] base_pose_sim skipped: task.info reports a fixed base")
+        else:
+            print(f"[INFO] base_pose_sim enabled: base_model={resolved_model} (from {model_arg})")
+            pre_control_nodes.append(
+                Node(
+                    package="base_pose_sim",
+                    executable="base_pose_sim_node",
+                    name="base_pose_sim",
+                    output="screen",
+                    parameters=[
+                        {
+                            "use_sim_time": ctx.use_sim_time,
+                            "base_model": resolved_model,
+                            "publish_odom": context.launch_configurations.get(
+                                "sim_base_publish_odom", "false"
+                            ).lower()
+                            == "true",
+                        }
+                    ],
+                )
+            )
+
     return ocs2_common.assemble_nodes(
         ctx,
         rviz_node=rviz_node,
@@ -173,7 +207,28 @@ def launch_setup(context, *args, **kwargs):
         main_spawner=main_spawner,
         extra_spawners=hand_spawners + body_spawners + ft_spawners,
         optional_nodes=[arms_target_manager] if arms_target_manager else [],
+        pre_control_nodes=pre_control_nodes,
     )
+
+
+def _resolve_sim_base_model(task_file_path: str):
+    """从 task.info 的 manipulatorModelType 推断底盘形式。
+
+    返回 None 表示固定基座（不需要位姿仿真节点），否则返回 base_pose_sim 的
+    base_model 取值。数字含义与规划侧一致：
+        0 = 固定基座；1 = 差速（vx, ω）；2/3 = 浮动/全驱动浮动；4 = 全向（vx, vy, ω）
+    """
+    try:
+        with open(task_file_path, "r", encoding="utf-8") as handle:
+            for raw in handle:
+                line = raw.split(";", 1)[0].strip()
+                if not line.startswith("manipulatorModelType"):
+                    continue
+                model_type = int(line.split()[1])
+                return {1: "differential", 4: "omni"}.get(model_type)
+    except Exception as exc:
+        print(f"[WARN] Cannot read manipulatorModelType from {task_file_path}: {exc}")
+    return None
 
 
 def generate_launch_description():
@@ -185,6 +240,22 @@ def generate_launch_description():
             DeclareLaunchArgument("world", default_value="dart"),
             DeclareLaunchArgument("enable_arms_target_manager", default_value="true"),
             DeclareLaunchArgument("enable_gripper", default_value="true"),
+            # 无物理仿真下补一条 world→base：仅 mock 后端 + WBC 时生效。
+            DeclareLaunchArgument(
+                "sim_base",
+                default_value="true",
+                description="mock 后端下用 cmd_vel 积分出底盘 TF（base_pose_sim，纯运动学）",
+            ),
+            DeclareLaunchArgument(
+                "sim_base_model",
+                default_value="auto",
+                description="底盘自由度：auto（读 task.info）| omni（vx,vy,ω）| differential（vx,ω）",
+            ),
+            DeclareLaunchArgument(
+                "sim_base_publish_odom",
+                default_value="false",
+                description="sim_base 额外发 world→odom(静态) + odom→base + /odom，供 nav2 使用",
+            ),
             DeclareLaunchArgument(
                 "use_controller_manager_include",
                 default_value="false",

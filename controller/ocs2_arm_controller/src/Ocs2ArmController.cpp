@@ -139,6 +139,11 @@ namespace ocs2::mobile_manipulator
             // Get controller name
             controller_name_ = get_node()->get_name();
 
+            // FSM topics: relative names so each robot (namespace) owns its own
+            // fsm_command / fsm_state pair.
+            fsm_state_topic_ = auto_declare<std::string>("fsm_state_topic", fsm_state_topic_);
+            fsm_command_topic_ = auto_declare<std::string>("fsm_command_topic", fsm_command_topic_);
+
             // Get update frequency
             get_node()->get_parameter("update_rate", ctrl_interfaces_.frequency_);
             RCLCPP_INFO(get_node()->get_logger(), "Controller Manager Update Rate: %d Hz", ctrl_interfaces_.frequency_);
@@ -337,11 +342,11 @@ namespace ocs2::mobile_manipulator
     {
         // Relative names: respect ControllerManager / robot namespace (multi-robot).
         fsm_state_publisher_ = get_node()->create_publisher<std_msgs::msg::Int32>(
-            "fsm_state", rclcpp::QoS(1).transient_local());
+            fsm_state_topic_, rclcpp::QoS(1).transient_local());
 
         // Subscribe to FSM command (dedicated topic for state transitions)
         fsm_command_subscription_ = get_node()->create_subscription<std_msgs::msg::Int32>(
-            "fsm_command", 10, [this](const std_msgs::msg::Int32::SharedPtr msg)
+            fsm_command_topic_, 10, [this](const std_msgs::msg::Int32::SharedPtr msg)
             {
                 ctrl_interfaces_.fsm_command_ = msg->data;
             });

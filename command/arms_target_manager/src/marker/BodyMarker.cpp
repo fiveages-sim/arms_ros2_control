@@ -1,8 +1,25 @@
+//
+// BodyMarker 实现：显示与鼠标拖动换算。
+//
+// 关键点：
+//   * 默认位姿放在机器人前方 0.9 m，避免 marker 与原点重叠后看不见；
+//   * 实测位姿先转发给上层回调（VR 拿它当控制基准），再节流刷新显示；
+//   * 刚下发过命令的 1 秒内不采用回显位姿。
+//
+// 注意：
+//   目标发布由 core/TargetRouter 负责，本文件只维护显示。
+//
 #include "arms_target_manager/marker/BodyMarker.h"
 
 namespace arms_ros2_control::command
 {
 
+/**
+ * @brief 构造胸部 marker
+ *
+ * 默认位姿放在机器人前方 0.9 m，避免 marker 与原点重合看不清。
+ * 只订阅实测位姿：目标回显与发布已统一交给 TargetRouter。
+ */
 BodyMarker::BodyMarker(
     rclcpp::Node::SharedPtr node,
     std::shared_ptr<MarkerFactory> marker_factory,
@@ -42,19 +59,16 @@ BodyMarker::BodyMarker(
         this->updateFromTopic(msg);
     };
 
+    // 目标回显与发布统一由 TargetRouter 负责，这里只需要实测位姿用于显示。
+    (void)current_target_topic;
     current_pose_subscription_ =
         node_->create_subscription<geometry_msgs::msg::PoseStamped>(
             current_pose_topic, 10, callback);
-
-    current_target_subscription_ =
-        node_->create_subscription<geometry_msgs::msg::PoseStamped>(
-            current_target_topic, 10,
-            [this](const geometry_msgs::msg::PoseStamped::ConstSharedPtr msg)
-            {
-                updateTargetFromTopic(msg);
-            });
 }
 
+/**
+ * @brief 生成交互 marker（绿色，便于与双臂 marker 区分）
+ */
 visualization_msgs::msg::InteractiveMarker BodyMarker::createMarker(
     const std::string& name,
     MarkerState mode,
@@ -69,6 +83,9 @@ visualization_msgs::msg::InteractiveMarker BodyMarker::createMarker(
         enable_interaction);
 }
 
+/**
+ * @brief 把 RViz 拖动事件换算到 marker 显示坐标系
+ */
 geometry_msgs::msg::Pose BodyMarker::handleFeedback(
     const visualization_msgs::msg::InteractiveMarkerFeedback::ConstSharedPtr& feedback,
     const std::string& source_frame_id) const
@@ -76,6 +93,11 @@ geometry_msgs::msg::Pose BodyMarker::handleFeedback(
     return transformPose(feedback->pose, source_frame_id, frame_id_);
 }
 
+/**
+ * @brief 用实测位姿刷新显示
+ *
+ * 先转发给上层回调（VR 需要它作为控制基准），再节流到约 30 Hz 更新 marker。
+ */
 void BodyMarker::updateFromTopic(
     const geometry_msgs::msg::PoseStamped::ConstSharedPtr& pose_msg)
 {
@@ -110,6 +132,11 @@ void BodyMarker::updateFromTopic(
     }
 }
 
+/**
+ * @brief 用控制器回传的目标刷新显示
+ *
+ * 刚下发过命令的 1 秒内不覆盖，防止拖动时 marker 被回显拉回。
+ */
 void BodyMarker::updateTargetFromTopic(
     const geometry_msgs::msg::PoseStamped::ConstSharedPtr& pose_msg)
 {
@@ -147,6 +174,11 @@ void BodyMarker::updateTargetFromTopic(
     }
 }
 
+/**
+ * @brief 把当前 marker 位姿下发到目标话题
+ *
+ * force=true 走 stamped（控制器会插值），否则按 publish_rate 节流。
+ */
 bool BodyMarker::publishTargetPose(bool force)
 {
     // 单次发送（force=true）走 stamped（插值）；连续发送走 pose（不插值），与双臂逻辑保持一致。
@@ -181,6 +213,9 @@ bool BodyMarker::publishTargetPose(bool force)
     return true;
 }
 
+/**
+ * @brief 坐标系换算；失败时打限频 WARN 并返回未换算的原值
+ */
 geometry_msgs::msg::Pose BodyMarker::transformPose(
     const geometry_msgs::msg::Pose& pose,
     const std::string& source_frame_id,

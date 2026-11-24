@@ -56,6 +56,7 @@ ROS 2 接口包：[`arms_ros2_control`](../..) 系统所使用的 **msg / srv / 
 | `head_tracking_ee_enabled` | `bool` | Head 6D 跟踪是否启用 |
 | `head_midpoint_gaze_enabled` | `bool` | 双手末端中点注视能力 |
 | `has_home_joint_reference` | `bool` | HOME 关节参考约束 |
+| `base_tracking_enabled` | `bool` | 底盘平面跟随能力（移动底盘且外部世界 TF 可用） |
 
 ### `WbcCurrentState`（msg）
 
@@ -63,7 +64,7 @@ ROS 2 接口包：[`arms_ros2_control`](../..) 系统所使用的 **msg / srv / 
 
 | 字段 | 类型 | 取值 |
 |------|------|------|
-| `base_state` | `uint8` | `BASE_LOCKED=0` / `BASE_UNLOCKED=1` |
+| `base_state` | `uint8` | `BASE_LOCKED=0` / `BASE_UNLOCKED=1` / `BASE_TRACKING=2` |
 | `body_state` | `uint8` | `BODY_FREE=0` / `VERTICAL=1` / `TRACKING=2` / `LOCKED=3` / `CUSTOM_LOCKED=5`（4 为旧锁头值，不再发布） |
 | `bimanual_state` | `uint8` | `BIMANUAL_INDEPENDENT=0` / `BIMANUAL_COUPLED=1` |
 | `left_arm_state` / `right_arm_state` | `uint8` | `ARM_DISABLED=0` / `ARM_ENABLED=1` |

@@ -61,8 +61,9 @@ KeyboardTeleop::KeyboardTeleop() : Node("keyboard_teleop_node")
             create_publisher<arms_ros2_control_msgs::msg::TeleopMode>("teleop_mode", qos);
     }
     chassis_pub_ = create_publisher<geometry_msgs::msg::Twist>("/cmd_vel", 10);
+    // FSM 话题使用相对名：多机器人部署时靠命名空间隔离（/<ns>/fsm_state）。
     fsm_state_sub_ = create_subscription<std_msgs::msg::Int32>(
-        "/fsm_state", rclcpp::QoS(1).transient_local(),
+        "fsm_state", rclcpp::QoS(1).reliable().transient_local(),
         [this](const std_msgs::msg::Int32::SharedPtr msg)
         {
             if (msg)
@@ -71,7 +72,8 @@ KeyboardTeleop::KeyboardTeleop() : Node("keyboard_teleop_node")
             }
         });
     wbc_state_sub_ = create_subscription<arms_ros2_control_msgs::msg::WbcCurrentState>(
-        "/ocs2_wbc_controller/current_state", 10,
+        "ocs2_wbc_controller/current_state",
+        rclcpp::QoS(1).reliable().transient_local(),
         [this](const arms_ros2_control_msgs::msg::WbcCurrentState::SharedPtr msg)
         {
             if (msg)
@@ -172,8 +174,9 @@ void KeyboardTeleop::publishWaistZero()
 
 bool KeyboardTeleop::wbcOwnsChassisVelocity() const
 {
+    // 随动与跟随都由 WBC 输出 cmd_vel；只有锁定状态由本节点直发。
     return fsm_state_ == 3 &&
-           base_state_ == arms_ros2_control_msgs::msg::WbcCurrentState::BASE_UNLOCKED;
+           base_state_ != arms_ros2_control_msgs::msg::WbcCurrentState::BASE_LOCKED;
 }
 
 void KeyboardTeleop::publishChassisCommand()

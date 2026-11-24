@@ -73,6 +73,10 @@ namespace ocs2::mobile_manipulator
 
         // Hardware parameters
         std::string controller_name_;
+        // FSM 话题名（默认机器级相对名，由节点命名空间隔离多机器人；
+        // 同命名空间跑多个控制器时可覆盖为 <controller>/fsm_state 以区分）。
+        std::string fsm_state_topic_{"fsm_state"};
+        std::string fsm_command_topic_{"fsm_command"};
         std::string command_prefix_;
         std::vector<std::string> joint_names_;
         std::vector<std::string> command_interface_types_;

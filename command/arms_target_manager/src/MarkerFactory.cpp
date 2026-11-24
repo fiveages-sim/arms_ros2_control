@@ -1,8 +1,15 @@
 //
-// Created for Arms ROS2 Control - MarkerFactory
-// Marker 创建工厂类实现
+// MarkerFactory 实现：只生成 marker 消息，不含状态与发布逻辑。
 //
-
+// 关键点：
+//   * header.stamp 故意留 0：让 RViz 每帧重新换算到 Fixed Frame，
+//     否则拖动一个 marker 会让另一个跟着跳；
+//   * 连续模式用球、单次模式用方块，让用户一眼看出当前会不会持续下发；
+//   * enable_interaction=false 时缩小并透明化，只作为位置提示。
+//
+// 注意：
+//   本文件不订阅、不发布；新增外形请加一个 createXxxMarker。
+//
 #include "arms_target_manager/MarkerFactory.h"
 #include <builtin_interfaces/msg/time.hpp>
 #include <rclcpp/rclcpp.hpp>
@@ -12,6 +19,12 @@
 
 namespace arms_ros2_control::command
 {
+    /**
+     * @brief 构造 marker 工厂
+     * @param node ROS 节点（保留备用）
+     * @param frame_id marker 显示坐标系
+     * @param disable_states 处于这些 FSM 状态时不允许自动刷新显示
+     */
     MarkerFactory::MarkerFactory(
         rclcpp::Node::SharedPtr node,
         std::string  frame_id,
@@ -22,6 +35,19 @@ namespace arms_ros2_control::command
     {
     }
 
+    /**
+     * @brief 生成手臂/胸部类 marker（方块或球 + 六自由度拖拽手柄）
+     *
+     * 连续模式用球（表示会持续下发），单次模式用方块（表示需手动发送）。
+     * enable_interaction=false 时缩小并透明化，只作为位置提示存在。
+     *
+     * @param name marker 名（反馈回调靠它区分是哪个 marker）
+     * @param description RViz 面板上显示的描述
+     * @param pose 初始位姿（显示系）
+     * @param color 颜色名
+     * @param mode 发布模式，决定外形
+     * @param enable_interaction 是否允许拖动
+     */
     visualization_msgs::msg::InteractiveMarker MarkerFactory::createArmMarker(
         const std::string& name,
         const std::string& description,
@@ -86,6 +112,11 @@ namespace arms_ros2_control::command
         return interactiveMarker;
     }
 
+    /**
+     * @brief 生成头部 marker（箭头 + 中心球/方块，保留六自由度拖拽）
+     *
+     * 头部是 6 自由度绝对目标，位置和姿态都可以下发，因此与手臂一样带完整拖拽手柄。
+     */
     visualization_msgs::msg::InteractiveMarker MarkerFactory::createHeadMarker(
         const std::string& name,
         const geometry_msgs::msg::Pose& pose,
@@ -113,12 +144,59 @@ namespace arms_ros2_control::command
             ? createSphereMarker("red") : createBoxMarker("red");
         centerMarker.color.a = arrowMarker.color.a;
         arrowControl.markers.push_back(centerMarker);
-        arrowControl.interaction_mode = visualization_msgs::msg::InteractiveMarkerControl::NONE;
+        // MENU：拖拽手柄由 addMovementControls 提供，主体仍可右键弹出菜单。
+        arrowControl.interaction_mode = enable_interaction
+            ? visualization_msgs::msg::InteractiveMarkerControl::MENU
+            : visualization_msgs::msg::InteractiveMarkerControl::NONE;
         interactiveMarker.controls.push_back(arrowControl);
 
         if (enable_interaction)
         {
+            // 头部与手臂一致，保留完整 6 自由度拖拽。
             addMovementControls(interactiveMarker);
+        }
+
+        return interactiveMarker;
+    }
+
+    /**
+     * @brief 生成底盘 marker（平面三自由度：x/y 平移 + 偏航旋转）
+     */
+    visualization_msgs::msg::InteractiveMarker MarkerFactory::createBaseMarker(
+        const std::string& name,
+        const std::string& description,
+        const geometry_msgs::msg::Pose& pose,
+        const std::string& color,
+        MarkerState mode,
+        bool enable_interaction) const
+    {
+        visualization_msgs::msg::InteractiveMarker interactiveMarker;
+        interactiveMarker.header.frame_id = frame_id_;
+        interactiveMarker.header.stamp = builtin_interfaces::msg::Time();
+        interactiveMarker.name = name;
+        interactiveMarker.scale = enable_interaction ? 0.25 : 0.001;
+        interactiveMarker.description = description;
+        interactiveMarker.pose = pose;
+
+        visualization_msgs::msg::Marker marker = mode == MarkerState::CONTINUOUS
+            ? createSphereMarker(color) : createBoxMarker(color);
+        if (!enable_interaction)
+        {
+            marker.color.a = 0.0;
+        }
+
+        visualization_msgs::msg::InteractiveMarkerControl bodyControl;
+        bodyControl.always_visible = true;
+        bodyControl.markers.push_back(marker);
+        // MENU：平面拖拽手柄由 addPlanarControls 提供，主体仍可右键弹出菜单。
+        bodyControl.interaction_mode = enable_interaction
+            ? visualization_msgs::msg::InteractiveMarkerControl::MENU
+            : visualization_msgs::msg::InteractiveMarkerControl::NONE;
+        interactiveMarker.controls.push_back(bodyControl);
+
+        if (enable_interaction)
+        {
+            addPlanarControls(interactiveMarker);
         }
 
         return interactiveMarker;
@@ -157,6 +235,10 @@ namespace arms_ros2_control::command
         return marker;
     }
 
+    /**
+     * @brief 为 marker 加 3 个平移轴 + 3 个旋转轴共六个拖拽手柄
+     * @param int_marker 目标 marker，原地追加 controls
+     */
     void MarkerFactory::addMovementControls(
         visualization_msgs::msg::InteractiveMarker& interactiveMarker) const
     {
@@ -174,11 +256,12 @@ namespace arms_ros2_control::command
         control.interaction_mode = visualization_msgs::msg::InteractiveMarkerControl::MOVE_AXIS;
         interactiveMarker.controls.push_back(control);
 
-        // Y轴旋转和移动
+        // Y轴旋转和移动：MOVE_AXIS/ROTATE_AXIS 沿控制局部 x 轴，
+        // 因此需要绕 z 旋转 90° 把 x 轴映射到 y 轴。
         control.orientation.w = 1;
         control.orientation.x = 0;
-        control.orientation.y = 1;
-        control.orientation.z = 0;
+        control.orientation.y = 0;
+        control.orientation.z = 1;
         control.name = "rotate_y";
         control.interaction_mode = visualization_msgs::msg::InteractiveMarkerControl::ROTATE_AXIS;
         interactiveMarker.controls.push_back(control);
@@ -186,11 +269,11 @@ namespace arms_ros2_control::command
         control.interaction_mode = visualization_msgs::msg::InteractiveMarkerControl::MOVE_AXIS;
         interactiveMarker.controls.push_back(control);
 
-        // Z轴旋转和移动
+        // Z轴旋转和移动：绕 y 旋转 90° 把控制 x 轴映射到 z 轴。
         control.orientation.w = 1;
         control.orientation.x = 0;
-        control.orientation.y = 0;
-        control.orientation.z = 1;
+        control.orientation.y = 1;
+        control.orientation.z = 0;
         control.name = "rotate_z";
         control.interaction_mode = visualization_msgs::msg::InteractiveMarkerControl::ROTATE_AXIS;
         interactiveMarker.controls.push_back(control);
@@ -199,6 +282,48 @@ namespace arms_ros2_control::command
         interactiveMarker.controls.push_back(control);
     }
 
+    /**
+     * @brief 为底盘 marker 加平面拖拽手柄：x/y 平移 + 偏航旋转
+     *
+     * 底盘模型只有平面位姿，z 平移和横滚/俯仰没有对应的求解目标，
+     * 因此不提供这些手柄，避免用户拖出一个不会生效的方向。
+     */
+    void MarkerFactory::addPlanarControls(
+        visualization_msgs::msg::InteractiveMarker& interactiveMarker) const
+    {
+        visualization_msgs::msg::InteractiveMarkerControl control;
+
+        control.orientation.w = 1;
+        control.orientation.x = 1;
+        control.orientation.y = 0;
+        control.orientation.z = 0;
+        control.name = "move_x";
+        control.interaction_mode = visualization_msgs::msg::InteractiveMarkerControl::MOVE_AXIS;
+        interactiveMarker.controls.push_back(control);
+
+        control.orientation.w = 1;
+        control.orientation.x = 0;
+        control.orientation.y = 0;
+        control.orientation.z = 1;
+        control.name = "move_y";
+        control.interaction_mode = visualization_msgs::msg::InteractiveMarkerControl::MOVE_AXIS;
+        interactiveMarker.controls.push_back(control);
+
+        // 绕 y 旋转 90° 把控制 x 轴映射到 z 轴，即偏航旋转。
+        control.orientation.w = 1;
+        control.orientation.x = 0;
+        control.orientation.y = 1;
+        control.orientation.z = 0;
+        control.name = "rotate_z";
+        control.interaction_mode = visualization_msgs::msg::InteractiveMarkerControl::ROTATE_AXIS;
+        interactiveMarker.controls.push_back(control);
+    }
+
+    /**
+     * @brief 按颜色名给 marker 上色
+     * @param marker 目标 marker，原地修改 color 字段
+     * @param color 颜色名（red/green/blue/yellow/...），未知名字保持默认
+     */
     void MarkerFactory::setMarkerColor(
         visualization_msgs::msg::Marker& marker,
         const std::string& color) const
@@ -218,6 +343,12 @@ namespace arms_ros2_control::command
         else if (color == "green")
         {
             marker.color.r = 0.0;
+            marker.color.g = 1.0;
+            marker.color.b = 0.0;
+        }
+        else if (color == "yellow")
+        {
+            marker.color.r = 1.0;
             marker.color.g = 1.0;
             marker.color.b = 0.0;
         }

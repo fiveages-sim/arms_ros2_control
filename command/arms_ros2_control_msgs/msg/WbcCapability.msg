@@ -13,3 +13,6 @@ bool has_home_joint_reference
 
 # Configured ability to gaze at the midpoint of both end effectors.
 bool head_midpoint_gaze_enabled
+
+# Mobile base with external world->base TF: BASE_TRACKING mode is available.
+bool base_tracking_enabled

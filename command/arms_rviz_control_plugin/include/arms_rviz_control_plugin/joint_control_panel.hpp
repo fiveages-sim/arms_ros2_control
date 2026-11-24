@@ -92,7 +92,8 @@ namespace arms_rviz_control_plugin
             double yaw = 0.0;    // rad
         };
 
-        void onFsmCommandReceived(const std_msgs::msg::Int32::SharedPtr msg);
+        /** 真实 FSM 状态回调（fsm_state，transient_local）：只认它，不再自己推断。 */
+        void onFsmStateReceived(const std_msgs::msg::Int32::SharedPtr msg);
         void onJointStateReceived(const sensor_msgs::msg::JointState::SharedPtr msg);
         void onLeftCurrentTargetReceived(const geometry_msgs::msg::PoseStamped::SharedPtr msg);
         void onRightCurrentTargetReceived(const geometry_msgs::msg::PoseStamped::SharedPtr msg);
@@ -199,7 +200,7 @@ namespace arms_rviz_control_plugin
 
         // ROS2
         rclcpp::Node::SharedPtr node_;
-        rclcpp::Subscription<std_msgs::msg::Int32>::SharedPtr fsm_command_subscriber_;
+        rclcpp::Subscription<std_msgs::msg::Int32>::SharedPtr fsm_state_sub_;
         rclcpp::Subscription<sensor_msgs::msg::JointState>::SharedPtr joint_state_subscriber_;
         rclcpp::Subscription<std_msgs::msg::String>::SharedPtr robot_description_subscriber_;
         rclcpp::Publisher<std_msgs::msg::Float64MultiArray>::SharedPtr joint_position_publisher_;

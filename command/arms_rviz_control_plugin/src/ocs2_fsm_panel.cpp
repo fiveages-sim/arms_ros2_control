@@ -12,12 +12,16 @@
 #include <QGuiApplication>
 #include <QScreen>
 #include <QSizePolicy>
+#include <QStyledItemDelegate>
+#include <QAbstractItemView>
+#include <QPainter>
+#include <QStylePainter>
+#include <QStyleOptionComboBox>
 #include <algorithm>
 #include <cmath>
 #include <functional>
 #include <memory>
 #include <utility>
-#include <arms_controller_common/utils/FSMStateTransitionValidator.h>
 
 namespace arms_rviz_control_plugin
 {
@@ -56,6 +60,63 @@ namespace arms_rviz_control_plugin
                 .arg(background)
                 .arg(scaled(13));
         }
+
+        /** 居中绘制下拉列表项，避免默认左对齐。 */
+        class CenteredItemDelegate : public QStyledItemDelegate
+        {
+        public:
+            explicit CenteredItemDelegate(QObject* parent = nullptr)
+                : QStyledItemDelegate(parent) {}
+
+            void paint(QPainter* painter, const QStyleOptionViewItem& option,
+                       const QModelIndex& index) const override
+            {
+                QStyleOptionViewItem centered(option);
+                centered.displayAlignment = Qt::AlignCenter;
+                QStyledItemDelegate::paint(painter, centered, index);
+            }
+        };
+
+        /** 当前文本居中绘制，其余行为与普通 QComboBox 一致（仍可整框点击弹出）。 */
+        class CenteredComboBox : public QComboBox
+        {
+        public:
+            using QComboBox::QComboBox;
+
+        protected:
+            void paintEvent(QPaintEvent*) override
+            {
+                QStylePainter painter(this);
+                QStyleOptionComboBox opt;
+                initStyleOption(&opt);
+
+                // 先让样式画边框和背景，文字清空以避免默认左对齐文字叠加。
+                const QString text = opt.currentText;
+                opt.currentText.clear();
+                painter.drawComplexControl(QStyle::CC_ComboBox, opt);
+
+                if (!text.isEmpty())
+                {
+                    const QRect edit_rect = style()->subControlRect(
+                        QStyle::CC_ComboBox, &opt, QStyle::SC_ComboBoxEditField, this);
+                    // 下拉框背景固定为白色，文字颜色显式取黑/灰，避免深色主题下不可见。
+                    QPalette text_palette = opt.palette;
+                    text_palette.setColor(QPalette::ButtonText,
+                                          isEnabled() ? QColor(Qt::black) : QColor(150, 150, 150));
+                    painter.drawItemText(edit_rect, Qt::AlignCenter, text_palette,
+                                         true, text, QPalette::ButtonText);
+                }
+            }
+        };
+
+        /** 弹出列表项居中显示。 */
+        void centerComboPopupItems(QComboBox* combo)
+        {
+            if (combo && combo->view())
+            {
+                combo->view()->setItemDelegate(new CenteredItemDelegate(combo));
+            }
+        }
     }  // namespace
 
     OCS2FSMPanel::OCS2FSMPanel(QWidget* parent)
@@ -67,9 +128,7 @@ namespace arms_rviz_control_plugin
         const int switch_width = scaled(72);
         const int switch_height = scaled(32);
         const int inner_spacing = scaled(4);
-        const int compact_label_height = scaled(18);
-        const int compact_stack_height = compact_label_height + scaled(2) + switch_height;
-        const int switch_cell_height = switch_height;
+        const int mode_label_height = scaled(18);
         const int combo_height = scaled(28);
         const int hold_button_height = scaled(28);
         const int grid_h_spacing = scaled(12);
@@ -86,10 +145,13 @@ namespace arms_rviz_control_plugin
         const int pair_cell_width = pair_content_width + scaled(12);
         const int wbc_row_width = 2 * pair_cell_width + grid_h_spacing;
         const int compact_cell_width = (wbc_row_width - 2 * grid_h_spacing) / 3;
+        // 模式下拉框单独收窄：以最长选项“自定义”为准，列宽仍按 compact_cell_width 均分。
+        const int combo_width =
+            label_fm.horizontalAdvance(QString::fromUtf8("自定义")) + scaled(24);
         const int panel_width = wbc_row_width;
         const int combo_padding_left = scaled(4);
-        const int combo_padding_right = scaled(12);
-        const int combo_dropdown_width = scaled(10);
+        const int combo_padding_right = combo_padding_left;
+        const int combo_dropdown_width = 0;
 
         // Create main layout
         auto* main_layout = new QVBoxLayout(this);
@@ -192,52 +254,30 @@ namespace arms_rviz_control_plugin
             return wrap;
         };
 
-        auto makeRow = [&](int height) {
-            auto* row = new QWidget(this);
-            row->setFixedSize(wbc_row_width, height);
-            auto* layout = new QHBoxLayout(row);
-            layout->setContentsMargins(0, 0, 0, 0);
-            layout->setSpacing(0);
-            return std::pair<QWidget*, QHBoxLayout*>{row, layout};
-        };
-
-        auto makeStackedSwitchCell = [&](QLabel* label, SwitchButton* sw) {
-            label->setAlignment(Qt::AlignHCenter | Qt::AlignVCenter);
-            label->setSizePolicy(QSizePolicy::Preferred, QSizePolicy::Fixed);
-            label->setFixedHeight(compact_label_height);
+        auto makeInlineCell = [&](QLabel* label, SwitchButton* sw, bool label_first) {
+            label->setFixedWidth(pair_label_width);
+            label->setSizePolicy(QSizePolicy::Fixed, QSizePolicy::Preferred);
             label->setStyleSheet(label_style);
+            label->setAlignment(Qt::AlignHCenter | Qt::AlignVCenter);
 
-            auto* layout = new QVBoxLayout();
+            auto* layout = new QHBoxLayout();
             layout->setContentsMargins(0, 0, 0, 0);
-            layout->setSpacing(scaled(2));
-            layout->addWidget(label, 0, Qt::AlignHCenter);
-            layout->addWidget(sw, 0, Qt::AlignHCenter);
+            layout->setSpacing(inner_spacing);
+            if (label_first) {
+                layout->addWidget(label);
+                layout->addWidget(sw);
+            } else {
+                layout->addWidget(sw);
+                layout->addWidget(label);
+            }
 
             auto* widget = new QWidget(this);
-            widget->setFixedSize(compact_cell_width, compact_stack_height);
+            widget->setFixedSize(pair_content_width, switch_height);
             widget->setLayout(layout);
             return widget;
         };
 
-        auto [compact_row, compact_row_layout] = makeRow(compact_stack_height);
-
-        base_label_ = std::make_unique<QLabel>("底盘", this);
-        base_switch_ = std::make_unique<SwitchButton>(this);
-        compact_row_layout->addWidget(makeStackedSwitchCell(base_label_.get(), base_switch_.get()));
-        compact_row_layout->addWidget(makeDividerCol(compact_stack_height));
-
-        left_arm_label_ = std::make_unique<QLabel>("左臂", this);
-        left_arm_switch_ = std::make_unique<SwitchButton>(this);
-        compact_row_layout->addWidget(makeStackedSwitchCell(left_arm_label_.get(), left_arm_switch_.get()));
-        compact_row_layout->addWidget(makeDividerCol(compact_stack_height));
-
-        right_arm_label_ = std::make_unique<QLabel>("右臂", this);
-        right_arm_switch_ = std::make_unique<SwitchButton>(this);
-        compact_row_layout->addWidget(makeStackedSwitchCell(right_arm_label_.get(), right_arm_switch_.get()));
-
-        upper_button_layout_->addWidget(compact_row, 0, 0);
-
-        const int pair_block_height = 2 * switch_cell_height + grid_v_spacing;
+        const int pair_block_height = 2 * switch_height + grid_v_spacing;
         auto* pair_block = new QWidget(this);
         pair_block->setFixedSize(wbc_row_width, pair_block_height);
         auto* pair_grid = new QGridLayout(pair_block);
@@ -254,32 +294,52 @@ namespace arms_rviz_control_plugin
         pair_grid->setColumnMinimumWidth(6, inner_spacing);
         pair_grid->setColumnMinimumWidth(7, switch_width);
 
-        auto setupPairLabel = [&](QLabel* label) {
-            label->setFixedWidth(pair_label_width);
-            label->setSizePolicy(QSizePolicy::Fixed, QSizePolicy::Preferred);
-            label->setStyleSheet(label_style);
-            label->setAlignment(Qt::AlignLeft | Qt::AlignVCenter);
-        };
+        // 第一行：左臂 | 右臂（标签在外侧，开关靠中间）
+        left_arm_label_ = std::make_unique<QLabel>("左臂", this);
+        left_arm_switch_ = std::make_unique<SwitchButton>(this);
+        pair_grid->addWidget(makeInlineCell(left_arm_label_.get(), left_arm_switch_.get(), true),
+                             0, 0, 1, 3, Qt::AlignVCenter | Qt::AlignLeft);
 
-        bimanual_label_ = std::make_unique<QLabel>("双臂耦合", this);
-        setupPairLabel(bimanual_label_.get());
-        bimanual_switch_ = std::make_unique<SwitchButton>(this);
-        pair_grid->addWidget(bimanual_label_.get(), 0, 0, Qt::AlignVCenter | Qt::AlignLeft);
-        pair_grid->addWidget(bimanual_switch_.get(), 0, 2, Qt::AlignVCenter | Qt::AlignLeft);
+        right_arm_label_ = std::make_unique<QLabel>("右臂", this);
+        right_arm_switch_ = std::make_unique<SwitchButton>(this);
+        pair_grid->addWidget(makeInlineCell(right_arm_label_.get(), right_arm_switch_.get(), false),
+                             0, 5, 1, 3, Qt::AlignVCenter | Qt::AlignRight);
 
         pair_grid->addWidget(makeDividerCol(pair_block_height), 0, 4, 2, 1, Qt::AlignHCenter);
 
-        home_pose_label_ = std::make_unique<QLabel>("参考关节", this);
-        setupPairLabel(home_pose_label_.get());
-        home_pose_switch_ = std::make_unique<SwitchButton>(this);
-        pair_grid->addWidget(home_pose_label_.get(), 0, 5, Qt::AlignVCenter | Qt::AlignLeft);
-        pair_grid->addWidget(home_pose_switch_.get(), 0, 7, Qt::AlignVCenter | Qt::AlignLeft);
+        // 第二行：双臂耦合 | 参考关节（同样镜像摆放）
+        bimanual_label_ = std::make_unique<QLabel>("双臂耦合", this);
+        bimanual_switch_ = std::make_unique<SwitchButton>(this);
+        pair_grid->addWidget(makeInlineCell(bimanual_label_.get(), bimanual_switch_.get(), true),
+                             1, 0, 1, 3, Qt::AlignVCenter | Qt::AlignLeft);
 
-        body_label_ = std::make_unique<QLabel>("身体模式", this);
-        setupPairLabel(body_label_.get());
-        body_combo_box_ = std::make_unique<QComboBox>(this);
-        body_combo_box_->setFixedSize(switch_width, combo_height);
-        body_combo_box_->setStyleSheet(QString(R"(
+        home_pose_label_ = std::make_unique<QLabel>("参考关节", this);
+        home_pose_switch_ = std::make_unique<SwitchButton>(this);
+        pair_grid->addWidget(makeInlineCell(home_pose_label_.get(), home_pose_switch_.get(), false),
+                             1, 5, 1, 3, Qt::AlignVCenter | Qt::AlignRight);
+
+        // 第三、四行：底盘模式 / 身体模式 / 头部模式 + 三个下拉框
+        const int mode_block_height = mode_label_height + grid_v_spacing + combo_height;
+        auto* mode_block = new QWidget(this);
+        mode_block->setFixedSize(wbc_row_width, mode_block_height);
+        auto* mode_grid = new QGridLayout(mode_block);
+        mode_grid->setContentsMargins(0, 0, 0, 0);
+        mode_grid->setHorizontalSpacing(0);
+        mode_grid->setVerticalSpacing(grid_v_spacing);
+        // 5 列：模式 | 分割线 | 模式 | 分割线 | 模式。
+        for (int col : {0, 2, 4}) {
+            mode_grid->setColumnMinimumWidth(col, compact_cell_width);
+        }
+        mode_grid->setColumnMinimumWidth(1, grid_h_spacing);
+        mode_grid->setColumnMinimumWidth(3, grid_h_spacing);
+
+        auto setupModeLabel = [&](QLabel* label) {
+            label->setStyleSheet(label_style);
+            label->setAlignment(Qt::AlignHCenter | Qt::AlignVCenter);
+            label->setFixedHeight(mode_label_height);
+        };
+
+        const QString combo_style = QString(R"(
             QComboBox {
                 font-size: %1px;
                 padding: %2px %3px %2px %4px;
@@ -299,6 +359,9 @@ namespace arms_rviz_control_plugin
                 width: %6px;
                 border: none;
             }
+            QComboBox::down-arrow {
+                image: none;
+            }
             QComboBox QAbstractItemView {
                 font-size: %1px;
                 border: 1px solid #cfcfcf;
@@ -312,28 +375,60 @@ namespace arms_rviz_control_plugin
             .arg(combo_padding_right)
             .arg(combo_padding_left)
             .arg(scaled(6))
-            .arg(combo_dropdown_width));
-        pair_grid->addWidget(body_label_.get(), 1, 0, Qt::AlignVCenter | Qt::AlignLeft);
-        pair_grid->addWidget(body_combo_box_.get(), 1, 2, Qt::AlignVCenter | Qt::AlignLeft);
+            .arg(combo_dropdown_width);
 
+        base_label_ = std::make_unique<QLabel>("底盘模式", this);
+        setupModeLabel(base_label_.get());
+        body_label_ = std::make_unique<QLabel>("身体模式", this);
+        setupModeLabel(body_label_.get());
         head_label_ = std::make_unique<QLabel>("头部模式", this);
-        setupPairLabel(head_label_.get());
-        head_combo_box_ = std::make_unique<QComboBox>(this);
-        head_combo_box_->setFixedSize(switch_width, combo_height);
-        head_combo_box_->setStyleSheet(body_combo_box_->styleSheet());
+        setupModeLabel(head_label_.get());
+
         using State = arms_ros2_control_msgs::msg::WbcCurrentState;
+
+        base_combo_box_ = std::make_unique<CenteredComboBox>(this);
+        base_combo_box_->setFixedSize(combo_width, combo_height);
+        base_combo_box_->setStyleSheet(combo_style);
+        base_combo_box_->addItem("锁定", State::BASE_LOCKED);
+        base_combo_box_->addItem("随动", State::BASE_UNLOCKED);
+        base_combo_box_->addItem("追踪", State::BASE_TRACKING);
+
+        body_combo_box_ = std::make_unique<CenteredComboBox>(this);
+        body_combo_box_->setFixedSize(combo_width, combo_height);
+        body_combo_box_->setStyleSheet(combo_style);
+        body_combo_box_->addItem("自由", State::BODY_FREE);
+        body_combo_box_->addItem("竖直", State::BODY_VERTICAL);
+        body_combo_box_->addItem("追踪", State::BODY_TRACKING);
+        body_combo_box_->addItem("锁定", State::BODY_LOCKED);
+        body_combo_box_->addItem("自定义", State::BODY_CUSTOM_LOCKED);
+
+        head_combo_box_ = std::make_unique<CenteredComboBox>(this);
+        head_combo_box_->setFixedSize(combo_width, combo_height);
+        head_combo_box_->setStyleSheet(combo_style);
         head_combo_box_->addItem("禁用", State::HEAD_DISABLED);
         head_combo_box_->addItem("追踪", State::HEAD_TRACKING);
         head_combo_box_->addItem("注视", State::HEAD_GAZE);
         head_combo_box_->addItem("朝前", State::HEAD_FORWARD);
-        pair_grid->addWidget(head_label_.get(), 1, 5, Qt::AlignVCenter | Qt::AlignLeft);
-        pair_grid->addWidget(head_combo_box_.get(), 1, 7, Qt::AlignVCenter | Qt::AlignLeft);
+
+        centerComboPopupItems(base_combo_box_.get());
+        centerComboPopupItems(body_combo_box_.get());
+        centerComboPopupItems(head_combo_box_.get());
+
+        mode_grid->addWidget(base_label_.get(), 0, 0, Qt::AlignHCenter | Qt::AlignVCenter);
+        mode_grid->addWidget(body_label_.get(), 0, 2, Qt::AlignHCenter | Qt::AlignVCenter);
+        mode_grid->addWidget(head_label_.get(), 0, 4, Qt::AlignHCenter | Qt::AlignVCenter);
+        mode_grid->addWidget(base_combo_box_.get(), 1, 0, Qt::AlignHCenter | Qt::AlignVCenter);
+        mode_grid->addWidget(body_combo_box_.get(), 1, 2, Qt::AlignHCenter | Qt::AlignVCenter);
+        mode_grid->addWidget(head_combo_box_.get(), 1, 4, Qt::AlignHCenter | Qt::AlignVCenter);
+        mode_grid->addWidget(makeDividerCol(mode_block_height), 0, 1, 2, 1, Qt::AlignHCenter);
+        mode_grid->addWidget(makeDividerCol(mode_block_height), 0, 3, 2, 1, Qt::AlignHCenter);
 
         auto* ocs2_to_hold_wbc_btn = new QPushButton("HOLD", this);
         ocs2_to_hold_wbc_btn->setStyleSheet(buttonStyle("#FF9800"));
         ocs2_to_hold_wbc_btn->setFixedHeight(hold_button_height);
 
-        upper_button_layout_->addWidget(pair_block, 1, 0);
+        upper_button_layout_->addWidget(pair_block, 0, 0);
+        upper_button_layout_->addWidget(mode_block, 1, 0);
 
         wbc_layout_->addLayout(upper_button_layout_.get());
         wbc_layout_->addWidget(ocs2_to_hold_wbc_btn, 0, Qt::AlignHCenter);
@@ -361,11 +456,11 @@ namespace arms_rviz_control_plugin
         connect(switch_pose_btn_.get(), &QPushButton::clicked, this, &OCS2FSMPanel::onSwitchPose);
 
         // Connect WBC signals
-        connect(base_switch_.get(), &SwitchButton::clicked, this, &OCS2FSMPanel::onBaseToggled);
+        connect(base_combo_box_.get(), QOverload<int>::of(&QComboBox::currentIndexChanged), this, &OCS2FSMPanel::onBaseModeChanged);
         connect(bimanual_switch_.get(), &SwitchButton::clicked, this, &OCS2FSMPanel::onBimanualToggled);
         connect(left_arm_switch_.get(), &SwitchButton::clicked, this, &OCS2FSMPanel::onLeftArmToggled);
         connect(right_arm_switch_.get(), &SwitchButton::clicked, this, &OCS2FSMPanel::onRightArmToggled);
-        connect(home_pose_switch_.get(), &SwitchButton::clicked, this, &OCS2FSMPanel::onHomePoseTrackingToggled);
+        connect(home_pose_switch_.get(), &SwitchButton::clicked, this, &OCS2FSMPanel::onHomeJointReferenceToggled);
         connect(head_combo_box_.get(), QOverload<int>::of(&QComboBox::currentIndexChanged), this, &OCS2FSMPanel::onHeadModeChanged);
         connect(body_combo_box_.get(), QOverload<int>::of(&QComboBox::currentIndexChanged), this, &OCS2FSMPanel::onBodyModeChanged);
         connect(ocs2_to_hold_wbc_btn, &QPushButton::clicked, this, &OCS2FSMPanel::onOCS2ToHold);
@@ -406,14 +501,15 @@ namespace arms_rviz_control_plugin
             }
         }
 
-        // Create FSM command publisher
+        // 话题全部使用相对名：多机器人部署时靠节点命名空间隔离
+        // （/robot_a/fsm_command 与 /robot_b/fsm_command）。
         fsm_command_publisher_ = node_->create_publisher<std_msgs::msg::Int32>(
-            "/fsm_command", 10);
+            "fsm_command", 10);
 
-        // Create subscriber to listen for FSM command changes
-        fsm_command_subscriber_ = node_->create_subscription<std_msgs::msg::Int32>(
-            "/fsm_command", 10,
-            std::bind(&OCS2FSMPanel::onFsmCommandReceived, this, std::placeholders::_1));
+        // 订阅真实状态（transient_local：控制器只在变化时发，后加入也能拿到）
+        fsm_state_sub_ = node_->create_subscription<std_msgs::msg::Int32>(
+            "fsm_state", rclcpp::QoS(1).reliable().transient_local(),
+            std::bind(&OCS2FSMPanel::onFsmStateReceived, this, std::placeholders::_1));
 
         // Only create WBC related ROS2 interfaces if controller is available
         if (wbc_available_)
@@ -424,53 +520,47 @@ namespace arms_rviz_control_plugin
 
             // Create WBC subscribers
             capability_sub_ = node_->create_subscription<arms_ros2_control_msgs::msg::WbcCapability>(
-                "/ocs2_wbc_controller/wbc_capabilities",
-                rclcpp::QoS(1).transient_local(),
+                "ocs2_wbc_controller/wbc_capabilities",
+                rclcpp::QoS(1).reliable().transient_local(),
                 std::bind(&OCS2FSMPanel::onReceiveCapability, this, std::placeholders::_1));
 
             state_sub_ = node_->create_subscription<arms_ros2_control_msgs::msg::WbcCurrentState>(
-                "/ocs2_wbc_controller/current_state",
-                10,
+                "ocs2_wbc_controller/current_state",
+                rclcpp::QoS(1).reliable().transient_local(),
                 std::bind(&OCS2FSMPanel::onReceiveCurrentState, this, std::placeholders::_1));
     }
 
-    RCLCPP_INFO(node_->get_logger(), "OCS2 FSM Panel initialized with /fsm_command topic");
+    RCLCPP_INFO(node_->get_logger(), "OCS2 FSM Panel initialized with fsm_command / fsm_state topics");
     }
 
     void OCS2FSMPanel::onHomeToHold()
     {
         publishCommand(2);
-        setCurrentState("HOLD");
     }
 
     void OCS2FSMPanel::onHoldToOCS2()
     {
         publishCommand(3);
-        setCurrentState("OCS2");
     }
 
     void OCS2FSMPanel::onOCS2ToHold()
     {
         publishCommand(2);
-        setCurrentState("HOLD");
     }
 
     void OCS2FSMPanel::onHoldToHome()
     {
         publishCommand(1);
-        setCurrentState("HOME");
     }
 
     void OCS2FSMPanel::onHoldToMoveJ()
     {
         publishCommand(4);
-        setCurrentState("MOVEJ");
     }
 
     void OCS2FSMPanel::onMoveJToHold()
     {
         publishCommand(2);
-        setCurrentState("HOLD");
     }
 
     void OCS2FSMPanel::onSwitchPose()
@@ -646,17 +736,21 @@ namespace arms_rviz_control_plugin
         Panel::save(config);
     }
 
-    void OCS2FSMPanel::onFsmCommandReceived(const std_msgs::msg::Int32::SharedPtr msg)
+    void OCS2FSMPanel::onFsmStateReceived(const std_msgs::msg::Int32::SharedPtr msg)
     {
-        std::string new_state;
-        bool valid_transition = arms_controller_common::FSMStateTransitionValidator::validateTransition(
-            current_state_, msg->data, new_state);
-
-        if (valid_transition)
+        if (!msg)
         {
-            setCurrentState(new_state);
-            current_command_ = msg->data;
+            return;
         }
+
+        // 直接采用控制器报的真实状态。这里不再用本地规则表推断：
+        // 规则表与控制器实际行为并不一致（例如 HOME + 命令 3 控制器会回 HOLD）。
+        static constexpr const char* kNames[] = {"RESET", "HOME", "HOLD", "OCS2", "MOVEJ"};
+        const int32_t code = msg->data;
+        const char* name = (code >= 0 && code <= 4) ? kNames[code] : "UNKNOWN";
+
+        current_command_ = code;
+        setCurrentState(name);
     }
 
     // ==================== WBC Control Methods ====================
@@ -675,6 +769,7 @@ namespace arms_rviz_control_plugin
         capability_state_.head_tracking_ee_enabled = msg->head_tracking_ee_enabled;
         capability_state_.head_midpoint_gaze_enabled = msg->head_midpoint_gaze_enabled;
         capability_state_.has_home_joint_reference = msg->has_home_joint_reference;
+        capability_state_.base_tracking_enabled = msg->base_tracking_enabled;
 
         QMetaObject::invokeMethod(this, [this]() { refreshWbcUi(); }, Qt::QueuedConnection);
     }
@@ -694,75 +789,104 @@ namespace arms_rviz_control_plugin
         QMetaObject::invokeMethod(this, [this]() { refreshWbcUi(); }, Qt::QueuedConnection);
     }
 
-    bool OCS2FSMPanel::isBaseLocked() const
+
+    int OCS2FSMPanel::getCurrentBaseModeIndex() const
     {
-        return current_wbc_state_.base_state == 0; // BASE_LOCKED
+        return current_wbc_state_.base_state;
     }
 
-    bool OCS2FSMPanel::isBimanualCoupled() const
+    QString OCS2FSMPanel::getBaseModeCommand(int modeIndex) const
     {
-        return current_wbc_state_.bimanual_state == 1; // BIMANUAL_COUPLED
+        using State = arms_ros2_control_msgs::msg::WbcCurrentState;
+        switch (modeIndex)
+        {
+            case State::BASE_LOCKED:
+                return "BASE_LOCK";
+            case State::BASE_UNLOCKED:
+                return "BASE_UNLOCK";
+            case State::BASE_TRACKING:
+                return "BASE_TRACK";
+            default:
+                return "";
+        }
     }
 
-    bool OCS2FSMPanel::isLeftArmEnabled() const
+    void OCS2FSMPanel::updateBaseComboBox()
     {
-        return current_wbc_state_.left_arm_state == 1; // ARM_ENABLED
+        if (!base_combo_box_) return;
+
+        base_combo_box_->blockSignals(true);
+        auto* model = qobject_cast<QStandardItemModel*>(base_combo_box_->model());
+        const bool available[] = {capability_state_.has_mobile_base,
+                                  capability_state_.has_mobile_base,
+                                  capability_state_.base_tracking_enabled};
+        int enabled_count = 0;
+        for (int i = 0; i < base_combo_box_->count() && i < 3; ++i)
+        {
+            model->item(i)->setEnabled(available[i]);
+            if (available[i]) ++enabled_count;
+        }
+        base_combo_box_->setCurrentIndex(base_combo_box_->findData(getCurrentBaseModeIndex()));
+        base_combo_box_->setEnabled(enabled_count > 1);
+        base_combo_box_->setToolTip("锁定：底盘不动；随动：底盘由 OCS2 自由决定；跟随：底盘跟踪世界系 marker");
+        base_combo_box_->blockSignals(false);
     }
 
-    bool OCS2FSMPanel::isRightArmEnabled() const
-    {
-        return current_wbc_state_.right_arm_state == 1; // ARM_ENABLED
-    }
-
-    bool OCS2FSMPanel::isBodyFree() const
-    {
-        return current_wbc_state_.body_state == 0; // BODY_FREE
-    }
-
-    bool OCS2FSMPanel::isBodyVertical() const
-    {
-        return current_wbc_state_.body_state == 1; // BODY_VERTICAL
-    }
-
-    bool OCS2FSMPanel::isBodyTracking() const
-    {
-        return current_wbc_state_.body_state == 2; // BODY_TRACKING
-    }
-
-    bool OCS2FSMPanel::isBodyLocked() const
-    {
-        return current_wbc_state_.body_state == 3; // BODY_LOCKED
-    }
-
-    bool OCS2FSMPanel::isBodyCustomLocked() const
-    {
-        return current_wbc_state_.body_state == 5; // BODY_CUSTOM_LOCKED
-    }
 
     int OCS2FSMPanel::getCurrentBodyModeIndex() const
     {
-        if (isBodyFree()) return BODY_MODE_FREE;
-        if (isBodyVertical()) return BODY_MODE_VERTICAL;
-        if (isBodyTracking()) return BODY_MODE_TRACKING;
-        if (isBodyLocked()) return BODY_MODE_LOCKED;
-        if (isBodyCustomLocked()) return BODY_MODE_CUSTOM_LOCKED;
-        return BODY_MODE_LOCKED;
+        using State = arms_ros2_control_msgs::msg::WbcCurrentState;
+        switch (current_wbc_state_.body_state)
+        {
+            case State::BODY_FREE:
+            case State::BODY_VERTICAL:
+            case State::BODY_TRACKING:
+            case State::BODY_LOCKED:
+            case State::BODY_CUSTOM_LOCKED:
+                return current_wbc_state_.body_state;
+            default:
+                return State::BODY_LOCKED;
+        }
     }
 
     QString OCS2FSMPanel::getBodyModeCommand(int modeIndex) const
     {
+        using State = arms_ros2_control_msgs::msg::WbcCurrentState;
         switch (modeIndex)
         {
-            case BODY_MODE_FREE:
+            case State::BODY_FREE:
                 return "BODY_FREE";
-            case BODY_MODE_VERTICAL:
+            case State::BODY_VERTICAL:
                 return "BODY_RELATIVE";
-            case BODY_MODE_TRACKING:
+            case State::BODY_TRACKING:
                 return "BODY_TRACKING";
-            case BODY_MODE_LOCKED:
+            case State::BODY_LOCKED:
                 return "BODY_LOCK";
-            case BODY_MODE_CUSTOM_LOCKED:
+            case State::BODY_CUSTOM_LOCKED:
                 return "BODY_CUSTOM_LOCK";
+            default:
+                return "";
+        }
+    }
+
+    int OCS2FSMPanel::getCurrentHeadModeIndex() const
+    {
+        return current_wbc_state_.head_state;
+    }
+
+    QString OCS2FSMPanel::getHeadModeCommand(int modeIndex) const
+    {
+        using State = arms_ros2_control_msgs::msg::WbcCurrentState;
+        switch (modeIndex)
+        {
+            case State::HEAD_DISABLED:
+                return "HEAD_DISABLE";
+            case State::HEAD_TRACKING:
+                return "HEAD_TRACKING";
+            case State::HEAD_GAZE:
+                return "HEAD_GAZE";
+            case State::HEAD_FORWARD:
+                return "HEAD_FORWARD";
             default:
                 return "";
         }
@@ -773,41 +897,24 @@ namespace arms_rviz_control_plugin
         if (!body_combo_box_) return;
 
         body_combo_box_->blockSignals(true);
-        body_combo_box_->clear();
-
-        body_combo_box_->addItem("自由", BODY_MODE_FREE);
-
-        if (capability_state_.has_body_relative_constraint)
+        auto* model = qobject_cast<QStandardItemModel*>(body_combo_box_->model());
+        const bool available[] = {true,
+                                  capability_state_.has_body_relative_constraint,
+                                  capability_state_.body_tracking_ee_enabled,
+                                  capability_state_.has_waist_lock,
+                                  capability_state_.has_custom_joint_lock};
+        int enabled_count = 0;
+        for (int i = 0; i < 5; ++i)
         {
-            body_combo_box_->addItem("竖直", BODY_MODE_VERTICAL);
+            model->item(i)->setEnabled(available[i]);
+            if (available[i]) ++enabled_count;
         }
+        body_combo_box_->setCurrentIndex(body_combo_box_->findData(getCurrentBodyModeIndex()));
 
-        if (capability_state_.body_tracking_ee_enabled)
-        {
-            body_combo_box_->addItem("跟随", BODY_MODE_TRACKING);
-        }
-
-        if (capability_state_.has_waist_lock)
-        {
-            body_combo_box_->addItem("锁定", BODY_MODE_LOCKED);
-        }
-
-        if (capability_state_.has_custom_joint_lock)
-        {
-            body_combo_box_->addItem("自定义", BODY_MODE_CUSTOM_LOCKED);
-        }
-
-        int current_mode = getCurrentBodyModeIndex();
-        int index = body_combo_box_->findData(current_mode);
-        if (index >= 0)
-        {
-            body_combo_box_->setCurrentIndex(index);
-        }
-
-        body_combo_box_->blockSignals(false);
         const bool forward = current_wbc_state_.head_state == arms_ros2_control_msgs::msg::WbcCurrentState::HEAD_FORWARD;
-        body_combo_box_->setEnabled(body_combo_box_->count() > 1 && !forward);
+        body_combo_box_->setEnabled(enabled_count > 1 && !forward);
         body_combo_box_->setToolTip(forward ? "朝前模式使用头腰联动及腰部约束；退出后恢复此身体模式" : "");
+        body_combo_box_->blockSignals(false);
     }
 
     void OCS2FSMPanel::updateHeadComboBox()
@@ -817,37 +924,19 @@ namespace arms_rviz_control_plugin
         const bool available[] = {true, capability_state_.head_tracking_ee_enabled,
                                   capability_state_.head_midpoint_gaze_enabled,
                                   capability_state_.has_head_coupling};
-        for (int i = 0; i < head_combo_box_->count(); ++i)
+        int enabled_count = 0;
+        for (int i = 0; i < head_combo_box_->count() && i < 4; ++i)
         {
             model->item(i)->setEnabled(available[i]);
+            if (available[i]) ++enabled_count;
         }
-        head_combo_box_->setCurrentIndex(head_combo_box_->findData(current_wbc_state_.head_state));
+        head_combo_box_->setCurrentIndex(head_combo_box_->findData(getCurrentHeadModeIndex()));
+        head_combo_box_->setEnabled(enabled_count > 1);
         head_combo_box_->setToolTip("禁用：保持头部关节；追踪：头部 marker 控制；注视：双手末端中点；朝前：头腰联动及腰部约束");
         head_combo_box_->blockSignals(false);
     }
 
-    void OCS2FSMPanel::onHeadModeChanged(int index)
-    {
-        if (index < 0) return;
-        const int mode = head_combo_box_->itemData(index).toInt();
-        if (mode == current_wbc_state_.head_state) return;
-        using State = arms_ros2_control_msgs::msg::WbcCurrentState;
-        switch (mode)
-        {
-            case State::HEAD_DISABLED: publishModeCommand("HEAD_DISABLE"); break;
-            case State::HEAD_TRACKING:
-                if (capability_state_.head_tracking_ee_enabled) publishModeCommand("HEAD_TRACKING");
-                break;
-            case State::HEAD_GAZE:
-                if (capability_state_.head_midpoint_gaze_enabled) publishModeCommand("HEAD_GAZE");
-                break;
-            case State::HEAD_FORWARD:
-                if (capability_state_.has_head_coupling) publishModeCommand("HEAD_FORWARD");
-                break;
-        }
-        // Keep displaying the acknowledged mode until the controller accepts the command.
-        updateHeadComboBox();
-    }
+
 
     void OCS2FSMPanel::updateSwitchVisualState(SwitchButton* sw, bool capability_available, bool logical_on)
     {
@@ -876,14 +965,14 @@ namespace arms_rviz_control_plugin
     {
         if (!wbc_container_ || !wbc_container_->isVisible() || !wbc_available_) return;
 
-        const bool left_enabled = isLeftArmEnabled();
-        const bool right_enabled = isRightArmEnabled();
-        const bool bimanual_coupled = isBimanualCoupled();
+        using State = arms_ros2_control_msgs::msg::WbcCurrentState;
+        const bool left_enabled = current_wbc_state_.left_arm_state == State::ARM_ENABLED;
+        const bool right_enabled = current_wbc_state_.right_arm_state == State::ARM_ENABLED;
+        const bool bimanual_coupled = current_wbc_state_.bimanual_state == State::BIMANUAL_COUPLED;
         const bool any_arm_disabled = (!left_enabled || !right_enabled);
 
-        updateSwitchVisualState(base_switch_.get(),
-                                capability_state_.has_mobile_base,
-                                !isBaseLocked());
+        // 底盘模式由下拉框显示，锁定/随动/跟随三态直接对应控制器状态。
+        updateBaseComboBox();
 
         // 限制1：任意一侧手臂禁用时，不允许开启双臂耦合，并显示灰色OFF
         if (!capability_state_.has_bimanual_coupling || any_arm_disabled)
@@ -928,50 +1017,92 @@ namespace arms_rviz_control_plugin
         RCLCPP_INFO(node_->get_logger(), "Published mode command: %s", cmd.c_str());
     }
 
-    void OCS2FSMPanel::onBaseToggled()
+    void OCS2FSMPanel::onBaseModeChanged(int index)
     {
-        if (!capability_state_.has_mobile_base) return;
-        publishModeCommand(isBaseLocked() ? "BASE_UNLOCK" : "BASE_LOCK");
+        if (index < 0) return;
+        const int mode = base_combo_box_->itemData(index).toInt();
+        if (mode == getCurrentBaseModeIndex()) return;
+        const QString command = getBaseModeCommand(mode);
+        if (command.isEmpty()) return;
+        publishModeCommand(command.toStdString());
+        // Keep displaying the acknowledged mode until the controller accepts the command.
+        updateBaseComboBox();
     }
 
-    void OCS2FSMPanel::onBimanualToggled()
+    void OCS2FSMPanel::onBodyModeChanged(int index)
     {
-        if (!capability_state_.has_bimanual_coupling) return;
-        // 任意一侧手臂禁用时，禁止开启双臂耦合
-        if (!isLeftArmEnabled() || !isRightArmEnabled())
-        {
-            RCLCPP_INFO(node_->get_logger(), "Bimanual coupling blocked: one arm is disabled");
-            refreshWbcUi();
-            return;
-        }
-        publishModeCommand(isBimanualCoupled() ? "ARMS_INDEPENDENT" : "ARMS_COUPLED");
+        if (index < 0) return;
+        const int mode = body_combo_box_->itemData(index).toInt();
+        if (mode == getCurrentBodyModeIndex()) return;
+        const QString command = getBodyModeCommand(mode);
+        if (command.isEmpty()) return;
+        publishModeCommand(command.toStdString());
+        // Keep displaying the acknowledged mode until the controller accepts the command.
+        updateBodyComboBox();
     }
+
+    void OCS2FSMPanel::onHeadModeChanged(int index)
+    {
+        if (index < 0) return;
+        const int mode = head_combo_box_->itemData(index).toInt();
+        if (mode == getCurrentHeadModeIndex()) return;
+        const QString command = getHeadModeCommand(mode);
+        if (command.isEmpty()) return;
+        publishModeCommand(command.toStdString());
+        // Keep displaying the acknowledged mode until the controller accepts the command.
+        updateHeadComboBox();
+    }
+
+
 
     void OCS2FSMPanel::onLeftArmToggled()
     {
+        using State = arms_ros2_control_msgs::msg::WbcCurrentState;
         // 双臂耦合启用时，禁止调整左右臂禁用状态
-        if (isBimanualCoupled())
+        if (current_wbc_state_.bimanual_state == State::BIMANUAL_COUPLED)
         {
             RCLCPP_INFO(node_->get_logger(), "Left arm toggle blocked: bimanual coupling is enabled");
             refreshWbcUi();
             return;
         }
-        publishModeCommand(isLeftArmEnabled() ? "LEFT_ARM_DISABLE" : "LEFT_ARM_ENABLE");
+        publishModeCommand(current_wbc_state_.left_arm_state == State::ARM_ENABLED
+                               ? "LEFT_ARM_DISABLE"
+                               : "LEFT_ARM_ENABLE");
     }
 
     void OCS2FSMPanel::onRightArmToggled()
     {
+        using State = arms_ros2_control_msgs::msg::WbcCurrentState;
         // 双臂耦合启用时，禁止调整左右臂禁用状态
-        if (isBimanualCoupled())
+        if (current_wbc_state_.bimanual_state == State::BIMANUAL_COUPLED)
         {
             RCLCPP_INFO(node_->get_logger(), "Right arm toggle blocked: bimanual coupling is enabled");
             refreshWbcUi();
             return;
         }
-        publishModeCommand(isRightArmEnabled() ? "RIGHT_ARM_DISABLE" : "RIGHT_ARM_ENABLE");
+        publishModeCommand(current_wbc_state_.right_arm_state == State::ARM_ENABLED
+                               ? "RIGHT_ARM_DISABLE"
+                               : "RIGHT_ARM_ENABLE");
     }
 
-    void OCS2FSMPanel::onHomePoseTrackingToggled()
+    void OCS2FSMPanel::onBimanualToggled()
+    {
+        using State = arms_ros2_control_msgs::msg::WbcCurrentState;
+        if (!capability_state_.has_bimanual_coupling) return;
+        // 任意一侧手臂禁用时，禁止开启双臂耦合
+        if (current_wbc_state_.left_arm_state != State::ARM_ENABLED ||
+            current_wbc_state_.right_arm_state != State::ARM_ENABLED)
+        {
+            RCLCPP_INFO(node_->get_logger(), "Bimanual coupling blocked: one arm is disabled");
+            refreshWbcUi();
+            return;
+        }
+        publishModeCommand(current_wbc_state_.bimanual_state == State::BIMANUAL_COUPLED
+                               ? "ARMS_INDEPENDENT"
+                               : "ARMS_COUPLED");
+    }
+
+    void OCS2FSMPanel::onHomeJointReferenceToggled()
     {
         if (!capability_state_.has_home_joint_reference) return;
         publishModeCommand(current_wbc_state_.home_joint_reference_enabled
@@ -979,21 +1110,7 @@ namespace arms_rviz_control_plugin
                                : "HOME_JOINT_ON");
     }
 
-    void OCS2FSMPanel::onBodyModeChanged(int index)
-    {
-        if (index < 0) return;
 
-        int mode = body_combo_box_->itemData(index).toInt();
-        QString command = getBodyModeCommand(mode);
-
-        if (command.isEmpty()) return;
-
-        int current_mode = getCurrentBodyModeIndex();
-        if (mode != current_mode)
-        {
-            publishModeCommand(command.toStdString());
-        }
-    }
 
 } // namespace arms_rviz_control_plugin
 

@@ -28,6 +28,10 @@ struct Ocs2ReferenceTargetContext {
     /// Enables the optional 7D head pose block and Head target ROS interfaces.
     bool head_target_enabled{false};
 
+    /// Enables the optional 7D planar base block and Base target ROS interfaces.
+    /// Only x, y and yaw are consumed by the OCS2 base tracking constraint.
+    bool base_target_enabled{false};
+
     static constexpr int kPoseTargetDim = 7;
     static constexpr int kDualArmTargetDim = 14;
 
@@ -35,10 +39,14 @@ struct Ocs2ReferenceTargetContext {
     [[nodiscard]] int headTargetOffset() const {
         return bodyTargetOffset() + (body_target_enabled ? kPoseTargetDim : 0);
     }
+    [[nodiscard]] int baseTargetOffset() const {
+        return headTargetOffset() + (head_target_enabled ? kPoseTargetDim : 0);
+    }
     [[nodiscard]] int wheelHumanoidTargetStateDim() const {
         return bodyTargetOffset() +
                (body_target_enabled ? kPoseTargetDim : 0) +
-               (head_target_enabled ? kPoseTargetDim : 0);
+               (head_target_enabled ? kPoseTargetDim : 0) +
+               (base_target_enabled ? kPoseTargetDim : 0);
     }
 };
 

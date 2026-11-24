@@ -34,10 +34,19 @@ add_library(${PROJECT_NAME} SHARED
         src/ArmsTargetManager.cpp
         src/MarkerFactory.cpp
         src/ControlInputHandler.cpp
+        src/core/TargetRouter.cpp
+        src/core/ChannelOwnership.cpp
+        src/core/InputHub.cpp
+        src/core/PoseTargetSink.cpp
+        src/core/HandCommandBus.cpp
+        src/core/FsmClient.cpp
+        src/core/HumanoidModeClient.cpp
+        src/detail/PoseFilters.cpp
         src/VRInputHandler.cpp
         src/marker/HeadMarker.cpp
         src/marker/ArmMarker.cpp
         src/marker/BodyMarker.cpp
+        src/marker/BaseMarker.cpp
 )
 
 target_include_directories(${PROJECT_NAME}
@@ -99,6 +108,11 @@ install(
 install(
         DIRECTORY config/
         DESTINATION share/${PROJECT_NAME}/config
+)
+
+install(
+        DIRECTORY doc/
+        DESTINATION share/${PROJECT_NAME}/doc
 )
 
 ament_export_dependencies(${TARGET_MANAGER_INCLUDE_DEPENDS})

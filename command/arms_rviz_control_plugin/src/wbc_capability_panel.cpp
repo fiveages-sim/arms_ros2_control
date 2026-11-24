@@ -18,7 +18,6 @@ WbcCapabilityPanel::WbcCapabilityPanel(QWidget* parent)
     status_label_->setStyleSheet("QLabel { color: #666666; font-style: italic; }");
     group_layout->addWidget(status_label_.get());
 
-    mobile_base_label_ = std::make_unique<QLabel>("Has Mobile Base: Unknown", capability_group_.get());
     body_relative_label_ = std::make_unique<QLabel>("Has Body Relative Constraint: Unknown", capability_group_.get());
     waist_lock_label_ = std::make_unique<QLabel>("Has Waist Lock: Unknown", capability_group_.get());
     custom_joint_lock_label_ = std::make_unique<QLabel>("Has Custom Joint Lock: Unknown", capability_group_.get());
@@ -26,8 +25,8 @@ WbcCapabilityPanel::WbcCapabilityPanel(QWidget* parent)
     body_tracking_label_ = std::make_unique<QLabel>("Body Tracking EE Enabled: Unknown", capability_group_.get());
     head_tracking_label_ = std::make_unique<QLabel>("Head Tracking EE Enabled: Unknown", capability_group_.get());
     home_pose_tracking_label_ = std::make_unique<QLabel>("Has Home Joint Reference: Unknown", capability_group_.get());
+    base_tracking_label_ = std::make_unique<QLabel>("Base Tracking Enabled: Unknown", capability_group_.get());
 
-    group_layout->addWidget(mobile_base_label_.get());
     group_layout->addWidget(body_relative_label_.get());
     group_layout->addWidget(waist_lock_label_.get());
     group_layout->addWidget(custom_joint_lock_label_.get());
@@ -35,6 +34,7 @@ WbcCapabilityPanel::WbcCapabilityPanel(QWidget* parent)
     group_layout->addWidget(body_tracking_label_.get());
     group_layout->addWidget(head_tracking_label_.get());
     group_layout->addWidget(home_pose_tracking_label_.get());
+    group_layout->addWidget(base_tracking_label_.get());
 
     main_layout_->addWidget(capability_group_.get());
 }
@@ -66,7 +66,6 @@ void WbcCapabilityPanel::onCapabilityReceived(
     status_label_->setText("Capability message received");
     status_label_->setStyleSheet("QLabel { color: #2e7d32; font-weight: bold; }");
 
-    updateCapabilityLabel(mobile_base_label_.get(), "Has Mobile Base", msg->has_mobile_base);
     updateCapabilityLabel(body_relative_label_.get(), "Has Body Relative Constraint", msg->has_body_relative_constraint);
     updateCapabilityLabel(waist_lock_label_.get(), "Has Waist Lock", msg->has_waist_lock);
     updateCapabilityLabel(custom_joint_lock_label_.get(), "Has Custom Joint Lock", msg->has_custom_joint_lock);
@@ -74,6 +73,7 @@ void WbcCapabilityPanel::onCapabilityReceived(
     updateCapabilityLabel(body_tracking_label_.get(), "Body Tracking EE Enabled", msg->body_tracking_ee_enabled);
     updateCapabilityLabel(head_tracking_label_.get(), "Head Tracking EE Enabled", msg->head_tracking_ee_enabled);
     updateCapabilityLabel(home_pose_tracking_label_.get(), "Has Home Joint Reference", msg->has_home_joint_reference);
+    updateCapabilityLabel(base_tracking_label_.get(), "Base Tracking Enabled", msg->base_tracking_enabled);
 }
 
 void WbcCapabilityPanel::updateCapabilityLabel(QLabel* label, const QString& name, bool enabled)
