@@ -2,7 +2,7 @@
 
 ## 概述
 
-VRInputHandler是基于VRMarkerWrapper功能开发的VR输入处理器，专门为arms_target_manager设计。它实现了VR pose订阅、状态切换机制和marker更新功能。
+VRInputHandler 是 arms_target_manager 的 VR 输入处理器，负责 VR pose 订阅、STORAGE/UPDATE 切换与目标发布。
 
 当 `ocs2_wbc_controller` 处于 active 时，拓扑判定为 **FULL_BODY（全身控制）**，可在 VR 手柄上切换身体模式、底盘锁、双臂耦合和单臂启用。当 `ocs2_arm_controller` 处于 active 时为 **SPLIT_BODY（分体/双臂）**，全身组合键无效。
 
@@ -11,22 +11,21 @@ VRInputHandler是基于VRMarkerWrapper功能开发的VR输入处理器，专门�
 ### 核心功能
 - **VR Pose订阅**: 订阅VR左右臂的末端执行器pose
 - **状态切换机制**: 通过右摇杆点击在存储模式和更新模式之间切换
-- **连续目标**: 每个有效VR pose回调均发布目标；变化阈值代码暂时保留但不生效
-- **差值计算**: 基于存储的base pose计算相对变化并应用到机器人
+- **连续目标**: UPDATE 下每个有效 VR pose 回调均发布末端目标
+- **差值计算**: 基于存储的 base pose 与冻结的 `vr_follow_frame` 旋转，将增量应用到机器人
 - **控制拓扑检测**: 启动时查询 `/controller_manager/list_controllers`，区分 FULL_BODY / SPLIT_BODY
 - **全身模式命令**: FULL_BODY 下通过 `/mode_command` 请求 WBC 身体/底盘/双臂/单臂状态
 
 ### 工作模式
 
-#### 存储模式 (Storage Mode)
-- 默认模式，不更新marker
-- 存储VR和机器人的当前pose作为base pose
-- 用于设置参考点
+#### 存储模式 (Storage Mode / TELEOP OFF)
+- 默认模式；不发布臂末端绝对目标，也不发布 VR 夹爪指令
+- 仍接收并缓存 VR pose，供进入 UPDATE 时对齐 base
+- 手柄 / 键盘经 `control_input` 的夹爪开合可独立使用
 
-#### 更新模式 (Update Mode)
-- 基于存储的base pose计算VR pose的变化
-- 将相同的变化应用到机器人base pose
-- 更新marker位置
+#### 更新模式 (Update Mode / TELEOP ON)
+- 基于存储的 base pose 计算 VR 增量并发布末端目标
+- VR 扳机比例 / 开关夹爪仅在此模式输出
 - 仅在 FSM = OCS2 时可由右摇杆切入
 
 ## 订阅的Topic
@@ -46,7 +45,7 @@ VRInputHandler是基于VRMarkerWrapper功能开发的VR输入处理器，专门�
 - `teleop/head_pose` (`geometry_msgs/msg/Pose`): VR头显pose
 - `teleop/controller_state` (`std_msgs/msg/Int32`): 按钮/组合键/脚踏事件码（修改链路，单帧）
 - `teleop/thumbstick_axes` (`geometry_msgs/msg/Twist`): 左右摇杆轴值；`linear.z` / `angular.z` 携带左右握把按下状态
-- `teleop/trigger_values` (`geometry_msgs/msg/Twist`): 左右扳机模拟量
+- `teleop/trigger_values` (`geometry_msgs/msg/Twist`): 左右扳机模拟量（仅 UPDATE 时驱动夹爪）
 
 ### 机器人状态
 - `left_current_pose` (`geometry_msgs/msg/PoseStamped`): 机器人左臂当前pose
@@ -261,48 +260,18 @@ ros2 launch ocs2_arm_controller full_body.launch.py \
 
 ## 技术细节
 
-### 变化检测阈值（暂时禁用）
-- `POSITION_THRESHOLD`: 原位置变化阈值1cm，代码保留用于A/B回退，当前不参与发布判断
-- `ORIENTATION_THRESHOLD`: 原方向变化阈值0.005弧度，代码保留用于A/B回退，当前不参与发布判断
-
-### 差值计算算法
-```cpp
-// 计算VR pose差值
-Eigen::Vector3d vrPosDiff = vrCurrentPos - vrBasePos;
-Eigen::Quaterniond vrOriDiff = vrBaseOri.inverse() * vrCurrentOri;
-
-// 应用到机器人base pose
-resultPos = robotBasePos + vrPosDiff;
-resultOri = robotBaseOri * vrOriDiff;
-```
-
 ### 状态管理
 - 使用原子变量确保线程安全
-- 支持多线程环境下的状态切换
-- 自动检测XR节点的存在性
 - 控制拓扑在启动期每秒重试，确认 FULL_BODY 或 SPLIT_BODY 后停止；两者同时 active 则保持 UNKNOWN
-
-## 调试信息
-
-VRInputHandler会输出详细的调试信息：
-
-- 控制拓扑切换（`VR control topology changed to FULL_BODY`）
-- 模式切换信息
-- 身体模式 / WBC 开关的请求、确认、2 秒超时
-- VR pose变化记录（存储模式）
-- 机器人pose变化记录（存储模式）
-- 计算的pose信息（更新模式）
-- Marker更新确认
 
 ## 注意事项
 
 1. **坐标系一致性**: 手臂锚点与发布目标均在 `ee_frame_id_`，仅用恢复时冻结的旋转转换 `vr_follow_frame` 中的增量
 2. **频率匹配**: VR更新频率应与系统处理能力匹配
-3. **阈值调整**: 根据实际需求调整变化检测阈值
-4. **线程安全**: 所有状态变量都使用原子操作确保线程安全
-5. **TF 故障**: 跟随 frame 与控制 frame 间 TF 缺失时不发布错误目标，后续 VR 回调自动重试
-6. **组合键抑制**: FULL_BODY 下按住握把会锁存对应摇杆，松手后须回中才恢复末端/底盘轴值。握把切换摇杆 XY/Z+Yaw 只认短按（松开且 ≤400 ms）；长按或已发出组合键（13/14/16/21–28）松开时不切模式。
-7. **能力门控**: `/mode_command` 是否被接受取决于 WBC task.info（如 `bodyTrackingEE`、`waistLock`、`bimanualCoupling`）。被拒绝时 VR 侧 2 秒超时后按实际状态恢复
+3. **TF 故障**: 跟随 frame 与控制 frame 间 TF 缺失时不发布错误目标，后续 VR 回调自动重试
+4. **组合键抑制**: FULL_BODY 下按住握把会锁存对应摇杆，松手后须回中才恢复末端/底盘轴值。握把切换摇杆 XY/Z+Yaw 只认短按（松开且 ≤400 ms）；长按或已发出组合键（13/14/16/21–28）松开时不切模式。
+5. **能力门控**: `/mode_command` 是否被接受取决于 WBC task.info（如 `bodyTrackingEE`、`waistLock`、`bimanualCoupling`）。被拒绝时 VR 侧 2 秒超时后按实际状态恢复
+6. **夹爪仲裁**: STORAGE（TELEOP OFF）下 VR 不发夹爪；此时手柄 / 键盘的 `hand_command` 可独立控制开合
 
 ## 故障排除
 
@@ -325,24 +294,8 @@ VRInputHandler会输出详细的调试信息：
    - 双臂耦合开启时不能用 Y/B 单独切臂
    - 事件 16 要求 VR enabled、FULL_BODY、OCS2；耦合时不能把暂停语义切回禁用
 
-4. **频闪问题**
-   - 调整位置和方向变化阈值
-   - 检查VR设备的数据质量
-   - 确认更新频率设置合理
-
-## 与VRMarkerWrapper的对比
-
-| 特性 | VRMarkerWrapper | VRInputHandler |
-|------|----------------|----------------|
-| 目标系统 | ocs2_ros_interfaces | arms_target_manager |
-| Marker控制 | IMarkerControl接口 | ArmsTargetManager |
-| 状态管理 | 内置状态机 | 简化状态切换 |
-| 集成方式 | 独立组件 | 集成到target manager |
-| 配置方式 | 构造函数参数 | 启动参数 |
-
-## 开发历史
-
-基于VRMarkerWrapper的功能，适配arms_target_manager的架构，保持了核心的VR控制逻辑，同时简化了与目标管理器的集成。FULL_BODY 下增加身体模式、WBC 四开关、单臂禁用 rebase 与底盘遥控。
+4. **手柄夹爪无效**
+   - 若 VR TELEOP 为 ON，扳机流会持续写夹爪；需要手柄独占时先退出 UPDATE
 
 ### 头显驱动 WBC Head 6D 目标
 

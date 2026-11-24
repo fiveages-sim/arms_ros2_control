@@ -7,7 +7,7 @@
 - **3D 交互式 marker**：在 RViz 中拖拽设置绝对目标 pose
 - **单臂/双臂支持**
 - **手柄适配**：订阅 `control_input`（`Inputs`），按 `linear_scale`/`angular_scale` 放大为 `*/twist` 速度（m/s、rad/s）；marker 仅可视化
-- **VR**：仍发绝对 `left_target` / `right_target`（本阶段不迁相对话题）
+- **VR**：UPDATE 下发绝对 `left_target` / `right_target`；STORAGE 下不发末端目标与 VR 夹爪
 
 ## 使用方法
 

@@ -671,9 +671,6 @@ void JoystickTeleop::publishChassisCommand()
     chassis_publisher_->publish(chassis_cmd_);
 }
 
-// sendGripperCommand, left_target_command_callback, and right_target_command_callback
-// are no longer needed - hand commands are now sent via Inputs message
-
 int main(int argc, char *argv[]) {
     rclcpp::init(argc, argv);
     auto node = std::make_shared<JoystickTeleop>();

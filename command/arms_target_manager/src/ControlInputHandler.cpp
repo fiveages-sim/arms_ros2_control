@@ -7,8 +7,6 @@
 #include <algorithm>
 #include <cmath>
 #include "arms_target_manager/ArmsTargetManager.h"
-#include <std_msgs/msg/int32.hpp>
-#include <std_msgs/msg/float64.hpp>
 
 namespace arms_ros2_control::command
 {

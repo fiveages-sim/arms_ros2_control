@@ -31,6 +31,6 @@
   <class name="arms_rviz_control_plugin/TeleopModeDisplay"
          type="arms_rviz_control_plugin::TeleopModeDisplay"
          base_class_type="rviz_common::Display">
-    <description>Event-bus teleop mode HUD (top-left) when teleop is enabled.</description>
+    <description>Teleop HUDs: EventBus + ControlInput dashboards stacked top-left, each gated independently with auto fill-in.</description>
   </class>
 </library>

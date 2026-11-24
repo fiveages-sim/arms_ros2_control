@@ -294,11 +294,6 @@ namespace arms_ros2_control::command
                             Eigen::Vector3d& position,
                             Eigen::Quaterniond& orientation);
 
-        bool hasPoseChanged(const Eigen::Vector3d& currentPos,
-                            const Eigen::Quaterniond& currentOri,
-                            const Eigen::Vector3d& prevPos,
-                            const Eigen::Quaterniond& prevOri);
-
         void calculatePoseFromDifference(const Eigen::Vector3d& vrCurrentPos,
                                          const Eigen::Quaterniond& vrCurrentOri,
                                          const Eigen::Vector3d& vrBasePos,
@@ -572,8 +567,6 @@ namespace arms_ros2_control::command
 
         std::shared_ptr<tf2_ros::Buffer> tf_buffer_;
 
-        static const double POSITION_THRESHOLD;
-        static const double ORIENTATION_THRESHOLD;
         static const int STALE_MIN_FROZEN_FRAMES;
     };
 }

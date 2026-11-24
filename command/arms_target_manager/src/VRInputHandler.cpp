@@ -3,20 +3,7 @@
 //
 
 #include "arms_target_manager/VRInputHandler.h"
-#include "arms_target_manager/ArmsTargetManager.h"
 #include "arms_controller_common/utils/FSMStateTransitionValidator.h"
-#include <rclcpp/rclcpp.hpp>
-#include <geometry_msgs/msg/pose_stamped.hpp>
-#include <geometry_msgs/msg/pose.hpp>
-#include <geometry_msgs/msg/twist.hpp>
-#include <arms_ros2_control_msgs/msg/wbc_current_state.hpp>
-#include <arms_ros2_control_msgs/msg/wbc_capability.hpp>
-#include <arms_ros2_control_msgs/msg/teleop_mode_state.hpp>
-#include <std_msgs/msg/float64.hpp>
-#include <std_msgs/msg/int32.hpp>
-#include <nav_msgs/msg/path.hpp>
-#include <Eigen/Core>
-#include <Eigen/Geometry>
 #include <algorithm>
 #include <cctype>
 #include <cmath>
@@ -25,8 +12,6 @@
 
 namespace arms_ros2_control::command
 {
-    const double VRInputHandler::POSITION_THRESHOLD = 0.01;
-    const double VRInputHandler::ORIENTATION_THRESHOLD = 0.005;
     const int VRInputHandler::STALE_MIN_FROZEN_FRAMES = 2;
 
     VRInputHandler::VRInputHandler(
@@ -1357,6 +1342,11 @@ namespace arms_ros2_control::command
 
     void VRInputHandler::toggleGripperByTrigger(bool is_left_trigger)
     {
+        if (!enabled_.load() || !is_update_mode_.load())
+        {
+            return;
+        }
+
         std::string target_controller_name;
         bool is_target_left_arm = true;
         resolveTriggerTarget(is_left_trigger, target_controller_name, is_target_left_arm);
@@ -1706,9 +1696,6 @@ namespace arms_ros2_control::command
                     }
                 }
             }
-            else
-            {
-            }
         }
     }
 
@@ -1780,9 +1767,6 @@ namespace arms_ros2_control::command
                             "🕹️ Right VR -> Right Arm target published");
                     }
                 }
-            }
-            else
-            {
             }
         }
     }
@@ -2166,26 +2150,6 @@ namespace arms_ros2_control::command
         orientation = Eigen::Quaterniond(rot);
     }
 
-    bool VRInputHandler::hasPoseChanged(const Eigen::Vector3d& currentPos,
-                                        const Eigen::Quaterniond& currentOri,
-                                        const Eigen::Vector3d& prevPos,
-                                        const Eigen::Quaterniond& prevOri)
-    {
-        double positionDiff = (currentPos - prevPos).norm();
-        if (positionDiff > POSITION_THRESHOLD)
-        {
-            return true;
-        }
-
-        double orientationDiff = std::abs(currentOri.angularDistance(prevOri));
-        if (orientationDiff > ORIENTATION_THRESHOLD)
-        {
-            return true;
-        }
-
-        return false;
-    }
-
     void VRInputHandler::applyStaleCatchUpRamp(bool isLeft,
                                                Eigen::Vector3d& position,
                                                Eigen::Quaterniond& orientation)
@@ -2456,6 +2420,11 @@ namespace arms_ros2_control::command
 
     void VRInputHandler::triggerValuesCallback(const geometry_msgs::msg::Twist::SharedPtr msg)
     {
+        if (!enabled_.load() || !is_update_mode_.load())
+        {
+            return;
+        }
+
         const double left_trigger_pull = std::clamp(msg->linear.x, 0.0, 1.0);
         const double right_trigger_pull = std::clamp(msg->angular.x, 0.0, 1.0);
         const double left_hand_percent = 1.0 - left_trigger_pull;

@@ -11,7 +11,7 @@
 | `GripperControlPanel` | Panel | 夹爪开关与位置百分比 |
 | `WbcCapabilityPanel` | Panel | 只读：WBC 能力标志 |
 | `TargetErrorDisplay` | Display | 右上：跟踪误差 + MPC（仅 OCS2） |
-| `TeleopModeDisplay` | Display | 左上：事件总线遥操状态（仅激活时显示） |
+| `TeleopModeDisplay` | Display | 遥操 HUD：事件总线 + control_input，左上堆叠补位 |
 
 ## 目录
 
@@ -202,14 +202,12 @@ source install/setup.bash
 - Joint 面板的绝对目标在 **厘米/角度** 下使用 ZYX 欧拉角（ABB `OrientZYX` / `EulerZYX`）；**米/弧度** 下保持原生四元数输入。
 - 相对增量的角速度分量约定为 RPY（与控制器 `PoseBasedReferenceManager` 一致：`dq = Rz·Ry·Rx`）。
 - Body TRACKING 笛卡尔目标与腰部 Float64 点动分离：追踪时用 `body_target/*`，点动仅用于 MOVEJ / 非追踪场景。
-- 旧 README 中的 `/control_input` 已废弃，现统一使用 `/fsm_command`。
+- FSM 切换走 `/fsm_command`；手柄/键盘速度与夹爪仍走 `control_input`（`Inputs`）。
 
 ### 三维视窗中的目标跟踪误差 HUD
 
-HUD 作为 `arms_rviz_control_plugin/TargetErrorDisplay` 显示在 RViz 网格视图右上角，
-不再位于 JointControlPanel，也不依赖该控制面板存在。
-已有用户配置可在 Displays → Add → TargetErrorDisplay 添加，用 Displays 复选框开关。
-该 Display 的 `Scale` 属性（0.5–2.0，默认 1.0）调节叠加层大小，并随 RViz 配置保存。
+`arms_rviz_control_plugin/TargetErrorDisplay` 显示在 RViz 网格视图右上角。
+Displays → Add → TargetErrorDisplay；`Scale`（0.5–2.0，默认 1.0）调节大小并随配置保存。
 
 独立订阅相对话题（跟随 RViz 节点 namespace，与控制器发布一致）：
 `fsm_state`、left/right/body/head_current_pose 与对应 current_target、
@@ -231,11 +229,18 @@ HUD 以控制器实际反馈 `fsm_state`（transient-local）为总开关，仅�
 
 ### 三维视窗中的遥操状态 HUD
 
-`arms_rviz_control_plugin/TeleopModeDisplay` 显示在视口**左上角**（与右上误差 HUD 分工）。Displays → Add → TeleopModeDisplay；`Scale` 0.5–2.0。
+`arms_rviz_control_plugin/TeleopModeDisplay` 是**一个** RViz Display，内部用两个 overlay class 分管显隐（**控制链路仍分离**）：
 
-订相对话题：`teleop/mode_state`（`TeleopModeState`，`Reliable` + `TransientLocal`）、`ocs2_wbc_controller/current_state`（腰部跟随）、`teleop/optical_r0_caps`（光学腕/灵巧手会话）。点击可向同 ns 的 `teleop/controller_state` 发修改事件（与 VR/脚踏同链路）。仅当 `enabled==true` 时显示；未激活或尚未收到消息时隐藏。不依赖 FSM=OCS2。
+| Overlay class | 位置 | 显示条件 |
+|---|---|---|
+| `EventBusTeleopDashboard`（事件总线：VR/外骨骼/脚踏等） | 左上堆叠 | `teleop/mode_state.enabled==true` |
+| `ControlInputTeleopDashboard`（control_input：手柄/键盘等） | 左上堆叠 | `teleop_mode.active==true` |
 
-单卡内容：首行左右分栏（`TELEOP ON`=UPDATE 跟随 / `TELEOP OFF`=STORAGE | `MIRROR ON`/`OFF`）；臂列左右分栏（`L/R RUN|PAUSE`，摇杆行，`GRIP %`/`GRIP SW`），中间竖线分隔。摇杆行随路由改写：默认 `STICK XY`/`STICK ZYAW`；`chassis_mode` 时为 `CHASSIS XY` / `CHASSIS YAW`；`BODY_TRACKING` 时双列为腰部 `WAIST XY`/`WAIST ROLL`（`body_stick_plane`）与 `WAIST ZYAW`/`WAIST PYAW`（`body_right_stick_plane`）。`optical_r0_caps≠0`（`vr-xrt wrist`）时隐藏 STICK/GRIP（含 WAIST）；`chassis_mode` 仍保留 `CHASSIS` 行。颜色：TELEOP ON 绿 / OFF 蓝 / MIRROR ON 琥珀 / OFF 灰 / RUN 绿 / PAUSE 红 / TELEOP ON 时 XY 蓝·切面/ZYAW 琥珀，TELEOP OFF 时 STICK/WAIST 灰；CHASSIS 琥珀且不受 TELEOP OFF 影响 / GRIP % 蓝 / GRIP SW 琥珀。不显示拓扑。Latin 文案。多机时 RViz 与 ATM 同 namespace即可。
+两套都在视口**左上**纵向堆叠；只显示其中一个时自动补到最上。Displays → Add → TeleopModeDisplay；共用 `Scale` 0.5–2.0。未激活或尚未收到对应消息时各自隐藏。不依赖 FSM=OCS2。
+
+**事件总线卡**订：`teleop/mode_state`（`TeleopModeState`，`Reliable` + `TransientLocal`）、`ocs2_wbc_controller/current_state`（腰部跟随）、`teleop/optical_r0_caps`（光学腕/灵巧手会话）。点击可向同 ns 的 `teleop/controller_state` 发修改事件。
+
+单卡内容：标签黑字 + 状态值分色。首行 `TELEOP`+`ON`/`OFF` | `MIRROR`+`ON`/`OFF`；臂列 `L`/`R`+`RUN`/`PAUSE`，摇杆/夹爪同行拆分；中间竖线分隔。摇杆行随路由改写：默认 `STICK XY`/`STICK ZYAW`；`chassis_mode` 时为 `CHASSIS XY` / `CHASSIS YAW`；`BODY_TRACKING` 时双列为腰部 `WAIST XY`/`WAIST ROLL`（`body_stick_plane`）与 `WAIST ZYAW`/`WAIST PYAW`（`body_right_stick_plane`）。`optical_r0_caps≠0`（`vr-xrt wrist`）时隐藏 STICK/GRIP（含 WAIST）；`chassis_mode` 仍保留 `CHASSIS` 行。颜色：TELEOP ON 绿 / OFF 蓝 / MIRROR ON 琥珀 / OFF 灰 / RUN 绿 / PAUSE 红 / TELEOP ON 时 XY 蓝·切面/ZYAW 琥珀，TELEOP OFF 时 STICK/WAIST 灰；CHASSIS 琥珀且不受 TELEOP OFF 影响 / GRIP % 蓝 / GRIP SW 琥珀。不显示拓扑。Latin 文案。多机时 RViz 与 ATM 同 namespace即可。
 
 可点击（左键松开，走事件总线；ATM 侧约束与手柄相同，如 UPDATE 需 FSM=OCS2）：
 
@@ -245,3 +250,5 @@ HUD 以控制器实际反馈 `fsm_state`（transient-local）为总开关，仅�
 | `MIRROR ON/OFF` | `7` | 镜像开关 |
 | `L RUN/PAUSE` | `3`（必要时先 `16`） | 与左 Y 相同；FULL_BODY 且尚非暂停语义时先发 `16`，等 `mode_state.yb_pause_semantics` 后再发 `3` |
 | `R RUN/PAUSE` | `6`（必要时先 `16`） | 与右 B 相同；同上 |
+
+**control_input 卡**另订：`teleop_mode`（`TeleopMode`，`Reliable` + `TransientLocal`）、`control_input`（`Inputs.target` → 当前臂）。只读，不发事件。单卡两行：`ARM`+`L`/`R` 或 `CHASSIS`；`MIRROR`+`ON`/`OFF` | `SPD`+`HIGH`/`LOW`。标签固定黑，L/R/CHASSIS/ON/OFF/HIGH/LOW 按状态变色。手柄与键盘共用此契约。

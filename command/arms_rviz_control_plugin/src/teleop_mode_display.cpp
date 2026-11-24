@@ -32,10 +32,13 @@ TeleopModeDisplay::TeleopModeDisplay() {
 TeleopModeDisplay::~TeleopModeDisplay() {
     removeMouseHook();
     subscription_.reset();
+    joy_mode_subscription_.reset();
+    joy_input_subscription_.reset();
     wbc_subscription_.reset();
     caps_subscription_.reset();
     event_publisher_.reset();
-    dashboard_.reset();
+    event_bus_dashboard_.reset();
+    control_input_dashboard_.reset();
 }
 void TeleopModeDisplay::onInitialize() {
     rviz_rendering::RenderSystem::get()->prepareOverlays(scene_manager_);
@@ -61,7 +64,6 @@ void TeleopModeDisplay::onInitialize() {
             data->teleop.body_right_stick_plane = message->body_right_stick_plane;
             data->teleop.topology = message->topology;
             data->teleop.valid = true;
-            // 仅记录；3/6 在 update() 里发，避免订阅回调里 publish
         });
     wbc_subscription_ = node->create_subscription<arms_ros2_control_msgs::msg::WbcCurrentState>(
         "ocs2_wbc_controller/current_state", rclcpp::QoS(1).transient_local(),
@@ -76,6 +78,24 @@ void TeleopModeDisplay::onInitialize() {
         [data = data_](std_msgs::msg::Int32::ConstSharedPtr message) {
             std::lock_guard<std::mutex> lock(data->mutex);
             data->teleop.dex_hand_session = message->data != 0;
+        });
+    joy_mode_subscription_ = node->create_subscription<arms_ros2_control_msgs::msg::TeleopMode>(
+        "teleop_mode", rclcpp::QoS(1).reliable().transient_local(),
+        [data = data_](arms_ros2_control_msgs::msg::TeleopMode::ConstSharedPtr message) {
+            std::lock_guard<std::mutex> lock(data->mutex);
+            data->joy.active = message->active;
+            data->joy.control_mode = message->control_mode;
+            data->joy.mirror_movement = message->mirror_movement;
+            data->joy.speed_level = message->speed_level;
+            data->joy.valid = true;
+        });
+    joy_input_subscription_ = node->create_subscription<arms_ros2_control_msgs::msg::Inputs>(
+        "control_input", rclcpp::QoS(10).reliable(),
+        [data = data_](arms_ros2_control_msgs::msg::Inputs::ConstSharedPtr message) {
+            std::lock_guard<std::mutex> lock(data->mutex);
+            if (message->target == 1 || message->target == 2) {
+                data->joy.arm_target = message->target;
+            }
         });
     installMouseHook();
 }
@@ -93,7 +113,6 @@ void TeleopModeDisplay::installMouseHook() {
     render_window_ = window;
     mouse_last_x_ = 0;
     mouse_last_y_ = 0;
-    // RViz routes viewport mouse through this callback (not QWidget events).
     render_window_->setOnRenderWindowMouseEventsCallback(
         [this](QMouseEvent* event) { onRenderWindowMouse(event); });
     mouse_hook_installed_ = true;
@@ -105,7 +124,6 @@ void TeleopModeDisplay::removeMouseHook() {
         mouse_hook_installed_ = false;
         return;
     }
-    // Restore a compatible forwarder (RenderPanel::onRenderWindowMouseEvents is protected).
     auto* panel = render_panel_;
     auto* ctx = context_;
     auto last_x = std::make_shared<int>(mouse_last_x_);
@@ -142,7 +160,6 @@ void TeleopModeDisplay::publishEvent(int32_t code) {
 }
 void TeleopModeDisplay::publishArmToggle(int32_t code, const Sample& teleop) {
     using Msg = arms_ros2_control_msgs::msg::TeleopModeState;
-    // FULL_BODY 默认 Y/B 是 WBC 臂开关；点 HUD L/R 先发 16，等 ATM 锁存暂停语义后再发 3/6。
     if (teleop.topology == Msg::TOPOLOGY_FULL_BODY && !teleop.yb_pause_semantics) {
         {
             std::lock_guard<std::mutex> lock(data_->mutex);
@@ -167,8 +184,8 @@ void TeleopModeDisplay::flushPendingArmEvent() {
     }
     publishEvent(code);
 }
-int32_t TeleopModeDisplay::eventCodeForHit(TeleopModeDashboard::Hit hit) const {
-    using Hit = TeleopModeDashboard::Hit;
+int32_t TeleopModeDisplay::eventCodeForHit(EventBusTeleopDashboard::Hit hit) const {
+    using Hit = EventBusTeleopDashboard::Hit;
     switch (hit) {
         case Hit::Teleop: return 4;
         case Hit::Mirror: return 7;
@@ -185,7 +202,7 @@ void TeleopModeDisplay::onRenderWindowMouse(QMouseEvent* event) {
     mouse_last_x_ = pos.x();
     mouse_last_y_ = pos.y();
 
-    if (isEnabled() && dashboard_ &&
+    if (isEnabled() && event_bus_dashboard_ &&
         (event->type() == QEvent::MouseButtonPress ||
          event->type() == QEvent::MouseButtonRelease) &&
         event->button() == Qt::LeftButton) {
@@ -195,13 +212,13 @@ void TeleopModeDisplay::onRenderWindowMouse(QMouseEvent* event) {
             teleop = data_->teleop;
         }
         if (teleop.valid && teleop.enabled) {
-            const auto hit = dashboard_->hitTest(
+            const auto hit = event_bus_dashboard_->hitTest(
                 static_cast<float>(pos.x()), static_cast<float>(pos.y()));
             const int32_t code = eventCodeForHit(hit);
             if (code != 0) {
                 if (event->type() == QEvent::MouseButtonRelease) {
-                    if (hit == TeleopModeDashboard::Hit::LeftArm ||
-                        hit == TeleopModeDashboard::Hit::RightArm) {
+                    if (hit == EventBusTeleopDashboard::Hit::LeftArm ||
+                        hit == EventBusTeleopDashboard::Hit::RightArm) {
                         publishArmToggle(code, teleop);
                     } else {
                         publishEvent(code);
@@ -215,19 +232,23 @@ void TeleopModeDisplay::onRenderWindowMouse(QMouseEvent* event) {
     forwardMouseToRviz(event, last_x, last_y);
 }
 void TeleopModeDisplay::updateScale() {
-    if (dashboard_) dashboard_->setScale(scale_property_->getFloat());
+    const float scale = scale_property_->getFloat();
+    if (event_bus_dashboard_) event_bus_dashboard_->setScale(scale);
+    if (control_input_dashboard_) control_input_dashboard_->setScale(scale);
 }
 void TeleopModeDisplay::onEnable() {
     elapsed_ = 1;
     installMouseHook();
 }
 void TeleopModeDisplay::onDisable() {
-    if (dashboard_) dashboard_->hide();
+    if (event_bus_dashboard_) event_bus_dashboard_->hide();
+    if (control_input_dashboard_) control_input_dashboard_->hide();
 }
 void TeleopModeDisplay::reset() {
     Display::reset();
     std::lock_guard<std::mutex> lock(data_->mutex);
     data_->teleop = {};
+    data_->joy = {};
     data_->pending_arm_event = 0;
     data_->awaiting_yb_pause = false;
     elapsed_ = 1;
@@ -237,33 +258,67 @@ void TeleopModeDisplay::update(float wall_dt, float) {
     if (!mouse_hook_installed_) installMouseHook();
     flushPendingArmEvent();
     Sample teleop;
+    JoySample joy;
     {
         std::lock_guard<std::mutex> lock(data_->mutex);
         teleop = data_->teleop;
+        joy = data_->joy;
     }
-    if (!teleop.valid || !teleop.enabled) {
-        if (dashboard_) dashboard_->hide();
-        return;
+    const bool show_event_bus = teleop.valid && teleop.enabled;
+    const bool show_control_input = joy.valid && joy.active;
+    const float scale = scale_property_->getFloat();
+
+    if (show_event_bus) {
+        if (!event_bus_dashboard_) {
+            event_bus_dashboard_ = std::make_unique<EventBusTeleopDashboard>();
+            event_bus_dashboard_->setScale(scale);
+        }
+        event_bus_dashboard_->show();
+    } else if (event_bus_dashboard_) {
+        event_bus_dashboard_->hide();
     }
-    if (!dashboard_) {
-        dashboard_ = std::make_unique<TeleopModeDashboard>();
-        dashboard_->setScale(scale_property_->getFloat());
-        dashboard_->show();
-        elapsed_ = 0;
-        return;
+
+    if (show_control_input) {
+        if (!control_input_dashboard_) {
+            control_input_dashboard_ = std::make_unique<ControlInputTeleopDashboard>();
+            control_input_dashboard_->setScale(scale);
+        }
+        control_input_dashboard_->show();
+    } else if (control_input_dashboard_) {
+        control_input_dashboard_->hide();
     }
-    dashboard_->show();
+
+    if (!show_event_bus && !show_control_input) return;
+
     elapsed_ += wall_dt;
     if (elapsed_ < 0.1f) return;
     elapsed_ = 0;
-    dashboard_->refreshLayout();
-    dashboard_->setMode(
-        teleop.update_mode, teleop.chassis_mode, teleop.body_tracking, teleop.mirror_movement,
-        teleop.left_arm_paused, teleop.right_arm_paused,
-        teleop.left_gripper_percent_mode, teleop.right_gripper_percent_mode,
-        teleop.left_stick_plane, teleop.right_stick_plane,
-        teleop.body_stick_plane, teleop.body_right_stick_plane,
-        teleop.dex_hand_session);
+    if (show_event_bus && event_bus_dashboard_) {
+        event_bus_dashboard_->refreshLayout();
+        event_bus_dashboard_->setMode(
+            teleop.update_mode, teleop.chassis_mode, teleop.body_tracking, teleop.mirror_movement,
+            teleop.left_arm_paused, teleop.right_arm_paused,
+            teleop.left_gripper_percent_mode, teleop.right_gripper_percent_mode,
+            teleop.left_stick_plane, teleop.right_stick_plane,
+            teleop.body_stick_plane, teleop.body_right_stick_plane,
+            teleop.dex_hand_session);
+    }
+    if (show_control_input && control_input_dashboard_) {
+        control_input_dashboard_->refreshLayout();
+        control_input_dashboard_->setMode(
+            joy.control_mode, joy.mirror_movement, joy.arm_target, joy.speed_level);
+    }
+
+    const float margin = 16.f * scale;
+    const float gap = 8.f * scale;
+    float y = margin;
+    if (show_event_bus && event_bus_dashboard_) {
+        event_bus_dashboard_->setOrigin(margin, y);
+        y += event_bus_dashboard_->height() + gap;
+    }
+    if (show_control_input && control_input_dashboard_) {
+        control_input_dashboard_->setOrigin(margin, y);
+    }
 }
 }
 PLUGINLIB_EXPORT_CLASS(arms_rviz_control_plugin::TeleopModeDisplay, rviz_common::Display)
