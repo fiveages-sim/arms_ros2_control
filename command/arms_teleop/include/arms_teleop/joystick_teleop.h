@@ -83,8 +83,6 @@ private:
     // Target arm selection (1=left, 2=right)
     int32_t currentTarget_;
 
-    // Gripper command state tracking (removed - using target_command subscriptions instead)
-
     double left_gripper_ratio_;
     double right_gripper_ratio_;
     double gripper_step_per_tick_;

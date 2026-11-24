@@ -1,6 +1,5 @@
 //
 // Created for Arms ROS2 Control - MarkerFactory
-// Marker 创建工厂类，统一管理所有 marker 的创建逻辑
 //
 #pragma once
 
@@ -19,8 +18,8 @@ namespace arms_ros2_control::command
      */
     enum class MarkerState
     {
-        SINGLE_SHOT, // 单次发布模式
-        CONTINUOUS // 连续发布模式
+        SINGLE_SHOT,
+        CONTINUOUS
     };
 
     /**
@@ -123,9 +122,8 @@ namespace arms_ros2_control::command
          */
         bool isStateDisabled(int32_t state) const;
 
-        // 配置成员
-        rclcpp::Node::SharedPtr node_; // ROS 节点（用于时间戳和日志）
-        std::string frame_id_; // marker 坐标系ID
-        std::vector<int32_t> disable_states_; // 禁用自动更新的状态列表
+        rclcpp::Node::SharedPtr node_;
+        std::string frame_id_;
+        std::vector<int32_t> disable_states_;
     };
 } // namespace arms_ros2_control::command

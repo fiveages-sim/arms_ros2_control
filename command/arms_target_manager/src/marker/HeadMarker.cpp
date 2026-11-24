@@ -1,5 +1,4 @@
 //
-// HeadMarker - 头部 Marker 管理类实现
 //
 
 #include "arms_target_manager/marker/HeadMarker.h"
@@ -17,13 +16,17 @@ namespace arms_ros2_control::command
         const std::string& frame_id,
         const std::string& control_base_frame,
         double publish_rate,
-        UpdateCallback update_callback)
+        UpdateCallback update_callback,
+        rclcpp::Publisher<geometry_msgs::msg::Pose>::SharedPtr pose_publisher,
+        rclcpp::Publisher<geometry_msgs::msg::PoseStamped>::SharedPtr pose_stamped_publisher)
         : node_(std::move(node))
           , marker_factory_(std::move(marker_factory))
           , tf_buffer_(std::move(tf_buffer))
           , frame_id_(frame_id)
           , control_base_frame_(control_base_frame)
           , publish_rate_(publish_rate)
+          , pose_publisher_(std::move(pose_publisher))
+          , pose_stamped_publisher_(std::move(pose_stamped_publisher))
           , update_callback_(std::move(update_callback))
           , last_publish_time_(node_->now())
           , last_marker_command_time_(rclcpp::Time(0, 0, node_->get_clock()->get_clock_type()))
@@ -53,9 +56,6 @@ namespace arms_ros2_control::command
         RCLCPP_INFO(node_->get_logger(),
                     "头部marker所在的link名称: %s", head_link_name_.c_str());
 
-        pose_publisher_ = node_->create_publisher<geometry_msgs::msg::Pose>("head_target", 10);
-        pose_stamped_publisher_ =
-            node_->create_publisher<geometry_msgs::msg::PoseStamped>("head_target/stamped", 10);
         current_target_subscription_ =
             node_->create_subscription<geometry_msgs::msg::PoseStamped>(
                 "head_current_target", 10,

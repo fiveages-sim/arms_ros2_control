@@ -28,4 +28,9 @@
          base_class_type="rviz_common::Display">
     <description>Tracking error dashboard over the RViz 3D viewport.</description>
   </class>
+  <class name="arms_rviz_control_plugin/TeleopModeDisplay"
+         type="arms_rviz_control_plugin::TeleopModeDisplay"
+         base_class_type="rviz_common::Display">
+    <description>Teleop HUDs: EventBus + ControlInput dashboards stacked top-left, each gated independently with auto fill-in.</description>
+  </class>
 </library>

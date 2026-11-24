@@ -9,11 +9,7 @@
 #include <geometry_msgs/msg/pose_stamped.hpp>
 #include <visualization_msgs/msg/interactive_marker.hpp>
 #include <visualization_msgs/msg/interactive_marker_feedback.hpp>
-#include <visualization_msgs/msg/interactive_marker_control.hpp>
-#include <visualization_msgs/msg/marker.hpp>
 #include <tf2_ros/buffer.hpp>
-#include <tf2_geometry_msgs/tf2_geometry_msgs.hpp>
-#include <tf2/exceptions.hpp>
 
 #include "arms_target_manager/MarkerFactory.h"
 

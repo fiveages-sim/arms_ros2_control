@@ -341,14 +341,17 @@ namespace arms_ros2_control::command
         rclcpp::Publisher<geometry_msgs::msg::Pose>::SharedPtr pub_left_target,
         rclcpp::Publisher<geometry_msgs::msg::PoseStamped>::SharedPtr pub_left_target_stamped,
         rclcpp::Publisher<geometry_msgs::msg::Pose>::SharedPtr pub_right_target,
-        rclcpp::Publisher<geometry_msgs::msg::PoseStamped>::SharedPtr pub_right_target_stamped)
+        rclcpp::Publisher<geometry_msgs::msg::PoseStamped>::SharedPtr pub_right_target_stamped,
+        rclcpp::Publisher<geometry_msgs::msg::Pose>::SharedPtr pub_head_target,
+        rclcpp::Publisher<geometry_msgs::msg::PoseStamped>::SharedPtr pub_head_target_stamped,
+        rclcpp::Publisher<nav_msgs::msg::Path>::SharedPtr pub_dual_target_stamped)
     {
         marker_factory_ = std::make_unique<MarkerFactory>(
             node_, marker_fixed_frame_, disable_auto_update_states_);
 
+        dual_target_stamped_publisher_ = std::move(pub_dual_target_stamped);
+
         tf_buffer_ = std::make_shared<tf2_ros::Buffer>(node_->get_clock());
-        // Feed Buffer from relative topics so __ns alone reaches /<ns>/tf (Isaac dual).
-        // TransformListener hard-binds absolute /tf and misses namespaced trees.
         std::string tf_topic = "tf";
         std::string tf_static_topic = "tf_static";
         if (!node_->has_parameter("tf_topic")) {
@@ -459,7 +462,9 @@ namespace arms_ros2_control::command
                 }
                 setServerPose(marker_name, pose);
                 markPendingChanges();
-            });
+            },
+            std::move(pub_head_target),
+            std::move(pub_head_target_stamped));
         head_marker_->initialize();
         head_marker_->setWbcTargetStateCheckCallback(
             [this]() { return shouldShowWbcHeadMarker(); });
@@ -816,8 +821,6 @@ namespace arms_ros2_control::command
             return;
         }
 
-        // 双臂耦合下，任一侧“发送目标”都应统一发送双臂，
-        // 避免只更新单臂current_target导致后续模式切换时另一侧marker回跳。
         if (is_bimanual_coupled &&
             (marker_type == "left_arm" || marker_type == "right_arm"))
         {
@@ -874,8 +877,6 @@ namespace arms_ros2_control::command
         dual_path.poses[1].header.frame_id = control_base_frame_;
         dual_path.poses[1].pose = right_transformed;
 
-        // 若 body marker 可用，三条轨迹（左/右/腰）合并成一次 dual_target/stamped 下发，
-        // 由接收端统一插值规划，避免多topic覆盖。
         if (include_body)
         {
             geometry_msgs::msg::Pose body_pose = body_marker_->getPose();
@@ -1161,12 +1162,6 @@ namespace arms_ros2_control::command
 
     void ArmsTargetManager::createPublishersAndSubscribers()
     {
-        if (dual_arm_mode_)
-        {
-            dual_target_stamped_publisher_ = node_->create_publisher<nav_msgs::msg::Path>(
-                "dual_target/stamped", 1);
-        }
-
         wbc_state_subscriber_ =
             node_->create_subscription<arms_ros2_control_msgs::msg::WbcCurrentState>(
                 "ocs2_wbc_controller/current_state",
@@ -1622,61 +1617,6 @@ namespace arms_ros2_control::command
         }
     }
 
-    bool ArmsTargetManager::updateBodyMarkerPoseIncremental(
-        const std::array<double, 3>& positionDelta,
-        const std::array<double, 3>& rpyDelta)
-    {
-        if (!body_marker_ || !shouldShowBodyMarker())
-        {
-            return false;
-        }
-
-        geometry_msgs::msg::Pose current_pose = body_marker_->getPose();
-
-        current_pose.position.x += positionDelta[0];
-        current_pose.position.y += positionDelta[1];
-        current_pose.position.z += positionDelta[2];
-
-        if (std::abs(rpyDelta[0]) > 0.001 || std::abs(rpyDelta[1]) > 0.001 || std::abs(rpyDelta[2]) > 0.001)
-        {
-            Eigen::Quaterniond current_quat(
-                current_pose.orientation.w,
-                current_pose.orientation.x,
-                current_pose.orientation.y,
-                current_pose.orientation.z
-            );
-
-            Eigen::AngleAxisd rollAngle(rpyDelta[0], Eigen::Vector3d::UnitX());
-            Eigen::AngleAxisd pitchAngle(rpyDelta[1], Eigen::Vector3d::UnitY());
-            Eigen::AngleAxisd yawAngle(rpyDelta[2], Eigen::Vector3d::UnitZ());
-
-            Eigen::Quaterniond rotationIncrement = yawAngle * pitchAngle * rollAngle;
-
-            current_quat = rotationIncrement * current_quat;
-            current_quat.normalize();
-
-            current_pose.orientation.w = current_quat.w();
-            current_pose.orientation.x = current_quat.x();
-            current_pose.orientation.y = current_quat.y();
-            current_pose.orientation.z = current_quat.z();
-        }
-
-        body_marker_->setPose(current_pose);
-
-        if (server_)
-        {
-            setServerPose(body_marker_->getMarkerName(), current_pose);
-            markPendingChanges();
-        }
-
-        if (shouldStreamPoseCommands())
-        {
-            body_marker_->publishTargetPose();
-        }
-
-        return true;
-    }
-
     geometry_msgs::msg::Pose ArmsTargetManager::getMarkerPose(const std::string& armType) const
     {
         if (armType == "left" && left_arm_marker_ && shouldShowLeftArmMarker())
@@ -1697,5 +1637,20 @@ namespace arms_ros2_control::command
         zero_pose.orientation.y = 0.0;
         zero_pose.orientation.z = 0.0;
         return zero_pose;
+    }
+
+    bool ArmsTargetManager::getLatestCurrentTarget(
+        const std::string& armType,
+        geometry_msgs::msg::PoseStamped& out) const
+    {
+        if (armType == "left" && left_arm_marker_)
+        {
+            return left_arm_marker_->getLatestCurrentTarget(out);
+        }
+        if (armType == "right" && dual_arm_mode_ && right_arm_marker_)
+        {
+            return right_arm_marker_->getLatestCurrentTarget(out);
+        }
+        return false;
     }
 } // namespace arms_ros2_control::command

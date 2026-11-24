@@ -7,7 +7,7 @@
 - **3D 交互式 marker**：在 RViz 中拖拽设置绝对目标 pose
 - **单臂/双臂支持**
 - **手柄适配**：订阅 `control_input`（`Inputs`），按 `linear_scale`/`angular_scale` 放大为 `*/twist` 速度（m/s、rad/s）；marker 仅可视化
-- **VR**：仍发绝对 `left_target` / `right_target`（本阶段不迁相对话题）
+- **VR**：UPDATE 下发绝对 `left_target` / `right_target`；STORAGE 下不发末端目标与 VR 夹爪
 
 ## 使用方法
 
@@ -39,11 +39,12 @@ ros2 launch ocs2_arm_controller demo.launch.py robot:=cr5
 |-------|------|------|------------|
 | `left_target` | `geometry_msgs/Pose` | 立即绝对 | VR / marker 连续 |
 | `left_target/stamped` | `geometry_msgs/PoseStamped` | 绝对 **moveL**；`frame_id` 非 base 则 TF→base | RViz 绝对 |
-| `left_target/twist` | `geometry_msgs/Twist` | **速度流**（m/s、rad/s），latch + `dt` 积分 | **手柄** |
+| `left_target/twist` | `geometry_msgs/Twist` | **速度流**（m/s、rad/s），latch + `dt` 积分 | **手柄 / VR 臂摇杆** |
 | `left_target/relative` | `geometry_msgs/TwistStamped` | **一次相对位移**（m、rad）+ moveL；`frame_id` 选坐标系 | **RViz 相对基座/末端** |
 | `left_current_target` | `PoseStamped` | 当前指令目标反馈（`frame_id`=base） | RViz / 可视化 |
 | `body_target` | `geometry_msgs/Pose` | 立即绝对（需 `body_target_enabled`） | VR / marker |
 | `body_target/stamped` | `geometry_msgs/PoseStamped` | 绝对 **moveL** | RViz 身体绝对（TRACKING） |
+| `body_target/twist` | `geometry_msgs/Twist` | **速度流**（m/s、rad/s），latch + `dt` 积分 | **VR BODY_TRACKING 摇杆** |
 | `body_target/relative` | `geometry_msgs/TwistStamped` | **一次相对位移** + moveL；`frame_id`=base/`body_frame` | **RViz 相对基座/身体** |
 | `body_current_target` | `PoseStamped` | 身体当前指令目标反馈 | RViz / marker |
 | `head_target` | `geometry_msgs/Pose` | WBC Head 6D 最终目标连续更新 | full-body Head marker |
@@ -112,12 +113,12 @@ RViz Joint Panel：绝对 / 相对基座 / 相对末端（手臂）或相对身�
 
 | 参数 | 含义 | 默认 | 生效时机 |
 |------|------|------|------|
-| `linear_scale` | 映射到 `*/twist` 的线速度上限 **m/s**（满杆） | `0.1` | 仅启动 |
-| `angular_scale` | 映射到 `*/twist` 的角速度上限 **rad/s**（满杆） | `0.25` | 仅启动 |
+| `linear_scale` | 映射到 `*/twist` 的线速度上限 **m/s**（满杆）；**joystick 与 VR 摇杆共用** | `0.1` | 仅启动 |
+| `angular_scale` | 映射到 `*/twist` 的角速度上限 **rad/s**（满杆）；同上 | `0.25` | 仅启动 |
 | `control_input_rate` | 上游 `control_input` 典型频率 Hz（仅手感估算，不参与实时换算） | `50.0` | 仅启动 |
-| `vr_thumbstick_linear_scale` | VR 摇杆线位移步进 m/step | `0.005` | 仅启动 |
-| `vr_thumbstick_angular_scale` | VR 摇杆角位移步进 rad/step | `0.05` | 仅启动 |
 | `enable_vr` | 是否启用 VR | `false` | 仅启动 |
+
+VR 摇杆（仅当路由为**臂末端**时）：发 `left|right_target/twist`，并 **mute** 该臂 VR 绝对 pose；回中后用 `current_target`/手柄 rebase 再 unmute。`BODY_TRACKING` 发 `body_target/twist`，**不** mute 臂 pose。CHASSIS 仍走 `cmd_vel`。
 
 ### 手柄 / 键盘 scale（速度，不是每帧位移）
 
@@ -128,7 +129,7 @@ twist.linear.{x,y,z}  = Inputs.{x,y,z}     * linear_scale     # 单位：m/s
 twist.angular.{x,y,z} = Inputs.{roll,pitch,yaw} * angular_scale  # 单位：rad/s
 ```
 
-- **`linear_scale` / `angular_scale` 的单位就是 Twist 速度单位**（m/s、rad/s），不是旧版「每条消息位移步进」的 m/step、rad/step。
+- **`linear_scale` / `angular_scale`**：满杆对应的线/角速度上限（m/s、rad/s）。
 - `Inputs` 轴量大致在 `[-1, 1]`（再乘 teleop 侧 `speed_scale`）；满杆时末端指令速度约为上述 scale。
 - 各机器人可在自身 `target_manager.yaml` 覆盖默认值。
 - OCS2 对 `*/twist` 做 latch + `dt` 积分；需要更快/更慢时直接调大/调小这两个 scale。
@@ -151,20 +152,29 @@ twist.angular.{x,y,z} = Inputs.{roll,pitch,yaw} * angular_scale  # 单位：rad/
 
 ### FULL_BODY 单臂禁用后的 VR 恢复
 
-- WBC 确认某臂为 `ARM_DISABLED` 后，VR 停止发布映射到该臂的 pose 目标，也停止累积该臂摇杆 offset；另一臂保持可控。
-- 禁用期间可自由移动对应 VR 手柄。重新启用确认后，机器人基准取 `observation_.state` 对应的 `left/right_current_pose`，VR 基准取手柄当前位置，并清零该臂摇杆 offset。
+- WBC 确认某臂为 `ARM_DISABLED` 后，VR 停止发布映射到该臂的 pose 目标，也不再对该臂发 `*/twist`；另一臂保持可控。
+- 禁用期间可自由移动对应 VR 手柄。重新启用确认后，机器人基准取 `observation_.state` 对应的 `left/right_current_pose`，VR 基准取手柄当前位置。
 - rebase 成功前该臂保持抑制；current pose 或 TF 暂不可用时不会回退到禁用前 target。
 - `left_current_target` / `right_current_target` 可能因参考管理器同步发布而刷新时间戳；禁用臂 pose 数值应保持不受 VR 输入影响。
 - 镜像模式只交换物理手柄到实际机械臂的映射，WBC enabled/disabled 和 rebase 状态始终按实际机械臂保存。
 
 ## 本包发布 / 订阅摘要
 
+节点内统一创建并注入以下 publisher（ATM / VR / joystick 不重复 `create_publisher`）：
+
+- `left_target`、`left_target/stamped`、`left_target/twist`
+- `right_target`、`right_target/stamped`、`right_target/twist`、`dual_target/stamped`（双臂）
+- `head_target`、`head_target/stamped`
+
+TF：`ArmsTargetManager` 维护一份相对 `tf`/`tf_static` 的 `Buffer`，经 `getTfBuffer()` 交给 VR 与各 Marker。
+
 **发布**
 
 - Marker 单次「发送目标」：`left_target/stamped`、`right_target/stamped`（`PoseStamped`）；双臂耦合：`dual_target/stamped`
 - Marker 连续 / VR：`left_target`、`right_target`（绝对 Pose；MOVEJ 下不发）
-- WBC Head Marker：`head_target`（连续）或 `head_target/stamped`（单次）
-- 手柄适配：`left_target/twist`、`right_target/twist`
+- WBC Head Marker / VR 头显：`head_target`（连续）或 `head_target/stamped`（单次）
+- 手柄 / VR 摇杆：`left_target/twist`、`right_target/twist`；VR 腰部：`body_target/twist`
+- 事件总线模式反馈：`teleop/mode_state`（`TeleopModeState`，`Reliable` + `TransientLocal`）
 
 **订阅**
 

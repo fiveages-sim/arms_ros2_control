@@ -12,13 +12,10 @@ using namespace arms_ros2_control::command;
 
 int main(int argc, char** argv)
 {
-    // 初始化ROS2
     rclcpp::init(argc, argv);
 
-    // 创建节点
     auto node = rclcpp::Node::make_shared("arms_target_manager_node");
 
-    // 获取参数
     bool dual_arm_mode = node->declare_parameter("dual_arm_mode", false);
     std::string control_base_frame = node->declare_parameter("control_base_frame", "world");
     std::string marker_fixed_frame = node->declare_parameter("marker_fixed_frame", "base_link");
@@ -26,12 +23,8 @@ int main(int argc, char** argv)
     double linear_scale = node->declare_parameter("linear_scale", 0.1);
     double angular_scale = node->declare_parameter("angular_scale", 0.25);
     double control_input_rate = node->declare_parameter("control_input_rate", 50.0);
-    double vr_thumbstick_linear_scale = node->declare_parameter("vr_thumbstick_linear_scale", 0.005);
-    double vr_thumbstick_angular_scale = node->declare_parameter("vr_thumbstick_angular_scale", 0.05);
     double vr_pose_scale = node->declare_parameter("vr_pose_scale", 1.0);
-    // VR/头显参考link（通常为机器人头部link），可在各机器人target_manager.yaml中配置
     std::string reference_link = node->declare_parameter("reference_link", "head_link2");
-    // VR 末端目标计算所在的跟随坐标系
     std::string vr_follow_frame =
         node->declare_parameter("vr_follow_frame", "base_footprint");
     if (vr_follow_frame.empty())
@@ -52,18 +45,12 @@ int main(int argc, char** argv)
 #endif
     );
 
-    // 获取 hand_controllers 参数（用于自动检测和验证）
     std::vector<std::string> hand_controllers = node->declare_parameter("hand_controllers", std::vector<std::string>());
 
-    // 头部控制参数在 ArmsTargetManager::initialize() 中从配置文件读取
-
-    // 自动检测双臂模式（基于 hand_controllers 数量）
     bool auto_detected_dual_arm = hand_controllers.size() > 1;
-    
-    // 验证配置一致性并记录控制器信息
+
     if (!hand_controllers.empty())
     {
-        // 构建控制器列表字符串
         std::string controllers_list;
         for (size_t i = 0; i < hand_controllers.size(); ++i) {
             if (i > 0) controllers_list += ", ";
@@ -107,8 +94,8 @@ int main(int argc, char** argv)
     if (enable_vr)
     {
         RCLCPP_INFO(node->get_logger(),
-                    "VR thumbstick scales: linear=%.3f, angular=%.3f (from target_manager.yaml)",
-                    vr_thumbstick_linear_scale, vr_thumbstick_angular_scale);
+                    "VR thumbstick uses joystick velocity scales: linear=%.3f m/s, angular=%.3f rad/s",
+                    linear_scale, angular_scale);
         RCLCPP_INFO(node->get_logger(),
                     "VR pose scale: left=1.0, right=1.0 (fixed, not configurable)");
         RCLCPP_INFO(node->get_logger(),
@@ -122,23 +109,30 @@ int main(int argc, char** argv)
 
     try
     {
-        // 创建统一的目标位姿发布器（在所有模块之前创建，供 ArmMarker 和 VRInputHandler 共享）
-        // 队列长度统一为 1，只关心最新的目标位姿
-        // 右臂发布器仅在双臂模式创建，避免单臂时广告 /right_target*
         auto pub_left_target = node->create_publisher<geometry_msgs::msg::Pose>("left_target", 1);
         auto pub_left_target_stamped =
             node->create_publisher<geometry_msgs::msg::PoseStamped>("left_target/stamped", 1);
+        auto pub_left_twist =
+            node->create_publisher<geometry_msgs::msg::Twist>("left_target/twist", 10);
+        auto pub_right_twist =
+            node->create_publisher<geometry_msgs::msg::Twist>("right_target/twist", 10);
+        auto pub_head_target = node->create_publisher<geometry_msgs::msg::Pose>("head_target", 10);
+        auto pub_head_target_stamped =
+            node->create_publisher<geometry_msgs::msg::PoseStamped>("head_target/stamped", 10);
         rclcpp::Publisher<geometry_msgs::msg::Pose>::SharedPtr pub_right_target;
         rclcpp::Publisher<geometry_msgs::msg::PoseStamped>::SharedPtr pub_right_target_stamped;
+        rclcpp::Publisher<nav_msgs::msg::Path>::SharedPtr pub_dual_target_stamped;
         if (dual_arm_mode)
         {
             pub_right_target = node->create_publisher<geometry_msgs::msg::Pose>("right_target", 1);
             pub_right_target_stamped =
                 node->create_publisher<geometry_msgs::msg::PoseStamped>("right_target/stamped", 1);
+            pub_dual_target_stamped =
+                node->create_publisher<nav_msgs::msg::Path>("dual_target/stamped", 1);
         }
 
         RCLCPP_INFO(node->get_logger(),
-                    "✅ Created unified target pose publishers (queue_size=1, dual_arm=%s)",
+                    "✅ Created unified target publishers (dual_arm=%s)",
                     dual_arm_mode ? "true" : "false");
 
         const bool movej_cartesian_markers =
@@ -170,62 +164,58 @@ int main(int argc, char** argv)
             disable_auto_update_states,
             0.05);
 
-        // 初始化（传入统一的发布器）
-        target_manager->initialize(pub_left_target, pub_left_target_stamped,
-                                   pub_right_target, pub_right_target_stamped);
+        target_manager->initialize(
+            pub_left_target, pub_left_target_stamped,
+            pub_right_target, pub_right_target_stamped,
+            pub_head_target, pub_head_target_stamped,
+            pub_dual_target_stamped);
 
-        // 创建ControlInputHandler（传入hand_controllers参数）
         auto control_handler = std::make_unique<ControlInputHandler>(
-            node, target_manager.get(), linear_scale, angular_scale, control_input_rate, hand_controllers);
+            node, target_manager.get(),
+            pub_left_twist, pub_right_twist,
+            linear_scale, angular_scale, control_input_rate, hand_controllers);
 
-        // 创建VRInputHandler（如果启用，传入统一的发布器、hand_controllers 及 target_manager.yaml 的 scale 参数）
         std::unique_ptr<VRInputHandler> vr_handler = nullptr;
         if (enable_vr)
         {
-            // VR 手柄位姿缩放因子固定为 1.0（左右手独立），不再通过参数配置
             vr_handler = std::make_unique<VRInputHandler>(
-                node, target_manager.get(), pub_left_target, pub_right_target, hand_controllers,
-                vr_thumbstick_linear_scale, vr_thumbstick_angular_scale,
+                node, target_manager.get(),
+                pub_left_target, pub_right_target,
+                pub_left_twist, pub_right_twist,
+                pub_head_target, pub_dual_target_stamped,
+                target_manager->getTfBuffer(),
+                hand_controllers,
+                linear_scale, angular_scale,
                 vr_pose_scale, reference_link, vr_follow_frame);
         }
 
-        // 创建 control input 订阅器（用于增量控制）
         auto control_subscription = node->create_subscription<arms_ros2_control_msgs::msg::Inputs>(
             "control_input", 10,
             [control_handler_ptr = control_handler.get()](
             const arms_ros2_control_msgs::msg::Inputs::ConstSharedPtr msg)
             {
-                // 处理增量控制
                 if (control_handler_ptr)
                 {
                     control_handler_ptr->processControlInput(msg);
                 }
             });
 
-        // 创建 FSM 命令订阅器（用于状态切换和 marker 形态更新）
-        // 统一处理 ArmsTargetManager 和 VRInputHandler 的 FSM 状态更新，避免重复订阅冲突
         auto fsm_command_subscription = node->create_subscription<std_msgs::msg::Int32>(
             "fsm_command", 10,
             [target_manager_ptr = target_manager.get(), vr_handler_ptr = vr_handler.get()](
             const std_msgs::msg::Int32::ConstSharedPtr msg)
             {
-                // 处理 FSM 状态切换 - ArmsTargetManager
                 if (target_manager_ptr)
                 {
                     target_manager_ptr->fsmCommandCallback(msg);
                 }
-                
-                // 处理 FSM 状态切换 - VRInputHandler（如果启用）
                 if (vr_handler_ptr)
                 {
-                    // 转换为 SharedPtr 以匹配 VRInputHandler 的回调签名
                     auto shared_msg = std::const_pointer_cast<std_msgs::msg::Int32>(msg);
                     vr_handler_ptr->fsmCommandCallback(shared_msg);
                 }
             });
 
-        // 设置 current_pose 回调（用于 VRInputHandler，通过 ArmMarker 的回调机制避免重复订阅）
-        // ArmMarker 内部订阅了 current_pose，通过回调机制将原始消息转发给 VRInputHandler
         if (enable_vr && vr_handler)
         {
             target_manager->setWbcStateCallback(
@@ -238,19 +228,16 @@ int main(int argc, char** argv)
                     }
                 });
 
-            // 左臂 current_pose 回调
             target_manager->setCurrentPoseCallback("left",
                 [vr_handler_ptr = vr_handler.get()](const geometry_msgs::msg::PoseStamped::ConstSharedPtr& msg)
                 {
                     if (vr_handler_ptr)
                     {
-                        // 转换为 SharedPtr 以匹配 VRInputHandler 的回调签名
                         auto shared_msg = std::const_pointer_cast<geometry_msgs::msg::PoseStamped>(msg);
                         vr_handler_ptr->robotLeftPoseCallback(shared_msg);
                     }
                 });
 
-            // 右臂 current_pose 回调（仅双臂模式）
             if (dual_arm_mode)
             {
                 target_manager->setCurrentPoseCallback("right",
@@ -258,7 +245,6 @@ int main(int argc, char** argv)
                     {
                         if (vr_handler_ptr)
                         {
-                            // 转换为 SharedPtr 以匹配 VRInputHandler 的回调签名
                             auto shared_msg = std::const_pointer_cast<geometry_msgs::msg::PoseStamped>(msg);
                             vr_handler_ptr->robotRightPoseCallback(shared_msg);
                         }
@@ -274,7 +260,6 @@ int main(int argc, char** argv)
             RCLCPP_INFO(node->get_logger(), "VR input handler is ready for VR control!");
         }
 
-        // 保持节点运行
         rclcpp::spin(node);
     }
     catch (const std::exception& e)
@@ -283,7 +268,6 @@ int main(int argc, char** argv)
         return 1;
     }
 
-    // 清理
     rclcpp::shutdown();
     return 0;
 }

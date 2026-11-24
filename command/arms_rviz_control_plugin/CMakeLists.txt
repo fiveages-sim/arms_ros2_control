@@ -38,6 +38,7 @@ cmake_language(CALL qt${QT_VERSION_MAJOR}_wrap_cpp MOC_FILES
         include/arms_rviz_control_plugin/joint_control_panel.hpp
         include/arms_rviz_control_plugin/wbc_capability_panel.hpp
         include/arms_rviz_control_plugin/target_error_display.hpp
+        include/arms_rviz_control_plugin/teleop_mode_display.hpp
         include/arms_rviz_control_plugin/switch_button.hpp
 )
 
@@ -48,6 +49,7 @@ set(SRC_FILES
         src/joint_control_panel.cpp
         src/wbc_capability_panel.cpp
         src/target_error_display.cpp
+        src/teleop_mode_display.cpp
         src/switch_button.cpp
 )
 

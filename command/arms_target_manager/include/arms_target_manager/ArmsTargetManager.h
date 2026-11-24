@@ -13,19 +13,15 @@
 #include <rclcpp/rclcpp.hpp>
 #include <geometry_msgs/msg/pose.hpp>
 #include <geometry_msgs/msg/pose_stamped.hpp>
-#include <geometry_msgs/msg/point.hpp>
-#include <geometry_msgs/msg/quaternion.hpp>
 #include <visualization_msgs/msg/interactive_marker.hpp>
 #include <visualization_msgs/msg/interactive_marker_feedback.hpp>
 #include <interactive_markers/interactive_marker_server.hpp>
 #include <interactive_markers/menu_handler.hpp>
-#include <arms_ros2_control_msgs/msg/inputs.hpp>
 #include <tf2_ros/buffer.hpp>
 #include <tf2_msgs/msg/tf_message.hpp>
 #include <std_msgs/msg/float64_multi_array.hpp>
 #include <std_msgs/msg/int32.hpp>
 #include <arms_ros2_control_msgs/msg/wbc_current_state.hpp>
-#include <std_msgs/msg/string.hpp>
 #include <nav_msgs/msg/path.hpp>
 #include "arms_target_manager/MarkerFactory.h"
 #include "arms_target_manager/marker/HeadMarker.h"
@@ -57,7 +53,10 @@ namespace arms_ros2_control::command
             rclcpp::Publisher<geometry_msgs::msg::Pose>::SharedPtr pub_left_target,
             rclcpp::Publisher<geometry_msgs::msg::PoseStamped>::SharedPtr pub_left_target_stamped,
             rclcpp::Publisher<geometry_msgs::msg::Pose>::SharedPtr pub_right_target = nullptr,
-            rclcpp::Publisher<geometry_msgs::msg::PoseStamped>::SharedPtr pub_right_target_stamped = nullptr);
+            rclcpp::Publisher<geometry_msgs::msg::PoseStamped>::SharedPtr pub_right_target_stamped = nullptr,
+            rclcpp::Publisher<geometry_msgs::msg::Pose>::SharedPtr pub_head_target = nullptr,
+            rclcpp::Publisher<geometry_msgs::msg::PoseStamped>::SharedPtr pub_head_target_stamped = nullptr,
+            rclcpp::Publisher<nav_msgs::msg::Path>::SharedPtr pub_dual_target_stamped = nullptr);
 
         void setMarkerPose(
             const std::string& armType,
@@ -70,11 +69,13 @@ namespace arms_ros2_control::command
             const std::array<double, 3>& rpyDelta,
             bool publish = true);
 
-        bool updateBodyMarkerPoseIncremental(
-            const std::array<double, 3>& positionDelta,
-            const std::array<double, 3>& rpyDelta);
-
         geometry_msgs::msg::Pose getMarkerPose(const std::string& armType) const;
+
+        std::shared_ptr<tf2_ros::Buffer> getTfBuffer() const { return tf_buffer_; }
+
+        bool getLatestCurrentTarget(
+            const std::string& armType,
+            geometry_msgs::msg::PoseStamped& out) const;
 
         void togglePublishMode();
 
@@ -185,7 +186,6 @@ namespace arms_ros2_control::command
 
         std::shared_ptr<MarkerFactory> marker_factory_;
 
-        rclcpp::Subscription<arms_ros2_control_msgs::msg::Inputs>::SharedPtr control_input_subscription_;
         rclcpp::Subscription<arms_ros2_control_msgs::msg::WbcCurrentState>::SharedPtr wbc_state_subscriber_;
         std::function<void(
             const arms_ros2_control_msgs::msg::WbcCurrentState::ConstSharedPtr&)>
@@ -220,8 +220,6 @@ namespace arms_ros2_control::command
         double publish_rate_;
 
         std::shared_ptr<tf2_ros::Buffer> tf_buffer_;
-        // Relative tf/tf_static subs (not TransformListener): Isaac dual robots
-        // publish /<ns>/tf; absolute /tf is empty under multi-robot namespaces.
         rclcpp::Subscription<tf2_msgs::msg::TFMessage>::SharedPtr tf_sub_;
         rclcpp::Subscription<tf2_msgs::msg::TFMessage>::SharedPtr tf_static_sub_;
 

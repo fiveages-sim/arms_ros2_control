@@ -1,6 +1,5 @@
 //
 // Created for Arms ROS2 Control - MarkerFactory
-// Marker 创建工厂类实现
 //
 
 #include "arms_target_manager/MarkerFactory.h"
@@ -40,10 +39,8 @@ namespace arms_ros2_control::command
         interactiveMarker.scale = enable_interaction ? 0.2 : 0.001;
         interactiveMarker.description = description;
 
-        // 设置位姿
         interactiveMarker.pose = pose;
 
-        // 根据模式选择形状：连续模式 = 球体，单次模式 = 盒子
         visualization_msgs::msg::Marker marker;
         if (mode == MarkerState::CONTINUOUS)
         {
@@ -54,18 +51,15 @@ namespace arms_ros2_control::command
             marker = createBoxMarker(color);
         }
 
-        // 如果不启用交互，将透明度设置为 0（完全透明）
         if (!enable_interaction)
         {
             marker.color.a = 0.0;
         }
 
-        // 创建控制
         visualization_msgs::msg::InteractiveMarkerControl boxControl;
         boxControl.always_visible = true;
         boxControl.markers.push_back(marker);
         
-        // 根据是否启用交互功能设置交互模式
         if (enable_interaction)
         {
             boxControl.interaction_mode = visualization_msgs::msg::InteractiveMarkerControl::MOVE_ROTATE_3D;
@@ -77,7 +71,6 @@ namespace arms_ros2_control::command
 
         interactiveMarker.controls.push_back(boxControl);
 
-        // 只有在启用交互功能时才添加移动控制
         if (enable_interaction)
         {
             addMovementControls(interactiveMarker);
@@ -150,9 +143,9 @@ namespace arms_ros2_control::command
     {
         visualization_msgs::msg::Marker marker;
         marker.type = visualization_msgs::msg::Marker::ARROW;
-        marker.scale.x = 0.15;  // 箭头长度
-        marker.scale.y = 0.03;  // 箭头宽度
-        marker.scale.z = 0.03;  // 箭头高度
+        marker.scale.x = 0.15;
+        marker.scale.y = 0.03;
+        marker.scale.z = 0.03;
         setMarkerColor(marker, color);
         return marker;
     }
@@ -162,7 +155,6 @@ namespace arms_ros2_control::command
     {
         visualization_msgs::msg::InteractiveMarkerControl control;
 
-        // X轴旋转和移动
         control.orientation.w = 1;
         control.orientation.x = 1;
         control.orientation.y = 0;
@@ -174,7 +166,6 @@ namespace arms_ros2_control::command
         control.interaction_mode = visualization_msgs::msg::InteractiveMarkerControl::MOVE_AXIS;
         interactiveMarker.controls.push_back(control);
 
-        // Y轴旋转和移动
         control.orientation.w = 1;
         control.orientation.x = 0;
         control.orientation.y = 1;
@@ -186,7 +177,6 @@ namespace arms_ros2_control::command
         control.interaction_mode = visualization_msgs::msg::InteractiveMarkerControl::MOVE_AXIS;
         interactiveMarker.controls.push_back(control);
 
-        // Z轴旋转和移动
         control.orientation.w = 1;
         control.orientation.x = 0;
         control.orientation.y = 0;
@@ -223,7 +213,6 @@ namespace arms_ros2_control::command
         }
         else
         {
-            // 默认灰色
             marker.color.r = 0.5;
             marker.color.g = 0.5;
             marker.color.b = 0.5;

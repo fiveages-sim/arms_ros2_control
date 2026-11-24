@@ -1,5 +1,4 @@
 //
-// HeadMarker - 头部 Marker 管理类
 //
 #pragma once
 
@@ -11,7 +10,6 @@
 #include <geometry_msgs/msg/pose_stamped.hpp>
 #include <visualization_msgs/msg/interactive_marker.hpp>
 #include <tf2_ros/buffer.hpp>
-#include <tf2_ros/transform_listener.hpp>
 
 namespace arms_ros2_control::command
 {
@@ -36,7 +34,9 @@ namespace arms_ros2_control::command
             const std::string& frame_id,
             const std::string& control_base_frame,
             double publish_rate = 20.0,
-            UpdateCallback update_callback = nullptr);
+            UpdateCallback update_callback = nullptr,
+            rclcpp::Publisher<geometry_msgs::msg::Pose>::SharedPtr pose_publisher = nullptr,
+            rclcpp::Publisher<geometry_msgs::msg::PoseStamped>::SharedPtr pose_stamped_publisher = nullptr);
 
         void initialize();
 

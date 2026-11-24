@@ -20,7 +20,7 @@
 |------|------|----------|------|
 | `joystick_teleop` | `sensor_msgs/Joy` | `control_input`、`teleop_mode`、`/cmd_vel`、腰部指令、`/fsm_command` | 经 launch 选 `game_controller_node` 或 `joy_node` |
 | `keyboard_teleop` | 终端 stdin（TTY） | 与手柄相同，**不发布** `/fsm_command` | 独立终端运行；参数可调 |
-| `foot_pedal_teleop` | Linux evdev 键盘设备 | `/teleop/controller_state`（`std_msgs/Int32`） | 事件流给 `VRInputHandler`；不发 `/fsm_command` |
+| `foot_pedal_teleop` | Linux evdev 键盘设备 | `teleop/controller_state`（`std_msgs/Int32`） | **只发修改事件**给 `VRInputHandler`；当前模式读 ATM 的 `teleop/mode_state`；须与 ATM 同命名空间；不发 `fsm_command` |
 
 ## 2. 编译
 
@@ -143,7 +143,9 @@ ros2 run arms_teleop keyboard_teleop --ros-args -p discrete_key_stale_ms:=350
 
 ## 5. 脚踏板遥操
 
-`foot_pedal_teleop` 读取一个 Linux evdev 键盘设备，向 `/teleop/controller_state` 发布与 VR 面键相同的 `std_msgs/Int32` 事件流。FSM / 遥操开关由 `VRInputHandler` 统一处理；本节点不发 `/fsm_command`。
+`foot_pedal_teleop` 读取一个 Linux evdev 键盘设备，向相对话题 `teleop/controller_state` 发布与 VR 面键相同的 `std_msgs/Int32` 事件流（**修改链路**）。须与目标机器人的 ATM **同命名空间**（如 `--ros-args -r __ns:=/robot_a`），多机同场景互不串扰。FSM / 遥操开关由 `VRInputHandler` 统一处理；本节点**不**发布模式快照，也**不**发 `fsm_command`。
+
+踩踏改镜像 / UPDATE / 单臂 pause 后，当前语义从同命名空间下 ATM 反馈话题 `teleop/mode_state`（`TeleopModeState`，`Reliable` + `TransientLocal`）读取（**反馈链路**）。与 VR 面键、未来外骨骼共用同一对链路；勿在脚踏节点旁路再发一份模式状态。
 
 默认独占设备（`grab_device:=true`），事件不会进桌面；忽略内核 key-repeat；无事件时仍以 30 Hz 发布 `0`。不使用双击手势。
 
@@ -187,8 +189,8 @@ F16 长按只发 `4`，不会再附带 `6`。
 | `device` | `auto` | 自动找 CM6K interface-00，或显式 evdev 路径 |
 | `device_serial` | 空 | auto 模式下区分多台 CM6K |
 | `grab_device` | `true` | 独占该输入设备 |
-| `teleop.publish_rate_hz` | `30.0` | `/teleop/controller_state` 发布频率 |
-| `teleop.controller_state_topic` | `/teleop/controller_state` | 事件话题 |
+| `teleop.publish_rate_hz` | `30.0` | `teleop/controller_state` 发布频率 |
+| `teleop.controller_state_topic` | `teleop/controller_state` | 事件话题（相对名，跟随节点 namespace） |
 | `whole_teleop_long_press_ms` | `800` | F16 触发事件 `4` 的按住时长 |
 | `mirror_long_press_ms` | `800` | F15 触发事件 `7` 的按住时长 |
 | `keys.fsm_up` / `fsm_down` / `left_arm_toggle` / `right_arm_toggle` | F13–F16（`183`–`186`） | Linux input key code |
@@ -220,7 +222,9 @@ sudo udevadm control --reload-rules
 | `/body_joint_controller/waist_lifting_command` | `std_msgs/Float64` | 手柄 / 键盘 | 键盘固定发 0 |
 | `/body_joint_controller/waist_turning_command` | `std_msgs/Float64` | 手柄 / 键盘 | 键盘固定发 0 |
 | `/fsm_command` | `std_msgs/Int32` | **仅手柄** | 键盘 / 脚踏板不发 |
-| `/teleop/controller_state` | `std_msgs/Int32` | **仅脚踏板** | VR 面键事件流 |
+| `teleop/controller_state` | `std_msgs/Int32` | **本包仅脚踏板**（VR 面键由 fa-py 等同话题发布） | **修改链路**：相对名，须与 ATM 同 ns；不表示当前模式 |
+
+事件总线的**反馈链路**由 ATM `VRInputHandler` 发布同 ns 下的 `teleop/mode_state`（`TeleopModeState`），不在本包节点内发出。脚踏改镜像 / UPDATE / pause 后请在对应命名空间下 `ros2 topic echo /<ns>/teleop/mode_state` 验收。
 
 速度字段：键盘 `speed_level` 为 1–10，`speed_scale = level * 0.1`；手柄 `0`=LOW / `1`=HIGH，比例由配置的 low/high scale 决定。
 

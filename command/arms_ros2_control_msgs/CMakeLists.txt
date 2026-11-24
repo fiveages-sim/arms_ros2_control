@@ -24,6 +24,7 @@ rosidl_generate_interfaces(${PROJECT_NAME}
         "msg/WbcCurrentState.msg"
         "msg/MpcTiming.msg"
         "msg/TeleopMode.msg"
+        "msg/TeleopModeState.msg"
         DEPENDENCIES builtin_interfaces std_msgs geometry_msgs nav_msgs
 )
 # 添加export依赖
