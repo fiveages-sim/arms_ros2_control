@@ -4,6 +4,7 @@
 #pragma once
 
 #include <array>
+#include <atomic>
 #include <memory>
 #include <mutex>
 #include <optional>
@@ -16,7 +17,6 @@
 #include <ocs2_self_collision_visualization/GeometryInterfaceVisualization.h>
 #include <rclcpp_lifecycle/lifecycle_node.hpp>
 #include <visualization_msgs/msg/marker_array.hpp>
-#include <geometry_msgs/msg/pose_array.hpp>
 #include <geometry_msgs/msg/pose_stamped.hpp>
 #include <std_msgs/msg/string.hpp>
 
@@ -26,7 +26,6 @@
 
 namespace ocs2::controller_common {
 
-/** Frame names and optional geometry — no MobileManipulatorInterface dependency. */
 struct Ocs2VisualizerConfig {
     std::string urdf_file;
     bool dual_arm{false};
@@ -49,19 +48,14 @@ public:
     void initialize();
 
     void updateEndEffectorTrajectory(const PrimalSolution& policy);
-    /** Same as updateEndEffectorTrajectory but from a copied state trajectory (viz thread). */
     void updateEndEffectorTrajectoryFromStates(const vector_array_t& stateTrajectory);
     void publishEndEffectorTrajectory(const rclcpp::Time& time);
 
-    /**
-     * Self-collision markers via GeometryInterfaceVisualization::publishDistances.
-     * Used by the async viz thread only. Returns true if FCL ran (lastMinDistance updated).
-     */
+    /** Viz thread only. Returns true when FCL ran and lastMinDistance was updated. */
     bool publishSelfCollisionVisualization(const vector_t& state) const;
     /** Min distance from the last successful publishDistances under the mutex. */
     scalar_t getLastMinDistance() const;
 
-    /** One FK into RT Data; extract left / right / body / head (7-vectors). No ROS publish. */
     struct EndEffectorPoses {
         vector_t left = vector_t::Zero(7);
         vector_t right = vector_t::Zero(7);
@@ -70,7 +64,6 @@ public:
     };
     EndEffectorPoses computeEndEffectorPoses(const vector_t& state) const;
 
-    /** Throttled PoseStamped publish (default 50 Hz). Control FK must use computeEndEffectorPoses. */
     void publishEndEffectorPoses(const rclcpp::Time& time, const EndEffectorPoses& poses) const;
     void publishEndEffectorPose(const rclcpp::Time& time, const vector_t& state) const;
     void setPosePublishPeriod(double period_sec);
@@ -80,9 +73,14 @@ public:
     /** 7-dim pose (x,y,z, qx,qy,qz,qw) of body_frame in base; identity at origin if body_frame empty or missing. */
     vector_t computeBodyFramePose(const vector_t& state) const;
 
-    void clearTrajectoryHistory();
+    void suppressEndEffectorTrajectory() const;
+    void resumeEndEffectorTrajectory() const;
+    [[nodiscard]] bool trajectorySuppressed() const;
+    /** Viz thread. True means this tick must not draw the end-effector trajectory. */
+    bool consumeTrajectorySuppression(const rclcpp::Time& time);
 
 private:
+    void publishTrajectoryDeleteAll(const rclcpp::Time& time);
     void forwardKinematicsInto(pinocchio::Data& data, const vector_t& state) const;
     vector_t extractFramePose7(const pinocchio::Data& data, pinocchio::FrameIndex frame_id) const;
     static void fillPoseStamped(geometry_msgs::msg::PoseStamped& msg, const rclcpp::Time& time,
@@ -110,6 +108,8 @@ private:
 
     std::vector<vector_t> left_arm_trajectory_history_;
     std::vector<vector_t> right_arm_trajectory_history_;
+    mutable std::atomic<bool> trajectory_suppressed_{false};
+    bool trajectory_markers_cleared_{false};
 
     bool dual_arm_mode_{false};
     std::string base_frame_;

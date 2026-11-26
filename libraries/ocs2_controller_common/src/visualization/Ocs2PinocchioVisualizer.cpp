@@ -54,15 +54,12 @@ namespace ocs2::controller_common
 
     void Ocs2PinocchioVisualizer::initialize()
     {
-        // Create publisher
         trajectory_marker_publisher_ = node_->create_publisher<visualization_msgs::msg::MarkerArray>(
             "trajectory_markers", 1);
-        
-        // Create end effector pose publisher
+
         left_end_effector_pose_publisher_ = node_->create_publisher<geometry_msgs::msg::PoseStamped>(
             "left_current_pose", 1);
-        
-        // Only create right arm publisher in dual arm mode
+
         if (dual_arm_mode_)
         {
             right_end_effector_pose_publisher_ = node_->create_publisher<geometry_msgs::msg::PoseStamped>(
@@ -78,62 +75,28 @@ namespace ocs2::controller_common
                 "head_current_pose", 1);
         }
 
-        // Create robot description publisher and publish URDF
-        if (!urdf_file_.empty())
+        robot_description_publisher_ = node_->create_publisher<std_msgs::msg::String>(
+            "ocs2_robot_description", rclcpp::QoS(1).transient_local());
+
+        std::ifstream urdf_stream(urdf_file_);
+        std::string urdf_content((std::istreambuf_iterator<char>(urdf_stream)),
+                                std::istreambuf_iterator<char>());
+        std_msgs::msg::String urdf_msg;
+        urdf_msg.data = std::move(urdf_content);
+        robot_description_publisher_->publish(urdf_msg);
+        RCLCPP_INFO(node_->get_logger(), "Published OCS2 robot description from: %s", urdf_file_.c_str());
+
+        auto geometry_opt = std::move(config_.pinocchio_geometry);
+        if (geometry_opt)
         {
-            robot_description_publisher_ = node_->create_publisher<std_msgs::msg::String>(
-                "/ocs2_robot_description", rclcpp::QoS(1).transient_local());
-            
-            // Read and publish URDF file (ifstream does not throw on open failure by default).
-            std::ifstream urdf_stream(urdf_file_);
-            if (urdf_stream.is_open())
-            {
-                std::string urdf_content((std::istreambuf_iterator(urdf_stream)),
-                                        std::istreambuf_iterator<char>());
-                urdf_stream.close();
-
-                std_msgs::msg::String urdf_msg;
-                urdf_msg.data = urdf_content;
-                robot_description_publisher_->publish(urdf_msg);
-
-                RCLCPP_INFO(node_->get_logger(), "Published OCS2 robot description from: %s", urdf_file_.c_str());
-            }
-            else
-            {
-                RCLCPP_WARN(node_->get_logger(), "Failed to open URDF file: %s", urdf_file_.c_str());
-            }
+            const scalar_t activationDistance = config_.self_collision_activation_distance;
+            // Parent-node topics/clock → relative distance_markers under /<ns>
+            geometry_visualization_ = std::make_unique<GeometryInterfaceVisualization>(
+                node_->get_node_topics_interface(), node_->get_clock(),
+                pinocchio_interface_, std::move(*geometry_opt), base_frame_, activationDistance);
+            RCLCPP_INFO(node_->get_logger(),
+                        "Self-collision visualization initialized (activation distance: %.3f m)", activationDistance);
         }
-
-        try
-        {
-            auto geometry_opt = std::move(config_.pinocchio_geometry);
-            if (geometry_opt)
-            {
-                const scalar_t activationDistance = config_.self_collision_activation_distance;
-                // Parent-node topics/clock → relative distance_markers under /<ns>
-                geometry_visualization_ = std::make_unique<GeometryInterfaceVisualization>(
-                    node_->get_node_topics_interface(), node_->get_clock(),
-                    pinocchio_interface_, std::move(*geometry_opt), base_frame_, activationDistance);
-                RCLCPP_INFO(node_->get_logger(),
-                            "Self-collision visualization initialized (activation distance: %.3f m)", activationDistance);
-            }
-            else
-            {
-                RCLCPP_INFO(node_->get_logger(),
-                            "No Pinocchio geometry provided, self-collision visualization disabled");
-            }
-        }
-        catch (const std::exception& e)
-        {
-            geometry_visualization_.reset();
-            RCLCPP_WARN(node_->get_logger(),
-                        "Failed to initialize self-collision visualization: %s, self-collision visualization disabled",
-                        e.what());
-        }
-
-        RCLCPP_INFO(node_->get_logger(), "Ocs2PinocchioVisualizer initialization completed");
-        RCLCPP_INFO(node_->get_logger(), "Self-collision visualization: %s",
-                    geometry_visualization_ ? "enabled" : "disabled");
     }
 
     void Ocs2PinocchioVisualizer::updateEndEffectorTrajectory(const PrimalSolution& policy)
@@ -186,16 +149,10 @@ namespace ocs2::controller_common
     void Ocs2PinocchioVisualizer::publishEndEffectorTrajectory(const rclcpp::Time& time)
     {
         visualization_msgs::msg::MarkerArray marker_array;
-        geometry_msgs::msg::PoseArray pose_array;
 
-        pose_array.header.stamp = time;
-        pose_array.header.frame_id = base_frame_;
-
-        // Create left arm trajectory marker
         if (!left_arm_trajectory_history_.empty())
         {
             std::vector<geometry_msgs::msg::Point> left_trajectory_points;
-            std::vector<geometry_msgs::msg::Pose> left_poses;
 
             for (const auto& pose : left_arm_trajectory_history_)
             {
@@ -204,30 +161,16 @@ namespace ocs2::controller_common
                 point.y = pose(1);
                 point.z = pose(2);
                 left_trajectory_points.push_back(point);
-
-                geometry_msgs::msg::Pose pose_msg;
-                pose_msg.position = point;
-                pose_msg.orientation.w = pose(6);
-                pose_msg.orientation.x = pose(3);
-                pose_msg.orientation.y = pose(4);
-                pose_msg.orientation.z = pose(5);
-                left_poses.push_back(pose_msg);
             }
 
-            // Create left arm trajectory line
             auto left_trajectory_marker = createTrajectoryLineMarker(
                 left_trajectory_points, left_arm_color_, trajectory_line_width_, "Left Arm Trajectory");
             marker_array.markers.push_back(left_trajectory_marker);
-
-            // Add to pose array
-            pose_array.poses.insert(pose_array.poses.end(), left_poses.begin(), left_poses.end());
         }
 
-        // Create right arm trajectory marker (if in dual arm mode)
         if (dual_arm_mode_ && !right_arm_trajectory_history_.empty())
         {
             std::vector<geometry_msgs::msg::Point> right_trajectory_points;
-            std::vector<geometry_msgs::msg::Pose> right_poses;
 
             for (const auto& pose : right_arm_trajectory_history_)
             {
@@ -236,33 +179,19 @@ namespace ocs2::controller_common
                 point.y = pose(1);
                 point.z = pose(2);
                 right_trajectory_points.push_back(point);
-
-                geometry_msgs::msg::Pose pose_msg;
-                pose_msg.position = point;
-                pose_msg.orientation.w = pose(6);
-                pose_msg.orientation.x = pose(3);
-                pose_msg.orientation.y = pose(4);
-                pose_msg.orientation.z = pose(5);
-                right_poses.push_back(pose_msg);
             }
 
-            // Create right arm trajectory line
             auto right_trajectory_marker = createTrajectoryLineMarker(
                 right_trajectory_points, right_arm_color_, trajectory_line_width_, "Right Arm Trajectory");
             marker_array.markers.push_back(right_trajectory_marker);
-
-            // Add to pose array
-            pose_array.poses.insert(pose_array.poses.end(), right_poses.begin(), right_poses.end());
         }
 
-        // Set marker header information
         for (auto& marker : marker_array.markers)
         {
             marker.header.stamp = time;
             marker.header.frame_id = base_frame_;
         }
 
-        // Publish marker array and pose array
         trajectory_marker_publisher_->publish(marker_array);
     }
 
@@ -272,27 +201,9 @@ namespace ocs2::controller_common
         {
             return false;
         }
-        const auto& model = pinocchio_interface_.getModel();
-        if (static_cast<size_t>(state.size()) != static_cast<size_t>(model.nq))
-        {
-            RCLCPP_WARN_THROTTLE(node_->get_logger(), *node_->get_clock(), 5000,
-                                 "Self-collision viz skipped: state size %ld != model.nq %u (check controller joints vs OCS2)",
-                                 static_cast<long>(state.size()), model.nq);
-            return false;
-        }
-        try
-        {
-            std::lock_guard<std::mutex> lock(self_collision_mutex_);
-            geometry_visualization_->publishDistances(state);
-            return true;
-        }
-        catch (const std::exception& e)
-        {
-            RCLCPP_WARN_THROTTLE(node_->get_logger(), *node_->get_clock(), 5000,
-                                 "Self-collision visualization failed (disable selfCollision in task or fix URDF/collision pairs): %s",
-                                 e.what());
-            return false;
-        }
+        std::lock_guard<std::mutex> lock(self_collision_mutex_);
+        geometry_visualization_->publishDistances(state);
+        return true;
     }
 
     scalar_t Ocs2PinocchioVisualizer::getLastMinDistance() const
@@ -476,13 +387,56 @@ namespace ocs2::controller_common
         return marker;
     }
 
-    void Ocs2PinocchioVisualizer::clearTrajectoryHistory()
+    void Ocs2PinocchioVisualizer::suppressEndEffectorTrajectory() const
     {
+        trajectory_suppressed_.store(true, std::memory_order_release);
+    }
+
+    void Ocs2PinocchioVisualizer::resumeEndEffectorTrajectory() const
+    {
+        trajectory_suppressed_.store(false, std::memory_order_release);
+    }
+
+    bool Ocs2PinocchioVisualizer::trajectorySuppressed() const
+    {
+        return trajectory_suppressed_.load(std::memory_order_acquire);
+    }
+
+    bool Ocs2PinocchioVisualizer::consumeTrajectorySuppression(const rclcpp::Time& time)
+    {
+        if (!trajectory_suppressed_.load(std::memory_order_acquire))
+        {
+            trajectory_markers_cleared_ = false;
+            return false;
+        }
+        if (trajectory_markers_cleared_)
+        {
+            return true;
+        }
+
         left_arm_trajectory_history_.clear();
         right_arm_trajectory_history_.clear();
-        RCLCPP_INFO(node_->get_logger(), "Trajectory history cleared");
-        
-        // Publish empty trajectory visualization to clear previous display
-        publishEndEffectorTrajectory(node_->now());
+        publishTrajectoryDeleteAll(time);
+        trajectory_markers_cleared_ = true;
+        return true;
+    }
+
+    void Ocs2PinocchioVisualizer::publishTrajectoryDeleteAll(const rclcpp::Time& time)
+    {
+        visualization_msgs::msg::MarkerArray marker_array;
+        const auto add_delete = [&](const std::string& namespace_name) {
+            visualization_msgs::msg::Marker marker;
+            marker.header.stamp = time;
+            marker.header.frame_id = base_frame_;
+            marker.ns = namespace_name;
+            marker.action = visualization_msgs::msg::Marker::DELETEALL;
+            marker_array.markers.push_back(std::move(marker));
+        };
+        add_delete("Left Arm Trajectory");
+        if (dual_arm_mode_)
+        {
+            add_delete("Right Arm Trajectory");
+        }
+        trajectory_marker_publisher_->publish(marker_array);
     }
 }

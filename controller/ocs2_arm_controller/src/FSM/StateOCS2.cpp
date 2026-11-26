@@ -84,6 +84,7 @@ namespace ocs2::mobile_manipulator
         last_mpc_time_ = node_->now();
 
         // Kick viz snapshot after reset (viz thread owned by controller activate lifetime).
+        ctrl_comp_->resumeTrajectoryVisualization();
         ctrl_comp_->requestVisualizationUpdate();
         mpc_thread_finished_ = false;
         mpc_running_ = true;

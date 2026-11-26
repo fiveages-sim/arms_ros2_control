@@ -554,7 +554,11 @@ namespace ocs2::mobile_manipulator
         pending_viz_pred_time_ = 0.0;
         {
             auto traj_scope = rt_timing_.scope(&rt_timing_.eval_traj_us);
-            if (policy_active_ && mpc_mrt_interface_)
+            if (visualizer_->trajectorySuppressed())
+            {
+                snap->has_policy_traj = false;
+            }
+            else if (policy_active_ && mpc_mrt_interface_)
             {
                 snap->stateTrajectory = mpc_mrt_interface_->getVisualizationStateTrajectory();
                 snap->has_policy_traj = snap->stateTrajectory && !snap->stateTrajectory->empty();
@@ -620,7 +624,8 @@ namespace ocs2::mobile_manipulator
         }
         collision_active_.store(active, std::memory_order_release);
 
-        if (snap.has_policy_traj && snap.stateTrajectory && !snap.stateTrajectory->empty())
+        if (!visualizer_->consumeTrajectorySuppression(node_->now()) && snap.has_policy_traj &&
+            snap.stateTrajectory && !snap.stateTrajectory->empty())
         {
             visualizer_->updateEndEffectorTrajectoryFromStates(*snap.stateTrajectory);
             visualizer_->publishEndEffectorTrajectory(node_->now());
@@ -669,8 +674,13 @@ namespace ocs2::mobile_manipulator
 
     void CtrlComponent::clearTrajectoryVisualization()
     {
-        visualizer_->clearTrajectoryHistory();
+        visualizer_->suppressEndEffectorTrajectory();
         pose_reference_manager_->resetTargetStateCache();
+    }
+
+    void CtrlComponent::resumeTrajectoryVisualization()
+    {
+        visualizer_->resumeEndEffectorTrajectory();
     }
 
     std::string CtrlComponent::resolvePlanningUrdfPath() const

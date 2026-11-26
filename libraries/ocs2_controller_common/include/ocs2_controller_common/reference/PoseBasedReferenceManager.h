@@ -1,6 +1,3 @@
-//
-// Pose-based reference: ROS pose/path targets -> OCS2 TargetTrajectories (robot-agnostic context).
-//
 #pragma once
 
 #include <arms_ros2_control_msgs/msg/circle_message.hpp>
@@ -32,24 +29,6 @@
 
 namespace ocs2::controller_common {
 
-/**
- * Subscribes to pose/path/twist/relative topics and writes TargetTrajectories.
- * Uses Ocs2ReferenceTargetContext for dual-arm flag, base frame, and zero-input dimension.
- *
- * Inbound (left; right symmetric when dual):
- * - left_target            Pose          immediate absolute (preempts this arm's moveL;
- *                                        other active left/right/body moveL preserved via rebuild)
- * - left_target/stamped    PoseStamped   OCS2: absolute moveL (frame_id non-base → TF→base);
- *                                        not-OCS2: forwarded to setStampedTargetHandlers (e.g. MOVEJ)
- * dual_target/stamped with 3 poses plans left+right+body together (OCS2); MOVEJ uses left/right only.
- * - left_target/twist      Twist         velocity stream (m/s, rad/s), latch + dt integrate
- *                                        (same preempt / other-preserve semantics as Pose)
- * - left_target/relative   TwistStamped  one-shot SE(3) delta (m, rad) + moveL; frame_id selects base/EE/TF
- * Body (wheel-humanoid, when body_target_enabled):
- * - body_target / body_target/stamped — same immediate vs moveL split as arms
- * - body_target/relative   TwistStamped  one-shot SE(3) delta + moveL; frame_id selects base/body/TF
- * dual_target/stamped with 3 poses plans left+right+body together.
- */
 class PoseBasedReferenceManager : public ReferenceManagerDecorator {
 public:
     PoseBasedReferenceManager(std::string topicPrefix,
@@ -60,16 +39,11 @@ public:
 
     void subscribe(const rclcpp_lifecycle::LifecycleNode::SharedPtr& node);
 
-    /** When false, pose/twist/relative/path stay ignored; stamped is forwarded to setStampedTargetHandlers. */
     void setAcceptingTargets(bool accept);
 
     using PoseStampedHandler = std::function<void(const geometry_msgs::msg::PoseStamped&)>;
     using DualStampedHandler = std::function<void(const nav_msgs::msg::Path&)>;
 
-    /**
-     * Called for left/right/dual_target/stamped when accepting_targets_ is false (e.g. MOVEJ).
-     * Subscriptions and TF stay in this manager; do not create a second subscriber or Buffer.
-     */
     void setStampedTargetHandlers(PoseStampedHandler left,
                                   PoseStampedHandler right = {},
                                   DualStampedHandler dual = {});
@@ -97,26 +71,20 @@ public:
      */
     void setArmExternalCommandPredicate(std::function<bool(bool is_left)> predicate);
 
-    /** Optional body pose block (7: x,y,z, qx,qy,qz,qw). */
     void setBodyPoseReference(const vector_t& body_pose_xyzw_7);
     /** Update only body target (keep arm targets unchanged), optionally pushing trajectory to MPC. */
     void setBodyPoseTargetOnly(const vector_t& body_pose_xyzw_7, bool update_target_trajectory = true);
-    /** Optional head pose block, with the same cache/update semantics as body. */
     void setHeadPoseReference(const vector_t& head_pose_xyzw_7);
     void setHeadPoseTargetOnly(const vector_t& head_pose_xyzw_7, bool update_target_trajectory = true);
-    /** Publish cached current targets for visualization/marker refresh, without modifying MPC targets. */
     void publishCurrentTargetsFromCache();
 
-    // Resolve both endpoints before planning; returned commit updates feedback only.
-    // Caller serializes MOVEJ requests; no MPC trajectory/reference buffers are modified.
     std::function<void()> prepareMoveJTargetFeedback(
         const arms_ros2_control_msgs::msg::LinearMessage& params);
 
 
     /**
      * Under wheel-humanoid COUPLED: update only the right-arm marker/cache from a left pose + captured
-     * relative (matches BimanualCouplingConstraint when left is the measured EE). Does not push MPC
-     * TargetTrajectories.
+     * relative. Does not push MPC TargetTrajectories.
      */
     void setCoupledRightMarkerFromLeftPose(const vector_t& left_pose7_xyzw, bool publish = true);
 
@@ -178,21 +146,17 @@ private:
     void bodyPoseStampedPoseCallback(geometry_msgs::msg::Pose::SharedPtr msg);
     void headPoseStampedPoseCallback(geometry_msgs::msg::Pose::SharedPtr msg);
 
-    /** Apply absolute 7D target [x,y,z,qx,qy,qz,qw]. interpolate=true uses moveL buffer path. */
     void applyLeftAbsoluteTarget(const vector_t& goal7, bool interpolate);
     void applyRightAbsoluteTarget(const vector_t& goal7, bool interpolate);
     void applyBodyAbsoluteTarget(const vector_t& goal7, bool interpolate);
     void applyHeadAbsoluteTarget(const vector_t& goal7, bool interpolate);
 
-    /** Compose one-shot relative Twist (linear=m, angular=rad RPY) onto base7. */
     [[nodiscard]] static vector_t composeTwistDelta(const vector_t& base7,
                                                     const geometry_msgs::msg::Twist& delta);
 
-    /** Express TwistStamped delta in base_frame_ (TF-rotate free vectors); empty/base frame_id = as-is. */
     [[nodiscard]] bool twistStampedToBaseTwist(const geometry_msgs::msg::TwistStamped& msg,
                                                geometry_msgs::msg::Twist& out_twist_base) const;
 
-    /** Integrate latched twist velocity (m/s, rad/s) for dt seconds onto base7. */
     [[nodiscard]] static vector_t integrateTwistVelocity(const vector_t& base7,
                                                          const geometry_msgs::msg::Twist& velocity,
                                                          double dt);
@@ -203,16 +167,13 @@ private:
     void processPoseStamped(const geometry_msgs::msg::PoseStamped::SharedPtr& msg,
                             std::function<void(geometry_msgs::msg::Pose::SharedPtr)> callback);
 
-    /** 将 PoseStamped 转为控制器内部 7 维位姿状态 [x,y,z,qx,qy,qz,qw]。
-     * 若 header.frame_id 与 base_frame_ 不同，先通过 TF 变换到 base_frame_ 再转换。
-     * tag 用于转换失败时的日志标识；成功返回 true，TF 失败返回 false。 */
     [[nodiscard]] bool parsePoseStampedToState(const geometry_msgs::msg::PoseStamped& pose_stamped,
                                                const char* tag,
                                                vector_t& out_state) const;
 
     void publishCurrentTargets(const std::string& target_type = "");
 
-    /** Wheel-humanoid COUPLED: after updating one arm target, set the other from captured relative pose (matches WheelHumanoidTargetNode).
+    /** Wheel-humanoid COUPLED: after updating one arm target, set the other from the captured relative pose.
      *  Returns true if the opposite arm target was synchronized. */
     [[nodiscard]] bool syncWheelHumanoidCoupledOppositeArmIfNeeded(bool left_target_was_updated);
 
@@ -254,8 +215,6 @@ private:
     rclcpp::Publisher<geometry_msgs::msg::PoseStamped>::SharedPtr head_target_publisher_;
 
     std::shared_ptr<tf2_ros::Buffer> tf_buffer_;
-    // Relative tf/tf_static (not TransformListener): it hard-binds absolute /tf
-    // and misses Isaac multi-robot /<ns>/tf.
     rclcpp::Subscription<tf2_msgs::msg::TFMessage>::SharedPtr tf_sub_;
     rclcpp::Subscription<tf2_msgs::msg::TFMessage>::SharedPtr tf_static_sub_;
     std::shared_ptr<rclcpp::Clock> clock_;
@@ -268,31 +227,23 @@ private:
         double startTime{0.0};
         double duration{0.0};
         std::vector<vector_t> path;
-        /** Duration of each path segment. Each segment is a zero-to-zero velocity S-curve. */
         std::vector<double> segmentDurations;
     };
 
     ArmReferenceBuffer left_arm_reference_buffer_;
     ArmReferenceBuffer right_arm_reference_buffer_;
-    /** Optional body/head moveL buffers; same representation as arm buffers. */
     ArmReferenceBuffer body_reference_buffer_;
     ArmReferenceBuffer head_reference_buffer_;
 
-    /** True if any left/right/body reference buffer is still active at time. */
     [[nodiscard]] bool anyReferenceBufferActive(double time) const;
 
-    /** 在两点 7 维位姿 [x,y,z,qx,qy,qz,qw] 之间插值；alpha∈[0,1] 时位置线性插值，姿态四元数 slerp（最短路径）。 */
     static vector_t interpolatePose7(const vector_t& start, const vector_t& goal, double alpha);
-    /** 按归一化进度 alpha∈[0,1] 在 7 维位姿路径上均匀分段采样；段内调用 interpolatePose7。 */
     static vector_t samplePose7Path(const std::vector<vector_t>& path, double alpha);
     [[nodiscard]] double minimumPoseDuration(const vector_t& start, const vector_t& goal) const;
     [[nodiscard]] double samplePoseProgress(const vector_t& start, const vector_t& goal,
                                             double elapsed, double duration) const;
 
     void resetArmReferenceBuffer(ArmReferenceBuffer& buffer, const vector_t& pose, double time);
-    /** 用 execute_path 的 waypoints 覆盖单臂 reference buffer（waypoints 不含起点）。
-     *  若旧 buffer 在 start_time 仍有效，起点从旧轨迹采样；否则使用 fallback_start_pose。
-     *  写入 path = [start_pose, ...waypoints]，并设置 start_time 与 duration。 */
     void setArmReferenceBufferFromWaypoints(ArmReferenceBuffer& buffer,
                                             const vector_t& fallback_start_pose,
                                             const std::vector<vector_t>& waypoints,

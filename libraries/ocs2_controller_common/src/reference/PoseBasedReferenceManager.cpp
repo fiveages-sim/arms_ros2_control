@@ -148,10 +148,8 @@ namespace ocs2::controller_common
     {
         dual_arm_mode_ = target_context_.dual_arm;
 
-        // 获取base frame
         base_frame_ = target_context_.base_frame;
 
-        // 初始化target state缓存
         left_target_state_ = vector_t::Zero(7);
         right_target_state_ = vector_t::Zero(7);
         body_pose_7_xyzw_ = vector_t::Zero(7);
@@ -159,11 +157,9 @@ namespace ocs2::controller_common
         head_pose_7_xyzw_ = vector_t::Zero(7);
         head_pose_7_xyzw_(6) = 1.0;
 
-        // 初始化圆弧指针
 #ifdef HAS_LINA_PLANNING
         left_circle_curve_ = std::make_shared<planning::CircularCurver>();
         right_circle_curve_ = std::make_shared<planning::CircularCurver>();
-        // 初始化Service状态
         left_service_state_.arm_name = "left";
         left_service_state_.curve = left_circle_curve_;
 
@@ -205,7 +201,6 @@ namespace ocs2::controller_common
     {
         tf_buffer_ = std::make_shared<tf2_ros::Buffer>(node->get_clock());
 
-        // Prefer controller-declared tf_topic (WbcCtrlComponent); else declare defaults.
         std::string tf_topic = "tf";
         std::string tf_static_topic = "tf_static";
         if (!node->has_parameter("tf_topic"))
@@ -255,21 +250,16 @@ namespace ocs2::controller_common
     void PoseBasedReferenceManager::subscribe(
         const rclcpp_lifecycle::LifecycleNode::SharedPtr& node)
     {
-        // 保存node引用用于访问参数服务器
         node_ = node;
 
-        // 保存node的logger用于后续日志输出
         logger_ = node->get_logger();
 
-        // 保存clock用于时间戳
         clock_ = node->get_clock();
 
-        // 初始化参数（从参数服务器获取）
         updateParam();
 
         setupTfBuffer(node);
 
-        // 左臂pose订阅者（单臂机器人也使用这个）
         auto leftCallback = [this](const geometry_msgs::msg::Pose::SharedPtr msg)
         {
             leftPoseCallback(msg);
@@ -277,7 +267,6 @@ namespace ocs2::controller_common
         left_pose_subscriber_ = node->create_subscription<geometry_msgs::msg::Pose>(
             "left_target", 1, leftCallback);
 
-        // 右臂pose订阅者（仅双臂机器人）
         if (dual_arm_mode_)
         {
             auto rightCallback = [this](const geometry_msgs::msg::Pose::SharedPtr msg)
@@ -289,7 +278,6 @@ namespace ocs2::controller_common
                                                                     rightCallback);
         }
 
-        // 左臂PoseStamped订阅者（单臂机器人也使用这个）
         auto leftStampedCallback =
             [this](const geometry_msgs::msg::PoseStamped::SharedPtr msg)
         {
@@ -299,17 +287,14 @@ namespace ocs2::controller_common
             node->create_subscription<geometry_msgs::msg::PoseStamped>(
                 "left_target/stamped", 1, leftStampedCallback);
 
-        // 左臂速度流（手柄）：latch + dt 积分，立即更新目标
         left_twist_subscriber_ = node->create_subscription<geometry_msgs::msg::Twist>(
             "left_target/twist", 1,
             [this](const geometry_msgs::msg::Twist::SharedPtr msg) { leftTwistCallback(msg); });
 
-        // 左臂一次相对位移 + moveL（TwistStamped：frame_id 区分基座/末端等）
         left_relative_subscriber_ = node->create_subscription<geometry_msgs::msg::TwistStamped>(
             "left_target/relative", 1,
             [this](const geometry_msgs::msg::TwistStamped::SharedPtr msg) { leftRelativeCallback(msg); });
 
-        // 右臂PoseStamped订阅者（仅双臂机器人）
         if (dual_arm_mode_)
         {
             auto rightStampedCallback =
@@ -347,9 +332,7 @@ namespace ocs2::controller_common
                 "head_target/stamped", 1,
                 [this](const geometry_msgs::msg::PoseStamped::SharedPtr msg) { headPoseStampedCallback(msg); });
         }
-        // 删除圆弧订阅者，添加Service
 #ifdef HAS_LINA_PLANNING
-        // 左臂圆弧Service
         auto leftServiceCallback =
             [this](const std::shared_ptr<rmw_request_id_t> request_header,
                    const std::shared_ptr<arms_ros2_control_msgs::srv::ExecuteCircle::Request> request,
@@ -362,7 +345,6 @@ namespace ocs2::controller_common
             "execute_left_circle",
             leftServiceCallback);
 
-        // 右臂圆弧Service（仅双臂机器人）
         if (dual_arm_mode_)
         {
             auto rightServiceCallback =
@@ -382,13 +364,7 @@ namespace ocs2::controller_common
                     "lina_planning not available, circle execution services are disabled");
 #endif
 
-        // 创建执行定时器
-        // execution_timer_ = node->create_wall_timer(
-        //     std::chrono::milliseconds(40), // 25Hz，与之前的采样率一致
-        //     [this]() { this->executionTimerCallback(); });
 
-        // 双目标PoseStamped订阅者（仅双臂机器人，用于同时更新左右两个目标）
-        // Path长度为2，第一个是左臂，第二个是右臂
         if (dual_arm_mode_)
         {
             auto dualTargetStampedCallback =
@@ -401,7 +377,6 @@ namespace ocs2::controller_common
                     "dual_target/stamped", 1, dualTargetStampedCallback);
         }
 
-        // Path订阅者（单臂和双臂机器人都支持）
         auto pathCallback = [this](const nav_msgs::msg::Path::SharedPtr msg)
         {
             this->pathCallback(msg);
@@ -409,7 +384,6 @@ namespace ocs2::controller_common
         path_subscriber_ = node->create_subscription<nav_msgs::msg::Path>(
             "target_path", 1, pathCallback);
 
-        // ExecutePath服务
         auto executePathCallback =
             [this](const std::shared_ptr<rmw_request_id_t> request_header,
                    const std::shared_ptr<arms_ros2_control_msgs::srv::ExecutePath::Request> request,
@@ -421,7 +395,6 @@ namespace ocs2::controller_common
         execute_path_service_ = node->create_service<arms_ros2_control_msgs::srv::ExecutePath>(
             "execute_path", executePathCallback);
 
-        // 初始化发布器：发布当前目标
         left_target_publisher_ =
             node->create_publisher<geometry_msgs::msg::PoseStamped>(
                 "left_current_target", 1);
@@ -570,7 +543,6 @@ namespace ocs2::controller_common
         return out;
     }
 
-    // 按归一化进度 alpha∈[0,1] 在 7 维 pose 路径上均匀分段采样；段内用 interpolatePose7 做位置线性插值与姿态 slerp。
     vector_t PoseBasedReferenceManager::samplePose7Path(const std::vector<vector_t>& path,
                                                         double alpha)
     {
@@ -986,10 +958,8 @@ namespace ocs2::controller_common
             combined_target_state = left_target_state_;
         }
 
-        // 使用当前系统时间作为目标时间
         double target_time = current_observation_.time;
 
-        // 创建TargetTrajectories - 只使用一个时间点
         scalar_array_t time_trajectory = {target_time};
         vector_array_t state_trajectory = {combined_target_state};
         vector_array_t input_trajectory(
@@ -998,7 +968,6 @@ namespace ocs2::controller_common
         TargetTrajectories target_trajectories(time_trajectory, state_trajectory,
                                                input_trajectory);
 
-        // 设置到ReferenceManager
         referenceManagerPtr_->setTargetTrajectories(std::move(target_trajectories));
     }
 
@@ -1805,7 +1774,6 @@ namespace ocs2::controller_common
         const geometry_msgs::msg::PoseStamped::SharedPtr& msg,
         std::function<void(geometry_msgs::msg::Pose::SharedPtr)> callback)
     {
-        // 如果源frame和目标frame相同，直接使用
         if (msg->header.frame_id == base_frame_)
         {
             auto pose_msg = std::make_shared<geometry_msgs::msg::Pose>();
@@ -1815,20 +1783,16 @@ namespace ocs2::controller_common
             return;
         }
 
-        // 使用TF转换到base frame（使用最新变换）
         try
         {
             geometry_msgs::msg::PoseStamped transformed_pose;
 
-            // 使用最新可用变换
             geometry_msgs::msg::TransformStamped transform =
                 tf_buffer_->lookupTransform(base_frame_, msg->header.frame_id,
                                             tf2::TimePointZero);
 
-            // 使用doTransform进行转换
             tf2::doTransform(*msg, transformed_pose, transform);
 
-            // 调用指定的回调方法
             auto pose_msg = std::make_shared<geometry_msgs::msg::Pose>();
             pose_msg->position = transformed_pose.pose.position;
             pose_msg->orientation = transformed_pose.pose.orientation;
@@ -2007,9 +1971,6 @@ namespace ocs2::controller_common
             return;
         }
 
-        // 支持两种格式：
-        //   2 poses: [left, right]
-        //   3 poses: [left, right, body]  -> 三条轨迹统一插值规划
         if (msg->poses.size() != 2 &&
             !(target_context_.body_target_enabled && msg->poses.size() == 3))
         {
@@ -2018,12 +1979,10 @@ namespace ocs2::controller_common
             return;
         }
 
-        // 保存上一帧缓存（用于插值起点）
         const vector_t previous_left_target_state = left_target_state_;
         const vector_t previous_right_target_state = right_target_state_;
         const vector_t previous_body_target_state = body_pose_7_xyzw_;
 
-        // 处理左臂（第一个pose）
         vector_t left_target_state;
         if (!parsePoseStampedToState(msg->poses[0], "左臂", left_target_state))
         {
@@ -2031,7 +1990,6 @@ namespace ocs2::controller_common
         }
         markLeftCouplingCommand();
 
-        // 处理右臂（第二个pose）
         vector_t right_target_state;
         if (!parsePoseStampedToState(msg->poses[1], "右臂", right_target_state))
         {
@@ -2106,7 +2064,6 @@ namespace ocs2::controller_common
         }
 #endif
 
-        // 更新缓存到新目标
         left_target_state_ = left_target_state;
         right_target_state_ = right_target_state;
 
@@ -2119,16 +2076,13 @@ namespace ocs2::controller_common
             }
             body_pose_7_xyzw_ = body_target_state;
 
-            // 三条轨迹统一插值规划（左/右/腰）
             updateTrajectoryWithBody(previous_left_target_state, previous_right_target_state, previous_body_target_state);
         }
         else
         {
-            // 兼容旧格式：仅双臂
             updateTrajectory(previous_left_target_state, previous_right_target_state);
         }
 
-        // 发布当前目标
         publishCurrentTargets();
     }
 
@@ -2149,7 +2103,6 @@ namespace ocs2::controller_common
 
         const size_t total_points = msg->poses.size();
 
-        // 转换路径点到状态向量
         auto poseToState =
             [](const geometry_msgs::msg::PoseStamped& pose_stamped) -> vector_t
         {
@@ -2171,10 +2124,8 @@ namespace ocs2::controller_common
         for (size_t i = 0; i < total_points; ++i)
         {
             const auto& pose_stamped = msg->poses[i];
-            // 直接转换，假设所有点都在base frame下
             vector_t state = poseToState(pose_stamped);
 
-            // 根据模式分配路径点
             if (dual_arm_mode_)
             {
                 // 双臂模式：将路径点分成两半，前半段给左臂，后半段给右臂
@@ -2190,12 +2141,10 @@ namespace ocs2::controller_common
             }
             else
             {
-                // 单臂模式：所有路径点都用于左臂（单臂机器人使用左臂主题）
                 left_arm_waypoints.push_back(state);
             }
         }
 
-        // 检查是否有有效的路径点
         if (left_arm_waypoints.empty() && right_arm_waypoints.empty())
         {
             RCLCPP_WARN(logger_, "没有有效的路径点可以处理");
@@ -2215,7 +2164,6 @@ namespace ocs2::controller_common
             return;
         }
 
-        // 如果某个臂没有路径点，使用当前缓存的状态（仅双臂模式）
         if (dual_arm_mode_)
         {
             if (left_arm_waypoints.empty())
@@ -2229,7 +2177,6 @@ namespace ocs2::controller_common
         }
         else
         {
-            // 单臂模式：如果左臂没有路径点，使用当前缓存的状态
             if (left_arm_waypoints.empty())
             {
                 left_arm_waypoints.push_back(left_target_state_);
@@ -2390,7 +2337,6 @@ namespace ocs2::controller_common
 
     void PoseBasedReferenceManager::resetTargetStateCache()
     {
-        // 重置target state缓存
         left_target_state_ = vector_t::Zero(7);
         right_target_state_ = vector_t::Zero(7);
         body_pose_7_xyzw_ = vector_t::Zero(7);
@@ -2419,7 +2365,6 @@ namespace ocs2::controller_common
             left_target_state_ = left_ee_pose;
         }
 
-        // 如果是双臂模式，设置右臂pose到缓存
         if (dual_arm_mode_)
         {
             if (!right_buffer_active)
@@ -2435,7 +2380,6 @@ namespace ocs2::controller_common
             }
         }
 
-        // 始终发布当前目标（保证 marker 同步刷新）
         publishCurrentTargets();
     }
 
@@ -2487,7 +2431,6 @@ namespace ocs2::controller_common
         const bool publish_head =
             (target_type.empty() || target_type == "both" || target_type == "head");
 
-        // 发布左臂当前目标
         if (publish_left)
         {
             geometry_msgs::msg::PoseStamped left_target_msg;
@@ -2503,7 +2446,6 @@ namespace ocs2::controller_common
             left_target_publisher_->publish(left_target_msg);
         }
 
-        // 发布右臂当前目标（仅双臂模式）
         if (dual_arm_mode_ && publish_right)
         {
             geometry_msgs::msg::PoseStamped right_target_msg;
@@ -2550,7 +2492,6 @@ namespace ocs2::controller_common
         }
     }
 
-    // 新增圆形轨迹相关函数
 #ifdef HAS_LINA_PLANNING
     bool PoseBasedReferenceManager::initCircleCurve(
         vector_t start_pose,
@@ -2563,7 +2504,6 @@ namespace ocs2::controller_common
                         "No starting point provided,please update current point!");
             return false;
         }
-        // 更新起点
         planning::TrajectPoint ps;
         ps.cart_pos(0) = start_pose(0);
         ps.cart_pos(1) = start_pose(1);
@@ -2581,10 +2521,8 @@ namespace ocs2::controller_common
         pe.quaternion_point.q.y = msg->endpoint.orientation.y;
         pe.quaternion_point.q.z = msg->endpoint.orientation.z;
         pe.quaternion_point.q.w = msg->endpoint.orientation.w;
-        // 初始化圆弧参数
         if (msg->time_mode)
         {
-            // 时间模式
             if (msg->duration < 0.001)
             {
                 RCLCPP_WARN(logger_,
@@ -2602,7 +2540,6 @@ namespace ocs2::controller_common
                 fabs(msg->max_angular_acceleration) > min_val &&
                 fabs(msg->max_angular_jerk) > min_val)
             {
-                // 如果用户设置了参数
                 time_mode_para.max_linear_vel = msg->max_linear_velocity;
                 time_mode_para.max_linear_acc = msg->max_linear_acceleration;
                 time_mode_para.max_linear_jerk = msg->max_linear_jerk;
@@ -2613,7 +2550,6 @@ namespace ocs2::controller_common
 
             if (!msg->use_three_point_method)
             {
-                // 如果是直接输入参数
                 time_mode_para.circular_rotation_axis(0) = msg->axis.x;
                 time_mode_para.circular_rotation_axis(1) = msg->axis.y;
                 time_mode_para.circular_rotation_axis(2) = msg->axis.z;
@@ -2635,7 +2571,6 @@ namespace ocs2::controller_common
             }
             else
             {
-                // 三点计算
                 planning::TrajectPoint pm;
                 pm.cart_pos(0) = msg->midpoint.position.x;
                 pm.cart_pos(1) = msg->midpoint.position.y;
@@ -2655,7 +2590,6 @@ namespace ocs2::controller_common
         }
         else
         {
-            // 参数模式
             planning::TrajectoryParameter speed_mode_para(
                 msg->max_linear_velocity, msg->max_linear_acceleration,
                 msg->max_linear_jerk, msg->max_angular_velocity,
@@ -2663,7 +2597,6 @@ namespace ocs2::controller_common
                 msg->use_slerp_for_orientation);
             if (!msg->use_three_point_method)
             {
-                // 如果是直接输入参数
                 speed_mode_para.circular_rotation_axis(0) = msg->axis.x;
                 speed_mode_para.circular_rotation_axis(1) = msg->axis.y;
                 speed_mode_para.circular_rotation_axis(2) = msg->axis.z;
@@ -2685,7 +2618,6 @@ namespace ocs2::controller_common
             }
             else
             {
-                // 三点计算
                 planning::TrajectPoint pm;
                 pm.cart_pos(0) = msg->midpoint.position.x;
                 pm.cart_pos(1) = msg->midpoint.position.y;
@@ -2708,7 +2640,6 @@ namespace ocs2::controller_common
     };
 
 
-    // 使用已有的变换转换位姿
     static geometry_msgs::msg::Pose
     transformPose(const geometry_msgs::msg::Pose& pose,
                   const geometry_msgs::msg::TransformStamped& transform)
@@ -2743,32 +2674,25 @@ namespace ocs2::controller_common
                                                                   arms_ros2_control_msgs::msg::CircleMessage::SharedPtr
                                                                   base_msg)
     {
-        // 把输入的圆弧参数转换成base_frame
         if (msg.frame_id == base_frame_)
         {
             *base_msg = msg;
             return;
         }
-        // 如果不是极坐标系，需要对其中的参数进行转换
         try
         {
-            // 复制所有的参数
             *base_msg = msg;
 
-            // 获取变换
             geometry_msgs::msg::TransformStamped transform =
                 tf_buffer_->lookupTransform(base_frame_, msg.frame_id,
                                             tf2::TimePointZero);
-            // 根据不同的方法转换不同的数据
             if (msg.use_three_point_method)
             {
-                // 转换三点法中的两个点
                 base_msg->midpoint = transformPose(msg.midpoint, transform);
                 base_msg->endpoint = transformPose(msg.endpoint, transform);
             }
             else
             {
-                // 转换参数法中的圆心
                 geometry_msgs::msg::Pose center_pose;
                 center_pose.position = msg.center;
                 center_pose.orientation = geometry_msgs::msg::Quaternion();
@@ -2778,7 +2702,6 @@ namespace ocs2::controller_common
                 // 转换旋转轴（只旋转不平移）
                 base_msg->axis = transformVector3(msg.axis, transform);
             }
-            // 更新坐标系ID
             base_msg->frame_id = base_frame_;
         }
         catch (const tf2::TransformException& ex)
@@ -2794,7 +2717,7 @@ namespace ocs2::controller_common
         const std::shared_ptr<arms_ros2_control_msgs::srv::ExecuteCircle::Request> request,
         std::shared_ptr<arms_ros2_control_msgs::srv::ExecuteCircle::Response> response)
     {
-        (void)request_header; // 不使用
+        (void)request_header;
 
         if (!armExternalCommandAllowed(true))
         {
@@ -2805,9 +2728,7 @@ namespace ocs2::controller_common
         }
 
         RCLCPP_INFO(logger_, "Received left arm arc execution request");
-        // 获取起始状态
         const vector_t start_state = left_target_state_;
-        // 验证请求
         std::string error_message;
         if (!validateCircleRequest(start_state, request, error_message))
         {
@@ -2817,13 +2738,11 @@ namespace ocs2::controller_common
             return;
         }
 
-        // 转换坐标系
         arms_ros2_control_msgs::msg::CircleMessage::SharedPtr base_frame_msg =
             std::make_shared<arms_ros2_control_msgs::msg::CircleMessage>();
         transCircleMessageToBaseFrame(request->circle_params, base_frame_msg);
 
 
-        // 开始执行
         startServiceExecution(left_service_state_, start_state, *base_frame_msg, "left");
         sendPlannedTrajectoryToOCS2(left_service_state_.time_trajectory, left_service_state_.state_trajectory, "left");
 
@@ -2841,7 +2760,7 @@ namespace ocs2::controller_common
         const std::shared_ptr<arms_ros2_control_msgs::srv::ExecuteCircle::Request> request,
         std::shared_ptr<arms_ros2_control_msgs::srv::ExecuteCircle::Response> response)
     {
-        (void)request_header; // 不使用
+        (void)request_header;
 
         if (!dual_arm_mode_)
         {
@@ -2859,9 +2778,7 @@ namespace ocs2::controller_common
         }
 
         RCLCPP_INFO(logger_, "Received right arm arc execution request");
-        // 获取起始状态
         const vector_t start_state = right_target_state_;
-        // 验证请求
         std::string error_message;
         if (!validateCircleRequest(start_state, request, error_message))
         {
@@ -2871,13 +2788,11 @@ namespace ocs2::controller_common
             return;
         }
 
-        // 转换坐标系
         arms_ros2_control_msgs::msg::CircleMessage::SharedPtr base_frame_msg =
             std::make_shared<arms_ros2_control_msgs::msg::CircleMessage>();
         transCircleMessageToBaseFrame(request->circle_params, base_frame_msg);
 
 
-        // 开始执行
         startServiceExecution(right_service_state_, start_state, *base_frame_msg, "right");
         sendPlannedTrajectoryToOCS2(right_service_state_.time_trajectory, right_service_state_.state_trajectory,
                                     "right");
@@ -2896,7 +2811,6 @@ namespace ocs2::controller_common
                                                           std::string& error_message)
     {
         const auto& msg = request->circle_params;
-        //检查起点的位姿
         if (start_pose.size() < 7)
         {
             error_message =
@@ -2922,14 +2836,12 @@ namespace ocs2::controller_common
             return false;
         }
 
-        // 检查时间模式下的时间参数
         if (msg.time_mode && msg.duration < 0.001)
         {
             error_message = "In time mode, a valid time parameter (duration > 0.001) must be provided";
             return false;
         }
 
-        // 检查速度模式下的速度参数
         if (!msg.time_mode)
         {
             if (fabs(msg.max_linear_velocity) < min_val)
@@ -2970,7 +2882,6 @@ namespace ocs2::controller_common
 
         if (msg.use_three_point_method)
         {
-            //检查输入的中间点和终点是不是有问题
             if (fabs(msg.midpoint.position.x) < min_val && fabs(msg.midpoint.position.y) < min_val && fabs(
                     msg.midpoint.position.z) < min_val && fabs(msg.midpoint.orientation.x) < min_val &&
                 fabs(msg.midpoint.orientation.y) < min_val && fabs(msg.midpoint.orientation.z) < min_val && fabs(
@@ -3052,7 +2963,6 @@ namespace ocs2::controller_common
     {
         std::lock_guard<std::mutex> lock(state.mutex);
 
-        // 初始化圆弧曲线
         if (!initCircleCurve(start_pose,
                              std::make_shared<arms_ros2_control_msgs::msg::CircleMessage>(msg),
                              state.curve))
@@ -3061,17 +2971,14 @@ namespace ocs2::controller_common
             return;
         }
 
-        // 获取总时间
         state.total_duration = state.curve->getTotalTime();
 
-        // 预计算轨迹点
         constexpr double kSampleInterval = 0.04; // 25Hz
         const size_t kNumSamples = std::max(
             static_cast<size_t>(std::ceil(state.total_duration / kSampleInterval)) + 1,
             static_cast<size_t>(2)
         );
 
-        // 清空之前的轨迹
         state.time_trajectory.clear();
         state.state_trajectory.clear();
         state.time_trajectory.reserve(kNumSamples);
@@ -3079,12 +2986,7 @@ namespace ocs2::controller_common
 
         const double dt = state.total_duration / static_cast<double>(kNumSamples - 1);
 
-        // 预计算所有轨迹点
         planning::TrajectPoint point;
-        //保存计算的点
-        // std::ofstream file("/home/lina/lina/data/cal_movec_data.csv");
-        // file << "t" << "," << "x" << "," << "y" << "," << "z" << ","
-        //     << "qx" << "," << "qy" << "," << "qz" << "," << "qw" << std::endl;
         for (size_t i = 0; i < kNumSamples; ++i)
         {
             const double t = static_cast<double>(i) * dt;
@@ -3098,20 +3000,13 @@ namespace ocs2::controller_common
             state_vec(4) = point.quaternion_point.q.y;
             state_vec(5) = point.quaternion_point.q.z;
             state_vec(6) = point.quaternion_point.q.w;
-            // file << std::fixed << std::setprecision(12) << t << "," << state_vec(0) << "," << state_vec(1) << "," <<
-            //     state_vec(2) << "," << state_vec(3) << "," << state_vec(4) << "," << state_vec(5) << "," << state_vec(6)
-            //     << std::endl;
             state.time_trajectory.push_back(t);
             state.state_trajectory.push_back(state_vec);
         }
-        // file.close();
-        // std::cout << "数据已保存" << std::endl;
 
-        // 设置执行状态
         state.start_state = start_pose;
         state.start_time = std::chrono::steady_clock::now();
         state.current_point_index = 0;
-        // state.is_executing = true;
     }
 
     void PoseBasedReferenceManager::sendPlannedTrajectoryToOCS2(const scalar_array_t& time_traj,
@@ -3127,7 +3022,6 @@ namespace ocs2::controller_common
             RCLCPP_WARN(logger_, "The number of input times matches the number of trajectories");
             return;
         }
-        // 起始时间
         const double t0 = current_observation_.time;
         scalar_array_t time_trajectory;
         time_trajectory.reserve(time_size);
@@ -3161,7 +3055,7 @@ namespace ocs2::controller_common
             for (size_t i = 0; i < time_size; i++)
             {
                 vector_t current_state = vector_t::Zero(7);
-                current_state = pose_trajectory[i]; // 保持右臂不变
+                current_state = pose_trajectory[i];
                 time_trajectory.push_back(t0 + time_traj[i]);
                 state_trajectory.push_back(current_state);
             }
@@ -3178,13 +3072,11 @@ namespace ocs2::controller_common
         if (arm_name == "left")
         {
             left_target_state_ = pose_trajectory.back();
-            // 发布当前目标（只发布左臂）
             publishCurrentTargets("left");
         }
         else if (arm_name == "right")
         {
             right_target_state_ = pose_trajectory.back();
-            // 发布当前目标（只发布左臂）
             publishCurrentTargets("right");
         }
     }
