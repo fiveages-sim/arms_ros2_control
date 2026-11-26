@@ -15,7 +15,6 @@ struct MpcExecutionParams {
     int thread_sleep_ms{2};
 };
 
-/** Mirrors previous StateOCS2 logic: mpc_frequency from param, clamp, min 10 Hz, thread sleep 2x controller period. */
 inline MpcExecutionParams computeMpcExecutionParams(const double controller_frequency_hz,
                                                     const int mpc_frequency_param,
                                                     const rclcpp::Logger& logger) {

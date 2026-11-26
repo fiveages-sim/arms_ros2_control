@@ -231,6 +231,7 @@ namespace ocs2::mobile_manipulator
 
         // Visualization management
         void clearTrajectoryVisualization();
+        void resumeTrajectoryVisualization();
 
         // Torque calculation for force control
         vector_t calculateStaticTorques() const;
