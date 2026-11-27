@@ -456,9 +456,10 @@ namespace arms_rviz_control_plugin
         fsm_command_publisher_ = node_->create_publisher<std_msgs::msg::Int32>(
             "/fsm_command", 10);
 
-        // Parameter client for COMPLIANCE soft/medium/hard presets
+        // Parameter client for COMPLIANCE soft/medium/hard presets.
+        // 节点名跟模式走：分体是 /ocs2_arm_controller，全身是 /ocs2_wbc_controller。
         ocs2_param_client_ = std::make_shared<rclcpp::AsyncParametersClient>(
-            node_, "/ocs2_arm_controller");
+            node_, wbc_available_ ? "/ocs2_wbc_controller" : "/ocs2_arm_controller");
 
         // Create subscriber to listen for FSM command changes
         fsm_command_subscriber_ = node_->create_subscription<std_msgs::msg::Int32>(
@@ -671,8 +672,7 @@ namespace arms_rviz_control_plugin
         if (!ocs2_param_client_->service_is_ready())
         {
             RCLCPP_WARN(node_->get_logger(),
-                        "COMPLIANCE preset '%s': /ocs2_arm_controller params not ready",
-                        name);
+                        "COMPLIANCE preset '%s': controller params not ready", name);
             return;
         }
 

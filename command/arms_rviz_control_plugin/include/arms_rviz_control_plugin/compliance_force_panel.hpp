@@ -165,6 +165,9 @@ private:
     rclcpp::Node::SharedPtr node_;
     rclcpp::Subscription<StatusMsg>::SharedPtr status_sub_;
     rclcpp::AsyncParametersClient::SharedPtr param_client_;
+    /// param_client_ 指向的控制器节点名（分体 /ocs2_arm_controller，
+    /// 全身 /ocs2_wbc_controller），只用于日志。
+    std::string param_node_;
     rclcpp::Client<std_srvs::srv::Trigger>::SharedPtr zero_wrench_client_;
     rclcpp::Client<std_srvs::srv::Trigger>::SharedPtr position_identification_client_;
     rclcpp::Client<std_srvs::srv::Trigger>::SharedPtr all_joint_identification_client_;

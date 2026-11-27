@@ -991,8 +991,16 @@ QLabel[role="hint-pending"] { color: #FB8C00; }
 
         node_ = this->getDisplayContext()->getRosNodeAbstraction().lock()->get_raw_node();
 
-        param_client_ = std::make_shared<rclcpp::AsyncParametersClient>(
-            node_, "/ocs2_arm_controller");
+        // 参数客户端要指向真正在控机器人的控制器：分体 /ocs2_arm_controller，
+        // 全身 /ocs2_wbc_controller。launch 通过额外参数 wbc_available 告知模式。
+        if (!node_->has_parameter("wbc_available"))
+            node_->declare_parameter("wbc_available", false);
+        param_node_ = node_->get_parameter("wbc_available").as_bool()
+                          ? "/ocs2_wbc_controller" : "/ocs2_arm_controller";
+        param_client_ = std::make_shared<rclcpp::AsyncParametersClient>(node_, param_node_);
+        RCLCPP_INFO(node_->get_logger(),
+                    "ComplianceForcePanel: COMPLIANCE 控制器 = %s", param_node_.c_str());
+
         zero_wrench_client_ = node_->create_client<std_srvs::srv::Trigger>(
             "/compliance_zero_wrench");
         position_identification_client_ = node_->create_client<std_srvs::srv::Trigger>(
@@ -1559,7 +1567,7 @@ QLabel[role="hint-pending"] { color: #FB8C00; }
         if (!param_client_->service_is_ready())
         {
             RCLCPP_WARN(node_->get_logger(),
-                        "ComplianceForcePanel: /ocs2_arm_controller params not ready");
+                        "ComplianceForcePanel: %s params not ready", param_node_.c_str());
             status_label_->setText("应用失败: 控制器参数服务不可用");
             return;
         }
