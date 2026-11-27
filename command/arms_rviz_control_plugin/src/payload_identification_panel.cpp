@@ -4,6 +4,8 @@
 #include <QDateTime>
 #include <QDir>
 #include <QFileDialog>
+#include <QApplication>
+#include <QFontDatabase>
 #include <QFormLayout>
 #include <QHBoxLayout>
 #include <QJsonArray>
@@ -19,22 +21,36 @@ QWidget* ComplianceForcePanel::makePayloadWidget()
 {
     auto* page = new QWidget(this);
     auto* layout = new QVBoxLayout(page);
+    layout->setContentsMargins(6, 6, 6, 6);
+    layout->setSpacing(6);
+
     auto* hint = new QLabel(
         "辨识力传感器之后的末端负载：质量、重心和原始零偏。\n"
         "COMPLIANCE 中将六轴设为位控（S=0），通过目标位姿调整姿态，静止且无接触后采样。\n"
         "至少 6 个姿态，绕两个不同轴倾斜。采样器不发送运动指令。", page);
     hint->setWordWrap(true);
+    setHintRole(hint, "hint");
     layout->addWidget(hint);
+
     auto* form = new QFormLayout();
+    form->setContentsMargins(0, 0, 0, 0);
+    form->setHorizontalSpacing(8);
+    form->setVerticalSpacing(4);
+    form->setFieldGrowthPolicy(QFormLayout::AllNonFixedFieldsGrow);
     payload_arm_combo_ = new QComboBox(page);
     payload_arm_combo_->addItem("左臂", "left");
     payload_arm_combo_->addItem("右臂", "right");
+    payload_arm_combo_->setMinimumWidth(100);
     payload_wrench_topic_ = new QLineEdit("/left_ft_broadcaster/wrench", page);
     payload_gravity_frame_ = new QLineEdit("world", page);
     payload_joint_topic_ = new QLineEdit("/joint_states", page);
+    payload_wrench_topic_->setMinimumWidth(180);
     payload_pose_count_ = new QSpinBox(page);
     payload_pose_count_->setRange(6, 100);
     payload_pose_count_->setValue(9);
+    payload_pose_count_->setMaximumWidth(80);
+    payload_pose_count_->setToolTip(
+        "至少 6 个姿态才能解出质量/重心/零偏；建议 9 个以上并绕两个不同轴倾斜。");
     form->addRow("手臂", payload_arm_combo_);
     form->addRow("原始 FT 话题", payload_wrench_topic_);
     form->addRow("重力参考系（-Z）", payload_gravity_frame_);
@@ -47,20 +63,34 @@ QWidget* ComplianceForcePanel::makePayloadWidget()
                     "/" + payload_arm_combo_->currentData().toString() + "_ft_broadcaster/wrench");
             });
 
+    // 「开始」是主操作实心蓝，「停止」描边红，其余保持默认 —— 与力控页一致
     auto* buttons = new QHBoxLayout();
+    buttons->setSpacing(6);
     payload_start_btn_ = new QPushButton("开始负载辨识…", page);
     payload_sample_btn_ = new QPushButton("采集当前姿态", page);
     payload_stop_btn_ = new QPushButton("停止采样", page);
     payload_sample_btn_->setEnabled(false);
     payload_stop_btn_->setEnabled(false);
+    applyButtonVariant(payload_start_btn_, "primary");
+    applyButtonVariant(payload_stop_btn_, "danger");
     buttons->addWidget(payload_start_btn_);
     buttons->addWidget(payload_sample_btn_);
     buttons->addWidget(payload_stop_btn_);
+    buttons->addStretch();
     layout->addLayout(buttons);
+
     payload_log_ = new QPlainTextEdit(page);
     payload_log_->setReadOnly(true);
     payload_log_->setMaximumBlockCount(500);
-    layout->addWidget(payload_log_);
+    payload_log_->setMinimumHeight(140);
+    // 日志用等宽字体：数值列才能对齐，「姿态 3/9」这类行也更好扫
+    {
+        QFont font = QFontDatabase::systemFont(QFontDatabase::FixedFont);
+        const double ui_size = QApplication::font().pointSizeF();
+        font.setPointSizeF(ui_size > 0.0 ? ui_size * 0.95 : 9.0);
+        payload_log_->setFont(font);
+    }
+    layout->addWidget(payload_log_, 1);
 
     payload_process_ = new QProcess(this);
     connect(payload_start_btn_, &QPushButton::clicked,

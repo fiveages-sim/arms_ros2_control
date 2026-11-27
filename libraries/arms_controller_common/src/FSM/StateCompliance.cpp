@@ -20,6 +20,36 @@ namespace arms_controller_common
         constexpr double kTorqueSetpointLimit = 5.0;  // Nm, per axis
         // 曲面贴合：力小于此值时不做对准（力方向/接触点估计不可靠）。
         constexpr double kAlignMinForce = 1.0;        // N
+        // 路径回放守卫：目标超前实测超过该距离并持续该时长 → 判定"跟不上"，
+        // 停回放（否则目标会一路跑完而机器人卡在原地）。
+        constexpr double kPathTrackErrorLimit = 0.02;  // m
+        constexpr double kPathTrackErrorTime = 0.8;    // s
+        // 跟踪守卫的阈值随规划加速度放宽：闭环在加速段的固有滞后 ≈ τe·a
+        // （τe = 2ζ/ωn + T = 38.3 ms，辨识值）。固定 20 mm 会被正常加速段误触发。
+        constexpr double kPathTrackLeadTime = 0.10;    // ≈ 2.6·τe [s]
+        // "有超前量" ≠ "走不到"。一阶位置闭环跟随匀速目标时**天生**落后
+        // v/K（K 被 servoOuterRate() 压到 3~5 1/s，0.1 m/s 就有 20~30 mm），
+        // 刚下发时离第一个角点常有几十上百毫米，这些都只是误差，不是故障。
+        // 真正要拦的只有一种：目标一直在跑、而手臂**压根不跟**（被挡 /
+        // 不可达 / 近奇异 / 关节顶限位）。所以判据里必须带"实测在动"这一
+        // 条：实测末端速度达到指令速度的这个比例，就认为在跟、直接清零计时。
+        constexpr double kPathTrackProgressRatio = 0.15;  // 实测/指令速度比
+        constexpr double kPathTrackMinSpeed = 0.005;      // 指令 <5 mm/s 不判 [m/s]
+
+        /// 一份人类可读的规划摘要：日志和面板上报共用，避免两处文案走形。
+        std::string describePlan(const compliance_detail::PathPlan& plan)
+        {
+            char buf[256];
+            std::snprintf(buf, sizeof(buf),
+                          "%zu 段 / %zu 角点 / 单趟 %.1f mm / %.0f mm/s / a=%.3f m/s²"
+                          " / %.2f s × %d 趟 = %.2f s / %s / %s",
+                          plan.segment_count(), plan.corner_count(),
+                          plan.length() * 1000.0, plan.speed() * 1000.0, plan.accel(),
+                          plan.loop_duration(), plan.loops(), plan.duration(),
+                          plan.stops_at_waypoints() ? "每段停车" : "整条梯形",
+                          plan.closed() ? "闭合" : "开链");
+            return buf;
+        }
 
         rcl_interfaces::msg::SetParametersResult validateForceSetpoint(
             const std::vector<rclcpp::Parameter>& parameters)
@@ -595,6 +625,7 @@ namespace arms_controller_common
             auto& a = arms_[s];
             a.target_sub.reset();
             a.target_stamped_sub.reset();
+            a.path_sub.reset();
             a.pose_pub.reset();
             a.target_pub.reset();
 
@@ -622,6 +653,14 @@ namespace arms_controller_common
                 kCurrentPoseTopic[s], 10);
             a.target_pub = node_->create_publisher<geometry_msgs::msg::PoseStamped>(
                 kCurrentTargetTopic[s], 10);
+
+            // 连续路径：一条消息带全部角点，控制器本地规划（圆角 + 时间参数化）
+            // 并按时间回放，同时把解析目标速度作为位控轴前馈。
+            a.path_sub = node_->create_subscription<arms_ros2_control_msgs::msg::CompliancePath>(
+                kPathTopic[s], rclcpp::QoS(rclcpp::KeepLast(1)).reliable(),
+                [this, s](const arms_ros2_control_msgs::msg::CompliancePath::SharedPtr msg) {
+                    onPathMessage(s == 0, *msg);
+                });
         }
 
         force_status_pub_ = node_->create_publisher<
@@ -908,6 +947,11 @@ namespace arms_controller_common
             a.workspace_rot_travel.setZero();
             a.workspace_rot_prev_valid = false;
             a.force_disp_pinned.fill(false);
+        }
+        {
+            // 清掉订阅线程可能刚写入的待回放路径（会话边界不留任何残留动作）。
+            std::lock_guard<std::mutex> lk(path_mutex_);
+            for (auto& a : arms_) a.pending_path_valid = false;
         }
 
         const size_t nj = ctrl_interfaces_.joint_position_state_interface_.size();
@@ -1462,10 +1506,16 @@ namespace arms_controller_common
             {
                 if (!have[s]) continue;
                 if (!updateTargetFromPose(s == 0, pending[s]))
+                {
                     RCLCPP_WARN_THROTTLE(node_->get_logger(), *node_->get_clock(), 1000,
                                          "COMPLIANCE teleop: %s target REJECTED (kin=%s)",
                                          kArmName[s],
                                          kinematicsAvailable() ? "ok" : "MISSING");
+                    continue;
+                }
+                // 单点目标抢占路径：先停回放，否则本节拍末尾的 updatePathTarget()
+                // 会把刚收到的目标覆盖掉，操作者会觉得"目标没人收"。
+                cancelPath(s == 0, "单点目标抢占");
             }
         }
 
@@ -1486,6 +1536,8 @@ namespace arms_controller_common
                         kinematics_->computeSingleEndEffectorPose(state_actual, kArmName[s]);
                     arms_[s].target_valid = true;
                     arms_[s].pos_integral.setZero();
+                    // 轴属性变了：路径回放会继续覆盖 target，必须一起停。
+                    cancelPath(s == 0, "柔顺轴切换");
                 }
                 if (node_)
                 {
@@ -1500,8 +1552,8 @@ namespace arms_controller_common
         {
             solve_[0].valid = false;
             solve_[1].valid = false;
-            stepHybridControl(true,  dt, contact_wrench[0], ft_active[0]);
-            stepHybridControl(false, dt, contact_wrench[1], ft_active[1]);
+            stepHybridControl(true,  time, dt, contact_wrench[0], ft_active[0]);
+            stepHybridControl(false, time, dt, contact_wrench[1], ft_active[1]);
             // qp 模式：两臂的控制律算完后，腰部与双臂在同一组变量里一次求解
             // （stepHybridControl 只填 solve_ 不下发）。
             if (jointWaistSolveActive()) solveJointAndFinalize(dt);
@@ -1647,6 +1699,17 @@ namespace arms_controller_common
                     msg.left_joint_count = msg.left_joint_names.size();
                     msg.right_joint_count = msg.right_joint_names.size();
                 }
+                // 路径回放状态：让面板显示控制器侧的真实结果（排队/入段/回放/
+                // 完成/取消/拒绝），而不是只显示"已发送"。
+                {
+                    std::lock_guard<std::mutex> lk(path_event_mutex_);
+                    for (int s = 0; s < 2; ++s)
+                    {
+                        msg.path_state[s] = arms_[s].path_event_state;
+                        msg.path_message[s] = arms_[s].path_event_message;
+                        msg.path_sequence[s] = arms_[s].path_event_sequence;
+                    }
+                }
                 force_status_pub_->publish(msg);
                 last_force_status_pub_ = time;
             }
@@ -1654,7 +1717,7 @@ namespace arms_controller_common
     }
 
     void StateCompliance::stepHybridControl(
-        bool is_left, double dt,
+        bool is_left, const rclcpp::Time& time, double dt,
         const Eigen::Matrix<double, 6, 1>& contact_wrench,
         bool ft_active)
     {
@@ -1673,6 +1736,8 @@ namespace arms_controller_common
         std::string diag_bounds;
         std::string diag_saturated;
         std::array<double, 6> diag_f_err{}, diag_f_eff{};
+        std::array<double, 6> diag_f_damping{}, diag_f_integral{};
+        std::array<bool, 6> diag_f_realized{}, diag_f_contact{};
 
         auto S = [&](int i) -> double {
             return i < static_cast<int>(task_selection_.size()) ? task_selection_[i] : 0.0;
@@ -1683,6 +1748,9 @@ namespace arms_controller_common
 
         const EndEffectorPose cur =
             kinematics_->computeSingleEndEffectorPose(state_actual, kArmName[is_left ? 0 : 1]);
+        // 路径回放：本周期先把 target / target_twist 推到时间参数化后的位置与速度
+        // （在 tgt 取值之前，单点目标在 run() 里已抢占并取消路径）。
+        updatePathTarget(is_left, cur, time, dt);
         EndEffectorPose tgt = a.target_valid ? a.target : cur;
 
         // Low-pass actual pose increments over the servo response horizon. This
@@ -1831,7 +1899,9 @@ namespace arms_controller_common
                 const double fade = std::clamp(
                     std::abs(v_ee_fb(i)) / std::max(vmax_i / 3.0, 1e-3), 0.0, 1.0);
                 const double gain = servo_guard_enabled_ ? std::min(K / (1.0 + D), servoOuterRate()) : K / (1.0 + D);
-                const double v_p = gain * dp(i) + a.pos_integral(i);
+                // 目标速度前馈：路径回放时由 PathPlan 解析给出（切向 × 弧长速度）。
+                // 开环项，不改变闭环极点；恒速段把 v/K 的跟随滞后直接消掉。
+                const double v_p = a.target_twist(i) + gain * dp(i) + a.pos_integral(i);
                 const double damp = hybrid_pos_vel_damping_ * fade * v_ee_fb(i);
                 v_des(i) = (v_p * damp > 0.0)
                     ? v_p - std::clamp(damp, -std::abs(v_p), std::abs(v_p))
@@ -1867,7 +1937,7 @@ namespace arms_controller_common
                 const double fade = std::clamp(
                     std::abs(v_ee_fb(i+3)) / std::max(vmax_i / 6.0, 1e-3), 0.0, 1.0);
                 const double gain = servo_guard_enabled_ ? std::min(K / (1.0 + D), servoOuterRate()) : K / (1.0 + D);
-                const double v_p = gain * rotvec(i) + a.pos_integral(i+3);
+                const double v_p = a.target_twist(i + 3) + gain * rotvec(i) + a.pos_integral(i + 3);
                 const double damp = hybrid_pos_vel_damping_ * fade * v_ee_fb(i+3);
                 v_des(i+3) = (v_p * damp > 0.0)
                     ? v_p - std::clamp(damp, -std::abs(v_p), std::abs(v_p))
@@ -1901,6 +1971,7 @@ namespace arms_controller_common
                 const double D = servo_guard_enabled_
                     ? compliance_detail::servoForceDamping(configured_D, servo_stiffness_bound_[i], servoOuterRate())
                     : configured_D;
+                if (diag_due) { diag_f_damping[i] = D; }
 
                 // Anti-drift deadzone: a static residual (tool-gravity model
                 // error, sensor drift) must not produce continuous creep. With
@@ -1929,6 +2000,7 @@ namespace arms_controller_common
                                      : f_mag > hybrid_force_contact_eps_;
                     a.force_in_contact[i] = in_contact;
                 }
+                if (diag_due) { diag_f_contact[i] = in_contact; }
 
                 // ── 响应守卫（鲁棒导纳）────────────────────────────────
                 // 判据用"累积行程比"（指令/实测），不是瞬时速度比——后者会被底层
@@ -1982,12 +2054,21 @@ namespace arms_controller_common
                     // Applied also inside the deadband so a stale integral cannot
                     // cause a velocity jump when the error re-enters the deadband.
                     a.force_integral(i) *= std::max(0.0, 1.0 - hybrid_force_ki_leak_ * dt);
-                    // Guarded mode checks actual, low-pass TCP motion, including
-                    // the measured waist. Solver velocity alone hides drive lag.
+                    // 响应守卫：判断"环路有没有合上"。
+                    // 注意：接触中力控轴本来就会被表面挡住，瞬时速度必然接近 0，
+                    // 单用速度比会把正常接触误判成"空推"，导致积分被永久关掉
+                    // （实测 real 恒 0、int 塌回 0，力控退化成纯 P）。
+                    // 因此用「累积行程比」兜底——stall 判据用的也是它。
+                    // 本分支已确保 in_contact==true，空推防护由 ctc/stl/lim 三条闸门负责。
                     const double req = a.v_des_filt(i);
                     const double achieved = servo_guard_enabled_ ? a.measured_velocity(i) : v_ee_fb(i);
-                    const bool realized = std::abs(req) < 1e-6 ||
+                    const bool velocity_realized = std::abs(req) < 1e-6 ||
                         (req * achieved > 0.0 && std::abs(achieved) > 0.3 * std::abs(req));
+                    const bool travel_realized =
+                        cmd_travel > 5e-3 * xmax_i &&
+                        ach_travel > hybrid_force_realize_tol_ * cmd_travel;
+                    const bool realized = velocity_realized || travel_realized;
+                    if (diag_due) { diag_f_realized[i] = realized; }
                     if (!realized || a.force_axis_stalled[i] || (servo_guard_enabled_ && a.servo_limited))
                     {
                         a.force_integral(i) *= std::max(
@@ -2001,6 +2082,7 @@ namespace arms_controller_common
                     }
                     a.force_integral(i) = std::clamp(
                         a.force_integral(i), -hybrid_force_ki_max_, hybrid_force_ki_max_);
+                    if (diag_due) { diag_f_integral[i] = a.force_integral(i); }
                     v_des(i) = (f_eff + a.force_integral(i)) / std::max(D, 1e-3);
                     // A stale integral must not keep compressing after the
                     // measured force reaches/exceeds its setpoint. 只在误差真的
@@ -2182,6 +2264,46 @@ namespace arms_controller_common
                 a.force_vdisp(i) + v_des(i) * dt, -xmax, xmax);
         }
 
+        // ── 力控轴领先量限幅（任务空间、按轴解耦）──────────────────────────────
+        // 关节空间的 guardPositionCommands() 用的是「全臂共享的 path scale」：一旦
+        // 力控轴的领先量越界，同一根 scale 会把**位置轴和力控轴的所有关节增量**
+        // 一起缩小。位置轴一动（伺服滞后在力控轴方向上的分量）就把预算吃光，于是
+        // 力控轴的补偿被同比例砍掉，表现为「位置轴移动时不补偿、停下才补偿」。
+        //
+        // 这里改为在任务空间、进逆解之前，按轴把力控轴自己的 v_des 压到「下
+        // 一周期不会把领先量顶出带宽」；位置轴分量完全不参与，不会被牵连。
+        // 关节空间那个 scale 退化为兜底（门限放宽 kFallbackLeadFactor 倍）。
+        if (servo_guard_enabled_)
+        {
+            for (int i = 0; i < 6; ++i)
+            {
+                if (S(i) < 0.5) { a.force_lead_scale[i] = 1.0; continue; }
+
+                const double limit = servo_max_lead_[i];
+                const double lead = a.command_lead.allFinite() ? a.command_lead(i) : 0.0;
+                const double step = v_des(i) * dt;
+                const double predicted = lead + step;
+
+                // 只在「本周期会把已越界的领先量推得更远」时压速度；
+                // 任何向 0 收、或本来就在带宽内的动作一律放行。
+                double scale = 1.0;
+                if (std::abs(predicted) > limit && std::abs(predicted) > std::abs(lead))
+                {
+                    const double allowed = std::copysign(limit, predicted) - lead;
+                    scale = std::abs(step) > 1e-12
+                        ? std::clamp(allowed / step, 0.0, 1.0) : 1.0;
+                }
+                a.force_lead_scale[i] = scale;
+                if (scale < 1.0 - 1e-9)
+                {
+                    v_des(i) *= scale;
+                    // 让下一周期的 realized / 积分闸看到真实指令，否则它会按未
+                    // 压减的速度去判「饱和 / 没响应」，把积分误锁死。
+                    a.v_des_filt(i) = v_des(i);
+                }
+            }
+        }
+
         // 不做阈值式可行性滤除：λ 阻尼最小二乘对奇异方向按 σ²/(σ²+λ²)
         // 平滑衰减（无阈值、不连续点，不会冻结也不会抖动）。目标不可
         // 达时解会自然收敛到"当前构型下距离目标最近的可达点"（静止条件
@@ -2267,6 +2389,10 @@ namespace arms_controller_common
             s.diag_err = diag_err;
             s.diag_f_err = diag_f_err;
             s.diag_f_eff = diag_f_eff;
+            s.diag_f_damping = diag_f_damping;
+            s.diag_f_integral = diag_f_integral;
+            s.diag_f_realized = diag_f_realized;
+            s.diag_f_contact = diag_f_contact;
             s.diag_jlim = diag_jlim;
             s.diag_bounds = diag_bounds;
             s.diag_saturated = diag_saturated;
@@ -2324,6 +2450,10 @@ namespace arms_controller_common
         std::array<double, 6> diag_err = p.diag_err;
         std::array<double, 6> diag_f_err = p.diag_f_err;
         std::array<double, 6> diag_f_eff = p.diag_f_eff;
+        std::array<double, 6> diag_f_damping = p.diag_f_damping;
+        std::array<double, 6> diag_f_integral = p.diag_f_integral;
+        std::array<bool, 6> diag_f_realized = p.diag_f_realized;
+        std::array<bool, 6> diag_f_contact = p.diag_f_contact;
         std::string diag_jlim = p.diag_jlim;
         std::string diag_bounds = p.diag_bounds;
         std::string diag_saturated = p.diag_saturated;
@@ -2667,10 +2797,40 @@ namespace arms_controller_common
                     std::snprintf(fd[i], sizeof(fd[i]), "--");
                 }
             }
+            double diag_flead = 1.0;
+            for (int i = 0; i < 6; ++i)
+            {
+                if (S(i) >= 0.5) diag_flead = std::min(diag_flead, a.force_lead_scale[i]);
+            }
+            // 力控轴「为什么不动」一行定位：D / 积分 / realized / servo_limited / 接触。
+            // D 的三个输入项一并打印：D=max(Dcfg, bound/rate)。若 D 远大于 Dcfg，
+            // 说明是 stiffness_bound 的下限顶上去的（bound/rate 与 rate 直接把答案写出来）。
+            char fdbg[208];
+            {
+                int fi = -1;
+                for (int i = 0; i < 6; ++i) { if (S(i) >= 0.5) { fi = i; break; } }
+                if (fi >= 0)
+                {
+                    const double dbg_rate = servoOuterRate();
+                    const double dbg_cfg = fi < static_cast<int>(hybrid_force_damping_.size())
+                                               ? hybrid_force_damping_[fi] : -1.0;
+                    const double dbg_bnd = fi < static_cast<int>(servo_stiffness_bound_.size())
+                                               ? servo_stiffness_bound_[fi] : -1.0;
+                    std::snprintf(fdbg, sizeof(fdbg),
+                        "fdbg=[ax%d D=%.1f(Dc=%.0f bd=%.0f r=%.2f) int=%+.3f real=%d lim=%d ctc=%d stl=%d vd=%+.5f/%+.5f] ",
+                        fi, diag_f_damping[fi], dbg_cfg, dbg_bnd, dbg_rate,
+                        diag_f_integral[fi],
+                        diag_f_realized[fi] ? 1 : 0, a.servo_limited ? 1 : 0,
+                        diag_f_contact[fi] ? 1 : 0,
+                        a.force_axis_stalled[fi] ? 1 : 0,
+                        a.force_vdisp(fi), a.force_disp(fi));
+                }
+                else fdbg[0] = '\0';
+            }
             char buf[1280];
             std::snprintf(buf, sizeof(buf),
                 "[COMPLIANCE diag] %s err=[%s %s %s %s %s %s] | "
-                "v=[%.3f %.3f %.3f %.2f %.2f %.2f] vach=[%s %s %s %s %s %s] res=%.3f | "
+                "v=[%.3f %.3f %.3f %.2f %.2f %.2f] vach=[%s %s %s %s %s %s] res=%.3f flead=%.2f %s| "
                 "|qdot|=%.4f escape=%.4f/%.2f smin=%.3f kkt=%.2e "
                 "align=[%.3e %.3e pos=%.3e] clip=%.3e "
                 "bounds=[%s] sat=[%s] jlim=[%s] | "
@@ -2680,7 +2840,7 @@ namespace arms_controller_common
                 kArmName[is_left ? 0 : 1],
                 e[0], e[1], e[2], e[3], e[4], e[5],
                 v_des(0), v_des(1), v_des(2), v_des(3), v_des(4), v_des(5),
-                va[0], va[1], va[2], va[3], va[4], va[5], diag_res,
+                va[0], va[1], va[2], va[3], va[4], va[5], diag_res, diag_flead, fdbg,
                 qdot.norm(), diag_limit_escape, diag_limit_escape_scale,
                 sigma_min, diag_kkt,
                 align_solved, align_final, position_align, post_clip,
@@ -2952,6 +3112,10 @@ namespace arms_controller_common
     bool StateCompliance::guardPositionCommands(const std::vector<double>& previous, double dt)
     {
         using Vec6 = Eigen::Matrix<double, 6, 1>;
+        // 关节空间在这里只做兜底：常规的「领先量略超带宽」已经由
+        // stepHybridControl() 在任务空间按轴处理（只压力控轴自己的 v_des，
+        // 不牵连位置轴）。只有领先量成倍越界、真的失控时才整臂降速。
+        constexpr double kFallbackLeadFactor = 3.0;
         auto difference = [](const EndEffectorPose& to, const EndEffectorPose& from) -> Vec6 {
             Vec6 result;
             result.head<3>() = to.position - from.position;
@@ -3004,11 +3168,12 @@ namespace arms_controller_common
                         // 于是另一臂的微米级残余运动每几个周期就把整机冻结一次。
                         if (!arms_[s].force_feedback_valid) continue;
                         const double delta = next_lead(i) - lead[s](i);
-                        const double lo = std::min(-servo_max_lead_[i], lead[s](i));
-                        const double hi = std::max(servo_max_lead_[i], lead[s](i));
+                        const double guard_lead = servo_max_lead_[i] * kFallbackLeadFactor;
+                        const double lo = std::min(-guard_lead, lead[s](i));
+                        const double hi = std::max(guard_lead, lead[s](i));
                         if (next_lead(i) < lo - 1e-10 || next_lead(i) > hi + 1e-10)
                             reduction = std::min(reduction, compliance_detail::commandLeadScale(
-                                lead[s](i), delta, servo_max_lead_[i]));
+                                lead[s](i), delta, guard_lead));
                         const double travel_limit = i < 3 ? hybrid_force_xmax_lin_ : hybrid_force_xmax_ang_;
                         reduction = std::min(reduction, compliance_detail::commandLeadScale(
                             arms_[s].force_vdisp(i), increment[s](i), travel_limit));
@@ -3269,5 +3434,414 @@ namespace arms_controller_common
         a.target_valid = true;
         ++a.target_updates;
         return true;
+    }
+
+    // ─────────────────── 连续路径：规划 / 回放 / 抢占 ───────────────────
+
+    void StateCompliance::onPathMessage(
+        bool is_left, const arms_ros2_control_msgs::msg::CompliancePath& msg)
+    {
+        if (!node_ || !kinematicsAvailable()) return;
+
+        // 日志和面板上报必须说同一句话，所以统一走这里。
+        const auto reject = [&](const std::string& why)
+        {
+            RCLCPP_ERROR(node_->get_logger(), "COMPLIANCE path: %s rejected (%s)",
+                         kArmName[is_left ? 0 : 1], why.c_str());
+            recordPathEvent(is_left, "rejected", why);
+        };
+
+        if (!teleop_enable_)
+        {
+            RCLCPP_WARN_THROTTLE(node_->get_logger(), *node_->get_clock(), 2000,
+                                 "COMPLIANCE path: %s ignored (compliance_teleop_enable=false)",
+                                 kArmName[is_left ? 0 : 1]);
+            recordPathEvent(is_left, "rejected", "compliance_teleop_enable=false");
+            return;
+        }
+        if (msg.points.empty() || msg.points.size() % 7 != 0)
+        {
+            reject("points 必须是 7 的整数倍，收到 " + std::to_string(msg.points.size()));
+            return;
+        }
+
+        const size_t count = msg.points.size() / 7;
+        if (count > compliance_detail::PathPlan::kMaxWaypoints)
+        {
+            reject("角点 " + std::to_string(count) + " 超过上限 " +
+                   std::to_string(compliance_detail::PathPlan::kMaxWaypoints));
+            return;
+        }
+
+        // 角点逐点转到控制系（与 stamped 目标同一套 TF 语义）
+        std::vector<compliance_detail::PathWaypoint> waypoints;
+        waypoints.reserve(count);
+        for (size_t k = 0; k < count; ++k)
+        {
+            geometry_msgs::msg::PoseStamped stamped;
+            // 只取 frame_id：路径是规划量不是测量量，TF 用最新可用值（stamp=0），
+            // 免得消息本身过旧（>TF 缓存时长）导致整条路径被拒。
+            stamped.header.frame_id = msg.header.frame_id;
+            stamped.pose.position.x = msg.points[7 * k + 0];
+            stamped.pose.position.y = msg.points[7 * k + 1];
+            stamped.pose.position.z = msg.points[7 * k + 2];
+            stamped.pose.orientation.x = msg.points[7 * k + 3];
+            stamped.pose.orientation.y = msg.points[7 * k + 4];
+            stamped.pose.orientation.z = msg.points[7 * k + 5];
+            stamped.pose.orientation.w = msg.points[7 * k + 6];
+
+            geometry_msgs::msg::Pose pose_base;
+            if (!stampedPoseToBase(stamped, pose_base))
+            {
+                reject("第 " + std::to_string(k + 1) + " 个角点 TF " +
+                       msg.header.frame_id + " → base 失败");
+                return;
+            }
+            compliance_detail::PathWaypoint wp;
+            wp.position << pose_base.position.x, pose_base.position.y, pose_base.position.z;
+            wp.orientation = Eigen::Quaterniond(pose_base.orientation.w, pose_base.orientation.x,
+                                                pose_base.orientation.y, pose_base.orientation.z);
+            waypoints.push_back(wp);
+        }
+
+        compliance_detail::PathPlanLimits limits;
+        limits.blend_radius = msg.blend_radius;
+        limits.speed = msg.speed;
+        limits.accel = msg.accel;
+        limits.lat_accel = msg.lat_accel;
+        limits.duration = msg.duration;
+        limits.loops = std::max(1, static_cast<int>(msg.loops));
+        limits.closed = msg.closed;
+        // 轨迹速度不得超过控制器自己的平移速度上限（否则 QP 会整组缩放，
+        // 前馈与实际速度不一致 —— 前馈是开环量，必须与规划速度严格一致）。
+        double path_vmax = 0.0;
+        if (!hybrid_cart_vmax_.empty())
+        {
+            path_vmax = std::abs(hybrid_cart_vmax_.front());
+            for (int i = 1; i < 3 && i < static_cast<int>(hybrid_cart_vmax_.size()); ++i)
+                path_vmax = std::min(path_vmax, std::abs(hybrid_cart_vmax_[i]));
+            // 硬上限：duration 反解之后 PathPlan 还会再检查一次（超了就拒绝）
+            limits.max_speed = path_vmax;
+            if (limits.speed > 0.0) limits.speed = std::min(limits.speed, path_vmax);
+        }
+
+        compliance_detail::PathPlan plan;
+        const std::string reason = plan.build(waypoints, limits);
+        if (!reason.empty())
+        {
+            reject(reason);
+            return;
+        }
+
+        {
+            std::lock_guard<std::mutex> lk(path_mutex_);
+            arm(is_left).pending_path = plan;   // 控制线程下一周期拷入 path
+            arm(is_left).pending_path_valid = true;
+        }
+
+        const std::string summary = describePlan(plan);
+        recordPathEvent(is_left, "queued", summary);
+        RCLCPP_INFO(node_->get_logger(), "COMPLIANCE path: %s queued — %s",
+                    kArmName[is_left ? 0 : 1], summary.c_str());
+    }
+
+    void StateCompliance::recordPathEvent(bool is_left, const char* state,
+                                          const std::string& message)
+    {
+        std::lock_guard<std::mutex> lk(path_event_mutex_);
+        ArmSide& a = arm(is_left);
+        a.path_event_state = state;
+        a.path_event_message = message;
+        ++a.path_event_sequence;
+    }
+
+    void StateCompliance::cancelPath(bool is_left, const char* reason)
+    {
+        ArmSide& a = arm(is_left);
+        a.target_twist.setZero();
+        // 只清标志、不清规划：PathPlan 是 61 KB，留给下一次下发覆盖，
+        // 抢占路径上不做无谓的大块内存写。
+        if (!a.path_active) return;
+        a.path_active = false;
+        a.path_prologue_duration = 0.0;
+        a.path_track_error_time = 0.0;
+        recordPathEvent(is_left, "cancelled", reason);
+        if (node_)
+            RCLCPP_INFO(node_->get_logger(), "COMPLIANCE path: %s cancelled (%s)",
+                        kArmName[is_left ? 0 : 1], reason);
+    }
+
+    void StateCompliance::updatePathTarget(bool is_left, const EndEffectorPose& current,
+                                           const rclcpp::Time& time, double dt)
+    {
+        ArmSide& a = arm(is_left);
+
+        // 关闭遥操作 = 不接受任何外部目标：排队/正在回放的路径一起作废，
+        // 避免"重新打开后突然自己动起来"。
+        if (!teleop_enable_)
+        {
+            {
+                std::lock_guard<std::mutex> lk(path_mutex_);
+                a.pending_path_valid = false;
+            }
+            if (a.path_active) cancelPath(is_left, "compliance_teleop_enable=false");
+            a.target_twist.setZero();
+            return;
+        }
+
+        // ① 换入新规划（订阅线程已规划好，这里只做一次值拷贝）
+        bool start_requested = false;
+        {
+            std::lock_guard<std::mutex> lk(path_mutex_);
+            if (a.pending_path_valid)
+            {
+                a.path = a.pending_path;
+                a.pending_path_valid = false;
+                start_requested = true;
+            }
+        }
+
+        if (start_requested)
+        {
+            a.path_active = a.path.valid();
+            a.path_done_logged = false;
+            a.path_track_error_time = 0.0;
+            a.target_twist.setZero();
+            if (!a.path_active) return;
+
+            a.path_t0 = time.seconds();
+            a.path_t_last = 0.0;
+
+            // 入段：当前**目标** → 路径起点。若目标已经就在起点附近就不插这一段。
+            //
+            // 起点必须取 a.target，不能取 current（实测）。取实测的话，换路径这一拍
+            // 入段 frac=0 → a.target = 实测位姿，等于把换路径前正在追的目标直接
+            // 丢掉：手臂带着滞后追随上一个目标时，目标会先往回跳一段，命令流出现
+            // 台阶（底层看到目标速度突变），然后才重新加速奔起点。从当前目标出发
+            // 则 target 连续，位置环看到的误差、指令速度都不断档。
+            // 只有 target 还没建立（刚进 COMPLIANCE，一次都没下过目标）时才退回实测。
+            const Eigen::Vector3d goal = a.path.start_position();
+            const Eigen::Vector3d from = a.target_valid ? a.target.position : current.position;
+            const Eigen::Quaterniond from_q =
+                a.target_valid ? a.target.quaternion : current.quaternion;
+            a.path_prologue_distance = (goal - from).norm();
+            if (a.path_prologue_distance < 1e-3)
+            {
+                a.path_prologue_distance = 0.0;
+                a.path_prologue_duration = 0.0;
+            }
+            else
+            {
+                a.path_prologue_from = from;
+                a.path_prologue_from_q = from_q;
+                a.path_prologue_dir = (goal - from) / a.path_prologue_distance;
+                a.path_prologue_duration = compliance_detail::PathPlan::trapezoid_duration(
+                    a.path_prologue_distance, a.path.speed(), a.path.accel());
+                // 入段的姿态变化率（slerp 均分在整段直线上）
+                Eigen::Quaterniond rel = a.path.start_orientation() *
+                                         a.path_prologue_from_q.conjugate();
+                if (rel.w() < 0.0) rel.coeffs() *= -1.0;
+                const double vec_norm = rel.vec().norm();
+                const double angle = 2.0 * std::atan2(vec_norm, rel.w());
+                a.path_prologue_omega_per_m.setZero();
+                if (vec_norm > 1e-12 && angle > 1e-9)
+                    a.path_prologue_omega_per_m =
+                        rel.vec() / vec_norm * (angle / a.path_prologue_distance);
+            }
+            // 入段和回放合并成一个 "playing" 状态：入段只是回放的前缀，
+            // 面板不需要区分两个阶段，文案里说清楚就够了。
+            char summary[192];
+            if (a.path_prologue_duration > 0.0)
+            {
+                std::snprintf(summary, sizeof(summary),
+                              "入段 %.1f mm / %.2f s，然后回放 %.2f s × %d 趟",
+                              a.path_prologue_distance * 1000.0, a.path_prologue_duration,
+                              a.path.duration(), a.path.loops());
+            }
+            else
+            {
+                std::snprintf(summary, sizeof(summary), "回放中：%.2f s × %d 趟（已在起点）",
+                              a.path.duration(), a.path.loops());
+            }
+            recordPathEvent(is_left, "playing", summary);
+            if (node_)
+                RCLCPP_INFO(node_->get_logger(), "COMPLIANCE path: %s start — %s",
+                            kArmName[is_left ? 0 : 1], summary);
+        }
+
+        if (!a.path_active)
+        {
+            a.target_twist.setZero();
+            return;
+        }
+
+        const double raw_t = time.seconds() - a.path_t0;
+        if (!std::isfinite(raw_t))
+        {
+            cancelPath(is_left, "时钟无效");
+            a.target_twist.setZero();
+            return;
+        }
+        // 时钟回跳（sim time 重置 / NTP 校时）绝不能被钳成 0 —— 那等于让目标
+        // 瞬移回路径起点、把手臂往回拽。直接判失效停掉回放。
+        if (raw_t < a.path_t_last - 2.0 * std::max(dt, 1e-6))
+        {
+            cancelPath(is_left, "时钟回跳（路径时间倒退）");
+            a.target_twist.setZero();
+            a.target = current;
+            a.target_valid = true;
+            a.pos_integral.setZero();
+            return;
+        }
+        a.path_t_last = raw_t;
+        const double t = std::max(raw_t, 0.0);
+
+        // 跟踪守卫：目标超前实测太多且持续太久 = 跟不上了（被挡/超速/奇异）。
+        // 目标就地停在当前实测位姿，和 pending_retarget_ 一样不再向外推。
+        // 阈值随规划加速度放宽：闭环在加速段的固有滞后 ≈ τe·a，固定 20 mm
+        // 会把正常加速误判成"跟不上"。
+        // 跟踪守卫的阈值。它必须容纳"闭环本来就有的滞后"，否则正常回放会被
+        // 误判成"跟不上"：
+        //   ① 一阶环跟随斜坡的稳态滞后 = v / K_eff。这里 K_eff 是
+        //      servoOuterRate()（被稳定性规则从配置的 K 压下来，通常只有 3~4 1/s），
+        //      所以 0.1 m/s 的路径先天就有 ~30 mm 的滞后，固定 20 mm 门槛必炸。
+        //   ② 加速段还有额外余量，按加速度放宽。
+        // 三轴全是力控时位置跟踪本身没有意义，不做判据。
+        const double eff_rate = std::max(servoOuterRate(), 0.1);
+        const double ramp_lag = a.path.speed() / eff_rate;
+        const double track_limit = std::max({kPathTrackErrorLimit,
+                                             kPathTrackLeadTime * a.path.accel(),
+                                             1.5 * ramp_lag});
+        auto commitTarget = [&](bool guard) -> void {
+            ++a.target_updates;
+            // 只统计**位控轴**的误差。力控轴（S=1）根本不追位置目标 ——
+            // 把它算进来等于要求这根轴也跟上轨迹：入段离起点越远误差越大，
+            // 回放时切向分量也被记进去，正常轨迹会被直接判成"跟不上"。
+            Eigen::Vector3d delta = a.target.position - current.position;
+            int counted = 0;
+            for (int i = 0; i < 3; ++i)
+            {
+                const bool force_axis =
+                    i < static_cast<int>(task_selection_.size()) && task_selection_[i] > 0.5;
+                if (force_axis) delta(i) = 0.0;
+                else ++counted;
+            }
+            if (counted == 0)
+            {
+                // 三个平移轴全是力控：没有位置跟踪可言，不做判据。
+                a.path_track_error_time = 0.0;
+                return;
+            }
+            // 入段不判：入段的目标是**从当前实测位姿出发**的一条直线，几何上
+            // 永远可达，唯一的"误差"就是闭环自身滞后 + 起步加速的暂态。
+            // 真被挡住时入段结束后回放阶段照样会在 0.5 s 内报警，安全不损失。
+            if (!guard)
+            {
+                a.path_track_error_time = 0.0;
+                return;
+            }
+            const double error = delta.norm();
+            if (error <= track_limit)
+            {
+                a.path_track_error_time = std::max(0.0, a.path_track_error_time - dt);
+                return;
+            }
+            // 手臂**在动**就不算跟不上：超前量不随时间发散，闭环迟早收敛。
+            // 这一条专门消掉"我本来就有误差"被误判成"走不到"的情况。
+            {
+                const double v_cmd = a.target_twist.head<3>().norm();
+                double v_act = 0.0;
+                if (a.measured_prev_valid && a.measured_velocity.allFinite())
+                {
+                    Eigen::Vector3d va = a.measured_velocity.head<3>();
+                    for (int i = 0; i < 3; ++i)
+                        if (i < static_cast<int>(task_selection_.size()) &&
+                            task_selection_[i] > 0.5)
+                            va(i) = 0.0;
+                    v_act = va.norm();
+                }
+                if (v_cmd <= kPathTrackMinSpeed ||
+                    v_act >= kPathTrackProgressRatio * v_cmd)
+                {
+                    a.path_track_error_time = std::max(0.0, a.path_track_error_time - dt);
+                    return;
+                }
+            }
+            a.path_track_error_time += dt;
+            if (a.path_track_error_time <= kPathTrackErrorTime) return;
+            if (node_)
+                RCLCPP_ERROR(node_->get_logger(),
+                             "COMPLIANCE path: %s aborted — 位控轴(共 %d 个)目标超前 %.1f mm"
+                             "（上限 %.1f mm = max(%.0f mm 下限, %.0f mm 加速余量, "
+                             "1.5×v/K=%.1f mm)，v=%.0f mm/s a=%.3f m/s²）持续 %.2f s 且实测"
+                             "末端速度只有指令的 %.0f%%（<%.0f%% 即判为没在跟），停在当前实测位姿",
+                             kArmName[is_left ? 0 : 1], counted, error * 1000.0,
+                             track_limit * 1000.0, kPathTrackErrorLimit * 1000.0,
+                             kPathTrackLeadTime * a.path.accel() * 1000.0,
+                             1.5 * ramp_lag * 1000.0,
+                             a.path.speed() * 1000.0, a.path.accel(),
+                             a.path_track_error_time,
+                             100.0 * (a.measured_prev_valid
+                                          ? a.measured_velocity.head<3>().norm() /
+                                                std::max(a.target_twist.head<3>().norm(), 1e-6)
+                                          : 0.0),
+                             100.0 * kPathTrackProgressRatio);
+            cancelPath(is_left, "跟不上（目标在跑但手臂不动）");
+            a.target = current;
+            a.target_valid = true;
+            a.target_twist.setZero();
+            a.pos_integral.setZero();
+            a.path_track_error_time = 0.0;
+        };
+
+        // ② 入段直线（同一条梯形速度曲线，前馈同样有效）
+        if (a.path_prologue_duration > 0.0 && t < a.path_prologue_duration)
+        {
+            const double v = a.path.speed();
+            const double acc = a.path.accel();
+            const double travelled = compliance_detail::PathPlan::trapezoid_distance(
+                t, a.path_prologue_distance, v, acc);
+            const double frac = std::clamp(travelled / a.path_prologue_distance, 0.0, 1.0);
+            const double speed_now = compliance_detail::PathPlan::trapezoid_speed(
+                t, a.path_prologue_distance, v, acc);
+            a.target.position = a.path_prologue_from +
+                                (a.path.start_position() - a.path_prologue_from) * frac;
+            a.target.setQuaternion(
+                a.path_prologue_from_q.slerp(frac, a.path.start_orientation()).normalized());
+            a.target_valid = true;
+            a.target_twist.setZero();
+            a.target_twist.head<3>() = a.path_prologue_dir * speed_now;
+            a.target_twist.tail<3>() = a.path_prologue_omega_per_m * speed_now;
+            commitTarget(/*guard=*/false);   // 入段不判"跟不上"，理由见 commitTarget
+            return;
+        }
+
+        // ③ 路径回放
+        const double path_time = t - a.path_prologue_duration;
+        compliance_detail::PathSample sample;
+        a.path.sample(path_time, sample);
+        a.target.position = sample.position;
+        a.target.setQuaternion(sample.orientation.normalized());
+        a.target_valid = true;
+        a.target_twist = sample.target_twist;
+
+        if (path_time >= a.path.duration())
+        {
+            a.path_active = false;
+            a.target_twist.setZero();
+            if (!a.path_done_logged)
+            {
+                a.path_done_logged = true;
+                recordPathEvent(is_left, "done", "已完成，目标保持在终点");
+                if (node_)
+                    RCLCPP_INFO(node_->get_logger(),
+                                "COMPLIANCE path: %s done (%.2f s × %d 趟)，目标保持在终点",
+                                kArmName[is_left ? 0 : 1], a.path.duration(), a.path.loops());
+            }
+        }
+        else
+        {
+            commitTarget(/*guard=*/true);
+        }
     }
 } // namespace arms_controller_common

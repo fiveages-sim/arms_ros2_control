@@ -37,6 +37,64 @@ ros2 topic pub /fsm_command std_msgs/msg/Int32 "data: 5" -1
   ```
   右臂：`/right_target`；带坐标系：`/left_target/stamped`
 
+### 2b. 连续路径（`compliance_path`，控制器本地规划 + 速度前馈）
+
+点列（4 个角点即可）作为**一条**消息下发，控制器自己圆角、排时间、按时间回放，
+并把解析出的目标速度作为位控轴前馈（`v = v_ff + K·Δx + I`，力控轴不参与）。
+
+```
+/<side>_compliance_path      arms_ros2_control_msgs/CompliancePath     reliable, depth 1
+```
+
+| 字段 | 含义 |
+|------|------|
+| `header.frame_id` | 角点坐标系（与 `*_target/stamped` 同一套 TF 语义，内部转到 `compliance_teleop_base_frame`） |
+| `points` | 每点 7 个：`x,y,z,qx,qy,qz,qw`（m / 四元数） |
+| `blend_radius` | 圆角半径 [m]，0 = 不圆角 |
+| `speed` / `accel` | 轨迹速度 / 切向加减速 [m/s, m/s²]，都必须 > 0 |
+| `lat_accel` | 圆角向心加速度上限 [m/s²]，实际速度 = `min(speed, √(lat_accel·r))`；0 = 不限 |
+| `closed` / `loops` | 是否闭合回路 / 循环趟数。**开链路径按往返执行**：第 2 趟反向走回，奇数趟停在末端、偶数趟回到起点 |
+
+行为：
+
+1. 收到即取消该臂正在回放的路径，从**当前 TCP 直线入段**到路径起点（同一条速度曲线）；
+2. 按时间参数化回放，中途不做逐点到位判定；`/<side>_current_target` 每周期就是路径目标；
+3. 走完 `loops` 趟停在终点并保持该目标；
+4. **抢占**：该臂任何 `/left_target`、`/left_target/stamped` 目标、柔顺轴切换、
+   退出 COMPLIANCE，都会立即取消路径；
+5. **跟不上守卫**：目标超前实测超限并持续 0.5 s → 停回放，目标就地停在当前实测位姿
+   （不再向外推），日志给出 `COMPLIANCE path: ... aborted`。
+   阈值随规划加速度放宽：`max(20 mm, 0.10 s × a)` —— 闭环在加速段的固有滞后
+   ≈ `τe·a`（`τe = 38.3 ms`），固定 20 mm 会把正常加速误判成“跟不上”；
+6. **时钟回跳**（sim time 重置 / NTP 校时）→ 直接取消回放并就地保持，
+   绝不用“钳到 0”处理（那等于把目标瞬移回路径起点）。
+
+规划失败（角点数/长度/参数非法）会打 `ERROR` 并**不**执行，不会留下半条轨迹。
+
+以下三种情况也会被拒绝（日志给出具体原因）：
+
+- `speed`/`accel` 与 `duration` 同时缺省；
+- `duration` 反解出的速度超过 `compliance_hybrid_cart_vmax` 的平移上限
+  （默认 0.15 m/s）——前馈是开环量，规划速度必须与 QP 实际执行速度一致，
+  **不能事后再夹**，所以直接拒绝并告诉你最快能多短；
+- `blend_radius > 0` 且 `closed = false` 且 `loops > 1`：整条一条梯形在圈边界
+  速度不为 0，无法平滑掉头（旧实现会瞬移回起点）。
+
+```bash
+# 4 个角点 + 15 mm 圆角 + 30 mm/s，走 5 趟
+python3 scripts/run_force_xy_path.py --execute --path-msg --loops 5 \
+    --config ~/configs/hybrid_force_left_config.json
+
+# 只发一条消息（不跑脚本）：points 是 7×N
+ros2 topic pub --once /left_compliance_path arms_ros2_control_msgs/msg/CompliancePath \
+  "{header: {frame_id: arm_base}, points: [0.6,0.3,-0.18,0,0,0,1, 0.8,0.3,-0.18,0,0,0,1,
+                                      0.8,0.45,-0.18,0,0,0,1, 0.6,0.45,-0.18,0,0,0,1],
+    blend_radius: 0.015, speed: 0.03, accel: 0.1, lat_accel: 0.2, closed: true, loops: 5}"
+```
+
+> 前端脚本另有 `--smooth`：由**脚本**按 100 Hz 流式发目标（控制器只做 P 跟踪，恒速段
+> 有 `v/K` 滞后）。`--path-msg` 把时间和前馈放进控制器，形状精度更高且不受通信抖动影响。
+
 ### 3. 设置力控轴与目标力（S=1 轴）
 
 ```bash
@@ -213,6 +271,7 @@ ros2 param list /ocs2_arm_controller | grep compliance
 | 话题 | 类型 | 频率 |
 |------|------|------|
 | `/compliance_force_status` | `arms_ros2_control_msgs/ComplianceForceStatus` | ~20 Hz（仅 COMPLIANCE） |
+| `/left_current_pose`、`/left_current_target` | `geometry_msgs/PoseStamped` | 每控制周期（路径回放时 `current_target` 就是路径目标） |
 
 ```yaml
 std_msgs/Header header
@@ -608,7 +667,7 @@ ros2 param set /ocs2_arm_controller compliance_zero_cal_duration 5.0
 
 ### 诊断日志（排查"追踪不到位/下垂"）
 
-`compliance_diag_log`（默认 true）+ `compliance_diag_log_period`（默认 1.0 s）控制，
+`compliance_diag_log`（默认 **false**，需要排查时显式设为 true）+ `compliance_diag_log_period`（默认 1.0 s）控制，
 每个臂每周期节流输出一行：
 
 ```

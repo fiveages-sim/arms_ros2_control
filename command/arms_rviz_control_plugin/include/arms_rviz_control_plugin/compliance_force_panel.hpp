@@ -9,9 +9,13 @@
 #include <QCheckBox>
 #include <QComboBox>
 #include <QDoubleSpinBox>
+#include <QElapsedTimer>
+#include <QFont>
 #include <QLabel>
 #include <QPushButton>
+#include <QResizeEvent>
 #include <QSpinBox>
+#include <QStyle>
 #include <QTableWidget>
 #include <QTimer>
 #include <QVBoxLayout>
@@ -26,8 +30,51 @@
 #include <arms_ros2_control_msgs/msg/compliance_force_status.hpp>
 #include <std_srvs/srv/trigger.hpp>
 
+#include "arms_rviz_control_plugin/compliance_path_widget.hpp"
+
 namespace arms_rviz_control_plugin
 {
+
+/// 当前面板缩放（1.0 = 基准），由 ComplianceForcePanel::applyUiScale() 更新。
+double uiScale();
+/// 随 uiScale 一起缩放的等宽字体（表格/读数用）。
+QFont monoUiFont();
+
+/// 次要说明文字的配色分级；字号由面板样式表里的 @SMALL@ 统一控制，
+/// 会跟着 ComplianceForcePanel::resizeEvent() 的面板宽度一起缩放。
+inline void setHintRole(QLabel* label, const char* role)
+{
+    if (!label) return;
+    label->setProperty("role", QString::fromLatin1(role));
+    if (auto* style = label->style())
+    {
+        style->unpolish(label);
+        style->polish(label);
+    }
+    label->update();
+}
+
+/**
+ * @brief 按钮外观变体。样式规则在 ComplianceForcePanel 的样式表里按
+ *        QPushButton[variant="…"] 匹配，所有按钮因此共用同一套圆角/内边距/字号，
+ *        只有配色分级不同：
+ *          primary  —— 主操作（应用设定 / 下发轨迹 / 开始负载辨识）
+ *          danger   —— 可逆的危险操作（传感器清零 / 停止辨识 / 停止采样）
+ *          critical —— 立即停止运动（停止轨迹），实心红，最醒目
+ */
+inline void applyButtonVariant(QPushButton* button, const char* variant)
+{
+    if (!button) return;
+    button->setProperty("variant", QString::fromLatin1(variant));
+    button->setCursor(Qt::PointingHandCursor);
+    button->setMinimumHeight(26);
+    if (auto* style = button->style())
+    {
+        style->unpolish(button);
+        style->polish(button);
+    }
+    button->update();
+}
 
 class PhaseIdentificationPlot : public QWidget
 {
@@ -66,10 +113,13 @@ public:
     void load(const rviz_common::Config& config) override;
     void save(rviz_common::Config config) const override;
 
+protected:
+    /// 面板尺寸变化时按宽度重算界面字号（夹在 85%~150%，5% 步进）。
+    void resizeEvent(QResizeEvent* event) override;
+
 private Q_SLOTS:
     void onApplyClicked();
-    void onSyncClicked();
-    void onZeroWrenchClicked();
+    void onSyncClicked();    void onZeroWrenchClicked();
     void onPositionIdentificationClicked();
     void onAllJointIdentificationClicked();
     void onContactIdentificationClicked();
@@ -80,9 +130,13 @@ private Q_SLOTS:
 private:
     using StatusMsg = arms_ros2_control_msgs::msg::ComplianceForceStatus;
 
+    /// 启动时把本面板从 rviz 默认的左侧停靠区搬到右侧（rviz2 无法用配置文件表达）。
+    void dockToRightAreaOnce();
     void onStatus(const StatusMsg::SharedPtr msg);
     void applyUiToController();
     void syncUiFromStatus(const StatusMsg& msg);
+    /// 按当前宽度重算字号并重新应用等宽字体；尺寸没变就什么都不做。
+    void applyUiScale();
     void updateMeasuredLabels(const StatusMsg& msg);
     void updateAlignLabels(const StatusMsg& msg);
     QWidget* makePayloadWidget();
@@ -90,6 +144,11 @@ private:
     void stopPayloadIdentification();
     void readPayloadOutput();
     void setPayloadRunning(bool running);
+
+    QWidget* makePathWidget();
+
+    /// 轨迹编辑器（compliance_path）。onInitialize() 里拿到 ROS 节点后 initialize()。
+    CompliancePathWidget* path_widget_{nullptr};
 
     QProcess* payload_process_{nullptr};
     QComboBox* payload_arm_combo_{nullptr};
@@ -114,6 +173,15 @@ private:
 
     QLabel* status_label_{nullptr};
     QLabel* frame_label_{nullptr};
+    /// 实时遥测行（20 Hz 刷新）。与 status_label_（瞬时提示浮层）分开：
+    /// 以前两者共用一个 label，操作反馈 50 ms 后就被遥测刷掉，等于看不见。
+    QLabel* telemetry_label_{nullptr};
+    /// 状态徽尘：COMPLIANCE（绿） / 无数据（灰）。
+    QLabel* state_badge_{nullptr};
+    QTimer* notice_watchdog_{nullptr};
+    QString last_notice_text_;
+    QElapsedTimer last_notice_timer_;
+    std::array<QLabel*, 6> axis_name_label_{};
     std::array<QCheckBox*, 6> force_axis_cb_{};
     std::array<QDoubleSpinBox*, 6> setpoint_spin_{};
     std::array<QLabel*, 6> meas_left_label_{};
@@ -148,6 +216,8 @@ private:
     bool ui_dirty_{false};
     bool have_status_{false};
     StatusMsg last_status_{};
+    /// 当前界面缩放百分比（100 = 基准宽度下的原始字号）。
+    int ui_scale_percent_{100};
 };
 
 }  // namespace arms_rviz_control_plugin

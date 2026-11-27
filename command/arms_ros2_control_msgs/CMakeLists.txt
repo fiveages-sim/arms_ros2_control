@@ -27,6 +27,7 @@ rosidl_generate_interfaces(${PROJECT_NAME}
         "msg/WbcCurrentState.msg"
         "msg/TeleopMode.msg"
         "msg/ComplianceForceStatus.msg"
+        "msg/CompliancePath.msg"
         DEPENDENCIES builtin_interfaces std_msgs geometry_msgs nav_msgs
 )
 # 添加export依赖

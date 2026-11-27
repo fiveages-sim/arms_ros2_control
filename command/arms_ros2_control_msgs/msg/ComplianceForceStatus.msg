@@ -55,3 +55,13 @@ float64 identification_gain
 float64 identification_phase_deg
 bool identification_result_valid
 string identification_message
+
+# 连续路径（compliance_path）回放状态，每臂一条 —— 面板用它显示控制器侧的
+# 真实结果（入段/回放/完成/取消/拒绝），而不是只显示"已发送"。
+# path_state[0] = 左臂, path_state[1] = 右臂。
+# 取值：idle / queued / playing / done / cancelled / rejected
+#   playing 涵盖"入段直线 + 路径回放"两个阶段，具体在文案里说明
+# path_sequence 每发生一次事件 +1；面板据此判断是否需要刷新文案。
+string[2] path_state
+string[2] path_message
+uint32[2] path_sequence

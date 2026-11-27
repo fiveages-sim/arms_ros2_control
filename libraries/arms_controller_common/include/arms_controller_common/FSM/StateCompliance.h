@@ -7,6 +7,7 @@
 // Per-axis control law (base frame, each cycle):
 //   S(i)=1 (force):  v = (F_err + I) / D_force   (first-order admittance)
 //   S(i)=0 (pos):    v = K_pos/(1+D) · Δx + I     (softened proportional)
+//                    + v_ff（compliance_path 回放时的解析目标速度前馈，开环）
 //
 //   qdot = J⁺_DLS · v,  q += qdot · dt,  clamp.
 //
@@ -14,6 +15,7 @@
 
 #include "arms_controller_common/FSM/FSMState.h"
 #include "arms_controller_common/FSM/ComplianceSupport.h"
+#include "arms_controller_common/FSM/CompliancePath.h"
 #include "arms_controller_common/FSM/PositionServoGuard.h"
 #include "arms_controller_common/utils/GravityCompensation.h"
 #include "arms_controller_common/utils/Kinematics.h"
@@ -27,6 +29,7 @@
 #include <vector>
 
 #include <arms_ros2_control_msgs/msg/compliance_force_status.hpp>
+#include <arms_ros2_control_msgs/msg/compliance_path.hpp>
 #include <arms_ros2_control_msgs/srv/set_surface_tracking.hpp>
 #include <geometry_msgs/msg/pose.hpp>
 #include <geometry_msgs/msg/pose_stamped.hpp>
@@ -84,6 +87,34 @@ namespace arms_controller_common
             geometry_msgs::msg::Pose pending_pose;
             bool pending_pose_valid{false};
 
+            // ── 连续路径回放（compliance_path 一次下发；控制器本地按时推进 + 前馈）──
+            // 订阅线程只写 pending_path / pending_path_valid（path_mutex_ 保护），
+            // 控制线程在本周期开始处拷入 path 后独占使用。
+            compliance_detail::PathPlan path;
+            compliance_detail::PathPlan pending_path;
+            bool pending_path_valid{false};
+            bool path_active{false};
+            bool path_done_logged{false};
+            double path_t0{0.0};                  ///< 起始时刻 [s]（控制时基）
+            /// 上一周期的路径时间 [s]：用来识别时钟回跳（sim time 重置 / NTP 校时）。
+            double path_t_last{0.0};
+            // 入段：当前 TCP → 路径起点 的直线（同一条梯形速度曲线）
+            Eigen::Vector3d path_prologue_from{Eigen::Vector3d::Zero()};
+            Eigen::Quaterniond path_prologue_from_q{Eigen::Quaterniond::Identity()};
+            Eigen::Vector3d path_prologue_dir{Eigen::Vector3d::UnitX()};
+            Eigen::Vector3d path_prologue_omega_per_m{Eigen::Vector3d::Zero()};
+            double path_prologue_distance{0.0};
+            double path_prologue_duration{0.0};
+            /// 跟踪误差超限的累计时长 [s]（路径回放的安全守卫）
+            double path_track_error_time{0.0};
+            /// 上报给面板的路径事件（idle/queued/prologue/playing/done/cancelled/rejected）。
+            /// 由 path_event_mutex_ 保护：订阅线程写、控制线程读。
+            std::string path_event_state{"idle"};
+            std::string path_event_message;
+            uint32_t path_event_sequence{0};
+            /// 本周期位控轴的速度前馈（base 系 6D，力控轴恒为 0）。
+            Eigen::Matrix<double, 6, 1> target_twist{Eigen::Matrix<double, 6, 1>::Zero()};
+
             Eigen::Matrix<double, 6, 1> pos_integral{Eigen::Matrix<double, 6, 1>::Zero()};
             Eigen::Matrix<double, 6, 1> force_integral{Eigen::Matrix<double, 6, 1>::Zero()};
             Eigen::Matrix<double, 6, 1> force_disp{Eigen::Matrix<double, 6, 1>::Zero()};
@@ -120,6 +151,10 @@ namespace arms_controller_common
             Eigen::Matrix<double, 6, 1> measured_velocity{Eigen::Matrix<double, 6, 1>::Zero()};
             Eigen::Matrix<double, 6, 1> command_lead{Eigen::Matrix<double, 6, 1>::Zero()};
             bool servo_limited{false};
+            // 力控轴「领先量守卫」的按轴缩放（任务空间）：1.0 = 不限制。
+            // 只作用于该力控轴自己的 v_des，位置轴完全不受影响 —— 与关节空间那个
+            // 全臂共享的 path scale 解耦，避免「位置轴一动就把力控轴补偿掉」。
+            std::array<double, 6> force_lead_scale{1.0, 1.0, 1.0, 1.0, 1.0, 1.0};
             bool force_feedback_valid{false};
 
             // 上一周期解算的关节速度（位控轴速度阻尼反馈用）：J·qdot_prev
@@ -159,6 +194,7 @@ namespace arms_controller_common
             rclcpp::Subscription<geometry_msgs::msg::WrenchStamped>::SharedPtr wrench_sub;
             rclcpp::Subscription<geometry_msgs::msg::Pose>::SharedPtr target_sub;
             rclcpp::Subscription<geometry_msgs::msg::PoseStamped>::SharedPtr target_stamped_sub;
+            rclcpp::Subscription<arms_ros2_control_msgs::msg::CompliancePath>::SharedPtr path_sub;
             rclcpp::Publisher<geometry_msgs::msg::PoseStamped>::SharedPtr pose_pub;
             rclcpp::Publisher<geometry_msgs::msg::PoseStamped>::SharedPtr target_pub;
             rclcpp::Publisher<geometry_msgs::msg::WrenchStamped>::SharedPtr filtered_wrench_pub;
@@ -178,6 +214,7 @@ namespace arms_controller_common
                 measured_velocity.setZero();
                 command_lead.setZero();
                 servo_limited = false;
+                force_lead_scale.fill(1.0);
                 force_feedback_valid = false;
                 alignment.reset();
                 qdot_prev.resize(0);
@@ -188,12 +225,21 @@ namespace arms_controller_common
                 target_updates = 0;
                 diag_target_updates = 0;
                 pending_pose_valid = false;
+                // 路径回放随会话一起清空：重新进入 COMPLIANCE 时不会自动续走。
+                path_active = false;
+                pending_path_valid = false;
+                path_done_logged = false;
+                path_prologue_distance = 0.0;
+                path_prologue_duration = 0.0;
+                path_t_last = 0.0;
+                target_twist.setZero();
             }
 
             void resetComplianceIo()
             {
                 target_sub.reset();
                 target_stamped_sub.reset();
+                path_sub.reset();
                 pose_pub.reset();
                 target_pub.reset();
             }
@@ -223,6 +269,11 @@ namespace arms_controller_common
             std::array<double, 6> diag_err{};
             std::array<double, 6> diag_f_err{};
             std::array<double, 6> diag_f_eff{};
+            // 力控轴「为什么不动」定位用：生效阻尼、积分、响应确认、接触门控。
+            std::array<double, 6> diag_f_damping{};
+            std::array<double, 6> diag_f_integral{};
+            std::array<bool, 6> diag_f_realized{};
+            std::array<bool, 6> diag_f_contact{};
             std::string diag_jlim, diag_bounds, diag_saturated;
         };
 
@@ -238,6 +289,24 @@ namespace arms_controller_common
         bool stopForWorkspaceViolation(const std::string& reason);
         void setupWrenchSubscriptions();
         void setupTeleopSubscriptions();
+
+        /**
+         * @brief 收到 compliance_path：规划成 PathPlan 并交给控制线程回放。
+         *
+         * 规划在订阅线程完成（圆角 + 时间参数化，O(角点数)），控制线程每周期
+         * 只做一次 61 KB 拷贝和采样 —— 控制周期内不分配内存。
+         */
+        void onPathMessage(bool is_left, const arms_ros2_control_msgs::msg::CompliancePath& msg);
+
+        /** 推进路径回放并把 (位姿, 目标速度) 写进 a.target / a.target_twist。 */
+        void updatePathTarget(bool is_left, const EndEffectorPose& current,
+                              const rclcpp::Time& time, double dt);
+
+        /** 单点目标 / 轴切换 / 会话退出时抢占路径。 */
+        void cancelPath(bool is_left, const char* reason);
+
+        /** 记录一条路径事件（写 path_event_*，供面板显示）。任意线程可调。 */
+        void recordPathEvent(bool is_left, const char* state, const std::string& message);
         void setupZeroWrenchService();
         void setupSurfaceTrackingService();
 
@@ -275,7 +344,7 @@ namespace arms_controller_common
                                geometry_msgs::msg::Pose& pose_base) const;
         bool updateTargetFromPose(bool is_left, const geometry_msgs::msg::Pose& pose_base);
 
-        void stepHybridControl(bool is_left, double dt,
+        void stepHybridControl(bool is_left, const rclcpp::Time& time, double dt,
                                const Eigen::Matrix<double, 6, 1>& contact_wrench,
                                bool ft_active);
 
@@ -434,7 +503,9 @@ namespace arms_controller_common
         rclcpp::Time zero_cal_start_;
 
         // ── 诊断日志（排查"追踪不到位/下垂"：奇异衰减/关节限位/力轴残差/硬件跟踪间隙）──
-        bool diag_log_{true};
+        // 默认关闭：正常使用 1 s 一行 × 2 臂会淹没其它日志。
+        // 排查时把 compliance_diag_log 设为 true 打开（周期由 compliance_diag_log_period 控制）。
+        bool diag_log_{false};
         double diag_log_period_{1.0};
         std::array<std::chrono::steady_clock::time_point, 2> last_diag_log_{};
 
@@ -453,6 +524,9 @@ namespace arms_controller_common
         static constexpr const char* kTargetTopic[2] = {"left_target", "right_target"};
         static constexpr const char* kTargetStampedTopic[2] = {
             "left_target/stamped", "right_target/stamped"};
+        /// 连续路径：一条消息带全部角点，控制器本地规划 + 回放 + 速度前馈。
+        static constexpr const char* kPathTopic[2] = {
+            "left_compliance_path", "right_compliance_path"};
         static constexpr const char* kCurrentPoseTopic[2] = {
             "left_current_pose", "right_current_pose"};
         static constexpr const char* kCurrentTargetTopic[2] = {
@@ -476,6 +550,10 @@ namespace arms_controller_common
         rclcpp::Time last_force_status_pub_{0, 0, RCL_ROS_TIME};
 
         std::mutex wrench_mutex_;
+        /// pending_path 的交接锁（订阅线程 → 控制线程，只在换路径时持有）。
+        std::mutex path_mutex_;
+        /// 路径事件的读写锁（订阅线程写 / 控制线程读，20 Hz，临界区只拷两个字符串）。
+        std::mutex path_event_mutex_;
 
         // ── 腰部柔顺通道状态 ──
         bool waist_enabled_{false};

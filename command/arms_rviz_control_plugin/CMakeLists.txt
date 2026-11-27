@@ -19,6 +19,7 @@ find_package(sensor_msgs REQUIRED)
 find_package(std_msgs REQUIRED)
 find_package(std_srvs REQUIRED)
 find_package(geometry_msgs REQUIRED)
+find_package(visualization_msgs REQUIRED)
 find_package(tf2 REQUIRED)
 find_package(arms_ros2_control_msgs REQUIRED)
 
@@ -42,6 +43,7 @@ cmake_language(CALL qt${QT_VERSION_MAJOR}_wrap_cpp MOC_FILES
         include/arms_rviz_control_plugin/target_error_display.hpp
         include/arms_rviz_control_plugin/switch_button.hpp
         include/arms_rviz_control_plugin/compliance_force_panel.hpp
+        include/arms_rviz_control_plugin/compliance_path_widget.hpp
 )
 
 # 设置源代码文件列表
@@ -53,6 +55,7 @@ set(SRC_FILES
         src/target_error_display.cpp
         src/switch_button.cpp
         src/compliance_force_panel.cpp
+        src/compliance_path_widget.cpp
         src/payload_identification_panel.cpp
 )
 
@@ -74,6 +77,7 @@ target_link_libraries(${PROJECT_NAME} PUBLIC
   ${std_msgs_TARGETS}
   ${std_srvs_TARGETS}
   ${geometry_msgs_TARGETS}
+  ${visualization_msgs_TARGETS}
   tf2::tf2
   ${arms_ros2_control_msgs_TARGETS}
 )

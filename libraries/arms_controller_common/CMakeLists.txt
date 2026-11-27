@@ -43,6 +43,7 @@ set(ARMS_CONTROLLER_COMMON_SOURCES
         src/FSM/StateHold.cpp
         src/FSM/StateMoveJ.cpp
         src/FSM/StateCompliance.cpp
+        src/FSM/CompliancePath.cpp
         src/utils/GravityCompensation.cpp
         src/utils/HeadCouplingLimits.cpp
         src/utils/JointLimitsManager.cpp
